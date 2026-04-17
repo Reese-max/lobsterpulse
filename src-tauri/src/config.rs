@@ -43,8 +43,8 @@ impl Default for AppearanceConfig {
             theme: default_theme(),
             pin_expanded: false,
             sound_enabled: false,
-            provider_sounds: std::collections::HashMap::new(),
-            provider_waiting_sounds: std::collections::HashMap::new(),
+            provider_sounds: default_provider_sounds(),
+            provider_waiting_sounds: default_provider_waiting_sounds(),
             sound_name: String::new(),
         }
     }
@@ -58,9 +58,27 @@ pub struct ProviderConfig {
     pub settings_path: Option<String>,
 }
 
-fn default_accent() -> String { "purple".into() }
+fn default_accent() -> String { "orange".into() }
 fn default_text_size() -> String { "medium".into() }
 fn default_theme() -> String { "dark".into() }
+
+fn default_provider_sounds() -> HashMap<String, String> {
+    HashMap::from([
+        ("claude".into(), "claude.mp3".into()),
+        ("codex".into(), "codex.mp3".into()),
+        ("copilot".into(), "copilot.mp3".into()),
+        ("gemini".into(), "__none__".into()),
+    ])
+}
+
+fn default_provider_waiting_sounds() -> HashMap<String, String> {
+    HashMap::from([
+        ("claude".into(), "claude-waiting.mp3".into()),
+        ("codex".into(), "codex-waiting.mp3".into()),
+        ("copilot".into(), "copilot-waiting.mp3".into()),
+        ("gemini".into(), "__none__".into()),
+    ])
+}
 
 fn default_providers() -> HashMap<String, ProviderConfig> {
     let mut m = HashMap::new();
@@ -76,7 +94,7 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
     });
     m.insert("copilot".into(), ProviderConfig {
         enabled: false,
-        name: "GitHub Copilot".into(),
+        name: "GitHub Copilot CLI".into(),
         settings_path: Some("~/.copilot/config.json".into()),
     });
     m.insert("codex".into(), ProviderConfig {
@@ -100,7 +118,7 @@ impl Default for AppConfig {
 pub fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
-        .join("agentpulse")
+        .join("lobsterpulse")
         .join("config.json")
 }
 
@@ -147,17 +165,23 @@ pub fn detect_providers() -> HashMap<String, bool> {
         which_exists("gemini") ||
         dirs::home_dir().map(|h| h.join(".gemini").exists()).unwrap_or(false));
 
-    // Copilot: check if gh copilot or copilot binary exists
-    detected.insert("copilot".into(), which_exists("copilot"));
+    // Copilot: check binary, GitHub CLI, or config dir
+    detected.insert("copilot".into(),
+        which_exists("copilot") ||
+        which_exists("gh") ||
+        dirs::home_dir().map(|h| h.join(".copilot").exists()).unwrap_or(false));
 
-    // Codex: check if codex binary exists
-    detected.insert("codex".into(), which_exists("codex"));
+    // Codex: check binary or config dir
+    detected.insert("codex".into(),
+        which_exists("codex") ||
+        dirs::home_dir().map(|h| h.join(".codex").exists()).unwrap_or(false));
 
     detected
 }
 
 fn which_exists(cmd: &str) -> bool {
-    std::process::Command::new("which")
+    let checker = if cfg!(windows) { "where.exe" } else { "which" };
+    std::process::Command::new(checker)
         .arg(cmd)
         .output()
         .map(|o| o.status.success())

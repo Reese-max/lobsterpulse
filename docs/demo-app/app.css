@@ -1,6 +1,6 @@
 :root {
-  --accent: rgb(217, 128, 255);
-  --accent-dim: rgba(217, 128, 255, 0.6);
+  --accent: rgb(255, 153, 51);
+  --accent-dim: rgba(255, 153, 51, 0.6);
   --text: rgba(255,255,255,0.95);
   --text-secondary: rgba(255,255,255,0.65);
   --text-dim: rgba(255,255,255,0.45);

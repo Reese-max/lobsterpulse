@@ -1,28 +1,31 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AgentPulse — Dynamic Island-style monitor for AI coding CLIs</title>
-  <meta name="description" content="Real-time floating status indicator for Claude Code, Gemini CLI, Codex CLI, and GitHub Copilot CLI. Cross-platform desktop app built with Tauri v2." />
-  <meta property="og:title" content="AgentPulse — Dynamic Island-style monitor for AI coding CLIs" />
-  <meta property="og:description" content="Real-time floating status indicator for Claude Code, Gemini CLI, Codex CLI, and GitHub Copilot CLI." />
-  <meta property="og:image" content="https://raw.githubusercontent.com/yazelin/AgentPulse/main/assets/capsule.png" />
-  <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/yazelin/AgentPulse/main/src-tauri/icons/128x128.png" />
+  <title>龍蝦監控 LobsterPulse</title>
+  <meta name="description" content="龍蝦監控是給 Claude、Codex、Copilot 與 Gemini CLI 的桌面浮動監控器。以繁中介面、橘色品牌與你的工作流為預設。" />
+  <meta property="og:title" content="龍蝦監控 LobsterPulse" />
+  <meta property="og:description" content="繁中桌面浮動監控器，專門追蹤 Claude、Codex、Copilot 與 Gemini CLI 的工作狀態。" />
+  <meta property="og:image" content="brand-logo.png" />
+  <link rel="icon" type="image/png" href="brand-logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <nav>
     <div class="container">
       <a href="#" class="brand">
-        <img class="brand-logo" src="https://raw.githubusercontent.com/yazelin/AgentPulse/main/src-tauri/icons/128x128.png" alt="" />
-        AgentPulse
+        <img class="brand-logo" src="brand-logo.png" alt="龍蝦監控圖示" />
+        龍蝦監控
       </a>
       <div class="nav-links">
-        <a href="#features">Features</a>
-        <a href="#states">States</a>
-        <a href="#install">Install</a>
-        <a href="https://github.com/yazelin/AgentPulse" target="_blank" rel="noopener">GitHub</a>
+        <a href="#features">功能</a>
+        <a href="#workflow">工作流</a>
+        <a href="#download">下載</a>
+        <a href="#repo">維護</a>
       </div>
     </div>
   </nav>
@@ -36,316 +39,240 @@
 
     <div class="hero-grid">
       <div class="hero-text">
-        <div class="tag">v0.2 — now cross-platform</div>
-        <h1>Pulse for every<br/>AI coding assistant</h1>
+        <div class="tag">自訂版桌面監控器</div>
+        <h1>讓 AI CLI 自己<br/>回報現在在幹嘛</h1>
         <p class="lede">
-          A floating Dynamic Island-style monitor that tracks your Claude Code, Gemini CLI,
-          Codex, and GitHub Copilot sessions in real time — across Linux, macOS, and Windows.
+          龍蝦監控是你自己的 LobsterPulse 分支。它把 Claude、Codex、Copilot，
+          還有需要時才打開的 Gemini，集中在同一個浮動膠囊裡，用繁中介面、橘色品牌與你的工作習慣做預設。
         </p>
         <div class="cta">
-          <a id="dl-linux" class="btn btn-primary dl-btn" href="https://github.com/yazelin/AgentPulse/releases/latest" target="_blank" rel="noopener">
-            <img class="btn-icon" src="https://cdn.simpleicons.org/linux/000000" alt="" />
-            Linux
-          </a>
-          <a id="dl-macos" class="btn btn-primary dl-btn" href="https://github.com/yazelin/AgentPulse/releases/latest" target="_blank" rel="noopener">
-            <img class="btn-icon" src="https://cdn.simpleicons.org/apple/000000" alt="" />
-            macOS
-            <span class="dl-arch">arm64</span>
-          </a>
-          <a id="dl-windows" class="btn btn-primary dl-btn" href="https://github.com/yazelin/AgentPulse/releases/latest" target="_blank" rel="noopener">
-            <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.801"/>
-            </svg>
-            Windows
-          </a>
+          <a class="btn btn-primary" href="#download">看下載區塊</a>
+          <a class="btn btn-secondary" href="#workflow">看預設工作流</a>
         </div>
         <div class="cta-secondary">
-          <span class="dl-version-label">Latest: <span id="dl-version">v0.2.0</span></span>
+          <span class="dl-version-label">版本：<strong>v0.2.2</strong></span>
           <span class="cta-sep">·</span>
-          <a id="dl-macos-intel" href="https://github.com/yazelin/AgentPulse/releases/latest" target="_blank" rel="noopener" class="link-subtle">Intel Mac?</a>
+          <span class="link-subtle">品牌：<code>龍蝦監控 / LobsterPulse</code></span>
           <span class="cta-sep">·</span>
-          <a href="https://github.com/yazelin/AgentPulse" target="_blank" rel="noopener" class="link-subtle">
-            <svg class="inline-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.4 3-.405 1.02.005 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
-            View on GitHub
-          </a>
+          <span class="link-subtle">主程式：<code>lobster-pulse.exe</code></span>
           <span class="cta-sep">·</span>
-          <a href="https://github.com/yazelin/AgentPulse/releases" target="_blank" rel="noopener" class="link-subtle">All releases</a>
+          <span class="link-subtle">sidecar：<code>lobster-pulse-hook.exe</code></span>
         </div>
-
-        <script>
-          (async function () {
-            try {
-              var res = await fetch('https://api.github.com/repos/yazelin/AgentPulse/releases/latest');
-              if (!res.ok) return;
-              var data = await res.json();
-              var pick = function (kw) {
-                return (data.assets || []).find(function (a) { return a.name && a.name.toLowerCase().indexOf(kw) !== -1 && a.name.toLowerCase().endsWith('.zip'); });
-              };
-              var targets = {
-                'dl-linux':       'linux',
-                'dl-macos':       'macos-arm64',
-                'dl-macos-intel': 'macos-x64',
-                'dl-windows':     'windows',
-              };
-              Object.keys(targets).forEach(function (id) {
-                var asset = pick(targets[id]);
-                var el = document.getElementById(id);
-                if (asset && el) el.href = asset.browser_download_url;
-              });
-              var ver = document.getElementById('dl-version');
-              if (ver && data.tag_name) ver.textContent = data.tag_name;
-            } catch (e) { /* fall back to static /releases/latest links */ }
-          })();
-        </script>
+        <div class="hero-metrics">
+          <div class="metric-card">
+            <strong>4</strong>
+            <span>主要 CLI provider</span>
+          </div>
+          <div class="metric-card">
+            <strong>全套</strong>
+            <span>Windows / macOS / iOS / Android icon 已同步</span>
+          </div>
+          <div class="metric-card">
+            <strong>獨立</strong>
+            <span><code>lobsterpulse</code> 設定與 runtime 路徑</span>
+          </div>
+          <div class="metric-card">
+            <strong>已驗證</strong>
+            <span>release build 與啟動流程</span>
+          </div>
+        </div>
       </div>
 
-      <!-- Live, interactive AgentPulse running in an iframe. Hover the capsule,
-           click the gear, everything's real. Auto-cycles through session states
-           so there's something to see even before you interact. -->
-      <div class="live-demo" aria-label="Interactive AgentPulse demo">
+      <div class="live-demo" id="demo" aria-label="Interactive LobsterPulse demo">
         <div class="live-demo-badge">
           <span class="live-demo-dot"></span>
-          Live · hover to expand · open settings · try the sounds
+          Live demo · hover 展開 · 開設定 · 試音效
         </div>
-        <iframe id="demo-iframe" src="demo-app/" title="AgentPulse interactive demo" loading="eager"></iframe>
+        <iframe id="demo-iframe" src="demo-app/" title="龍蝦監控互動 demo" loading="eager"></iframe>
       </div>
     </div>
-
   </header>
 
   <section class="providers">
     <div class="container">
-      <div class="providers-label">Works with</div>
+      <div class="providers-label">主要助手</div>
       <div class="providers-row">
-        <span>
-          <span class="provider-logo" style="color:#d97757"><svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg></span>
-          Claude Code
-        </span>
-        <span>
-          <span class="provider-logo" style="color:#4285f4"><svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z"/></svg></span>
-          Gemini CLI
-        </span>
-        <span>
-          <span class="provider-logo" style="color:#10a37f"><svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"/></svg></span>
-          Codex CLI
-        </span>
-        <span>
-          <span class="provider-logo" style="color:#6e40c9"><svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M19.245 5.364c1.322 1.36 1.877 3.216 2.11 5.817.622 0 1.2.135 1.592.654l.73.964c.21.278.323.61.323.955v2.62c0 .339-.173.669-.453.868C20.239 19.602 16.157 21.5 12 21.5c-4.6 0-9.205-2.583-11.547-4.258-.28-.2-.452-.53-.453-.868v-2.62c0-.345.113-.679.321-.956l.73-.963c.392-.517.974-.654 1.593-.654l.029-.297c.25-2.446.81-4.213 2.082-5.52 2.461-2.54 5.71-2.851 7.146-2.864h.198c1.436.013 4.685.323 7.146 2.864zm-7.244 4.328c-.284 0-.613.016-.962.05-.123.447-.305.85-.57 1.108-1.05 1.023-2.316 1.18-2.994 1.18-.638 0-1.306-.13-1.851-.464-.516.165-1.012.403-1.044.996a65.882 65.882 0 00-.063 2.884l-.002.48c-.002.563-.005 1.126-.013 1.69.002.326.204.63.51.765 2.482 1.102 4.83 1.657 6.99 1.657 2.156 0 4.504-.555 6.985-1.657a.854.854 0 00.51-.766c.03-1.682.006-3.372-.076-5.053-.031-.596-.528-.83-1.046-.996-.546.333-1.212.464-1.85.464-.677 0-1.942-.157-2.993-1.18-.266-.258-.447-.661-.57-1.108-.32-.032-.64-.049-.96-.05zm-2.525 4.013c.539 0 .976.426.976.95v1.753c0 .525-.437.95-.976.95a.964.964 0 01-.976-.95v-1.752c0-.525.437-.951.976-.951zm5 0c.539 0 .976.426.976.95v1.753c0 .525-.437.95-.976.95a.964.964 0 01-.976-.95v-1.752c0-.525.437-.951.976-.951zM7.635 5.087c-1.05.102-1.935.438-2.385.906-.975 1.037-.765 3.668-.21 4.224.405.394 1.17.657 1.995.657h.09c.649-.013 1.785-.176 2.73-1.11.435-.41.705-1.433.675-2.47-.03-.834-.27-1.52-.63-1.813-.39-.336-1.275-.482-2.265-.394zm6.465.394c-.36.292-.6.98-.63 1.813-.03 1.037.24 2.06.675 2.47.968.957 2.136 1.104 2.776 1.11h.044c.825 0 1.59-.263 1.995-.657.555-.556.765-3.187-.21-4.224-.45-.468-1.335-.804-2.385-.906-.99-.088-1.875.058-2.265.394zM12 7.615c-.24 0-.525.015-.84.044.03.16.045.336.06.526l-.001.159a2.94 2.94 0 01-.014.25c.225-.022.425-.027.612-.028h.366c.187 0 .387.006.612.028-.015-.146-.015-.277-.015-.409.015-.19.03-.365.06-.526a9.29 9.29 0 00-.84-.044z"/></svg></span>
-          GitHub Copilot
-        </span>
+        <span>Claude Code</span>
+        <span>Codex CLI</span>
+        <span>GitHub Copilot CLI</span>
+        <span>Gemini CLI</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="workflow">
+    <div class="container">
+      <h2>預設工作流</h2>
+      <p class="section-lede">這版不是照 upstream 原樣搬過來，而是直接改成你現在實際會用的順序。</p>
+
+      <div class="states-table">
+        <div class="states-row working">
+          <div class="states-label"><span class="states-dot"></span> Claude 優先</div>
+          <div class="states-desc">主畫面與 demo 都以 Claude 作為第一優先顯示，適合你平常做主要實作與收尾。</div>
+        </div>
+        <div class="states-row waiting">
+          <div class="states-label"><span class="states-dot"></span> Codex / Copilot 常駐</div>
+          <div class="states-desc">預設音效與 demo 流程都把 Codex、Copilot 放到核心工作流，不再只是附屬 provider。</div>
+        </div>
+        <div class="states-row idle">
+          <div class="states-label"><span class="states-dot"></span> Gemini 次要</div>
+          <div class="states-desc">預設不幫 Gemini 配提示音，保留給實驗或備用，不去搶主監控注意力。</div>
+        </div>
+        <div class="states-row stale">
+          <div class="states-label"><span class="states-dot"></span> 完全分家</div>
+          <div class="states-desc">設定檔、音效資料夾、port 檔、hook sidecar 都改成 lobsterpulse，不跟舊專案共用。</div>
+        </div>
       </div>
     </div>
   </section>
 
   <section id="features">
     <div class="container">
-      <h2>Why AgentPulse</h2>
-      <p class="section-lede">
-        A cross-platform rewrite of the macOS-only
-        <a href="https://github.com/tzangms/ClaudePulse" target="_blank" rel="noopener">ClaudePulse</a>,
-        extended to monitor every major AI coding CLI at once.
-      </p>
+      <h2>你這版的重點</h2>
+      <p class="section-lede">這些都是已經落在程式碼裡的實際變更，不是只換 logo 而已。</p>
 
       <div class="features">
         <div class="feature">
-          <div class="feature-icon">
-            <!-- Pill/capsule with internal pulse dot -->
-            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="5" y="14" width="30" height="12" rx="6"/>
-              <circle cx="12" cy="20" r="1.6" fill="currentColor" stroke="none"/>
-              <path d="M17 20h8M27 20h3" stroke-linecap="round"/>
-            </svg>
-          </div>
-          <h3>Dynamic Island Style</h3>
-          <p>A single floating capsule that expands into a full session list on hover. Unobtrusive when quiet, information-dense when you need it.</p>
+          <div class="feature-icon">01</div>
+          <h3>繁中介面</h3>
+          <p>主程式、設定頁、session 狀態與 demo 全部改成繁中，不再混英文狀態字。</p>
         </div>
 
         <div class="feature">
-          <div class="feature-icon">
-            <!-- 2×2 grid of CLI tiles -->
-            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="7" y="7" width="11" height="11" rx="2.5"/>
-              <rect x="22" y="7" width="11" height="11" rx="2.5"/>
-              <rect x="7" y="22" width="11" height="11" rx="2.5"/>
-              <rect x="22" y="22" width="11" height="11" rx="2.5"/>
-            </svg>
-          </div>
-          <h3>4 CLIs, 1 window</h3>
-          <p>Claude Code, Gemini CLI, Codex, GitHub Copilot — all tracked simultaneously. Each session shows its provider's official icon.</p>
+          <div class="feature-icon">02</div>
+          <h3>龍蝦品牌圖示</h3>
+          <p>Windows tray、exe icon、landing page brand logo 都換成新的龍蝦膠囊圖示。</p>
         </div>
 
         <div class="feature">
-          <div class="feature-icon">
-            <!-- Bell with ringing arc -->
-            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M13 25a7 7 0 0114 0v1l2 3H11l2-3z"/>
-              <path d="M18 30a2 2 0 004 0"/>
-              <circle cx="20" cy="11" r="1.5" fill="currentColor" stroke="none"/>
-              <path d="M29 14c1.5 1.5 2 3 2 5M31 10c2 2 3 5 3 9" opacity="0.55"/>
-            </svg>
-          </div>
-          <h3>Smart notifications</h3>
-          <p>Per-provider audio cues for two events: "task complete" and "waiting for user input". Pick sounds independently for each CLI.</p>
+          <div class="feature-icon">03</div>
+          <h3>Windows 偵測修正</h3>
+          <p>provider 偵測在 Windows 改走 <code>where.exe</code>，不再沿用 Unix-only 的 <code>which</code>。</p>
         </div>
 
         <div class="feature">
-          <div class="feature-icon">
-            <!-- Three stacked OS windows (linux/mac/win) -->
-            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="6" y="10" width="20" height="13" rx="2"/>
-              <rect x="12" y="15" width="20" height="13" rx="2" fill="var(--bg, #1a1a1c)"/>
-              <rect x="18" y="20" width="16" height="11" rx="2" fill="var(--bg, #1a1a1c)"/>
-            </svg>
-          </div>
-          <h3>Truly cross-platform</h3>
-          <p>One hook architecture (via a native sidecar binary) works identically across bash, PowerShell, and cmd.exe — no shell-specific quoting hacks.</p>
+          <div class="feature-icon">04</div>
+          <h3>Copilot / Codex 友善</h3>
+          <p>Copilot 與 Codex 的偵測與預設音效都往前提，符合你實際會一起開的場景。</p>
         </div>
 
         <div class="feature">
-          <div class="feature-icon">
-            <!-- Half-moon / half-sun toggle -->
-            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="20" cy="20" r="9"/>
-              <path d="M20 11a9 9 0 000 18z" fill="currentColor" stroke="none"/>
-              <path d="M20 5v2M20 33v2M5 20h2M33 20h2M9 9l1.5 1.5M29.5 29.5L31 31M31 9l-1.5 1.5M10.5 29.5L9 31" opacity="0.5"/>
-            </svg>
-          </div>
-          <h3>Light / Dark theme</h3>
-          <p>Manual toggle in Settings or Tray. Accent colour picker with five options. Text size S / M / L.</p>
+          <div class="feature-icon">05</div>
+          <h3>獨立設定目錄</h3>
+          <p><code>~/.config/lobsterpulse</code>、<code>~/.lobsterpulse/port</code> 和 <code>lobster-pulse-hook</code> 已經完全獨立。</p>
         </div>
 
         <div class="feature">
-          <div class="feature-icon">
-            <!-- Single window with a check badge -->
-            <svg viewBox="0 0 40 40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="7" y="10" width="22" height="18" rx="2.5"/>
-              <path d="M7 15h22"/>
-              <circle cx="11" cy="12.5" r="0.9" fill="currentColor" stroke="none"/>
-              <circle cx="14" cy="12.5" r="0.9" fill="currentColor" stroke="none"/>
-              <circle cx="31" cy="29" r="5" fill="var(--bg, #1a1a1c)"/>
-              <path d="M29 29l1.5 1.5L33 28"/>
-            </svg>
-          </div>
-          <h3>Single instance</h3>
-          <p>Launching a second time focuses the running window instead of spawning a dead tray icon. Auto-detects installed CLIs on first run.</p>
+          <div class="feature-icon">06</div>
+          <h3>可再生資產</h3>
+          <p>repo 內附 <code>scripts/generate_brand_assets.ps1</code>，之後你要再調整 icon 可以直接重生全部資產。</p>
         </div>
       </div>
     </div>
   </section>
 
-  <section id="states">
+  <section id="download">
     <div class="container">
-      <h2>Session states at a glance</h2>
-      <p class="section-lede">The capsule colour + label tell you exactly what each session is doing.</p>
+      <h2>下載與產物</h2>
+      <p class="section-lede">這份分支目前以你本機的 release 產物和可再生 bundle 資產為主，不再依賴 upstream release。</p>
 
-      <div class="states-table">
-        <div class="states-row working">
-          <div class="states-label"><span class="states-dot"></span> Working</div>
-          <div class="states-desc">CLI is actively processing — running tools, generating, thinking</div>
-        </div>
-        <div class="states-row waiting">
-          <div class="states-label"><span class="states-dot"></span> Waiting</div>
-          <div class="states-desc">CLI paused for your input (permission prompt, confirmation)</div>
-        </div>
-        <div class="states-row idle">
-          <div class="states-label"><span class="states-dot"></span> Idle</div>
-          <div class="states-desc">Session exists but no activity for 30 s</div>
-        </div>
-        <div class="states-row stale">
-          <div class="states-label"><span class="states-dot"></span> Stale</div>
-          <div class="states-desc">No activity for 10 minutes — dims in the list, removed at 30</div>
-        </div>
-      </div>
-    </div>
-  </section>
+      <div class="download-grid">
+        <article class="download-card featured">
+          <div class="download-badge success">已驗證</div>
+          <h3>Windows 桌面版</h3>
+          <p>主程式和 hook sidecar 已經一起重建，現在這兩個檔案就是你自己的交付入口。</p>
+          <pre><code>src-tauri\target\release\lobster-pulse.exe
+src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
+          <div class="download-meta">
+            <span>同層放置</span>
+            <span>桌面浮動膠囊</span>
+            <span>繁中 UI</span>
+          </div>
+        </article>
 
-  <section>
-    <div class="container">
-      <h2>Every surface, deliberately tiny</h2>
-      <p class="section-lede">Settings live in a compact tabbed sheet. No modal spam, no browser tabs.</p>
+        <article class="download-card">
+          <div class="download-badge">已同步</div>
+          <h3>Bundle icon 資產包</h3>
+          <p>現在不只 Windows icon，連 macOS、iOS、Android 那批 bundle icon 也會跟主視覺同步重生。</p>
+          <pre><code>src-tauri\icons\icon.icns
+src-tauri\icons\ios\
+src-tauri\icons\android\</code></pre>
+          <p class="download-note">由 <code>scripts\generate_brand_assets.ps1</code> 內建呼叫 Tauri icon 生成器完成。</p>
+        </article>
 
-      <div class="screenshots">
-        <div class="shot">
-          <img src="https://raw.githubusercontent.com/yazelin/AgentPulse/main/assets/settings-providers.png" alt="Providers tab" />
-          <h4>Providers</h4>
-          <p>Toggle each CLI on/off — hooks install or remove immediately. Auto-detection shows which CLIs you already have.</p>
-        </div>
-        <div class="shot">
-          <img src="https://raw.githubusercontent.com/yazelin/AgentPulse/main/assets/settings-sounds.png" alt="Sounds tab" />
-          <h4>Sounds</h4>
-          <p>Per-provider dropdowns for both completion and waiting states. Ship your own MP3s; the <svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg> button opens the sounds directory.</p>
-        </div>
-        <div class="shot">
-          <img src="https://raw.githubusercontent.com/yazelin/AgentPulse/main/assets/settings-appearance.png" alt="Appearance tab" />
-          <h4>Appearance</h4>
-          <p>Theme, accent colour, keep-expanded toggle, and text size — everything that tweaks the look is here.</p>
-        </div>
+        <article class="download-card">
+          <div class="download-badge">可重建</div>
+          <h3>原始碼建置</h3>
+          <p>如果你之後要打新的 release 或 bundle，直接從 repo 內重建，不需要回頭依賴上游產物。</p>
+          <pre><code>cd src-tauri
+cargo build --release
+cargo tauri build</code></pre>
+          <p class="download-note">第二行需要先安裝 <code>tauri-cli</code>；純 release exe 只要第一行。</p>
+        </article>
       </div>
     </div>
   </section>
 
   <section id="install">
     <div class="container">
-      <h2>Install</h2>
-      <p class="section-lede">v0.2 ships as zip archives — no installer, no package manager. Download, unzip, run.</p>
+      <h2>建置與啟動</h2>
+      <p class="section-lede">這三個入口對應你最常用的維護節點：跑程式、重生資產、打 bundle。</p>
 
-      <div class="install-card">
-        <h3>
-          <span class="os-icon-group">
-            <img class="os-icon" src="https://cdn.simpleicons.org/linux/ffffff" alt="Linux" />
-          </span>
-          Linux
-        </h3>
-        <pre><code>unzip agent-pulse-vX.Y.Z-linux.zip -d agent-pulse
-cd agent-pulse
-chmod +x agent-pulse agent-pulse-hook
-./agent-pulse</code></pre>
-        <p class="install-note">Keep <code>agent-pulse</code> and <code>agent-pulse-hook</code> in the same folder — the main app locates the sidecar at its own sibling path.</p>
+      <div class="install-grid">
+        <div class="install-card">
+          <h3>直接跑 release 產物</h3>
+          <pre><code>src-tauri\target\release\lobster-pulse.exe
+src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
+          <p class="install-note">兩個檔案要放在同一層，主程式會用相鄰路徑找到 sidecar。</p>
+        </div>
+
+        <div class="install-card">
+          <h3>重生品牌資產</h3>
+          <pre><code>.\scripts\generate_brand_assets.ps1</code></pre>
+          <p class="install-note">這會一起更新 docs logo、Windows icon、<code>icon.icns</code>、iOS 與 Android icon。</p>
+        </div>
+
+        <div class="install-card">
+          <h3>從原始碼重建</h3>
+          <pre><code>cd src-tauri
+cargo build --release</code></pre>
+          <p class="install-note">如果之後要打完整 bundle，再另外補裝 <code>cargo-tauri</code> 後跑 <code>cargo tauri build</code>。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="repo">
+    <div class="container">
+      <h2>Repo 維護方式</h2>
+      <p class="section-lede">這份 clone 不再只有單純改檔，而是整理成你自己的產品線：保留上游、分出品牌主線、日後可再掛你的 origin。</p>
+
+      <div class="repo-grid">
+        <article class="repo-card">
+          <h3>保留上游來源</h3>
+          <p><code>origin</code> 會改名成 <code>upstream</code>，之後你要拉 AgentPulse 新版本時，不會跟你自己的 repo 混在一起。</p>
+        </article>
+
+        <article class="repo-card">
+          <h3>品牌主線</h3>
+          <p>主開發分支改成 <code>lobsterpulse/main</code>。你的品牌版變更都沿著這條線走，不再直接堆在上游 <code>main</code> 上。</p>
+        </article>
+
+        <article class="repo-card">
+          <h3>日常功能分支</h3>
+          <p>後續新功能建議從 <code>feature/*</code> 開出去，做完再回 merge 到 <code>lobsterpulse/main</code>，保留可追蹤的維護節奏。</p>
+        </article>
       </div>
 
-      <div class="install-card">
-        <h3>
-          <span class="os-icon-group">
-            <img class="os-icon" src="https://cdn.simpleicons.org/apple/ffffff" alt="macOS" />
-          </span>
-          macOS
-        </h3>
-        <p class="install-note" style="margin-top:0;margin-bottom:12px;">
-          Pick the build for your chip: <strong>Apple Silicon</strong> (<code>-macos-arm64.zip</code>) or <strong>Intel</strong> (<code>-macos-x64.zip</code>).
-        </p>
-        <pre><code>unzip agent-pulse-vX.Y.Z-macos-arm64.zip -d agent-pulse
-cd agent-pulse
-chmod +x agent-pulse agent-pulse-hook
-# Strip Gatekeeper's quarantine xattr so the unsigned binary can launch
-xattr -cr ./agent-pulse ./agent-pulse-hook
-./agent-pulse</code></pre>
-        <p class="install-note">
-          <strong>Why the <code>xattr</code> step?</strong> The binaries aren't signed with an Apple Developer certificate yet, so macOS tags them as quarantined on download and Gatekeeper refuses to launch them (<em>"cannot be opened because the developer cannot be verified"</em>). Removing the xattr tells Gatekeeper to skip that check for these two files. Alternatively, in Finder right-click the binary → <strong>Open</strong>, then <strong>Open</strong> again in the warning dialog.
-        </p>
-      </div>
-
-      <div class="install-card">
-        <h3>
-          <span class="os-icon-group">
-            <svg class="os-icon" viewBox="0 0 24 24" fill="currentColor" aria-label="Windows">
-              <!-- Windows 8+ official 4-parallelogram logo -->
-              <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.801"/>
-            </svg>
-          </span>
-          Windows
-        </h3>
-        <ol style="margin-left: 20px; color: var(--text-secondary); font-size: 15px; line-height: 1.9;">
-          <li>Download <code>agent-pulse-v0.2.0-windows.zip</code> from the Releases page</li>
-          <li>Right-click the zip → Extract All → pick any folder</li>
-          <li>Double-click <code>agent-pulse.exe</code></li>
-        </ol>
-        <p class="install-note">SmartScreen may warn on first launch (binaries aren't code-signed). Click <strong>More info → Run anyway</strong>.</p>
-      </div>
-
-      <div style="text-align: center; margin-top: 36px;">
-        <a href="https://github.com/yazelin/AgentPulse/releases/latest" target="_blank" rel="noopener" class="btn btn-primary">
-          Go to latest release
-        </a>
+      <div class="repo-command-card">
+        <h3>建議日常流程</h3>
+        <pre><code>git checkout lobsterpulse/main
+git checkout -b feature/your-change
+git add .
+git commit -m "feat: ..."
+git checkout lobsterpulse/main
+git merge --ff-only feature/your-change</code></pre>
+        <p class="install-note">如果你之後建立自己的 GitHub repo，再把它加回 <code>origin</code>，保留 <code>upstream</code> 指向原始 AgentPulse 即可。</p>
       </div>
     </div>
   </section>
@@ -353,18 +280,12 @@ xattr -cr ./agent-pulse ./agent-pulse-hook
   <footer>
     <div class="container">
       <div class="footer-links">
-        <a href="https://github.com/yazelin/AgentPulse" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/yazelin/AgentPulse/issues" target="_blank" rel="noopener">Issues</a>
-        <a href="https://github.com/yazelin/AgentPulse/releases" target="_blank" rel="noopener">Releases</a>
-        <a href="https://github.com/yazelin/AgentPulse/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+        <a href="#features">功能</a>
+        <a href="#workflow">工作流</a>
+        <a href="#download">下載</a>
+        <a href="#repo">維護</a>
       </div>
-      <p>
-        <a href="https://github.com/yazelin/AgentPulse" target="_blank" rel="noopener">AgentPulse</a>
-        by <a href="https://github.com/yazelin" target="_blank" rel="noopener">@yazelin</a> ·
-        Inspired by <a href="https://github.com/tzangms/ClaudePulse" target="_blank" rel="noopener">ClaudePulse</a>
-        by <a href="https://github.com/tzangms" target="_blank" rel="noopener">@tzangms</a> ·
-        Built with <a href="https://tauri.app/" target="_blank" rel="noopener">Tauri v2</a>
-      </p>
+      <p>龍蝦監控 LobsterPulse · 你的自訂桌面 AI CLI 監控器</p>
     </div>
   </footer>
 </body>

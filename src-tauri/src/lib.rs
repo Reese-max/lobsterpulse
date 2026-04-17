@@ -70,7 +70,7 @@ fn check_provider_setup(provider_id: String, config_state: tauri::State<AppConfi
 fn sounds_dir() -> std::path::PathBuf {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
-        .join("agentpulse")
+        .join("lobsterpulse")
         .join("sounds");
     let _ = std::fs::create_dir_all(&dir);
     // seed_default_sounds skips files that already exist, so this is a
@@ -415,12 +415,12 @@ pub fn run() {
             });
 
             // System tray
-            let show = MenuItemBuilder::with_id("show", "Show/Hide").build(app)?;
-            let settings = MenuItemBuilder::with_id("settings", "Open Settings").build(app)?;
-            let toggle_theme = MenuItemBuilder::with_id("toggle_theme", "Toggle Light/Dark").build(app)?;
-            let open_config = MenuItemBuilder::with_id("open_config", "Open Config File").build(app)?;
-            let restart = MenuItemBuilder::with_id("restart", "Restart").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Quit AgentPulse").build(app)?;
+            let show = MenuItemBuilder::with_id("show", "顯示 / 隱藏").build(app)?;
+            let settings = MenuItemBuilder::with_id("settings", "開啟設定").build(app)?;
+            let toggle_theme = MenuItemBuilder::with_id("toggle_theme", "切換明暗主題").build(app)?;
+            let open_config = MenuItemBuilder::with_id("open_config", "開啟設定檔").build(app)?;
+            let restart = MenuItemBuilder::with_id("restart", "重新啟動").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "結束龍蝦監控").build(app)?;
             let menu = MenuBuilder::new(app)
                 .item(&show)
                 .item(&settings)
@@ -436,7 +436,7 @@ pub fn run() {
 
             TrayIconBuilder::new()
                 .icon(icon)
-                .tooltip("AgentPulse")
+                .tooltip("龍蝦監控")
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => {
@@ -498,7 +498,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            info!("AgentPulse ready on port {port}");
+            info!("LobsterPulse ready on port {port}");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -523,5 +523,5 @@ pub fn run() {
             is_cursor_inside,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running AgentPulse");
+        .expect("error while running LobsterPulse");
 }

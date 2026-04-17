@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AgentPulse",
+  "productName": "龍蝦監控",
   "version": "0.2.2",
-  "identifier": "com.agentpulse.desktop",
+  "identifier": "com.lobsterpulse.desktop",
   "build": {
     "frontendDist": "../src",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AgentPulse",
+        "title": "龍蝦監控",
         "width": 300,
         "height": 46,
         "resizable": false,
@@ -31,7 +31,7 @@
     "trayIcon": {
       "iconPath": "icons/128x128.png",
       "iconAsTemplate": false,
-      "tooltip": "AgentPulse"
+      "tooltip": "龍蝦監控"
     }
   },
   "bundle": {

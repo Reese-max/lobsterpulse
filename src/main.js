@@ -17,6 +17,8 @@ const PROVIDER_COLORS = {
   codex: "#10a37f",
 };
 
+const APP_NAME = "龍蝦監控";
+
 // ─── State ───
 const COLORS = {
   purple: "rgb(217,128,255)", cyan: "rgb(77,217,255)",
@@ -224,7 +226,7 @@ async function init() {
   }));
 
   $("btn-github").addEventListener("click", () => {
-    invoke("open_url", { url: "https://github.com/yazelin/AgentPulse" }).catch(() => {});
+    invoke("open_app_config").catch(() => {});
   });
 
   // Settings tab switching
@@ -244,7 +246,7 @@ async function init() {
 }
 
 // ─── Providers in settings ───
-const PROVIDER_ORDER = ["claude", "gemini", "codex", "copilot"];
+const PROVIDER_ORDER = ["claude", "codex", "copilot", "gemini"];
 
 async function renderProviders() {
   const detected = await invoke("detect_installed_providers");
@@ -259,8 +261,8 @@ async function renderProviders() {
     const found = detected[id] || false;
     const canEnable = !!p.settings_path;
     const checked = p.enabled ? "checked" : "";
-    const statusText = !canEnable ? "coming soon"
-                     : found ? "detected"
+    const statusText = !canEnable ? "尚未支援"
+                     : found ? "已偵測"
                      : "";
     const statusClass = !canEnable ? "provider-pending"
                       : found ? "provider-found"
@@ -271,7 +273,7 @@ async function renderProviders() {
       ${providerIconHtml(id, 18)}
       <span class="provider-name">${esc(p.name)}</span>
       ${statusText ? `<span class="${statusClass}">${statusText}</span>` : ""}
-      ${canEnable ? `<button class="provider-open" data-provider="${id}" title="Open ${esc(p.name)} settings file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
+      ${canEnable ? `<button class="provider-open" data-provider="${id}" title="開啟 ${esc(p.name)} 設定檔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
     </div>`;
   }).join("");
 
@@ -314,7 +316,7 @@ async function renderProviderSounds(kind = "completion") {
   try { sounds = await invoke("list_sounds"); } catch(e) {}
 
   if (sounds.length === 0) {
-    container.innerHTML = `<div class="dropdown-empty">No sounds in folder. Click 📁 to add MP3/WAV/OGG files.</div>`;
+    container.innerHTML = `<div class="dropdown-empty">音效資料夾目前沒有檔案。點 📁 後放入 MP3/WAV/OGG 即可。</div>`;
     return;
   }
 
@@ -336,18 +338,18 @@ async function renderProviderSounds(kind = "completion") {
       const stored = appConfig.appearance[configKey][pid];
       // Treat both "__none__" and "" as None
       const isNone = stored === "__none__" || stored === "";
-      const display = isNone || !stored ? "(none)" : stored;
+      const display = isNone || !stored ? "(不播放)" : stored;
       return `<div class="provider-sound-row">
         ${providerIconHtml(pid, 16)}
         <span class="provider-sound-name">${esc(p.name)}</span>
         <div class="custom-dropdown sound-dd" data-provider="${pid}">
           <div class="dropdown-selected">${esc(display)}</div>
           <div class="dropdown-options hidden">
-            <div class="dropdown-option${isNone ? ' active' : ''}" data-value="__none__">(none)</div>
+            <div class="dropdown-option${isNone ? ' active' : ''}" data-value="__none__">(不播放)</div>
             ${sounds.map(s => `<div class="dropdown-option${s === stored ? ' active' : ''}" data-value="${esc(s)}">${esc(s)}</div>`).join("")}
           </div>
         </div>
-        <button class="icon-btn play-btn" data-sound="${esc(isNone || !stored ? "" : stored)}" title="Preview">
+        <button class="icon-btn play-btn" data-sound="${esc(isNone || !stored ? "" : stored)}" title="試聽">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         </button>
       </div>`;
@@ -373,7 +375,7 @@ async function renderProviderSounds(kind = "completion") {
         const stored = appConfig.appearance[configKey][pid];
         const isNone = stored === "__none__" || stored === "";
         options.innerHTML =
-          `<div class="dropdown-option${isNone ? ' active' : ''}" data-value="__none__">(none)</div>` +
+          `<div class="dropdown-option${isNone ? ' active' : ''}" data-value="__none__">(不播放)</div>` +
           freshSounds.map(s => `<div class="dropdown-option${s === stored ? ' active' : ''}" data-value="${esc(s)}">${esc(s)}</div>`).join("");
         // Rewire click handlers for new options
         options.querySelectorAll(".dropdown-option").forEach(opt => {
@@ -381,7 +383,7 @@ async function renderProviderSounds(kind = "completion") {
             ev.stopPropagation();
             const val = opt.dataset.value;
             const optIsNone = val === "__none__";
-            selected.textContent = optIsNone ? "(none)" : val;
+            selected.textContent = optIsNone ? "(不播放)" : val;
             appConfig.appearance[configKey][pid] = val;
             if (!optIsNone) playSound(val);
             options.classList.add("hidden");
@@ -400,7 +402,7 @@ async function renderProviderSounds(kind = "completion") {
         e.stopPropagation();
         const val = opt.dataset.value; // "" never, either filename or "__none__"
         const isNone = val === "__none__";
-        selected.textContent = isNone ? "(none)" : val;
+        selected.textContent = isNone ? "(不播放)" : val;
         appConfig.appearance[configKey][pid] = val;
         if (!isNone) playSound(val);
         options.classList.add("hidden");
@@ -481,14 +483,14 @@ function renderCapsule(st) {
 
   if (s) {
     $("capsule-project").textContent = s.project_name;
-    const stMap = { working: "Working...", waiting_for_user: "Waiting", stale: "Stale" };
-    $("capsule-status").textContent = stMap[s.state] || "Idle";
+    const stMap = { working: "執行中...", waiting_for_user: "等待處理", stale: "過久未更新" };
+    $("capsule-status").textContent = stMap[s.state] || "閒置";
     const stClass = ({ working: "working", waiting_for_user: "waiting_for_user", stale: "stale" })[s.state] || "idle";
     $("capsule-status").className = "capsule-status " + stClass;
     $("capsule-time").textContent = s.is_active ? s.formatted_time : "";
     $("capsule-time").style.display = s.is_active ? "" : "none";
   } else {
-    $("capsule-project").textContent = "AgentPulse";
+    $("capsule-project").textContent = APP_NAME;
     $("capsule-status").textContent = "";
     $("capsule-status").className = "capsule-status";
     $("capsule-time").style.display = "none";
@@ -511,7 +513,7 @@ function renderSessions(st) {
   $("session-list").innerHTML = st.sessions.map(s => {
     const sel = s.id === aid ? " selected" : "";
     const sc = ({ working: "working", waiting_for_user: "waiting_for_user", stale: "stale" })[s.state] || "idle";
-    const sl = ({ working: "Working", waiting_for_user: "Waiting", stale: "Stale" })[s.state] || "";
+    const sl = ({ working: "執行中", waiting_for_user: "等待中", stale: "過舊" })[s.state] || "";
     const cwdShort = s.cwd ? s.cwd.replace(/^\/home\/[^/]+/, "~") : "";
     return `<div class="session-row${sel}" data-id="${s.id}">
       <div class="session-provider-icon">${providerIconHtml(s.provider, 16)}</div>
@@ -524,7 +526,7 @@ function renderSessions(st) {
         ${s.last_prompt ? `<div class="session-prompt">${esc(s.last_prompt)}</div>` : ""}
       </div>
       ${s.is_active ? `<span class="session-time">${s.formatted_time}</span>` : ""}
-      <button class="session-remove" data-rid="${s.id}" title="Remove">&times;</button>
+      <button class="session-remove" data-rid="${s.id}" title="移除">&times;</button>
     </div>`;
   }).join("");
 

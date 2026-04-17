@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AgentPulse</title>
+  <title>龍蝦監控</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -11,7 +11,7 @@
     <!-- Capsule (always on top, always draggable) -->
     <div id="capsule" class="capsule">
       <div id="capsule-icons" class="capsule-icons"></div>
-      <span id="capsule-project" class="capsule-project">AgentPulse</span>
+      <span id="capsule-project" class="capsule-project">龍蝦監控</span>
       <span id="capsule-status" class="capsule-status"></span>
       <span class="capsule-spacer"></span>
       <span id="capsule-time" class="capsule-time"></span>
@@ -22,15 +22,20 @@
     <div id="view-expanded" class="hidden">
       <div id="session-list" class="session-list"></div>
       <div class="action-bar">
-        <button id="btn-github" class="icon-btn" title="View on GitHub" style="margin-right:auto">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.4 3-.405 1.02.005 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+        <button id="btn-github" class="icon-btn" title="開啟監控設定檔" style="margin-right:auto">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 4h16v16H4z"/>
+            <path d="M8 4v6h8V4"/>
+            <path d="M8 14h8"/>
+            <path d="M8 18h5"/>
+          </svg>
         </button>
-        <button id="btn-settings" class="icon-btn" title="Settings">
+        <button id="btn-settings" class="icon-btn" title="設定">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
           </svg>
         </button>
-        <button id="btn-pin" class="icon-btn" title="Keep Expanded">
+        <button id="btn-pin" class="icon-btn" title="固定展開">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6h2v-6h5v-2z"/>
           </svg>
@@ -42,9 +47,9 @@
     <div id="view-settings" class="hidden">
       <div class="settings-header">
         <div class="settings-tabs">
-          <button class="settings-tab active" data-tab="providers">Providers</button>
-          <button class="settings-tab" data-tab="sounds">Sounds</button>
-          <button class="settings-tab" data-tab="appearance">Appearance</button>
+          <button class="settings-tab active" data-tab="providers">助手</button>
+          <button class="settings-tab" data-tab="sounds">音效</button>
+          <button class="settings-tab" data-tab="appearance">外觀</button>
         </div>
         <button id="btn-close-settings" class="icon-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -56,34 +61,34 @@
         </div>
         <div class="settings-tab-panel" data-panel="sounds">
           <div class="setting-group">
-            <div><div class="setting-main-label">Notification Sounds</div><div class="setting-sub-label">Play sounds for completion and waiting states</div></div>
+            <div><div class="setting-main-label">提示音效</div><div class="setting-sub-label">在完成與等待你處理時播放提示音</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-sound" /><span class="toggle-slider"></span></label>
           </div>
           <div id="sound-picker" class="setting-group-col hidden">
             <div class="sound-header">
-              <label class="setting-label">On Complete</label>
-              <button id="btn-open-sounds" class="icon-btn" title="Open sounds folder">
+              <label class="setting-label">完成時</label>
+              <button id="btn-open-sounds" class="icon-btn" title="開啟音效資料夾">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
                 </svg>
               </button>
             </div>
             <div id="provider-sounds-list"></div>
-            <div class="sound-header"><label class="setting-label">On Waiting For User</label></div>
+            <div class="sound-header"><label class="setting-label">等待你處理時</label></div>
             <div id="provider-waiting-sounds-list"></div>
           </div>
         </div>
         <div class="settings-tab-panel" data-panel="appearance">
           <div class="setting-group">
-            <div><div class="setting-main-label">Light Theme</div><div class="setting-sub-label">Use light color scheme</div></div>
+            <div><div class="setting-main-label">淺色主題</div><div class="setting-sub-label">切換成淺色配色</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-theme" /><span class="toggle-slider"></span></label>
           </div>
           <div class="setting-group">
-            <div><div class="setting-main-label">Keep Expanded</div><div class="setting-sub-label">Panel stays open without hovering</div></div>
+            <div><div class="setting-main-label">固定展開</div><div class="setting-sub-label">不用滑鼠停留也保持展開</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-pin" /><span class="toggle-slider"></span></label>
           </div>
           <div class="setting-group-col">
-            <label class="setting-label">Accent Color</label>
+            <label class="setting-label">重點色</label>
             <div class="color-picker">
               <button class="color-dot active" data-color="purple" style="--dot:rgb(217,128,255)"></button>
               <button class="color-dot" data-color="cyan" style="--dot:rgb(77,217,255)"></button>
@@ -93,7 +98,7 @@
             </div>
           </div>
           <div class="setting-group-col">
-            <label class="setting-label">Size</label>
+            <label class="setting-label">尺寸</label>
             <div class="size-picker">
               <button class="size-btn" data-size="small">S</button>
               <button class="size-btn active" data-size="medium">M</button>

@@ -20,7 +20,7 @@ pub fn provider_needs_setup(_provider_id: &str, config: &ProviderConfig) -> bool
         Err(_) => return true,
     };
 
-    // Look for agentpulse marker in hooks
+    // Look for the LobsterPulse sidecar marker in hooks
     let hooks_obj = json.get("hooks").unwrap_or(&json);
     let hooks = match hooks_obj {
         Value::Object(h) => h,
@@ -51,20 +51,20 @@ pub fn provider_needs_setup(_provider_id: &str, config: &ProviderConfig) -> bool
     true
 }
 
-// Substring that uniquely identifies AgentPulse-installed hooks. Matches
-// the sidecar binary filename across all shells + OSes (agent-pulse-hook
-// on unix, agent-pulse-hook.exe on windows). Previously "agentpulse" —
+// Substring that uniquely identifies LobsterPulse-installed hooks. Matches
+// the sidecar binary filename across all shells + OSes (lobster-pulse-hook
+// on unix, lobster-pulse-hook.exe on windows). Previously "agentpulse" —
 // which never matched anything, because the binary name is hyphenated.
-const MARKER: &str = "agent-pulse-hook";
+const MARKER: &str = "lobster-pulse-hook";
 
 /// Absolute path to the sidecar binary, expected next to the main exe.
 /// Shipping a binary (not a shell one-liner) keeps hook commands
 /// shell-agnostic across bash / PowerShell / cmd.exe.
 fn sidecar_path() -> PathBuf {
     let exe_name = if cfg!(windows) {
-        "agent-pulse-hook.exe"
+        "lobster-pulse-hook.exe"
     } else {
-        "agent-pulse-hook"
+        "lobster-pulse-hook"
     };
     std::env::current_exe()
         .ok()
@@ -91,7 +91,7 @@ fn hook_cmd_powershell(provider_id: &str) -> String {
     }
 }
 
-/// Remove only AgentPulse hooks (those containing "agentpulse" string) from a provider's config
+/// Remove only LobsterPulse hooks from a provider's config.
 pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(), String> {
     let path = match &config.settings_path {
         Some(p) => expand_path(p),
@@ -110,7 +110,7 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
         for (_event, entries) in hooks.iter_mut() {
             if let Value::Array(arr) = entries {
                 arr.retain(|entry| {
-                    // Check if this entry contains an agentpulse hook
+                    // Check if this entry contains a LobsterPulse hook
                     let hook_list = if let Some(Value::Array(hl)) = entry.get("hooks") {
                         hl.clone()
                     } else {
@@ -128,13 +128,13 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
 
     let formatted = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     std::fs::write(&path, formatted).map_err(|e| e.to_string())?;
-    info!("Removed AgentPulse hooks for {provider_id}");
+    info!("Removed LobsterPulse hooks for {provider_id}");
     Ok(())
 }
 
-/// Install hooks for a provider (removes existing AgentPulse hooks first to avoid duplicates)
+/// Install hooks for a provider, removing any previous LobsterPulse hooks first.
 pub fn install_provider(provider_id: &str, config: &ProviderConfig) -> Result<(), String> {
-    // Clean up any existing AgentPulse hooks first
+    // Clean up any existing LobsterPulse hooks first.
     let _ = remove_provider(provider_id, config);
 
     let path = match &config.settings_path {

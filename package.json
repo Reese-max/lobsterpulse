@@ -1,7 +1,7 @@
 {
-  "name": "agent-pulse",
+  "name": "lobster-pulse",
   "version": "0.2.2",
-  "description": "Cross-platform Dynamic Island monitor for AI coding assistant sessions",
+  "description": "Traditional Chinese desktop monitor for Claude, Codex, Copilot, and Gemini sessions",
   "scripts": {
     "tauri": "cargo tauri",
     "dev": "cargo tauri dev",

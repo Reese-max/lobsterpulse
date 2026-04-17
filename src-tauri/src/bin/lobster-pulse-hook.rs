@@ -1,7 +1,7 @@
 // Sidecar binary invoked by CLI hook configs. Reads the event JSON from
-// stdin and forwards it as an HTTP POST to the running AgentPulse server.
+// stdin and forwards it as an HTTP POST to the running LobsterPulse server.
 //
-// Usage: agent-pulse-hook <provider_id>
+// Usage: lobster-pulse-hook <provider_id>
 //
 // Shell-agnostic by design: no bash, no PowerShell, no cmd syntax. Any
 // host CLI that can spawn a process (on any OS) can invoke this. Errors
@@ -28,7 +28,7 @@ fn main() {
 
 fn read_port() -> Option<u16> {
     let home = dirs::home_dir()?;
-    let content = std::fs::read_to_string(home.join(".agentpulse").join("port")).ok()?;
+    let content = std::fs::read_to_string(home.join(".lobsterpulse").join("port")).ok()?;
     content.trim().parse().ok()
 }
 

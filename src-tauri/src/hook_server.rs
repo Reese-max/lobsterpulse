@@ -34,7 +34,7 @@ impl HookServer {
                 Ok(listener) => {
                     self.port = candidate_port;
                     write_port_file(candidate_port);
-                    info!("AgentPulse server listening on port {candidate_port}");
+                    info!("LobsterPulse server listening on port {candidate_port}");
 
                     let tx = Arc::new(tx);
                     tokio::spawn(accept_loop(listener, tx));
@@ -172,7 +172,7 @@ fn find_body_start(data: &[u8]) -> Option<usize> {
 
 fn read_existing_port_file() -> Option<u16> {
     let home = dirs::home_dir()?;
-    let path = home.join(".agentpulse").join("port");
+    let path = home.join(".lobsterpulse").join("port");
     let content = std::fs::read_to_string(path).ok()?;
     content.trim().parse().ok()
 }
@@ -191,7 +191,7 @@ async fn is_port_listening(port: u16) -> bool {
 
 fn write_port_file(port: u16) {
     if let Some(home) = dirs::home_dir() {
-        let dir = home.join(".agentpulse");
+        let dir = home.join(".lobsterpulse");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("port"), port.to_string());
     }
@@ -199,7 +199,7 @@ fn write_port_file(port: u16) {
 
 pub fn remove_port_file() {
     if let Some(home) = dirs::home_dir() {
-        let _ = std::fs::remove_file(home.join(".agentpulse").join("port"));
+        let _ = std::fs::remove_file(home.join(".lobsterpulse").join("port"));
     }
 }
 
@@ -214,7 +214,7 @@ impl std::fmt::Display for ServerError {
         match self {
             Self::NoAvailablePort => write!(f, "No available port in range 19280-19289"),
             Self::AnotherInstanceRunning(p) => {
-                write!(f, "Another AgentPulse instance is running on port {p}")
+                write!(f, "Another LobsterPulse instance is running on port {p}")
             }
         }
     }

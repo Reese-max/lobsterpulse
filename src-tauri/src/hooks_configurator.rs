@@ -78,11 +78,11 @@ fn hook_cmd(provider_id: &str) -> String {
     format!("\"{}\" {provider_id}", sidecar_path().display())
 }
 
-/// Gemini CLI on Windows hardcodes `powershell.exe -NoProfile -Command`
-/// for hook execution. PowerShell parses `"path\to\exe.exe" arg` as a bare
-/// string expression (ParserError: UnexpectedToken at `arg`), not a call —
-/// the `&` call operator is required. cmd.exe and bash don't accept the
-/// prefix, so only emit it on Windows.
+/// Some Windows hook runners execute command strings through PowerShell.
+/// PowerShell parses `"path\to\exe.exe" arg` as a bare string expression
+/// (ParserError: UnexpectedToken at `arg`), not a call, so the `&` call
+/// operator is required. cmd.exe and bash don't accept the prefix, so only
+/// emit it for providers whose Windows hook runner needs PowerShell syntax.
 fn hook_cmd_powershell(provider_id: &str) -> String {
     if cfg!(windows) {
         format!("& {}", hook_cmd(provider_id))
@@ -263,7 +263,7 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
     }
 
     // 2. Write hooks.json
-    let cmd = hook_cmd("codex");
+    let cmd = hook_cmd_powershell("codex");
 
     let hooks_json = json!({
         "hooks": {

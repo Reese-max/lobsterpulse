@@ -7,3 +7,23 @@ dist/
 
 # Spectra app data
 .spectra/
+
+# Auto-dev engineer-loop runtime (loop writes these every round;
+# do NOT delete while loop is running, do NOT track in git)
+.engineer-loop.pid
+.engineer-loop.state.json
+
+# Auto-dev harness sensor reports
+.harness-*.json
+.harness-*.state
+
+# LP notify daemon runtime (jsonl log + DLQ + health)
+.lp-notify*
+.lp-notify-cache/
+
+# Auto-dev project lock + Spectra app config
+.project.lock
+.spectra.yaml
+
+# Auto-dev per-round run records
+runs/

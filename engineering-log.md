@@ -919,3 +919,66 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 **風險**: 連續 M0 模式已打破，但 K5 是新維度、未來若 metrics 改壞要有 e2e 才有完整 coverage（unit test 鎖 format、不鎖 transport）
 **綜合**: 7/10
 **指令**: 下輪可選 K6（per-provider token counter 細顆度）或 M1（任何一條 M0-3 feature 改善），避免再回 silent-fail-only 路徑
+
+### [2026-06-01] Round 17 — K6 per-provider token counter 落地 + 順手修 lifetime token 蒸發 bug
+**類型**: M1（K6 metrics 細顆度 + 修 latent bug；從 R16 M2 量測基建進到 M1 feature 落地）
+**KPI**: K6-per-provider-token-counter + K6-bug-fix
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `lobsterpulse_provider_tokens_input{provider="..."}` metric | 無 | 有（9 provider × counter） | ✓ |
+| `lobsterpulse_provider_tokens_output{provider="..."}` metric | 無 | 有（9 provider × counter） | ✓ |
+| `lobsterpulse_tokens_input`/`_output` lifetime 語意 | 否（sum live session，session 移除後 token 蒸發 → counter 倒退） | 是（讀 `ProviderTotals` lifetime aggregate） | ✓ |
+| render_prometheus_body 函式簽名 | `(sessions, count, active)` | `(sessions, count, active, &ProviderTotals map)` | +1 參數 |
+| 該函式 unit test 數 | 6 | 8 | +2 |
+| Lib unit tests | 57 pass | 59 pass | +2 |
+| cargo clippy --lib --tests -- -D warnings | 0 warning | 0 warning | — |
+| cargo fmt --check | 過 | 過 | — |
+| bash test/smoke-test.sh quick | PASS | PASS | — |
+
+**為什麼**:
+- Supervisor R16 指令明確列 K6 為下輪首選（「per-provider token counter 細顆度」），延續 R16 metrics exporter refactor 紅利
+- 接手時先盤點 session.rs:318-325 的 `ProviderTotals` 發現**資料已存在** — lifetime per-provider 累計在 `SessionManager.bump_provider_totals` 早就在累，**只是 metrics exporter 沒讀** → 純 surgical 接線，**不動 session 狀態**
+- 順手發現 latent bug：原 `render_prometheus_body` 從 live `SessionInfo` sum token，session 移除（`SessionEnd` 或 30 min stale）後 token 從 global metric 蒸發 → Prometheus counter 倒退、警報誤觸發
+- 兩個改動的 schema 共用同一個資料源（`ProviderTotals`）→ 一次改、global + per-provider 一起修
+
+**搜尋**:
+- 沒做 WebSearch（純接線既有 ProviderTotals → metrics endpoint，無新領域）
+- 對照 R16 抽 `render_prometheus_body` 的 pure-fn pattern：純 fn + alphabetical sort + fixture 構造 = 可 unit test
+
+**做了什麼**:
+- `lib.rs::render_prometheus_body` signature 從 `(sessions, count, active)` 改為 `(sessions, count, active, &HashMap<String, ProviderTotals>)`
+- `render_prometheus` (Tauri-bound wrapper) 多傳 1 個參數：`&state.provider_totals`（line 553 `AppState` 已有）
+- Token 累計邏輯：原 `for s in sessions { tot_in += s.tokens_input; ... }` 改為 `for (p, t) in provider_totals { tot_in = tot_in.saturating_add(t.tokens_input); provider_in.insert(p, ...); ... }`
+- 新增 2 條 Prometheus metric：
+  - `lobsterpulse_provider_tokens_input{provider="..."}` — counter, HELP "Lifetime input tokens per provider"
+  - `lobsterpulse_provider_tokens_output{provider="..."}` — counter, HELP "Lifetime output tokens per provider"
+- 新增 2 個 unit test：
+  1. `per_provider_token_metrics_alphabetical_and_separate` — 3 providers 不同 token 數，alphabetical 排序驗證
+  2. `token_aggregate_uses_lifetime_not_live_sessions` — 0 個 live session 但 provider_totals 有大量 token，驗證 metric 仍正確反映 lifetime（修 bug 的核心 regression guard）
+- 既有 `token_counters_sum_across_all_sessions` 改名為 `token_counters_sum_from_provider_totals_aggregate`、改用 `totals_map` fixture
+- 新增 `totals(provider, in_, out)` test helper（封裝 ProviderTotals 構造）
+- `output_includes_help_and_type_headers_for_every_metric` 測試新增 4 行 required header 驗證（HELP + TYPE × 2 條新 metric）
+
+**為什麼不另開 metric 命名空間**:
+- 沿用 `lobsterpulse_*` prefix + `_provider_` 區隔細顆度，符合 Prometheus naming convention
+- `lobsterpulse_tokens_input` (global) / `lobsterpulse_provider_tokens_input` (per-provider) 兩條共存且合計一致（global = sum of provider），operator 端可自由 aggregate
+
+**驗證**:
+- `cargo fmt --check` 過（rustfmt 自動重排 `vec![...]` 換行、1 file touched by fmt）
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 59/59 pass（57 prior + 2 new；0 regression）
+- `bash test/smoke-test.sh quick` PASS（cargo check 綠）
+
+**結果**: PASS（K6 落地 + lifetime token bug 順手修 + 0 lint warning + 0 regression + commit `68659a9`）
+
+**KPI-impact: K6 per-provider token counter 從 0 → 2 metric + 修 lifetime token counter 蒸發 bug**
+
+**不做的範圍**（給後續輪次）:
+- 加 HTTP-level e2e 測試（spawn 整個 metrics server thread）：test 慢且 flaky 風險高、port 衝突要管理，超出 M1 surgical 範圍
+- `lobsterpulse_session_failure_count` / `lobsterpulse_session_idle_age_seconds` SLO signal：目前 `AppState` 沒暴露這兩欄，要先動 session.rs / state gathering，超出本輪
+- 拆 `MetricsSnapshot` trait abstraction：1 個 caller、YAGNI
+- per-provider **session failure counter** 細顆度（`lobsterpulse_provider_failure_count{provider="..."}`）：資料在 `ProviderTotals.failure_count`、已是 lifetime aggregate，可作為下一輪 K7 候選（與 K6 同 pattern）
+- 把 lifetime token counter bug 的 fix 套到 discord `poll_discord_commands` 的 silent-fail 路徑：無關 metric 範圍、不順手
+- `.arch-fitness.json` / `.supervisor-report.json` 加 .gitignore：是 H0、24h chore_ratio 紅線仍生效

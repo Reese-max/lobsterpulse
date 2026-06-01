@@ -739,3 +739,71 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - 為 R6/R8/R11/R12/R21 5 個 silent-fail surface 點寫**整合** log filter doc（記下 `[prefix]` grep 速查表）：是 H0 docs，下輪再議
 - 全 codebase sweep `let _ =` 殘留：R12 末已列為「scope 跨多 module、需另開一輪」，本輪 surgical
 - 把 lifetime counter pattern 套到 `discord_kill_cmd` reaction count / `token_spike` trigger count 等：超出 metrics 範疇
+
+### [2026-06-01] Round 22 — K10 per-provider since_timestamp gauge 落地（lifetime 五件套收尾：ProviderTotals.since 派生）
+**類型**: M1（K10 metrics 細顆度；K6/K7/K8/K9 lifetime aggregate 同 pattern 收尾）
+**KPI**: K10-per-provider-since-timestamp-gauge
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `lobsterpulse_provider_since_timestamp{provider="..."}` gauge | 無 | 有（per-provider × gauge，Unix epoch seconds） | ✓ |
+| `ProviderTotals.since` 欄位 exposed 維度 | 0（已收集未 expose） | 1（gauge） | +1 |
+| `render_prometheus_body` provider metric 段數 | 7 (sessions / active / tokens_in / tokens_out / failure / idle / session_count) | 8 (新增 since_timestamp) | +1 |
+| Lib unit tests | 72 pass | 77 pass | +5 |
+| `cargo clippy --lib --tests -- -D warnings` | 0 warning | 0 warning | — |
+| `cargo fmt --check` | 過 | 過 | — |
+| `bash test/smoke-test.sh quick` | PASS | PASS | — |
+| 24h chore_ratio (rolling) | 41% | 41%（本輪 M1 不計入 chore） | 持平 |
+
+**為什麼**:
+- R19 末列 K8 候選 = per-provider `since` first-seen；K8 落地時 predecessor 順手把 `ProviderTotals.last_event_at` 收齊但 `since` 仍未 expose
+- `ProviderTotals.since` 在 R19 之前的 `bump_provider_totals` 就已收集（`if entry.since.is_none() { entry.since = Some(Utc::now()) }`），是 R19 落地前就存在的 lifetime 信號 —— K10 純接線把它透出
+- 用途：
+  1. `now - since_timestamp` = uptime 對等量（該 provider 已監控多久）
+  2. 結合 K8 idle_seconds 算「最近活動佔 lifetime 比例」= 健康度信號
+  3. debug「quota 為什麼是 0」時一查就知道「這 provider 到底有沒有接入過」（since 缺失 = 從未收過 event）
+- 對齊 K6/K7/K8/K9 lifetime-vs-live：since 進 ProviderTotals 後不蒸發，session 結束 + 30 min stale 回收後仍能看出「何時第一次被監控到」
+- 24h chore_ratio 41% 仍超 30% 紅線 → 本輪**強制 M1**，不碰 H0
+
+**搜尋**:
+- 沒做 WebSearch（K6/K7/K8/K9 同 pattern 延伸，純 surgical 接線）
+- 對照 K9 lifetime-vs-live regression guard 概念：本輪新測試 `since_timestamp_uses_lifetime_aggregate_not_live_sessions` 復用同 pattern（0 live session 但 ProviderTotals.since 已填 → 仍輸出）
+
+**做了什麼**:
+- `lib.rs::render_prometheus_body` 新增 `provider_since: HashMap<String, i64>` 收集 `ProviderTotals.since.timestamp()`、alphabetical 排序、sample line 輸出
+- 新 metric 段：
+  ```
+  # HELP lobsterpulse_provider_since_timestamp Unix epoch seconds when this provider was first seen (lifetime aggregate)
+  # TYPE lobsterpulse_provider_since_timestamp gauge
+  lobsterpulse_provider_since_timestamp{provider="cicx"} 1735739400
+  ...
+  ```
+- `since = None` 的 provider 不輸出 sample（對齊 K8 idle_seconds `last_event_at = None` 跳過策略，避免 Prometheus 端把缺失當 0 timestamp = 1970-01-01 誤判）
+- 新增 5 個 unit test：
+  1. `since_timestamp_empty_state_emits_header_only` — 0 provider，header 有、sample line 沒有
+  2. `since_timestamp_emits_unix_seconds_per_provider` — 3 provider 不同 since（2024/2025/2026），驗 sample line 用 `timestamp()` 序列化
+  3. `since_timestamp_skips_providers_with_no_since` — `since = None` 的 provider 不輸出 sample
+  4. `since_timestamp_uses_lifetime_aggregate_not_live_sessions` — 0 live session 但 ProviderTotals.since 已填，metric 仍正確反映 lifetime
+  5. `since_timestamp_alphabetical_and_deterministic` — 3 provider 故意非字母序輸入，alphabetical 排序 + 確定性
+- 新 fixture helper：`totals_with_since(p, since)`、`totals_no_since(p)`
+- 既有 `output_includes_help_and_type_headers_for_every_metric` test 補 K10 兩個 header
+- 既有 `empty_state_emits_zero_counters_and_no_provider_lines` test 補 K10 sample line 缺席斷言
+- test module 內 import `chrono::TimeZone`（用 `.with_ymd_and_hms` 構造 fixture timestamp，production code 不引入避免污染 runtime import）
+
+**驗證**:
+- `cargo fmt --check` → 過
+- `cargo clippy --lib --tests -- -D warnings` → 0 warning
+- `cargo test --lib` → 77 passed; 0 failed（前 72 + K10 5 條）
+- `bash test/smoke-test.sh quick` → PASS
+
+**結果**: PASS（commit `f71560c`、1 file / +230 / -0）
+
+**不做的範圍**（給後續輪次）:
+- M0-3 程式碼改動：K6/K7/K8/K9/K10 lifetime 五件套已收尾，下一輪可從更高層次思考：
+  - 真正的 SLO 維度（histogram：session_duration_seconds / time_to_first_event）
+  - OpenAB bridge ingest throughput（每分鐘事件數 counter）
+  - 事件 type 細分（per-provider per-event-type counter，給「cicx ThinkingDelta 比例」等深度分析）
+  - K-quota snapshot timestamp（OpenAB snapshot 檔最後修改時間 → age gauge）— quota_history 已有檔案，可順手 derive
+- 把 K10 since_timestamp 接到 Discord Bot 通知（idle 比例 > 80% 觸發「該 provider 半年沒新事件」提醒）：超出 metrics 範疇、需另開 M1
+- 全 codebase sweep `let _ =` 殘留：R12 末已列為「scope 跨多 module、需另開一輪」，本輪 surgical

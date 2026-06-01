@@ -595,6 +595,58 @@ mod tests {
     }
 
     #[test]
+    fn session_count_lifetime_aggregate_accumulates_across_unique_sessions() {
+        // K9 整合測試：lifetime aggregate 真實累積路徑。
+        // 同 provider 多個 unique session_id 開過 → ProviderTotals.session_count 累計。
+        // 同一 session 內多個 event → 不重複算（K9 跟 K6/K7/K8 一致：unique session_id 算一次）。
+        // session 結束 + 新 session 開 → 累計增加。
+        let mut m = SessionManager::new();
+        // session 1：開 + 多個 event + 結束
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionStart"));
+        let _ = m.handle_event(&ev("cicx", "s1", "UserPromptSubmit"));
+        let _ = m.handle_event(&ev("cicx", "s1", "PreToolUse"));
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionEnd"));
+        assert_eq!(
+            m.provider_totals.get("cicx").map(|t| t.session_count),
+            Some(1),
+            "session 1 結束後累計應為 1"
+        );
+        // session 2：不同 session_id → 累計 +1
+        let _ = m.handle_event(&ev("cicx", "s2", "SessionStart"));
+        assert_eq!(
+            m.provider_totals.get("cicx").map(|t| t.session_count),
+            Some(2),
+            "session 2 開始後累計應為 2（session 1 lifetime 保留）"
+        );
+        // session 3：開 event 但不結束 → 累計 +1
+        let _ = m.handle_event(&ev("cicx", "s3", "SessionStart"));
+        assert_eq!(
+            m.provider_totals.get("cicx").map(|t| t.session_count),
+            Some(3),
+            "session 3 開始後累計應為 3"
+        );
+        // 同 session 內重發 SessionStart（duplicate） → 不 +1
+        let _ = m.handle_event(&ev("cicx", "s3", "SessionStart"));
+        assert_eq!(
+            m.provider_totals.get("cicx").map(|t| t.session_count),
+            Some(3),
+            "同 session 重發 SessionStart 不該 +1"
+        );
+        // 不同 provider session → 獨立累計
+        let _ = m.handle_event(&ev("codex", "c1", "SessionStart"));
+        assert_eq!(
+            m.provider_totals.get("cicx").map(|t| t.session_count),
+            Some(3),
+            "cicx 累計不該被 codex 影響"
+        );
+        assert_eq!(
+            m.provider_totals.get("codex").map(|t| t.session_count),
+            Some(1),
+            "codex 累計應為 1"
+        );
+    }
+
+    #[test]
     fn duplicate_session_end_does_not_trigger_completed_twice() {
         let mut m = SessionManager::new();
         let _ = m.handle_event(&ev("cicx", "s2", "SessionStart"));

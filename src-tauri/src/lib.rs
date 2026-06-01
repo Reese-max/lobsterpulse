@@ -1050,12 +1050,21 @@ fn render_prometheus_body(
     // 進去時一定 ≤ render 端讀到時的 wall clock），但保留 saturating 防時鐘回撥 / 序列化。
     let mut provider_idle: std::collections::HashMap<String, i64> =
         std::collections::HashMap::new();
+    // K9 落地：per-provider lifetime session count —— 該 provider 累計開過多少 session
+    // （每個 unique session_id 算一次，由 `SessionManager::handle_event` 在新 session 插入時
+    // `ProviderTotals.session_count += 1`）。跟 K6/K7 lifetime aggregate 一致：session 結
+    // 束 + 30 min stale 回收後 live 為 0，但 lifetime `ProviderTotals.session_count` 仍保留。
+    // 差異化 `lobsterpulse_provider_sessions`（live）和本 metric（lifetime）= user 知道
+    // 該 provider 累計被 stale 回收的 session 數 = 使用量信號。
+    let mut provider_session_count: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     for (p, t) in provider_totals {
         tot_in = tot_in.saturating_add(t.tokens_input);
         tot_out = tot_out.saturating_add(t.tokens_output);
         provider_in.insert(p.clone(), t.tokens_input);
         provider_out.insert(p.clone(), t.tokens_output);
         provider_fail.insert(p.clone(), t.failure_count);
+        provider_session_count.insert(p.clone(), t.session_count);
         if let Some(last) = t.last_event_at {
             let elapsed = now.signed_duration_since(last).num_seconds().max(0);
             provider_idle.insert(p.clone(), elapsed);
@@ -1074,6 +1083,8 @@ fn render_prometheus_body(
     provider_fail_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_idle_sorted: Vec<_> = provider_idle.iter().collect();
     provider_idle_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_session_count_sorted: Vec<_> = provider_session_count.iter().collect();
+    provider_session_count_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
@@ -1125,6 +1136,16 @@ fn render_prometheus_body(
     for (p, n) in &provider_idle_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_idle_seconds{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    // K9 落地：per-provider lifetime session count —— 累計已開過多少 session。
+    // 跟 K6/K7 lifetime aggregate 對齊：counter 類型，session 結束 / stale 回收後
+    // live 為 0，但 ProviderTotals.session_count 仍保留 → metric 反映歷史累計。
+    // 差異化 `lobsterpulse_provider_sessions`（live）：本 metric 顯示「曾經開過」總量。
+    out.push_str("# HELP lobsterpulse_provider_session_count Lifetime session count per provider\n# TYPE lobsterpulse_provider_session_count counter\n");
+    for (p, n) in &provider_session_count_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_session_count{{provider=\"{p}\"}} {n}\n"
         ));
     }
     out
@@ -2013,6 +2034,22 @@ mod render_prometheus_tests {
         )
     }
 
+    /// K9 測試用：為 test 製造 ProviderTotals fixture，指定 `session_count`（lifetime 累計）。
+    /// token / failure 留 0、`last_event_at` 設 now（避免干擾 K8 idle 計算）。
+    fn totals_with_session_count(provider: &str, session_count: u64) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count,
+                failure_count: 0,
+                since: None,
+                last_event_at: Some(Utc::now()),
+            },
+        )
+    }
+
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
         let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
@@ -2029,6 +2066,8 @@ mod render_prometheus_tests {
         assert!(!body.contains("lobsterpulse_provider_tokens_output{"));
         // K7 落地：per-provider 失敗計數段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_failure_count{"));
+        // K9 落地：per-provider lifetime session count 段同樣：空 map → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_session_count{"));
     }
 
     #[test]
@@ -2215,6 +2254,9 @@ mod render_prometheus_tests {
             // K8 新增：per-provider idle gauge
             "# HELP lobsterpulse_provider_idle_seconds",
             "# TYPE lobsterpulse_provider_idle_seconds gauge",
+            // K9 新增：per-provider lifetime session count counter
+            "# HELP lobsterpulse_provider_session_count",
+            "# TYPE lobsterpulse_provider_session_count counter",
         ];
         for h in required_headers {
             assert!(
@@ -2398,5 +2440,75 @@ mod render_prometheus_tests {
 
         // clamp 為 0 而非 -1
         assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"claude\"} 0\n"));
+    }
+
+    #[test]
+    fn session_count_empty_state_emits_header_only() {
+        // 沒任何 provider → K9 段只有 HELP/TYPE、沒有 sample line。
+        // 對齊 K6/K7/K8「empty state 不假裝 0 session」語意。
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
+
+        assert!(body.contains("# HELP lobsterpulse_provider_session_count"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_session_count counter"));
+        assert!(!body.contains("lobsterpulse_provider_session_count{"));
+    }
+
+    #[test]
+    fn session_count_uses_lifetime_aggregate_not_live_sessions() {
+        // K9 核心 regression guard：lifetime-vs-live。
+        // 0 個 live session（sessions=[]）但 ProviderTotals.session_count=5 → metric 仍顯示 5。
+        // 跟 K6/K7/K8 一致：session 結束 + 30 min stale 回收後 live 為 0，但 lifetime
+        // ProviderTotals.session_count 仍保留 → Prometheus 不會誤判 counter 倒退。
+        let body = render_prometheus_body(
+            &[], // 0 個 live session
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_session_count("cicx", 5),   // 5 個 session 累計
+                totals_with_session_count("codex", 1),  // 1 個 session
+                totals_with_session_count("claude", 0), // 0（理論不會出現，但驗 0 也輸出）
+            ]),
+            Utc::now(),
+        );
+
+        assert!(body.contains("lobsterpulse_provider_session_count{provider=\"cicx\"} 5\n"));
+        assert!(body.contains("lobsterpulse_provider_session_count{provider=\"codex\"} 1\n"));
+        assert!(body.contains("lobsterpulse_provider_session_count{provider=\"claude\"} 0\n"));
+    }
+
+    #[test]
+    fn session_count_alphabetical_and_deterministic() {
+        // 3 個 provider、不同 session count、故意非字母序輸入 → 驗 alphabetical 排序。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_session_count("openx", 12),
+                totals_with_session_count("cicx", 3),
+                totals_with_session_count("gemini", 7),
+            ]),
+            Utc::now(),
+        );
+
+        // 每個 provider 都應該有對應 sample line
+        assert!(body.contains("lobsterpulse_provider_session_count{provider=\"cicx\"} 3\n"));
+        assert!(body.contains("lobsterpulse_provider_session_count{provider=\"gemini\"} 7\n"));
+        assert!(body.contains("lobsterpulse_provider_session_count{provider=\"openx\"} 12\n"));
+
+        // 排序驗證：cicx < gemini < openx
+        let cicx_idx = body
+            .find("lobsterpulse_provider_session_count{provider=\"cicx\"} 3\n")
+            .expect("cicx session_count line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_session_count{provider=\"gemini\"} 7\n")
+            .expect("gemini session_count line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_session_count{provider=\"openx\"} 12\n")
+            .expect("openx session_count line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider session_count 必須 alphabetical 排序"
+        );
     }
 }

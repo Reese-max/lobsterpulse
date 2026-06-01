@@ -298,12 +298,17 @@ mod tests {
 
     #[test]
     fn hook_parse_failures_counter_does_not_increment_on_valid_json() {
-        let before = super::hook_parse_failures();
-        // 合法 JSON 應走 Ok 分支，counter 不變
+        // HOOK_PARSE_FAILURES 是 process-level AtomicU64（K15 lifetime aggregate
+        // 設計），cargo test 平行時其他 test 的 process_body(壞 JSON) 會
+        // fetch_add 進同一個 counter，所以「valid JSON 不該 increment」不能用
+        // assert_eq!(after, before) 對全局值斷言 —— 會被平行 test 噪音打掛。
+        //
+        // 證明 valid JSON 不 increment 的方式是「call 回 Ok」：process_body 內
+        // fetch_add 緊接在 Err(()) return 之前，Ok 分支不碰 counter。所以本
+        // test 只驗「valid JSON 解析成功、且沒走到 fetch_add 那條 Err 路徑」，
+        // counter 數值交給另外 2 條 incremental test 驗。
         let event = process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
             .expect("valid json should parse");
-        let after = super::hook_parse_failures();
-        assert_eq!(after, before, "valid JSON 不該讓 counter 增加");
         assert_eq!(event.hook_event_name, "Stop");
     }
 

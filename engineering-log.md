@@ -4,6 +4,59 @@
 
 ## 改善紀錄
 
+### [2026-06-01] Round 14 — hook_server::write_port_file 2 條 silent fail surface (create_dir_all + write)
+**類型**: M0（user-facing observability bug：port file 是 sidecar 找 port 唯一依據、setup 失敗整個 hook 路徑走錯 port、user 端 capsule 動不了、log 全無）
+**KPI**: K-silent-fail-surface
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| write_port_file 內 silent fail sites | 2 (create_dir_all + write) | 0 (if let Err + log::warn) | −2 |
+| 累積 silent-fail-surface 覆蓋（含 R6/R8/R9/R11/R12/R13） | 31 sites surfaced | 33 sites surfaced | +2 |
+| cargo test --lib | 49 pass | 49 pass | — |
+| cargo clippy --lib --tests -- -D warnings | 0 warning | 0 warning | — |
+| 24h 連續 M0 推進輪數 | 7 (R6/R8/R9/R11/R12/R13/本輪) | 8 | +1 |
+| 24h chore_ratio (純 M0 fix) | 0% (連續 fix type) | 0% | — |
+
+**為什麼**:
+- R13 末 explicit defer「下次 round 挑」：`hook_server.rs:427-428` port file write — port file 是 sidecar (`bin/lobster-pulse-hook.rs:31`) `read_port()` 唯一讀取源，create_dir_all 或 write 失敗時 sidecar 端 `read_to_string(...).ok()?` 直接 None → fallback DEFAULT_PORT=19280、整個 hook 路徑走錯 port、user 端 capsule 動不了、log 全無
+- 影響面：9 家 provider 全部 hook event 進不到（因為 post 到錯 port 連不上），等同整套監控失明
+- 對齊 R12/R13 改法：inline `let _ =` → `if let Err(e) = ... { log::warn!(...) }`，訊息含 site name (`write_port_file`) + 失敗原因 + path（create 還帶 dir，write 還帶 port 編號）
+
+**搜尋**:
+- 沒做 WebSearch（同 R6/R8/R11/R12/R13 既有 pattern 延伸、非新領域）
+- 順手對照 R13 末「不做的範圍」清單：本輪只動 `hook_server.rs:427-428`，其他留的 (sidecar stdin/HTTP、auto_rules context menu、openab_bridge best-effort cleanup) 仍不混入
+- 順手驗 `bin/lobster-pulse-hook.rs:25-26` `let _ = post(...)` 是 sidecar 端，sidecar 整個 process 一退出 = CLI 不等結果，符合「fail 不破壞 parent CLI」設計意圖、非 silent fail
+
+**做了什麼**:
+- `hook_server.rs:424-436` write_port_file：
+  - 427 `let _ = std::fs::create_dir_all(&dir);` → `if let Err(e) = ... { log::warn!("write_port_file: create dir {} failed: {e}", dir.display()); }`
+  - 428 `let _ = std::fs::write(dir.join("port"), port.to_string());` → `if let Err(e) = ... { log::warn!("write_port_file: write port={port} to {}/port failed: {e}", dir.display()); }`
+- 兩條獨立 if let Err（不 return）— 對齊 R12/R13 模式；create 失敗仍嘗試 write，換 debug 時「create 失敗」vs「write 失敗」訊息清晰（disk full 兩條都會 fire、disk permission 只 create 會 fire、read-only fs 兩條都 fire，分得開）
+
+**為什麼不加 unit test**:
+- write_port_file 是 private fn，內部用 `dirs::home_dir()` 讀 env、跨平台行為（Windows 讀 USERPROFILE / Unix 讀 HOME）要設對才能 mock
+- 要包 fn 加 `dir: &Path` 參數 = 改 ABI 為了測 = 「abstraction for test only」、違反 R13 拒絕的「abstraction for single-use」精神
+- 接受：這條屬於 integration-test territory（真實 fs 行為、跨平台 home dir），留給後續若加 e2e harness 再覆蓋；同 R12/R13 取捨
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 49/49 pass（0 regression；R13 累積 49，本輪未新增 unit test）
+- `bash test/smoke-test.sh quick` PASS
+
+**結果**: PASS（M0 observability 改善落地 + 2 silent fail sites surfaced + 0 lint warning + 0 regression + commit `338cc23`）
+
+**不做的範圍**（給後續輪次）:
+- `hook_server.rs:432-436` `remove_port_file` 內 `let _ = std::fs::remove_file(...)` — 是 shutdown 階段 best-effort cleanup、port file 留著下次啟動會被 `read_existing_port_file` 偵測到仍可運作（is_port_listening fallback）、非 silent fail 高優先
+- `bin/lobster-pulse-hook.rs:23, 26` sidecar stdin read / HTTP post — R14 驗過設計意圖是「fail 不破壞 parent CLI」、非 silent fail
+- `auto_rules.rs:631, 638` powershell context menu spawn — 是 user-input command 路徑、scope 更大（可能涉及 shell injection 防護），本輪 R14 不混入；下一輪可單獨評估
+- `openab_bridge.rs:69, 240, 253-254, 273, 321, 331, 342, 357, 371` best-effort temp cleanup — R12/R13 已歸類「下一次 open() 會 Err 暴露、caller 已 log」、雙層保護
+- `quota_history.rs:60` `let _ = writeln!(f, ...)` CSV row write — R13 歸類 LOW（趨勢圖少一點而已），留著
+- `.arch-fitness.json` / `.supervisor-report.json` 是 supervisor runtime 產物，R12 末 deferred 給 H0 窗口加 .gitignore
+
+---
+
 ### [2026-06-01] Round 13 — tray menu 4 條 CLI spawn silent fail surface (openab_restart × 2 + open_config + restart)
 **類型**: M0（user-facing observability bug：4 條 on_menu_event closure 內 `let _ = std::process::Command::new(...).output()/spawn()` 沉默吞 error）
 **KPI**: K-silent-fail-surface

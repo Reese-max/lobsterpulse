@@ -628,16 +628,24 @@ fn tick_inner(
 
             // 觸發 openab 重啟
             if !openab_restart_command.trim().is_empty() {
-                let _ = std::process::Command::new("powershell.exe")
+                if let Err(e) = std::process::Command::new("powershell.exe")
                     .args([
                         "-NoProfile",
                         "-Command",
                         "Stop-Process -Name openab -Force -ErrorAction SilentlyContinue",
                     ])
-                    .spawn();
-                let _ = std::process::Command::new("powershell.exe")
+                    .spawn()
+                {
+                    log::warn!("auto_rules: hook_failure_burst openab stop spawn failed: {e}");
+                }
+                if let Err(e) = std::process::Command::new("powershell.exe")
                     .args(["-NoProfile", "-Command", openab_restart_command])
-                    .spawn();
+                    .spawn()
+                {
+                    log::warn!(
+                        "auto_rules: hook_failure_burst openab restart spawn failed (cmd={openab_restart_command}): {e}"
+                    );
+                }
                 if let Err(e) = discord::send_message(
                     notify.discord_token,
                     notify.discord_channel,

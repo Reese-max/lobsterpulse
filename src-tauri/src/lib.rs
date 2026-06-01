@@ -1638,17 +1638,23 @@ pub fn run() {
                     "openab_restart" => {
                         let cfg_state = app.state::<AppConfigState>();
                         let restart_cmd = cfg_state.0.lock().unwrap().appearance.openab_restart_command.clone();
-                        let _ = std::process::Command::new("powershell.exe")
+                        if let Err(e) = std::process::Command::new("powershell.exe")
                             .args([
                                 "-NoProfile",
                                 "-Command",
                                 "Stop-Process -Name openab -Force -ErrorAction SilentlyContinue",
                             ])
-                            .output();
+                            .output()
+                        {
+                            log::warn!("openab_restart: stop powershell failed: {e}");
+                        }
                         if !restart_cmd.trim().is_empty() {
-                            let _ = std::process::Command::new("powershell.exe")
+                            if let Err(e) = std::process::Command::new("powershell.exe")
                                 .args(["-NoProfile", "-Command", &restart_cmd])
-                                .spawn();
+                                .spawn()
+                            {
+                                log::warn!("openab_restart: spawn `{}` failed: {e}", restart_cmd);
+                            }
                         }
                     }
                     "toggle_theme" => {
@@ -1661,14 +1667,18 @@ pub fn run() {
                         let opener = if cfg!(target_os = "macos") { "open" }
                                      else if cfg!(target_os = "windows") { "explorer" }
                                      else { "xdg-open" };
-                        let _ = std::process::Command::new(opener)
+                        if let Err(e) = std::process::Command::new(opener)
                             .arg(path.to_string_lossy().to_string())
-                            .spawn();
+                            .spawn()
+                        {
+                            log::warn!("open_config: spawn `{}` failed: {e}", opener);
+                        }
                     }
                     "restart" => {
                         if let Ok(exe) = std::env::current_exe() {
-                            let _ = std::process::Command::new(exe)
-                                .spawn();
+                            if let Err(e) = std::process::Command::new(exe).spawn() {
+                                log::warn!("restart: spawn self failed: {e}");
+                            }
                         }
                         hook_server::remove_port_file();
                         app.exit(0);

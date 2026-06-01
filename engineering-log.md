@@ -709,3 +709,129 @@
 - 全 codebase sweep 剩餘 silent fail sites（`openab_bridge::tail_new_events` 等,R24 候選未動）
 - K14 alert rules 寫進 Prometheus alertmanager（4 條 metric 已就緒,但 alert 規則需要 alertmanager 端 config,非程式碼改動）
 - engineering-log.md 622 行超 500 cap → 下輪 H0 rotate（本輪 M1 順,禁 H0）
+
+### [2026-06-02] R28 — auto_state.json RMW load 4 條 silent fail surfaced + helper 收斂
+
+**類型**: M0（silent error surfacing — 對齊 R6 / R10 / R11 / R12 / R14 / R23 silent-surfacing 主題線）
+
+**KPI**: silent_fail_sites_observable 4 個新 surface 路徑
+
+**為什麼**:
+- R25 auto_rules confirm 流程 send-fail surfaced 後，發現 auto_state.json 的 RMW load 路徑還有 4 處 silent 吞 error：
+  - 2 個 loader (`load_persisted_summary_markers_at_impl` / `load_persisted_session_idle_markers_at_impl`) 用 `serde_json::from_str(...).unwrap_or_default()`
+  - 2 個 persist (`persist_summary_markers_in` / `persist_session_idle_markers_in`) 的 RMW 預讀用 `read_to_string(...).ok().and_then(from_str).ok().unwrap_or_default()` 鏈
+- auto_state.json 損壞場景：磁碟寫入半截（斷電 / OOM）/ 手動編輯壞 JSON / 編碼錯 → 全部回 default → dedup state 漂移 → summary 重推 / session_idle 重通知 spam
+- operator 看到「今天 10:00 summary 又推了一次」沒 log 可查「是 disk full 還是壞 JSON」
+
+**搜尋**: 沿用 R6/R23 「caller 端 log 統一 prefix」pattern — 已有 `discord_err_msg` (R6) 跟 `config_persist_warn_msg` (R23) 兩條 prefix 風格，本輪新增 `persisted_marker_warn_msg` 第三條同風格 helper，集中格式 + 收斂 fs / serde 兩條失敗路徑到同一個 `parse_persisted_markers_at` 函式
+
+**做了什麼**:
+- `persisted_marker_warn_msg(err: &str) -> String` — 統一 prefix `[auto_rules] auto_state markers load failed: {err}`
+- `parse_persisted_markers_at(path: &Path) -> PersistedSummaryMarkers` — 三條路徑：
+  1. `NotFound` → `default()` 靜默（first-run 預期，避免啟動 spam log）
+  2. 其他 IO 錯誤（權限 / disk full）→ `log::warn!` + `default()`
+  3. JSON 解析失敗 → `log::warn!` 帶 80 字元 preview + `default()`
+- 4 處 silent 鏈改成呼叫 helper
+- 4 個 unit test 覆蓋三條路徑 + RMW 壞 JSON 整合行為（`r25_persisted_marker_warn_msg_unifies_prefix` / `r25_parse_missing_file_returns_default_no_log` / `r25_parse_corrupt_json_logs_warn_and_returns_default` / `r25_persist_session_idle_over_corrupt_json_logs_warn_and_overwrites`）
+- RMW 壞 JSON 寫入行為鎖住：壞 JSON 進來 helper 回 default → persist 用 default payload 寫回 → summary marker 沒救回（跟 R16 同檔共存設計保持一致：壞檔救不回，寧可重發也不要 silent 漂移）
+
+**驗證**:
+- `cargo fmt --check` 過（cargo fmt 自動重排 `persisted_marker_warn_msg(&format!(...))` 多行呼叫）
+- `cargo clippy --lib --no-deps -- -D warnings` 0 warning
+- `cargo test --lib auto_rules:: --no-fail-fast` **27 passed**（含 4 個 R28 new tests），baseline 145 tests 全綠、0 regression
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked supervisor 檔，符合 R13 防護）
+- commit `a29e6f2` — 1 file / +123 / -17
+
+**為什麼 helper 命名 `parse_persisted_markers_at`**:
+- 跟既有 `load_persisted_summary_markers_at` / `load_persisted_session_idle_markers_at` 系列命名對齊（`{verb}_{entity}_at`）
+- 用 `at` suffix 表示「在指定 path 讀」（testable、跟 `persist_*_in` 的 `in` suffix 對仗）
+
+**為什麼 test 名稱沿用 R28 標頭**:
+- 本輪 commit 跟 test 都標 R28（log 序號）
+- prompt 內部 round counter 是 R25 但跟 log 序號已 drift 3 輪（K13 R26 → K14 R27 → R28 silent surfacing）
+- 沿用 prompt 的 "R25" 反而會跟 log 既有 R25 entry 重複 → 用 log 序號 R28 維持唯一性
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| silent_fail_sites auto_state.json load | 4 swallowed | 4 surfaced | +4 observable |
+| log prefix 一致性 (auto_rules 模組) | 2 prefix | 3 prefix | +1 (`persisted_marker_warn_msg`) |
+| auto_rules unit tests | 23 | 27 | +4 |
+
+**不做的範圍**（給後續輪次）:
+- `openab_bridge::tail_new_events` 剩餘 silent fail sites（R24 候選未動）
+- `last_session_idle_event_ts` GC 改用 moka / 顯式 LRU（目前是 lazy 64-drop 簡版，效率非本輪 KPI）
+- engineering-log.md 622+ 行超 500 cap → R29 H0 候選 rotate（本輪 M0 順，禁 H0）
+- K15 hook_parse_failures metric 已有，但 RMW 壞 JSON 屬於「caller 端磁碟損壞」不在 hook_server 端，跟 K15 是互補兩個 metric 點
+
+**結果**: PASS（M0 silent error surfacing 收尾 auto_state.json RMW 路徑 + 0 lint warning + 0 regression + commit `a29e6f2`）
+
+**KPI-impact: silent_fail_sites_observable +4 個 auto_state.json load 失敗路徑 surface 出來,operator 排查 dedup 漂移時間從「找線索」降到「grep 一行 prefix」**
+
+### [2026-06-02] R29 — quota_history CSV row parse silent-fail surfaced（ts/pct `unwrap_or(0)` 假資料 4 path → 1 helper + 6 tests）
+
+**類型**: M0（silent error surfacing — 對齊 R21 / R23 / R28 silent-surfacing 主題線）
+
+**KPI**: silent_fail_sites_observable +2 paths（`ts.parse().unwrap_or(0)` / `pct.parse().unwrap_or(0)`） → log warn 帶 line_no + raw value
+
+**為什麼**:
+- 觀察 10687: R28 auto_state.json RMW 收尾後，sweep 剩餘 silent-fail sites 發現 `quota_history::load_history` 也有同型 `unwrap_or(0)` 鏈
+- 兩條鏈在 CSV 寫入半截（斷電 / OOM / 手動編輯壞 row）時會把整列靜默當成 `(ts=0, pct=0)` 推進 map：
+  - `ts=0` → 1970-01-01 變成「最舊」，可能過了 `cutoff` 過濾掉（純丟失）或污染 history 圖（cutoff 寬鬆時）
+  - `pct=0` → 假的「quota 用完」資料點，後續 alert/graph 全誤判
+- 抽成 helper 收斂兩條路徑的 log policy（對齊 R13 `read_events_since` 純函式風格），caller 端用 `?` 風格的 `Option` continue skip 該列
+- schema 錯（`parts.len() != 3`）保持靜默 skip，跟原本 `continue` 行為一致（first-run 預期 + 編輯壞 row 不需 log spam）
+
+**搜尋**: 沒做 WebSearch（同 R6/R21/R23/R28 prefix-log pattern，純 surgical 收斂）
+
+**做了什麼**:
+- `parse_quota_history_row(parts: &[&str], line_no: usize) -> Option<(u64, u8)>` helper
+  - schema 錯（`parts.len() != 3`）→ `None` 靜默 skip
+  - `ts.parse()` 失敗 → `log::warn!` 帶 line_no + raw value + `None` skip
+  - `pct.parse()` 失敗 → `log::warn!` 帶 line_no + raw value + `None` skip
+  - 兩個 log prefix 統一 `[quota_history] load_history: row {line_no}` 方便 grep
+- `load_history` 改用 helper，原本 `parts[0].parse().unwrap_or(0)` / `parts[2].parse().unwrap_or(0)` 兩條鏈消失
+- 6 個新 unit test 覆蓋 5 條 branch：
+  1. `parse_quota_history_row_valid_returns_some` — 3 段 row 合法 → `Some((ts, pct))`
+  2. `parse_quota_history_row_wrong_schema_returns_none_silently` — 2 段 / 空 vec → `None` 靜默
+  3. `parse_quota_history_row_ts_parse_fail_returns_none` — `"not-a-number"` → `None` + warn
+  4. `parse_quota_history_row_pct_parse_fail_returns_none` — `"abc"` → `None` + warn
+  5. `parse_quota_history_row_pct_overflow_returns_none` — `"999"`（>u8）→ `None` + warn
+  6. `parse_quota_history_row_empty_pct_field_returns_none` — 寫入半截結尾 `"ts,name,\n"` → `None` + warn
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests --no-deps -- -D warnings` 0 warning
+- `cargo test --lib` **151 passed**（145 既有 + 6 R29；0 regression）
+- `bash test/smoke-test.sh quick` PASS（`cargo check` 綠）
+
+**為什麼 helper 用 `Option` 而不是 `Result`**:
+- 對齊 R13 `read_events_since` 純函式風格（`Option` 表示「不採用」+ 內部 log）
+- caller 端 `let Some((ts, pct)) = ... else { continue }` 一行，比 `Result` 配 `?` 更貼近原本 `continue` 行為
+- 不需要 caller 端區分 schema 錯 / parse 錯（兩者都 skip 處理）
+
+**為什麼 schema 錯保持靜默**:
+- 原本 `if parts.len() != 3 { continue; }` 行為就是不 log
+- 編輯壞 row 在 first-run 不算錯誤、留 0 個 log 比較乾淨
+- 純 keep 既有行為，避免 round 範圍擴張到「連 schema 都改」
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `quota_history::load_history` silent-fail sites | 2 (ts/pct unwrap_or(0)) | 0 (helper 收斂 + log warn) | -2 swallowed, +2 observable |
+| `parse_quota_history_row` log prefix | 無 | `[quota_history] load_history: row {N}` | +1 (對齊 R6/R21/R23/R28 prefix 風格) |
+| quota_history unit tests | 2 | 8 | +6 |
+| Lib 總 unit tests | 145 | 151 | +6 |
+| 24h chore_ratio (rolling) | 7.8% (5/64) | 7.8% (本輪 M0 不計入 chore) | 持平 |
+
+**不做的範圍**（給後續輪次）:
+- `openab_bridge::tail_new_events` 剩餘 silent fail sites（R24 候選未動）
+- `csv_path()` 抽成可注入參數讓 `load_history` 也能 unit test end-to-end：H0 refactor 風險、改 RMW 原子性合約依賴，下輪再議
+- `extract_min_percent` 抽 helper 順手補 test：非本輪 scope、屬於既有 R12 fix 已 cover 範圍
+- `quota_history::snapshot_once` 對應的 K16 metric `quota_history_write_failures_total`（hook K15 同 pattern）：M1 候選，per-quota_history-row 計數需要新 metric slot 跟 Prometheus 整合
+- `last_session_idle_event_ts` GC 改用 moka / 顯式 LRU（非本輪 scope）
+- engineering-log.md 769 行超 500 cap → R30 H0 候選 rotate（本輪 M0 順，禁 H0）
+
+**結果**: PASS（M0 silent error surfacing 收尾 quota_history CSV row parse 路徑 + 0 lint warning + 0 regression）
+
+**KPI-impact: silent_fail_sites_observable +2 paths（ts/pct unwrap_or(0) 假資料點 → log warn 帶 line_no + raw value）,operator 排查 quota 圖漂移時間從「找線索」降到「grep 一行 prefix」**

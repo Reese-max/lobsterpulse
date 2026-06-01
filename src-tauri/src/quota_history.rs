@@ -98,20 +98,59 @@ pub fn load_history() -> Result<std::collections::HashMap<String, Vec<(u64, u8)>
         .saturating_sub(KEEP_DAYS * 86400);
     let mut map: std::collections::HashMap<String, Vec<(u64, u8)>> =
         std::collections::HashMap::new();
-    for line in data.lines() {
+    for (line_no, line) in data.lines().enumerate() {
         let parts: Vec<&str> = line.splitn(3, ',').collect();
-        if parts.len() != 3 {
+        let Some((ts, pct)) = parse_quota_history_row(&parts, line_no + 1) else {
             continue;
-        }
-        let ts: u64 = parts[0].parse().unwrap_or(0);
+        };
         if ts < cutoff {
             continue;
         }
         let name = parts[1].to_string();
-        let pct: u8 = parts[2].parse().unwrap_or(0);
         map.entry(name).or_default().push((ts, pct));
     }
     Ok(map)
+}
+
+/// 解析單列 quota-history CSV，回 `(ts, pct)` 或 `None`（skip + log warn）。
+///
+/// R29 silent-fail surfacing：原 `parts[0].parse().unwrap_or(0)` 跟
+/// `parts[2].parse().unwrap_or(0)` 兩條鏈在 CSV 寫入半截（斷電 / OOM /
+/// 手動編輯壞 row）時，會把整列靜默當成 `(ts=0, pct=0)` 推進 map：
+/// - `ts=0` → 1970-01-01 變成「最舊」,可能過了 `cutoff` 過濾掉（純丟失）
+///   或污染 history 圖（cutoff 寬鬆時）
+/// - `pct=0` → 假的「quota 用完」資料點,後續 alert/graph 全誤判
+///
+/// 抽成 helper 收斂兩條路徑的 log policy（對齊 R13 `read_events_since`
+/// 純函式風格），caller 端用 `?` 風格的 `Option` continue skip 該列。
+/// schema 錯（`parts.len() != 3`）保持靜默 skip,跟原本 `continue` 行為一致。
+fn parse_quota_history_row(parts: &[&str], line_no: usize) -> Option<(u64, u8)> {
+    if parts.len() != 3 {
+        return None;
+    }
+    let ts: u64 = match parts[0].parse() {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!(
+                "[quota_history] load_history: row {line_no} ts parse failed \
+                 (raw=\"{}\"): {e} — skip row",
+                parts[0]
+            );
+            return None;
+        }
+    };
+    let pct: u8 = match parts[2].parse() {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!(
+                "[quota_history] load_history: row {line_no} pct parse failed \
+                 (raw=\"{}\"): {e} — skip row",
+                parts[2]
+            );
+            return None;
+        }
+    };
+    Some((ts, pct))
 }
 
 /// 從 text 抓所有 `N%`（含小數 48.3%）回傳最小值 u8。
@@ -207,5 +246,58 @@ mod tests {
         drop(ro);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn parse_quota_history_row_valid_returns_some() {
+        // 對齊 R29 contract：3 段 row 合法 → Some((ts, pct))，
+        // caller 端再依 cutoff 過濾。
+        let parts = vec!["1700000000", "cicx", "42"];
+        assert_eq!(
+            parse_quota_history_row(&parts, 1),
+            Some((1_700_000_000, 42))
+        );
+    }
+
+    #[test]
+    fn parse_quota_history_row_wrong_schema_returns_none_silently() {
+        // 對齊原本 load_history 行為：parts.len() != 3 靜默 skip（first-run 預期
+        // + 編輯壞 row 不需 log spam）。不測 log 是因為 schema 錯不是 silent-fail
+        // surfacing 的目標——純 keep 既有行為。
+        let too_few = vec!["1700000000", "cicx"];
+        assert_eq!(parse_quota_history_row(&too_few, 1), None);
+        let empty: Vec<&str> = vec![];
+        assert_eq!(parse_quota_history_row(&empty, 1), None);
+    }
+
+    #[test]
+    fn parse_quota_history_row_ts_parse_fail_returns_none() {
+        // R29 silent-fail surfacing 核心：ts 壞掉必須 log warn + skip，
+        // 不能 unwrap_or(0) 變成「1970-01-01 假資料」污染 map。
+        let parts = vec!["not-a-number", "cicx", "42"];
+        assert_eq!(parse_quota_history_row(&parts, 7), None);
+    }
+
+    #[test]
+    fn parse_quota_history_row_pct_parse_fail_returns_none() {
+        // pct 壞掉（不是數字）必須 log warn + skip，
+        // 不能 unwrap_or(0) 變成「假的 quota 用完 0%」誤判 alert/graph。
+        let parts = vec!["1700000000", "cicx", "abc"];
+        assert_eq!(parse_quota_history_row(&parts, 3), None);
+    }
+
+    #[test]
+    fn parse_quota_history_row_pct_overflow_returns_none() {
+        // pct 超出 u8 範圍（>255）必須 skip，不能 saturate 變成 255 假資料。
+        let parts = vec!["1700000000", "cicx", "999"];
+        assert_eq!(parse_quota_history_row(&parts, 5), None);
+    }
+
+    #[test]
+    fn parse_quota_history_row_empty_pct_field_returns_none() {
+        // 空字串（寫入半截 CSV row 結尾 `"ts,name,\n"`）也視為 parse 失敗 → skip。
+        // 對齊 write 半截場景：disk full / 斷電留下 `"1700000000,cicx,\n"`。
+        let parts = vec!["1700000000", "cicx", ""];
+        assert_eq!(parse_quota_history_row(&parts, 9), None);
     }
 }

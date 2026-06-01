@@ -427,43 +427,65 @@ fn tick_inner(
                 }
             }
             if discord_active {
-                if let Ok(mid) =
-                    discord::send_message(notify.discord_token, notify.discord_channel, &content)
+                match discord::send_message(notify.discord_token, notify.discord_channel, &content)
                 {
-                    if let Err(e) = discord::add_reaction(
-                        notify.discord_token,
-                        notify.discord_channel,
-                        &mid,
-                        "✅",
-                    ) {
+                    Ok(mid) => {
+                        if let Err(e) = discord::add_reaction(
+                            notify.discord_token,
+                            notify.discord_channel,
+                            &mid,
+                            "✅",
+                        ) {
+                            log::warn!(
+                                "{}",
+                                discord_err_msg(
+                                    &format!(
+                                        "session_idle sid={} reaction=✅",
+                                        prefix_chars(&sid, 8)
+                                    ),
+                                    &e
+                                )
+                            );
+                        }
+                        if let Err(e) = discord::add_reaction(
+                            notify.discord_token,
+                            notify.discord_channel,
+                            &mid,
+                            "❌",
+                        ) {
+                            log::warn!(
+                                "{}",
+                                discord_err_msg(
+                                    &format!(
+                                        "session_idle sid={} reaction=❌",
+                                        prefix_chars(&sid, 8)
+                                    ),
+                                    &e
+                                )
+                            );
+                        }
+                        state.lock().unwrap().pending_confirms.push(PendingConfirm {
+                            kind: "session_idle",
+                            session_id: sid.clone(),
+                            message_id: mid,
+                            posted_at: Instant::now(),
+                        });
+                    }
+                    Err(e) => {
+                        // R25 surface：原 `if let Ok(mid) = ... { ... }` 在 Discord send 失敗時
+                        // 整段（含 `pending_confirms.push`）靜默跳過——operator 看不到「user 點
+                        // ❌/✅ 但 Discord 沒收到」+ state 沒推進會卡住後續 click 解析。
                         log::warn!(
                             "{}",
                             discord_err_msg(
-                                &format!("session_idle sid={} reaction=✅", prefix_chars(&sid, 8)),
+                                &format!(
+                                    "session_idle sid={} confirm send_message",
+                                    prefix_chars(&sid, 8)
+                                ),
                                 &e
                             )
                         );
                     }
-                    if let Err(e) = discord::add_reaction(
-                        notify.discord_token,
-                        notify.discord_channel,
-                        &mid,
-                        "❌",
-                    ) {
-                        log::warn!(
-                            "{}",
-                            discord_err_msg(
-                                &format!("session_idle sid={} reaction=❌", prefix_chars(&sid, 8)),
-                                &e
-                            )
-                        );
-                    }
-                    state.lock().unwrap().pending_confirms.push(PendingConfirm {
-                        kind: "session_idle",
-                        session_id: sid.clone(),
-                        message_id: mid,
-                        posted_at: Instant::now(),
-                    });
                 }
             }
         }
@@ -1188,31 +1210,55 @@ pub fn poll_discord_commands(
                 "🟡 請確認要 kill session `{}`？\n\n✅ = 執行  /  ❌ = 取消  /  10 分鐘無反應 = 自動取消",
                 prefix_chars(sid, 12)
             );
-            if let Ok(mid) = discord::send_message(token, channel, &content) {
-                if let Err(e) = discord::add_reaction(token, channel, &mid, "✅") {
+            match discord::send_message(token, channel, &content) {
+                Ok(mid) => {
+                    if let Err(e) = discord::add_reaction(token, channel, &mid, "✅") {
+                        log::warn!(
+                            "{}",
+                            discord_err_msg(
+                                &format!(
+                                    "discord_kill_cmd sid={} reaction=✅",
+                                    prefix_chars(sid, 8)
+                                ),
+                                &e
+                            )
+                        );
+                    }
+                    if let Err(e) = discord::add_reaction(token, channel, &mid, "❌") {
+                        log::warn!(
+                            "{}",
+                            discord_err_msg(
+                                &format!(
+                                    "discord_kill_cmd sid={} reaction=❌",
+                                    prefix_chars(sid, 8)
+                                ),
+                                &e
+                            )
+                        );
+                    }
+                    state.lock().unwrap().pending_confirms.push(PendingConfirm {
+                        kind: "discord_kill_cmd",
+                        session_id: sid.to_string(),
+                        message_id: mid,
+                        posted_at: Instant::now(),
+                    });
+                }
+                Err(e) => {
+                    // R25 surface：原 `if let Ok(mid) = ... { ... }` 在 Discord send 失敗時
+                    // 整段靜默跳過——user 輸入 `!lp kill` 後沒看到任何東西、operator 也不知道
+                    // Discord 拒絕了，pending_confirms 也沒 push（後續 10 分鐘 timeout 邏輯不
+                    // 會觸發，state 仍乾淨但 user 經驗是 bot 沒回應）。
                     log::warn!(
                         "{}",
                         discord_err_msg(
-                            &format!("discord_kill_cmd sid={} reaction=✅", prefix_chars(sid, 8)),
+                            &format!(
+                                "discord_kill_cmd sid={} confirm send_message",
+                                prefix_chars(sid, 8)
+                            ),
                             &e
                         )
                     );
                 }
-                if let Err(e) = discord::add_reaction(token, channel, &mid, "❌") {
-                    log::warn!(
-                        "{}",
-                        discord_err_msg(
-                            &format!("discord_kill_cmd sid={} reaction=❌", prefix_chars(sid, 8)),
-                            &e
-                        )
-                    );
-                }
-                state.lock().unwrap().pending_confirms.push(PendingConfirm {
-                    kind: "discord_kill_cmd",
-                    session_id: sid.to_string(),
-                    message_id: mid,
-                    posted_at: Instant::now(),
-                });
             }
         } else {
             if let Err(e) = discord::send_message(token, channel, &reply) {
@@ -1542,6 +1588,65 @@ mod tests {
             msg.starts_with("[auto_rules] discord ") && msg.contains(" failed: "),
             "必須走 R6 統一 prefix 讓 log filter 一條 query 抓全部 Discord 失敗：{msg}"
         );
+    }
+
+    /// R25 regression：session_idle confirm 與 kill confirm 兩條 `if let Ok(mid) = discord::send_message`
+    /// → 改成 `match ... { Err(e) => log::warn!(discord_err_msg(...)) }`。原 pattern 在 Discord
+    /// send 失敗時整段靜默跳過（含 `pending_confirms.push`），operator 看不到「user 已點 ❌/✅
+    /// 但 Discord 沒收到」+ state 沒推進會卡住後續 click 解析。
+    ///
+    /// 鎖定 ctx 格式穩定（兩條都走 R6/R11 同 prefix `[auto_rules] discord ... failed: ...`，
+    /// log filter 一條 query 抓全部）：
+    ///   - `session_idle sid=<8char-prefix> confirm send_message`
+    ///   - `discord_kill_cmd sid=<8char-prefix> confirm send_message`
+    #[test]
+    fn r25_confirm_send_message_errors_use_unified_prefix() {
+        // session_idle confirm send_message ctx 必須含 `confirm send_message` 讓 operator 一眼看
+        // 出「這是 send 確認訊息失敗」而非「add_reaction 失敗」（reaction 失敗還有 message id 可救）
+        let sid = "abc12345deadbeef";
+        let sid_short = prefix_chars(sid, 8);
+        let msg = discord_err_msg(
+            &format!("session_idle sid={sid_short} confirm send_message"),
+            "curl exit 22: HTTP/1.1 401 Unauthorized",
+        );
+        assert!(
+            msg.contains("confirm send_message"),
+            "ctx 必須標 `confirm send_message`（區分 add_reaction fail 跟 send fail）：{msg}"
+        );
+        assert!(
+            msg.contains(&format!("session_idle sid={sid_short}")),
+            "ctx 必須帶 sid short prefix 對齊 reaction 既有 pattern：{msg}"
+        );
+        assert!(
+            msg.starts_with("[auto_rules] discord ") && msg.contains(" failed: "),
+            "必須走 R6 統一 prefix：{msg}"
+        );
+
+        // kill confirm send_message 同樣 contract
+        let msg2 = discord_err_msg(
+            &format!("discord_kill_cmd sid={sid_short} confirm send_message"),
+            "curl exit 56: Recv failure",
+        );
+        assert!(
+            msg2.contains("discord_kill_cmd") && msg2.contains("confirm send_message"),
+            "ctx 必須標 `discord_kill_cmd ... confirm send_message`：{msg2}"
+        );
+        assert!(
+            msg2.starts_with("[auto_rules] discord ") && msg2.contains(" failed: "),
+            "必須走 R6 統一 prefix：{msg2}"
+        );
+    }
+
+    /// R25 contract：`prefix_chars` 在 R25 兩處新 ctx 都用 `prefix_chars(sid, 8)` 對齊既有
+    /// R6 reaction ctx pattern。鎖定 sid=8 截前綴的語意，避免後人改成 4 / 12 導致 log filter regex 失效。
+    #[test]
+    fn r25_confirm_ctx_uses_eight_char_sid_prefix() {
+        // 16 字 sid → 8 字 short
+        assert_eq!(prefix_chars("abcdef0123456789", 8), "abcdef01");
+        // 8 字 sid → 整段
+        assert_eq!(prefix_chars("abc12345", 8), "abc12345");
+        // 4 字 sid → 整段（短於 8 不截）
+        assert_eq!(prefix_chars("abc1", 8), "abc1");
     }
 
     #[test]

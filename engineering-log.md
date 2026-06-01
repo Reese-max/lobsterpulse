@@ -4,6 +4,74 @@
 
 ## 改善紀錄
 
+### [2026-06-01] Round 3 — daily/weekly summary 純 toast 模式瘋狂重發
+**類型**: M0（user-facing 阻斷 bug：純 toast 模式開 daily/weekly 會被 15s tick 反覆推）
+**KPI**: K-summary-dedup-correctness
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| daily_summary 純 toast 模式 1 小時內 fire 次數 | 240 (15s × 60) | 1 | −239 |
+| weekly_summary 純 toast 模式 1 小時內 fire 次數 | 240 (15s × 60) | 1 | −239 |
+| send_embed 失敗時是否 unblock dedup | 是（會反覆重試轟炸） | 否 | ✓ |
+| 24h chore_ratio | 0% | 0% | — |
+
+**為什麼**:
+R1/R2 結論「LobsterPulse 端無/已修 M0」偏重 user panic / dev workflow break。
+本輪往**功能性 silent failure** 方向重掃 1087 行 `auto_rules.rs`，找到一個 user-facing 阻斷 bug：
+
+`auto_rules.rs` Rule 4/5（daily/weekly summary）：
+```rust
+if should_fire {
+    // ... collect data + send_toast ...
+    if discord::send_embed(...).is_ok() {     // ← 問題在這
+        state.lock().unwrap().last_summary_date = today;
+    }
+}
+```
+
+dedup marker 只在 **Discord send 成功** 後才寫。純 toast 模式（無 Discord 通道）
+→ `is_ok()` 永遠 false → `last_summary_date` 永遠是空字串 → 下一次 tick 通過 `should_fire` 檢查
+→ **整天反覆發 toast**（tick = 15s，每小時 240 次，summary_hour 整點一小時 240 個 toast 通知）。
+
+影響面：
+- `daily_summary_enabled` / `weekly_summary_enabled` 預設 off，但用戶主動開 + 只用 toast 通道 → 中招
+- 與 R2 修的「Discord silent fail」是**同方向 root cause**：原本用 send 結果決定 dedup，邏輯反了
+- chore_treadmill 紅線要求 M0-M3，本 bug 完美符合 M0 定義（user-facing 阻斷）
+
+**搜尋**:
+- 重掃 `auto_rules.rs` 全 1087 行找 `let _ = ... = is_ok() { state.lock() = }` 同類模式
+- 確認 Rule 1/2/3/6 用 `dedup_gate` 正確（決定要 fire 時就 set）→ Rule 4/5 是 outlier
+- 確認 `quota_history.rs` 的 `extract_min_percent` 與這無關
+
+**做了什麼**:
+- Rule 4 (daily_summary) line 519-575：dedup marker 從「send_embed 成功後」移至「should_fire 通過後立即」
+- Rule 5 (weekly_summary) line 591-643：同樣改法
+- 抽 helper `mark_summary_fired_if_new(&mut AutoRuleState, SummaryMarker, &str) -> bool`
+  + enum `SummaryMarker { Daily, Weekly }` 統一兩條規則的 dedup 語意
+- Discord send 改為 `let _ = ...`（best-effort，失敗不再 unblock dedup 避免失敗重試轟炸）
+- 加 3 個 unit test 覆蓋：
+  - `summary_dedup_marks_before_send_pure_toast_mode`（核心 regression：模擬純 toast 模式 tick 第二次）
+  - `weekly_dedup_marks_before_send_pure_toast_mode`（同上、weekly 變體）
+  - `daily_and_weekly_markers_are_independent`（daily 標過不影響 weekly）
+
+**驗證**:
+- `cargo check --quiet` → Finished 0 errors ✓
+- `cargo clippy -- -D warnings` → 無 warning ✓
+- `cargo test --lib auto_rules::tests` → **6 passed; 0 failed**（含 3 個新增）✓
+- `bash test/smoke-test.sh quick` → PASS ✓
+
+**結果**: PASS（M0 bug 修復落地 + 3 個 unit test 覆蓋）
+
+**不做的範圍**（記錄給後續輪次）:
+- Rule 3 (hook_failure_burst) 的中文硬碼 filter（`"請用"`/`"ripgrep"`/`"rg.exe"`/`"取代 find"`/`"取代 grep"`）：
+  屬 noise reduction 而非 critical functionality，且非 user-facing 阻斷，留觀
+- 11+ 處 `let _ = discord::...` 吞 error：R2 提的 caller side 改善，是 noise 而非 silent failure
+- `daily_summary_hour == now_local.hour()` 的整點 + 15s tick 精準度（可能在 9:00:00 沒 tick、9:00:15 補發）：
+  屬 best-effort 推送容忍範圍，1 分鐘內可接受
+- `last_summary_date` 沒持久化（重啟會 reset）：目前是 in-memory `Arc<Mutex>`、不算阻斷 bug
+
+
+
 ### [2026-06-01] Round 2 — Discord HTTP 4xx silent fail → surfaced
 **類型**: M0（user-facing 阻斷 bug）
 **KPI**: K-discord-err-visibility

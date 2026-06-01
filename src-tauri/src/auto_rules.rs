@@ -509,6 +509,8 @@ fn tick_inner(
 
     // ─── Rule 4: daily_summary ───
     // 本地時區當天 == summary_hour 時就推一次，每日 1 次（last_summary_date 擋重複）。
+    // dedup marker 在「決定要 fire」時立即設，避免純 toast 模式（無 Discord send 成功路徑）
+    // 下被 15s tick 反覆重發。
     if cfg.daily_summary_enabled {
         let now_local = chrono::Local::now();
         let today = now_local.format("%Y-%m-%d").to_string();
@@ -517,6 +519,11 @@ fn tick_inner(
             now_local.hour() as u8 == cfg.daily_summary_hour && s.last_summary_date != today
         };
         if should_fire {
+            // 先標 dedup（無論 send 成功與否，今天都只 fire 一次）
+            let mut s = state.lock().unwrap();
+            let _ = mark_summary_fired_if_new(&mut s, SummaryMarker::Daily, &today);
+            drop(s);
+
             // 收集 provider_totals 作為「自 LP 啟動以來累計」數據
             let (rows, total_sessions, total_in, total_out, total_fail) = {
                 let m = mgr.lock().unwrap();
@@ -560,17 +567,14 @@ fn tick_inner(
                     send_toast(a, &title, "今日 quota 日報已送出");
                 }
             }
-            if discord::send_embed(
+            // Discord 為 best-effort；失敗不再 unblock dedup（避免失敗重試轟炸）
+            let _ = discord::send_embed(
                 notify.discord_token,
                 notify.discord_channel,
                 &title,
                 &desc,
                 0x4169E1,
-            )
-            .is_ok()
-            {
-                state.lock().unwrap().last_summary_date = today;
-            }
+            );
         }
     }
 
@@ -587,6 +591,11 @@ fn tick_inner(
             is_mon && now_local.hour() as u8 == cfg.daily_summary_hour && s.last_weekly_key != wkey
         };
         if should {
+            // 先標 dedup（無論 send 成功與否，本週都只 fire 一次）
+            let mut s = state.lock().unwrap();
+            let _ = mark_summary_fired_if_new(&mut s, SummaryMarker::Weekly, &wkey);
+            drop(s);
+
             let top = {
                 let m = mgr.lock().unwrap();
                 let mut rows: Vec<(String, u64, u64, u64, u64)> = m
@@ -629,17 +638,14 @@ fn tick_inner(
                     send_toast(a, &title, "本週 quota 週報已送出");
                 }
             }
-            if discord::send_embed(
+            // Discord 為 best-effort；失敗不再 unblock dedup
+            let _ = discord::send_embed(
                 notify.discord_token,
                 notify.discord_channel,
                 &title,
                 &desc,
                 0x9370DB,
-            )
-            .is_ok()
-            {
-                state.lock().unwrap().last_weekly_key = wkey;
-            }
+            );
         }
     }
 
@@ -748,6 +754,31 @@ fn fmt_tokens(n: u64) -> String {
     } else {
         n.to_string()
     }
+}
+
+/// Daily/weekly summary 共用 dedup：若 marker 與已標記值不同，標記並回傳 true（這次是新 fire）。
+/// 修正前 dedup marker 在 send 成功後才設，純 toast 模式（無 Discord send 成功路徑）會被 15s tick
+/// 反覆重發。改為「決定要 fire 立即標記」後，無論 send 是否成功都擋重複。
+pub(crate) fn mark_summary_fired_if_new(
+    state: &mut AutoRuleState,
+    field: SummaryMarker,
+    marker: &str,
+) -> bool {
+    let slot = match field {
+        SummaryMarker::Daily => &mut state.last_summary_date,
+        SummaryMarker::Weekly => &mut state.last_weekly_key,
+    };
+    if *slot == marker {
+        return false;
+    }
+    *slot = marker.to_string();
+    true
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SummaryMarker {
+    Daily,
+    Weekly,
 }
 
 /// Discord command polling — 看 #cctest 有沒有新 `!lp ...` 訊息，有就執行並回覆。
@@ -1083,5 +1114,63 @@ mod tests {
     fn extract_min_percent_ignores_invalid_values() {
         let t = "A: **49.7%** B: **N/A%** C: **101%** D: **-5%**";
         assert_eq!(extract_min_percent(t), Some(50));
+    }
+
+    /// Regression：純 toast 模式（無 Discord 成功路徑）下，dedup marker 必須在「決定要 fire」
+    /// 時立即設，否則 15s tick 會反覆進入 send 區段。
+    #[test]
+    fn summary_dedup_marks_before_send_pure_toast_mode() {
+        let mut state = AutoRuleState::default();
+        // 第一次：未標記 → 新 fire、回傳 true、欄位被設
+        assert!(mark_summary_fired_if_new(
+            &mut state,
+            SummaryMarker::Daily,
+            "2026-06-01"
+        ));
+        assert_eq!(state.last_summary_date, "2026-06-01");
+
+        // 第二次（同日、純 toast 模式 tick 第二次）：已是同 marker → 跳過、回傳 false
+        // 修正前這條會走「send_toast 第二次」——bug
+        assert!(!mark_summary_fired_if_new(
+            &mut state,
+            SummaryMarker::Daily,
+            "2026-06-01"
+        ));
+        assert_eq!(state.last_summary_date, "2026-06-01");
+    }
+
+    #[test]
+    fn weekly_dedup_marks_before_send_pure_toast_mode() {
+        let mut state = AutoRuleState::default();
+        assert!(mark_summary_fired_if_new(
+            &mut state,
+            SummaryMarker::Weekly,
+            "2026-W22"
+        ));
+        assert_eq!(state.last_weekly_key, "2026-W22");
+        // 第二次 tick（純 toast 模式）：應跳過
+        assert!(!mark_summary_fired_if_new(
+            &mut state,
+            SummaryMarker::Weekly,
+            "2026-W22"
+        ));
+    }
+
+    /// Daily 與 Weekly marker 互相獨立——daily 標過不影響 weekly
+    #[test]
+    fn daily_and_weekly_markers_are_independent() {
+        let mut state = AutoRuleState::default();
+        mark_summary_fired_if_new(&mut state, SummaryMarker::Daily, "2026-06-01");
+        assert!(mark_summary_fired_if_new(
+            &mut state,
+            SummaryMarker::Weekly,
+            "2026-W22"
+        ));
+        // 隔天 daily 應該可以再 fire
+        assert!(mark_summary_fired_if_new(
+            &mut state,
+            SummaryMarker::Daily,
+            "2026-06-02"
+        ));
     }
 }

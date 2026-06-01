@@ -11,7 +11,7 @@ set -e
 cd "$(dirname "$0")"
 
 echo "→ Killing any running instance..."
-pkill -9 -x agent-pulse 2>/dev/null || true
+pkill -9 -x lobster-pulse 2>/dev/null || true
 pkill -f "serve.*1420" 2>/dev/null || true
 sleep 1
 

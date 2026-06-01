@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build and run AgentPulse for testing (any changes — Rust or frontend)
+# Build and run LobsterPulse for testing (any changes — Rust or frontend)
 # Frontend files are embedded into the binary at build time, so ANY change needs a rebuild.
 #
 # Usage:
@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
 MODE="${1:-debug}"
 
 echo "→ Killing any running instance..."
-pkill -9 -x agent-pulse 2>/dev/null || true
+pkill -9 -x lobster-pulse 2>/dev/null || true
 sleep 1
 
 if [ "$MODE" = "release" ]; then
@@ -21,11 +21,11 @@ if [ "$MODE" = "release" ]; then
   # Plain cargo build skips frontend embedding, so the webview falls back to
   # devUrl (localhost:1420) and shows "Could not connect to localhost".
   cargo tauri build --no-bundle
-  BIN="src-tauri/target/release/agent-pulse"
+  BIN="src-tauri/target/release/lobster-pulse"
 else
   echo "→ Building debug binary..."
   cargo build --manifest-path src-tauri/Cargo.toml
-  BIN="src-tauri/target/debug/agent-pulse"
+  BIN="src-tauri/target/debug/lobster-pulse"
 fi
 
 echo "→ Launching $BIN..."

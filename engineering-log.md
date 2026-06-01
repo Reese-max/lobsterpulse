@@ -979,3 +979,81 @@
 **結果**: PASS（M0 silent error surfacing 收尾 `config::load_config` 最後 2 條 silent chain + 順手清 K16 漏的 2 個 clippy lint + 0 lint warning + 0 regression）
 
 **KPI-impact: silent_fail_sites_observable +2 paths（`load_config` 兩條 silent chain → `load_config_at` 三條分流 + 結構化 log warn 帶 80 字 preview,operator 排查「config 為什麼全變回預設」從「找線索」降到「grep [config] load_config_at 一行 prefix」+ 看 80 字 preview）**
+
+### [2026-06-02] R29 — K17 per-provider × per-event-type lifetime counter（接續 K13 lifetime aggregate 維度,補 type 細顆度）
+
+**類型**: M1（metrics observability — 對齊 K6/K7/K9/K10/K13 lifetime aggregate 同一主題線）
+
+**KPI**: Hook server per-event-type observability 從 0 條 → ~90 series 上限（9 provider × ~10 known event type）
+
+**為什麼**:
+- K13 lifetime event counter 只算「該 provider 共收過幾個 event」→ operator 要拿 SLO signal 還要 `rate(...{type="Stop"}[5m])` 對 `rate(...{type="UserPromptSubmit"}[5m])` 算差值,才看得出「runner 一直發 Stop 但沒人 prompt = 卡住」
+- K17 直接 emit 細顆度 counter,Prometheus scrape 端用 `label_join` / `label_replace` 即可,不用 PromQL 加工
+- K6/K7/K9/K10/K12/K13 既有 per-provider 細顆度 metric 都做了,K13 漏 type 維度 = 系列盲點
+- 接續 R6-R12 同一 silent-fail / observability 主題線但往 metric 維度擴展
+
+**搜尋**:
+- 沒做 WebSearch（純內部 K13 pattern 延伸,既有程式碼就是 reference）
+- 對照 K6 lifetime-vs-live regression guard 概念:本輪新測試 `event_type_total_uses_lifetime_aggregate_not_live_sessions` 復用同 pattern
+
+**做了什麼**:
+- `session.rs:329-340` `ProviderTotals` 加 `event_type_counts: BTreeMap<String, u64>` 欄位
+  - 用 `BTreeMap` 而非 `HashMap`：render 端 alphabetical sort 確定性輸出,已知 type 數量 ≤ ~10 sort 成本可忽略
+  - doc 解釋為什麼用 BTreeMap、為什麼 K13 缺 type 維度是盲點
+- `session.rs:bump_provider_totals` 內對非空 `hook_event_name` 累加 type 維度計數
+  - 空字串防呆：`RawHookEvent::normalize` 對未識別 schema 會回 `""`（見 `hook_event.rs:62 unwrap_or_default`）→ 這種「未識別 schema」事件不該被算進任何具名 type bucket,寧可漏計也不讓 `lobsterpulse_provider_event_type_total{type=""}` 污染 metric 視圖
+  - 對齊 K13 lifetime aggregate 語意：session 結束 + 30 min stale 回收後 ProviderTotals 仍保留 → Prometheus 端 counter 不倒退
+- `lib.rs:render_prometheus_body` 攤平 `(provider, type, count)` 並兩段排序（先 provider 後 type）→ 對齊既有 K6/K7/K9/K13 byte-deterministic 契約
+- emit 新 metric 段：
+  ```
+  # HELP lobsterpulse_provider_event_type_total Lifetime event count per provider per event type (counter; rate() per type label)
+  # TYPE lobsterpulse_provider_event_type_total counter
+  lobsterpulse_provider_event_type_total{provider="cicx",type="PostToolUseFailure"} 1
+  ...
+  ```
+- 4 個新 unit test 覆蓋關鍵契約（位於 `render_prometheus_tests` 模組,既有 K13 test fixture 群同 pattern）：
+  1. `event_type_total_empty_state_emits_header_only` — 空 map → 沒 sample line（HELP/TYPE 標頭仍輸出）
+  2. `event_type_total_single_type_emits_one_sample_per_provider` — 單 type → 一條 sample line 帶 `(provider, type)` 兩 label
+  3. `event_type_total_multiple_types_sorted_by_provider_then_type` — 多 provider × 多 type → 兩段排序（先 provider 後 type）,故意用「非字母序」輸入驗證排序契約,順手驗證 cicx 內 type 副排序也對
+  4. `event_type_total_uses_lifetime_aggregate_not_live_sessions` — 0 live session 但 lifetime `event_type_counts` 仍有值 → sample 仍輸出（lifetime-vs-live 契約）
+- 修 4 個既有 test fixture（`totals_with_since` / `totals_with_since_and_last_at` / `totals_no_event_with_since` / `totals_with_since_now`）漏 K17 新欄位
+  - K17 author 改完 `ProviderTotals` 結構但只更新 6 個 fixture,漏 4 個 → `cargo build --lib` 過（不編 test code）,`cargo test --lib` 才抓 E0063 missing field
+  - 加 `event_type_counts: BTreeMap::new()` 跟既有 K17 fixture 同 pattern,最小 surgical 修
+
+**為什麼空 `hook_event_name` 不入 map**:
+- K15 parse_failures counter 已經蓋「未識別 schema」這類事件（`RawHookEvent::normalize` 回 `""` 觸發 K15 ++）
+- 同一個事件同時 ++ K15 跟 K17 `type=""` = 雙重計數,operator 端 alert 規則會算兩次
+- K17 map key 過濾 `""` → K15 counter 跟 K17 counter 維度完全分離（payload 語意 vs wire 結果 + 具名 type 流量）
+
+**為什麼 `BTreeMap` 而非 `HashMap`**:
+- render 端 alphabetical sort 確定性輸出 → Prometheus scrape byte-deterministic（既有 K6-K13 同契約）
+- 已知 type 數量 ≤ ~10、sort 成本可忽略
+- `HashMap` random iteration order 在多 provider × 多 type 場景下 scrape diff 難以 diff review
+
+**驗證**:
+- `cargo fmt --check` 0 diff（K17 author 留 1 個 `find()` 呼叫 101 字元超 100 cap → fmt auto-fix）
+- `cargo clippy --lib -- -D warnings` 0 error
+- `cargo test --lib` **162 passed**（158 既有 + 4 K17 新 test,4 個 fixture 修完 K17 author 漏的 E0063 + 0 regression）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| Hook server per-event-type metrics | 0 條 | ~90 series 上限（9 provider × ~10 type） | +~90 |
+| Hook server Prometheus metrics 總計 | 4 (K15 + K16×3) | 5 (K15 + K16×3 + K17 event_type) | +1 metric 段 |
+| `ProviderTotals` 欄位 | 6 (tokens_input/output, session_count, failure_count, events_total, since, last_event_at) | 7 (+ event_type_counts) | +1 |
+| `ProviderTotals` map 維度 | 0 | 1 (event_type_counts BTreeMap) | +1 |
+| render_prometheus_tests 總計 | K13 起 5+1+1+1+1+1+1+1+1+1+1+1+1 = 16 段 | 17 段 (K17 4 test) | +4 |
+| Lib 總 unit tests | 158 (R31) | 162 | +4 |
+| `render_prometheus_body` 排序契約 | K6/K7/K9/K13 alphabetical | + K17 兩段（provider, type） | +1 兩段排序 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8%（本輪 M1 不計入 chore） | 持平 |
+
+**不做的範圍**（給後續輪次）:
+- per-event-type gauge（latency / idle-by-type）：要 timestamp in/out 對 + bucket 設定,屬於下一個 metrics theme
+- `lobsterpulse_provider_event_type_total{type=""}` 顯式 emit：上面 K15/K17 雙重計數理由,不 emit
+- type 白名單機制（拒絕未知 type 入 map）：over-engineering,normalize 已給 hook_event_name 上限
+- 4 個 fixture 改用 `..Default::default()` 縮減重複欄位：rustfmt 100 字 cap 內顯式列欄位比 spread 更易 review,維持現狀
+- engineering-log.md 982 行超 500 cap → R32+ H0 候選 rotate（本輪 M1 順,禁 H0）
+
+**結果**: PASS（M1 metrics observability + K17 per-provider × per-event-type counter 落地 ~90 series + 修 K17 author 漏的 4 個 fixture E0063 + 0 lint warning + 0 regression + commit `ee4ace0`）
+
+**KPI-impact: hook_server per-event-type observability 0→~90 series（per-provider × per-type 細顆度 counter,SLO alert 規則一裝就 work:Stop-vs-UserPromptSubmit 偵測 runner 卡住 / Pre-vs-Post 偵測 tool 卡住 / TokenUpdate rate 監 quota 流量）**

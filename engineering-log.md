@@ -916,3 +916,66 @@
 **結果**: PASS（M1 metrics observability + K16 hook_server HTTP response status class counter 3 條 metric 落地 + 0 lint warning + 0 regression）
 
 **KPI-impact: hook_server HTTP response status class observability 0→3 metrics（2xx/4xx/5xx）,operator 端 alert rule 一裝就 work（4xx alert 立即看見 CLI schema 漂移 / 5xx 預留供未來）**
+
+### [2026-06-02] R31 — `load_config` 抽 `load_config_at` 純 fn + 三條路徑分流 + 結構化 log warn（接續 R30 收尾的 silent-fail surfacing 主題線）
+
+**類型**: M0（silent error surfacing — 對齊 R6/R8/R9/R12/R14/R21/R23/R28/R29 同一主題線,收掉 `load_config` 最後 2 條 silent chain）
+
+**KPI**: `config::load_config` silent-fail sites 從 2 → 0（修前 `unwrap_or_default` 吞壞 JSON + `if let Ok(data) = read_to_string` 吞 IO 錯誤 → 修後 `load_config_at` 三條分流 + 結構化 log warn）
+
+**為什麼**:
+- 觀察 10500: 「Codebase Audit — Remaining Silent Error Sites Identified」清單中 `config::load_config` 兩條 silent chain 一直未修
+- 觀察 R23 `save_config_at` 落地後,讀路徑（`load_config`）還在耦合 process env,unit test 必須碰 `dirs::config_dir()` 才能驗讀失敗 / 壞 JSON 行為,測試成本高、易漏
+- 對齊 pattern:R23 `save_config_at` / R12 `write_offset_at` / R8 `process_body` 都是「抽 path 參數的純 fn」,`load_config` 一直沒跟上 → 本輪補完
+
+**搜尋**: 沒做 WebSearch（純內部 pattern 對齊,R23/R12/R8 既有程式碼就是 reference）
+
+**做了什麼**:
+- `config.rs:445-477` `load_config()` 改為 `load_config_at(&config_path())` 薄殼呼叫,保留 forward-migration + name 強制對齊邏輯不動
+- `config.rs:480-510` 新增 `load_config_at(path: &Path) -> AppConfig` 純 fn,三條路徑分流:
+  1. `Err(NotFound)` → `default()` 靜默（first-run 預期,啟動 spam log 反而是 noise — 對齊 R28 `parse_persisted_markers_at` / R29 `parse_quota_history_row` NotFound 策略）
+  2. `Err(other IO)` → `log::warn!` 帶 path + kind + hint「可能原因:權限拒絕 / 檔案被鎖住 / 磁碟滿 / cross-device link」+ `default()`,operator 一行 grep `[config] load_config_at` 就知道「磁碟有問題、不是 app bug」
+  3. JSON `Err(e)` → `log::warn!` 帶 80 字元 preview + `default()`,operator 看 preview 可定位「是誰寫的壞 JSON」（磁碟寫入半截 / OOM kill / 手動編輯 / 編碼錯）
+- `config.rs:680-797` 新增 4 個 unit test（沿用 R23 `save_config_at_tests` 既有 `TmpDir` pattern,獨立 `load_config_at_tests` 模組確保 test independence）:
+  1. `load_config_at_reads_valid_file` — happy path sentinel round-trip
+     - 注入 `setup_done = true` + `appearance.theme = "R31-marker"` 後序列化,load 回來必須看到 sentinel
+     - **強化**:原本工程師留的 tautology 斷言 `assert!(!providers.is_empty() || providers.is_empty())` 等於 `assert!(true)`,毫無行為保證 → R31 改為真實 round-trip 斷言,若 `load_config_at` 默默回 default,這兩條會 fail
+  2. `load_config_at_missing_file_silently_returns_default` — NotFound 靜默契約（不 panic + 不 log warn + 回 default）
+  3. `load_config_at_corrupt_json_warns_and_returns_default` — 故意寫半截 JSON `{"setup_done": true, "appearance": {"acce`（模擬磁碟寫入中斷）,驗函式回 default（log 內容鎖在 prefix `[config] load_config_at: config.json JSON parse failed` 由 production 觀察保證,unit test 無 log capture 不強驗）
+  4. `load_config_at_io_error_warns_and_returns_default` — NUL 路徑（`\x00config-no-write\x00`）跨平台拒絕,驗函式不 panic + 回 default（Windows 直接拒 / Unix 視 fs 而定,負面測試只驗「不 panic + 回 default」不鎖特定 kind,對齊 R12 `write_offset_at_returns_err_on_invalid_path`）
+- 順手修 K16 commit (`eee9f54`) 漏的 2 個 pre-existing clippy lint:
+  - `hook_server.rs:31-32` doc list item overindented（`///          ` 改 `///    ` — 多縮排 4 個 space 觸發 `clippy::doc-overindented-list-items`）
+  - 為何 R30 沒抓:K16 當時只跑 `cargo build --lib`（rustc warning gate）沒跑 `cargo clippy -- -D warnings`（clippy lint gate）,R30 log 寫的「0 lint warning」只覆蓋 rustc 部分
+  - 為何 R31 修:trivial 2-space fix、不擴 scope、對齊「0 lint warning」KPI 慣例,卡在 CI 任何 clippy gate
+
+**為什麼只抽 `load_config_at` 不動 forward-migration 邏輯**:
+- `load_config()` 內還有「補缺失 provider + name 強制對齊 default」邏輯,這層邏輯跟 `dirs::config_dir()` 無關、跟「讀檔失敗/壞 JSON」分流也無關
+- 分層後:
+  - `load_config_at(path)` = IO + 解析 純 fn,3 條分流,可獨立 unit test
+  - `load_config()` = 業務規則（migration + 預設對齊）薄殼,呼叫 `load_config_at(&config_path())`
+- 兩層各自獨立可測,業務規則變更（加新 provider）不會動到 IO 分流的 test,反之亦然
+
+**驗證**:
+- `cargo fmt --check` 0 diff
+- `cargo clippy --lib -- -D warnings` 0 error（清掉 R30 漏的 2 個 pre-existing + 本輪 0 新增）
+- `cargo test --lib` **158 passed**（154 既有 + 4 R31 新增,R30 0 regression）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `config::load_config` silent-fail sites | 2 (`unwrap_or_default` + `if let Ok` 吞 IO) | 0 (`load_config_at` 三條分流 + 結構化 log) | -2 swallowed, +2 observable |
+| `load_config` IO/parse 三條分流 | 無 | NotFound 靜默 / IO 錯 warn / JSON 解析錯 warn 帶 preview | +1 三層分流 |
+| config 模組 unit tests | 7 (`save_config_at` 3 個 + 既有 4 個) | 11 (+4 R31) | +4 |
+| Lib 總 unit tests | 154 (R30) | 158 | +4 |
+| Rust clippy lints (D warnings) | 2 (K16 pre-existing 漏) | 0 | -2 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8% (本輪 M0 不計入 chore) | 持平 |
+
+**不做的範圍**（給後續輪次）:
+- `load_config` 內 forward-migration 邏輯也抽成可測純 fn:目前耦合 default provider list（`default_providers()` 已是 const fn,不痛）、低優先
+- log capture 框架（`test-log` crate 之類）讓 4 個 test 可直接 assert log warn 內容:infra 成本高、本輪測試只驗「函式不 panic + 回 default」已足夠,留作 M2 候選
+- K11 / K12 既有 `HookServerMetrics` snapshot struct 套同 pattern 把「`load_config_at` 也回 `Result<Config, LoadError>` 帶 NotFound/IO/Parse 三態」,讓 caller `load_config` 可選擇 log warn 策略:目前 `load_config` 一定 log warn + 回 default 是合理 default,需求未浮現不動
+- engineering-log.md 918 行超 500 cap → R32+ H0 候選 rotate（本輪 M0 順,禁 H0）
+
+**結果**: PASS（M0 silent error surfacing 收尾 `config::load_config` 最後 2 條 silent chain + 順手清 K16 漏的 2 個 clippy lint + 0 lint warning + 0 regression）
+
+**KPI-impact: silent_fail_sites_observable +2 paths（`load_config` 兩條 silent chain → `load_config_at` 三條分流 + 結構化 log warn 帶 80 字 preview,operator 排查「config 為什麼全變回預設」從「找線索」降到「grep [config] load_config_at 一行 prefix」+ 看 80 字 preview）**

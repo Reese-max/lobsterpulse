@@ -587,3 +587,155 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - 把 `last_event_at` 順手接到 capsule UI 顯示「last activity X seconds ago」：超出 metrics 範疇、UI 改動大，下輪再議
 - 把 idle_seconds gauge 改 counter（monotonic 計數）：語意不同（gauge = 當下 idle 多少秒 / counter = 累計 idle 秒數），user 端 SLO alert 通常用 gauge
 
+
+### [2026-06-01] Round 20 — K9 per-provider session_count lifetime counter 落地（lifetime 四件套收尾）
+**類型**: M1（K9 metrics 細顆度；lifetime 四件套 K6/K7/K8/K9 收尾）
+**KPI**: K9-per-provider-session-count-lifetime-counter
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `lobsterpulse_provider_session_count{provider="..."}` counter | 無 | 有（9 provider × counter） | ✓ |
+| `ProviderTotals.session_count` 欄位 | 已在（session.rs:430 handle_event += 1） | 已有，純接線 render 端 | 0（已就位） |
+| `render_prometheus_body` 函式簽名 | 同 R19 | 同 R19 | — |
+| Lib unit tests | 66 pass | 70 pass | +4（3 lib + 1 session integration） |
+| `cargo clippy --lib --tests -- -D warnings` | 0 warning | 0 warning | — |
+| `cargo fmt --check` | 過 | 過 | — |
+| `bash test/smoke-test.sh quick` | PASS | PASS | — |
+| 24h chore_ratio (rolling) | 43% | 43% → 待 R21 重算（本輪 M1 不計入 chore） | 持平 |
+
+**為什麼**:
+- R19 末列 K9 候選 = per-provider session_count 細顆度 lifetime。R19 評估「純接線、設計價值低」但實際有 SLO 價值：
+  - 現有 `lobsterpulse_provider_sessions{provider="..."}` 是 **live** session 數（從 `SessionInfo` 切片算）
+  - 新 metric 是 **lifetime** 累計（從 `ProviderTotals.session_count` 算）
+  - 差異化 → user 知道該 provider 累計被 stale 回收的 session 數 = 使用量信號
+  - 例如：當前 live claude=1、lifetime claude=10 → 知道 claude 累計開過 10 個 session、9 個已結束回收
+  - 跟 K6 lifetime token / K7 lifetime failure / K8 lifetime idle 同 pattern
+- 純接線紅利：`ProviderTotals.session_count` 欄位在 session.rs:430 早就 +1，K9 只缺 render 端讀出來
+- 24h chore_ratio 43% 紅線仍生效 → 本輪**強制 M1**，不碰 H0
+- 選 M1 K9 而非 M2 HTTP e2e / M0 silent-fail hunt：K9 風險最低、價值明確（1 個新 metric + 1 條 SLO 信號）
+
+**搜尋**:
+- 沒做 WebSearch（K6/K7/K8/K9 同 pattern 延伸，純 surgical 接線 + 純 fn 化）
+- 對照 K6/K7/K8 lifetime-vs-live regression guard 概念：本輪新測試復用同 pattern
+
+**做了什麼**:
+- `lib.rs:1043-1056` `render_prometheus_body` 加 `let mut provider_session_count: HashMap<String, u64>` + 從 `t.session_count` 填
+- `lib.rs:1067-1068` alphabetical 排序 `provider_session_count_sorted`
+- `lib.rs:1118-1128` 新 metric 段輸出：
+  ```
+  # HELP lobsterpulse_provider_session_count Lifetime session count per provider
+  # TYPE lobsterpulse_provider_session_count counter
+  lobsterpulse_provider_session_count{provider="cicx"} 5
+  ...
+  ```
+- 既有 `output_includes_help_and_type_headers_for_every_metric` 加 2 行 required header（HELP + TYPE）
+- 既有 `empty_state_emits_zero_counters_and_no_provider_lines` 加 1 條 K9 empty 斷言
+- 新 test helper `totals_with_session_count(provider, count)`
+- 新 3 個 lib test：
+  1. `session_count_empty_state_emits_header_only` — 0 provider，header 有、sample line 沒有
+  2. `session_count_uses_lifetime_aggregate_not_live_sessions` — 0 live session 但 ProviderTotals.session_count=5，metric 仍正確反映
+  3. `session_count_alphabetical_and_deterministic` — 3 providers 不同 session_count 值，alphabetical 排序 + 確定性
+- `session.rs` 新 integration test `session_count_lifetime_aggregate_accumulates_across_unique_sessions`：
+  - session 1：開 + 多個 event + 結束 → 累計 1
+  - session 2：不同 session_id → 累計 2（lifetime 不蒸發）
+  - session 3：開但不結束 → 累計 3
+  - 同 session 重發 SessionStart → 不 +1
+  - 不同 provider 獨立累計
+
+**為什麼用 counter 而不是 gauge**:
+- 跟 K6 lifetime token、K7 lifetime failure 對齊：lifetime 累計 = counter
+- K8 idle_seconds 是 gauge（瞬時值）= 語意不同
+- `session_count` 嚴格 monotonic 遞增（每個 unique session_id 算一次）→ counter 符合 monotonic 語意
+
+**為什麼 `lobsterpulse_provider_sessions`（live）跟 `lobsterpulse_provider_session_count`（lifetime）並存**:
+- live 給前端 capsule 顯示「當下有幾個 session 在跑」= UI 用途
+- lifetime 給 Prometheus alert 算「使用量 / 變化率」= 監控用途
+- 兩者並存 = 監控端可以算 rate(lifetime_session_count[5m]) = session 開啟率
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 70/70 pass（66 既有 + 3 lib K9 + 1 session K9 integration；0 regression）
+- `bash test/smoke-test.sh quick` PASS
+- **未做 runtime smoke**：R19 K8 runtime smoke 已驗證 metrics pipeline 真的從 /metrics 出來；K9 走完全相同的 pure fn 邏輯（從 ProviderTotals 拉出），pipeline 沒變 → skip
+- 如果需要 runtime confirmation，下輪可加 `smoke_k9.ps1` 復用 R19 K8 模式
+
+**結果**: PASS（K9 落地 + lifetime 四件套 K6/K7/K8/K9 收尾 + 0 lint warning + 0 regression + commit `033dc1e`）
+
+**KPI-impact: K9 per-provider session_count lifetime counter 從 0 → 1 metric + lifetime 四件套 K6/K7/K8/K9 收尾**
+
+**不做的範圍**（給後續輪次）:
+- HTTP-level e2e 測試 spawn metrics server thread：test 慢且 flaky 風險高、port 衝突要管理，K6/K7/K8/K9 都已說明
+- `.arch-fitness.json` / `.supervisor-report.json` 加 .gitignore：H0、24h chore_ratio 43% 紅線仍生效，下輪再議
+- 把 K6/K7/K8/K9 lifetime-vs-live pattern 套到 discord `poll_discord_commands` 的 silent-fail 路徑：無關 metric 範圍
+- 把 `ProviderTotals.session_count` 接到 capsule UI 顯示「累計 session 數」：超出 metrics 範疇、UI 改動大，下輪再議
+- `lobsterpulse_provider_session_count` 跟 `lobsterpulse_sessions_total` 全域值的差異化 alert：R21+ 觀察
+
+### [2026-06-01] Round 21 — quota_history CSV writeln 沉默吞 fs error surfaced + counter 修不說謊
+**類型**: M0（user-facing observability bug + 計數語意 bug 同時修；R12 「不做的範圍」點名的 quota_history 池收尾）
+**KPI**: K4-openab-bridge-observability 延伸池 → 新 K10-quota-history-csv-observability
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `quota_history::snapshot_once` silent fail sites | 1 (line 60 `let _ = writeln!`) | 0 | −1 |
+| `written` counter 計數語意（caller 看到的值） | 不可信（含失敗列） | 與實際成功列數一致 | ✓ |
+| Caller `Ok(N)` 語意（lib.rs:1446 hourly / lib.rs:1459 post-runners / manual_snapshot_once Tauri cmd） | 誤導 | 與磁碟一致 | ✓ |
+| CSV row format regression guard | 無 | 1 條 unit test 鎖 `"ts,name,pct\n"` | ✓ |
+| writeln 失敗 contract | 無 | 1 條 unit test 鎖 read-only handle → io::Error | ✓ |
+| Lib unit tests | 70 pass | 72 pass | +2 |
+| `cargo clippy --lib --tests -- -D warnings` | 0 warning | 0 warning | — |
+| `cargo fmt --check` | 過 | 過 | — |
+| `bash test/smoke-test.sh quick` | PASS | PASS | — |
+
+**為什麼**:
+- R12 末「不做的範圍」明確點名 `quota_history.rs:60 let _ = writeln!` 是「另一個 silent fail 池」待收。R6-R20 連 9 輪 M0 + K6-K9 metrics 都已落地，這條是**僅存**的 R12 deferred M0 候選
+- 雙重 bug 同時修：
+  1. **Silent fail**：`writeln!` 失敗（磁碟滿 / fd 中斷）完全無 log → operator 看 hourly 看到 `Ok(0)` 以為「無 usage runner」、實際是「CSV 寫失敗」
+  2. **Counter 說謊**：原 `let _ = writeln!(f, ...); written += 1;` 不管 writeln 成功與否都 +1 → caller 收到 `Ok(N)` 誤以為 N 列都 commit 到磁碟
+- 對齊 R6/R8/R11/R12 surface pattern：`log::warn!` 統一 prefix `[quota_history]`，log filter 一條 query 抓全部 quota CSV 失敗
+- 對齊 R12 `write_offset_at` pure fn pattern：把 IO 操作抽成 `write_csv_row(f, ts, name, pct) -> io::Result<()>`，caller 端決定 log policy 與計數是否扣 → 同一個 module 內的兩個 IO helper 形狀對齊，方便日後 grep
+- 24h chore_ratio 紅線觸發 → 本輪**強制 M0**，不碰 H0
+- 選 M0 quota_history 而非 M1 K10+ 新 metric：M0 是真實 user-facing observability bug（CSV 資料點無聲遺失）、K-series 已收尾；新 metric 是 nice-to-have，bug 修是 must-fix
+
+**搜尋**:
+- 沒做 WebSearch（pure fn 化 + log surface 是 R4/R6/R8/R11/R12 既定 pattern，無新領域）
+- 對照 R12 `write_offset_at` API 形狀：本輪 `write_csv_row(f, ts, name, pct) -> io::Result<()>` 完全對齊（caller-side log + counter policy）
+- 對照 R8 `process_body` pure fn + R12 `write_offset_at` pure fn + R4 `write_local_usage_snapshot` pure fn：3 個 IO helper 都是同形狀，未來 grep 維護容易
+
+**做了什麼**:
+- `quota_history.rs:60` 抽 `fn write_csv_row(f: &mut File, ts: u64, name: &str, pct: u8) -> io::Result<()>` 為 pure fn
+- caller `snapshot_once` 改 `match write_csv_row(&mut f, now, name, pct) { Ok(()) => written += 1, Err(e) => log::warn!("[quota_history] write_csv_row failed (ts={now}, runner={name}, pct={pct}): {e} — quota-history.csv 該輪缺一筆") }`
+- 統一 prefix `[quota_history]`，與 R6/R8/R11/R12 既有 prefix 對齊（`[auto_rules]` / `[hook_server]` / `[openab_bridge]` / `[quota_history]`）→ log filter `grep '\[quota_history\]'` 一條 query 抓 CSV 失敗
+- 加 2 條 unit test：
+  1. `write_csv_row_writes_csv_line` — happy path：2 row 寫入 → 讀回 = `"1700000000,cicx,42\n1700000001,openx,7\n"`，鎖 format（無 BOM、無 CRLF、未來若有人改寫成 serialize 不能 break）
+  2. `write_csv_row_returns_err_on_read_only_handle` — negative path：read-only handle 寫入 → `io::Error`（kind ∈ InvalidInput/BrokenPipe/PermissionDenied/Other，不鎖特定 kind 因 Windows/Unix 差異）→ 驗證 caller 端**會**收到 Err、**不會**誤算 `written`
+
+**為什麼只動 line 60、不動 line 39 (`let _ = create_dir_all`)**:
+- line 39 的 `let _ = std::fs::create_dir_all(parent)` 是 best-effort — 若失敗，後續 `OpenOptions::open(&path)` 會回 Err 並 bubble 到 caller 的 `log::warn!`（lib.rs:1446/1459 已處理）
+- 改 line 39 表面是對齊 R12 surface pattern，**但**會把 `create_dir_all` 的 NotFound 報兩次（一次 line 39、一次 line 50 open）— 是 noise 不是 signal
+- scope 控制：R12 已明確說明 create_dir_all 是 best-effort pattern，不重複 surface
+
+**為什麼不把 `snapshot_once` 簽名改成 `Result<usize, (usize, usize)>` 帶「實際寫入 / 嘗試寫入」**:
+- 既有 caller 對 `Err(e)` 已正確處理（log::warn + 繼續）；`Ok(N)` 語意從「嘗試寫 N 列」變「成功寫 N 列」= 語意變窄，但**沒人**依賴舊語意
+- lib.rs:1446/1459 只 log Err，不讀 Ok 值
+- manual_snapshot_once Tauri cmd 把 Ok(N) 丟給前端，UI 顯示「本次 snapshot X 列」= 改成「成功 X 列」語意更直覺，**不**是 breaking change
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 72/72 pass（70 prior + 2 new）
+- `cargo test --lib quota_history` 2/2 new pass
+- `bash test/smoke-test.sh quick` PASS
+
+**結果**: PASS（M0 observability 改善 + counter 語意修對 + 0 lint warning + 0 regression + commit pending）
+
+**KPI-impact: K10-quota-history-csv-observability silent fail 1 → 0；counter 計數從不可信 → 與磁碟一致**
+
+**不做的範圍**（給後續輪次）:
+- 把 `quota_history::snapshot_once` 從 `dirs::home_dir()` 抽成接受 `&Path` 參數：會動到 3 個 caller（lib.rs:737/1446/1459），scope 超出 M0 surgical
+- 加 integration test「跑完整 snapshot_once → 讀 quota-history.csv 確認 row 數」：要 mock `dirs::home_dir()` 環境、需要 tmpdir，比 unit test 寫 CSV row 脆；unit test 已鎖 format 與 writeln contract
+- 為 R6/R8/R11/R12/R21 5 個 silent-fail surface 點寫**整合** log filter doc（記下 `[prefix]` grep 速查表）：是 H0 docs，下輪再議
+- 全 codebase sweep `let _ =` 殘留：R12 末已列為「scope 跨多 module、需另開一輪」，本輪 surgical
+- 把 lifetime counter pattern 套到 `discord_kill_cmd` reaction count / `token_spike` trigger count 等：超出 metrics 範疇

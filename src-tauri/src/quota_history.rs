@@ -57,11 +57,26 @@ pub fn snapshot_once() -> Result<usize, String> {
         }
         let text = r.get("text").and_then(|x| x.as_str()).unwrap_or("");
         if let Some(pct) = extract_min_percent(text) {
-            let _ = writeln!(f, "{now},{name},{pct}");
-            written += 1;
+            // 對齊 R12 surface pattern：writeln 失敗要可觀察 + 不能算進 `written`。
+            // 之前 `let _ = writeln!(f, ...)` 沉默吞 fs error，caller 看到 `Ok(N)`
+            // 誤以為 N 列都 commit，實際磁碟滿/fd 斷時缺資料無 log。
+            match write_csv_row(&mut f, now, name, pct) {
+                Ok(()) => written += 1,
+                Err(e) => log::warn!(
+                    "[quota_history] write_csv_row failed (ts={now}, runner={name}, pct={pct}): \
+                     {e} — quota-history.csv 該輪缺一筆"
+                ),
+            }
         }
     }
     Ok(written)
+}
+
+/// 寫單列 CSV row。抽成 pure fn 方便 unit test 鎖 format 與 IO error 傳播。
+/// 失敗回 `io::Error` — caller 端決定 log policy 與計數是否要扣（snapshot_once
+/// 故意不把失敗 row 算進 `written`，避免 caller 看到 `Ok(N)` 誤判）。
+fn write_csv_row(f: &mut std::fs::File, ts: u64, name: &str, pct: u8) -> std::io::Result<()> {
+    writeln!(f, "{ts},{name},{pct}")
 }
 
 /// 讀全部 history，回傳 (name → Vec<(ts, pct)>)。截掉超過 KEEP_DAYS 的紀錄。
@@ -135,4 +150,62 @@ fn extract_min_percent(text: &str) -> Option<u8> {
         i += 1;
     }
     min
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Read;
+
+    #[test]
+    fn write_csv_row_writes_csv_line() {
+        let dir = std::env::temp_dir().join(format!("lp-quota-history-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.csv");
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        write_csv_row(&mut f, 1_700_000_000, "cicx", 42).unwrap();
+        write_csv_row(&mut f, 1_700_000_001, "openx", 7).unwrap();
+        drop(f);
+
+        let mut buf = String::new();
+        File::open(&path).unwrap().read_to_string(&mut buf).unwrap();
+        assert_eq!(buf, "1700000000,cicx,42\n1700000001,openx,7\n");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn write_csv_row_returns_err_on_read_only_handle() {
+        // 對齊 R20 silent-fail 改善的 contract：writeln 失敗必須傳出 Err，
+        // caller 才能 log + 不算進 `written`。在 read-only handle 寫入 → io::Error。
+        let dir = std::env::temp_dir().join(format!("lp-quota-history-ro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ro.csv");
+        // 先建立檔案，才能以 read-only 開啟
+        File::create(&path).unwrap();
+        let mut ro = OpenOptions::new().read(true).open(&path).unwrap();
+        let err = write_csv_row(&mut ro, 1_700_000_000, "cicx", 50).unwrap_err();
+        // 不鎖特定 kind（不同 OS 回的 kind 不同：Windows BadFileDesc、Unix InvalidInput/Other），
+        // 只要是 io::Error 就代表 caller 不會誤把這列算進 `written`。
+        let k = err.kind();
+        assert!(
+            matches!(
+                k,
+                std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::Other
+            ),
+            "read-only 檔寫入應回 io::Error，實際 kind={k:?}"
+        );
+        drop(ro);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
 }

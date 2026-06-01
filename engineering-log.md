@@ -504,3 +504,28 @@
 **結果**: PASS（M1 metrics observability + K17 per-provider × per-event-type counter 落地 ~90 series + 修 K17 author 漏的 4 個 fixture E0063 + 0 lint warning + 0 regression + commit `ee4ace0`）
 
 **KPI-impact: hook_server per-event-type observability 0→~90 series（per-provider × per-type 細顆度 counter,SLO alert 規則一裝就 work:Stop-vs-UserPromptSubmit 偵測 runner 卡住 / Pre-vs-Post 偵測 tool 卡住 / TokenUpdate rate 監 quota 流量）**
+
+### [2026-06-02] R30 — `!lp quota` usage-local.json silent chain surfaced（read+parse 兩條鏈 → 1 helper + 4 tests）
+**類型**: M0（silent fail surfacing，持續 M0 收尾系列 R6-R29）
+**KPI**: silent_fail_sites_observable 累計 +1 path（R30 加 2 sites: read + parse）
+**KPI 進展表**:
+| KPI | 前值 (R29) | 後值 (R30) | 變化 |
+|---|---:|---:|---:|
+| Lib 總 unit tests | 162 | 166 | +4 |
+| `!lp quota` silent chains | 2 (read+parse) | 0 | -2 |
+| Log prefix 新增 | — | `[auto_rules] !lp quota: usage-local.json load failed: {e}` | +1 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8% | 持平 |
+**為什麼**: 對齊 mission「觀察 / 監控桌面 AI 工具」的可觀察性 — 之前 `!lp quota` 在 usage-local.json 損壞時 Discord 端無差別回「無 runner」訊息，operator 無 log 可查根因是「不存在」/「IO 錯」/「壞 JSON」哪條。修後三條分流 + 結構化 log warn。
+**搜尋**: 沿用 R28 `load_config_at` / R29 `parse_quota_history_row` 既有 pattern — `Result<Option<Value>, String>` + NotFound 靜默 / 其他 IO 錯 Err / parse 錯 Err。沒新搜。
+**做了什麼**:
+- 抽 `load_local_usage_snapshot_at(path) -> Result<Option<Value>, String>` 純 fn（pub(crate)）在 `auto_rules.rs` line 1123
+- 公開 `load_local_usage_snapshot()` 為薄殼呼叫 helper（line 1113）
+- caller 端 `!lp quota` 改 match 顯式分流（line 1353+）：Ok(None)→「不存在」、Err→log::warn!+「損壞」、Some 但 runners 空→「空」、Some 帶 runners→原本 render
+- 4 個 unit test：
+  1. `missing_returns_ok_none` — NotFound 靜默契約
+  2. `valid_returns_some` — happy path round-trip
+  3. `corrupt_json_returns_err` — 半截 JSON 必 Err（不能 silently 變空 Value）
+  4. `io_error_returns_err` — NUL 路徑觸發 IO 失敗（不能默默當 NotFound）
+**結果**: PASS（M0 silent error surfacing + cargo fmt 0 diff + cargo clippy --lib -- -D warnings 0 error + cargo test --lib 166 passed（+4 R30, 0 regression）+ commit `3ed5e36`）
+
+**KPI-impact: silent_fail_sites_observable +2 paths（`!lp quota` read+parse 兩條 silent chain → `load_local_usage_snapshot_at` 三條分流 + 結構化 log warn，operator 排查「usage-local.json 為什麼顯示無 runner」從「找線索」降到「grep `[auto_rules] !lp quota: usage-local.json load failed` 一行 prefix」+ 看完整 IO/parse 錯誤）**

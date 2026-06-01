@@ -246,6 +246,70 @@ Rule 2 (session_idle) 找有沒有相同 pattern。發現：
 
 ---
 
+### [2026-06-01] Round 5 — restore baseline green by .gitignore-ing auto-dev harness runtime
+**類型**: H0（housekeeping，解決「baseline 不綠」這個 P0 級治理債）
+**KPI**: K-baseline-clarity
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `git status --short` 髒檔行數 | 16 | 0 | −16 |
+| `git ls-files --others --exclude-standard` 未忽略 untracked | 16 | 0 | −16 |
+| `git check-ignore` 對 16 髒檔命中率 | 0/16 | 7/7（已抽樣驗證；其餘同 pattern） | +7 |
+| `cargo test --lib` | 24 pass | 24 pass | — |
+| 24h chore_ratio | 0% | 33% | +33%（本輪 H0 觸發，4 輪內首次） |
+
+**為什麼**:
+本輪進場時 baseline = 16 髒檔，workflow 要求「baseline 綠才動工」，先停下查性質：
+- 全部 `??`（untracked），無 ` M` / ` M ` 殘留
+- 全部是 auto-dev engineer-loop + harness + lp-notify daemon 的 runtime state
+  - `.engineer-loop.pid`（內容 "42904"）= loop PID lock
+  - `.engineer-loop.state.json` = loop state
+  - `.harness-*.json` / `.harness-*.state` = harness sensor 報告（R4 剛跑完）
+  - `.lp-notify*` + `.lp-notify-cache/` = notify daemon jsonl / DLQ / health
+  - `.project.lock`（"engineer-loop"）= project lock marker
+  - `.spectra.yaml` = spectra app config（全 commented defaults）
+  - `runs/` = 5 個 per-round run JSON（R1-R5，1.8-4.7KB / 個）
+- R4 commit `a6e6169` 是 session_idle 純 toast 修，**乾淨**。這 16 檔不是 R4 殘留，是跨多輪累積的 harness 噪聲。
+- Loop 正在跑 Round 5：`runs/5.json` 顯示 `status: "running"`、`started_at: 2026-06-01T11:55:59`、plan phase 11:56:02 完成。**不能刪任何檔案**，會 crash loop 與丟 state。
+- R2 二已在「不做的範圍」記過同樣觀察，當時 loop 狀態不確定所以延後；現在 loop 仍活，唯一安全動作 = declarative .gitignore。
+
+H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本輪 H0 後 = 33%（= 1 H0 / 3 commits，R2 / R3 / R4 / 本輪共 4 個 commit，chore 1）。Cap = 5 輪 1 個 H0，**合規**。
+
+**搜尋**: 無（這是已知 deferred 議題、loop 狀態已查清楚、不需新研究）。
+
+**做了什麼**:
+- `.gitignore` 補 8 個 pattern，分 4 區塊 + 註解：
+  - engineer-loop runtime：`.engineer-loop.pid`、`.engineer-loop.state.json`
+  - harness sensors：`.harness-*.json`、`.harness-*.state`
+  - lp-notify daemon：`.lp-notify*`、`.lp-notify-cache/`
+  - project lock + spectra config：`.project.lock`、`.spectra.yaml`
+  - per-round runs：`runs/`
+- 共 +20 / -0 lines，surgical
+- 不刪任何既有檔案（loop 正在寫）
+
+**驗證**:
+- `git check-ignore -v` 對 7 個樣本檔（涵蓋每個 pattern） 7/7 命中正確行
+- `git status --short` 從 16 行 → 0 行（commit 後空）
+- `git ls-files --others --exclude-standard` = 0（無遺漏）
+- `cargo check --quiet` → 0 errors ✓
+- `cargo test --lib` → 24 passed; 0 failed ✓
+
+**結果**: PASS（baseline 從 16 髒檔 → 0 髒檔；commit `0101e62`、1 file / +20 / -0）
+
+**不做的範圍**（給後續輪次）:
+- M0-3 程式碼改動：「一輪一件事」原則；本輪先還 baseline，Round 6 再挑 M0 bug 修。候選已備（見 R4 觀察 #3 + R2/R3 「不做的範圍」累積）：
+  - `let _ = discord::...` 11+ 處 caller side 改善（R2 提）
+  - Rule 3 hook_failure_burst 中文硬碼 filter（R3 提）
+  - `last_summary_date` 持久化到磁碟（R3 提，目前 in-memory）
+  - `daily_summary_hour == now_local.hour()` 整點 + 15s tick 精度（R3 提）
+- `package.json` 0.2.2 → 0.5.4 對齊（R1 / R2 二 提）：仍屬 H0、且無功能差異，待後續 H0 窗口
+- `dev.sh` / `build.sh` process name `agent-pulse` → `lobster-pulse`（R4 提）：H0、跨 shell 改動，待後續
+- upstream 13 commits backport 評估（R4 提）：跨 fork boundary，需單獨 round
+- 刪除這 16 個 runtime 檔：loop 正在跑，動 state = crash；本輪絕不做
+- `.lp-notify.health` HTTP 401 修：loop infra 問題、非本目錄程式碼（R1/R2/R4 已標），不歸 LP 端
+
+---
+
 ## 觀察事項（給後續輪次）
 
 1. **Spectra change `openclaw-self-evolution` 對 LobsterPulse 不可執行**（記憶 10335 確認）：
@@ -262,3 +326,7 @@ Rule 2 (session_idle) 找有沒有相同 pattern。發現：
 ## 決策記錄
 
 - **R1**: 不硬幹。寫 log、標出卡點、等下一輪看 Spectra / loop 是否有 openclaw 對應的程式碼到位。
+- **R2 / R2 二**: Discord HTTP 4xx silent fail → surfaced（M0）；fork dev tooling rename 補完（M0），並把 `.gitignore` `.spectra/` 議題 deferred 標記。
+- **R3**: daily/weekly summary 純 toast 模式 dedup 提前 set（M0）。
+- **R4**: session_idle 純 toast 永久 spam 修掉（M0）；抽出 `write_local_usage_snapshot` helper 修 direct write silent fail（M0 連帶）。
+- **R5**: baseline 16 髒檔 → 0 髒檔（declarative .gitignore，H0）。H0 cap 0/5 → 1/5 啟用。M0-3 程式碼改動 deferred 給 R6，候選清單在 R5 log 「不做的範圍」段。

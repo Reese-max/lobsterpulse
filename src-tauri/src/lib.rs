@@ -280,7 +280,11 @@ fn remove_provider_hooks(
     if let Some(p) = config.providers.get_mut(&provider_id) {
         p.enabled = false;
     }
-    save_config(&config).ok();
+    if let Err(e) = save_config(&config) {
+        log::warn!(
+            "[config] failed to persist enabled=false after remove_provider_hooks for {provider_id}: {e}"
+        );
+    }
     Ok(())
 }
 
@@ -296,7 +300,11 @@ fn install_provider_hooks(
         if let Some(p) = config.providers.get_mut(&provider_id) {
             p.enabled = true;
         }
-        save_config(&config).ok();
+        if let Err(e) = save_config(&config) {
+            log::warn!(
+                "[config] failed to persist enabled=true after install_provider_hooks for {provider_id}: {e}"
+            );
+        }
         Ok(())
     } else {
         Err(format!("Unknown provider: {provider_id}"))

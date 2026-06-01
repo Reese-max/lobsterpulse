@@ -994,39 +994,62 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
         &state.sessions,
         state.session_count as u64,
         state.active_count as u64,
+        &state.provider_totals,
     )
 }
 
-/// Pure formatter：把 `SessionInfo` 切片 + 兩個 aggregate 計數組成 Prometheus text format。
+/// Pure formatter：把 `SessionInfo` 切片 + aggregate 計數 + `ProviderTotals` lifetime
+/// aggregate 組成 Prometheus text format。
 ///
 /// 抽出此 fn 的理由：
 /// - 原本 inline 在 `render_prometheus` 內依賴 `tauri::AppHandle`，unit-test 要起 Tauri runtime
-/// - 抽成 `&[SessionInfo]` + 兩個 u64 aggregate 後可純函式測試
+/// - 抽成 `&[SessionInfo]` + aggregate 計數 + `&HashMap<String, ProviderTotals>` 後可純函式測試
 /// - provider 條目排序（alphabetical by key）確保輸出 deterministic，方便測試 assertion +
 ///   Prometheus scraper diff 穩定
+///
+/// Token 計數的語意說明（K6 落地）：
+/// - `lobsterpulse_tokens_input` / `_output`：**lifetime** aggregate，讀 `ProviderTotals`
+///   （不讀 live `SessionInfo`），否則 session 移除（SessionEnd / 30 min stale）後
+///   token 會從 global metric 蒸發、Prometheus 端會看到 counter 倒退
+/// - `lobsterpulse_provider_tokens_input{provider="..."}` / `_output`：per-provider 細顆度，
+///   來源同 `ProviderTotals`，可看各 backend 自己的 quota 消耗配比
 fn render_prometheus_body(
     sessions: &[session::SessionInfo],
     session_count: u64,
     active_count: u64,
+    provider_totals: &std::collections::HashMap<String, session::ProviderTotals>,
 ) -> String {
     let mut provider_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut provider_active: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    let mut tot_in: u64 = 0;
-    let mut tot_out: u64 = 0;
     for s in sessions {
         *provider_counts.entry(s.provider.clone()).or_default() += 1;
         if s.is_active {
             *provider_active.entry(s.provider.clone()).or_default() += 1;
         }
-        tot_in += s.tokens_input;
-        tot_out += s.tokens_output;
     }
+    // Token 累計走 ProviderTotals（lifetime aggregate），不走 live SessionInfo：
+    // session 移除後 SessionInfo 拿不到，ProviderTotals 仍保留歷史累計。
+    let mut tot_in: u64 = 0;
+    let mut tot_out: u64 = 0;
+    let mut provider_in: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut provider_out: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for (p, t) in provider_totals {
+        tot_in = tot_in.saturating_add(t.tokens_input);
+        tot_out = tot_out.saturating_add(t.tokens_output);
+        provider_in.insert(p.clone(), t.tokens_input);
+        provider_out.insert(p.clone(), t.tokens_output);
+    }
+
     let mut provider_counts_sorted: Vec<_> = provider_counts.iter().collect();
     provider_counts_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_active_sorted: Vec<_> = provider_active.iter().collect();
     provider_active_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_in_sorted: Vec<_> = provider_in.iter().collect();
+    provider_in_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_out_sorted: Vec<_> = provider_out.iter().collect();
+    provider_out_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
@@ -1045,10 +1068,22 @@ fn render_prometheus_body(
             "lobsterpulse_provider_active{{provider=\"{p}\"}} {c}\n"
         ));
     }
-    out.push_str("# HELP lobsterpulse_tokens_input Total input tokens across all sessions\n# TYPE lobsterpulse_tokens_input counter\n");
+    out.push_str("# HELP lobsterpulse_tokens_input Lifetime input tokens across all providers\n# TYPE lobsterpulse_tokens_input counter\n");
     out.push_str(&format!("lobsterpulse_tokens_input {tot_in}\n"));
-    out.push_str("# HELP lobsterpulse_tokens_output Total output tokens across all sessions\n# TYPE lobsterpulse_tokens_output counter\n");
+    out.push_str("# HELP lobsterpulse_tokens_output Lifetime output tokens across all providers\n# TYPE lobsterpulse_tokens_output counter\n");
     out.push_str(&format!("lobsterpulse_tokens_output {tot_out}\n"));
+    out.push_str("# HELP lobsterpulse_provider_tokens_input Lifetime input tokens per provider\n# TYPE lobsterpulse_provider_tokens_input counter\n");
+    for (p, n) in &provider_in_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_tokens_input{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    out.push_str("# HELP lobsterpulse_provider_tokens_output Lifetime output tokens per provider\n# TYPE lobsterpulse_provider_tokens_output counter\n");
+    for (p, n) in &provider_out_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_tokens_output{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
     out
 }
 
@@ -1825,10 +1860,13 @@ mod write_local_usage_snapshot_tests {
 #[cfg(test)]
 mod render_prometheus_tests {
     use super::*;
-    use crate::session::{SessionInfo, SessionState};
+    use crate::session::{ProviderTotals, SessionInfo, SessionState};
+    use std::collections::HashMap;
 
     /// 為 test 製造 SessionInfo fixture（只填 render_prometheus_body 讀的欄位）。
-    fn info(provider: &str, is_active: bool, tokens_in: u64, tokens_out: u64) -> SessionInfo {
+    /// K6 落地後 `tokens_input` / `tokens_output` 仍記在 SessionInfo 但 metric 不再讀它
+    /// （lifetime aggregate 走 ProviderTotals）；保留欄位是給 frontend SessionInfo 顯示用。
+    fn info(provider: &str, is_active: bool, _tokens_in: u64, _tokens_out: u64) -> SessionInfo {
         SessionInfo {
             id: format!("{provider}-sid"),
             provider: provider.to_string(),
@@ -1845,17 +1883,35 @@ mod render_prometheus_tests {
             last_prompt: None,
             tool_calls: Vec::new(),
             thinking: false,
-            tokens_input: tokens_in,
-            tokens_output: tokens_out,
+            tokens_input: 0,
+            tokens_output: 0,
             last_event_secs_ago: 0,
             token_samples: Vec::new(),
             duration_secs: 0,
         }
     }
 
+    /// 為 test 製造 ProviderTotals fixture（填 render_prometheus_body 讀的 token 欄位）。
+    fn totals(provider: &str, in_: u64, out: u64) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: in_,
+                tokens_output: out,
+                session_count: 1,
+                failure_count: 0,
+                since: None,
+            },
+        )
+    }
+
+    fn totals_map(entries: Vec<(String, ProviderTotals)>) -> HashMap<String, ProviderTotals> {
+        entries.into_iter().collect()
+    }
+
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
-        let body = render_prometheus_body(&[], 0, 0);
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new());
 
         assert!(body.contains("lobsterpulse_sessions_total 0\n"));
         assert!(body.contains("lobsterpulse_sessions_active 0\n"));
@@ -1864,12 +1920,20 @@ mod render_prometheus_tests {
         // 沒 session → provider_* 段只有 HELP/TYPE 標頭、沒有 sample
         assert!(!body.contains("lobsterpulse_provider_sessions{"));
         assert!(!body.contains("lobsterpulse_provider_active{"));
+        // 沒 provider → 新增的 per-provider token 段也只有 HELP/TYPE、沒有 sample
+        assert!(!body.contains("lobsterpulse_provider_tokens_input{"));
+        assert!(!body.contains("lobsterpulse_provider_tokens_output{"));
     }
 
     #[test]
     fn single_inactive_session_reported_as_total_only() {
         let sessions = vec![info("claude", false, 100, 50)];
-        let body = render_prometheus_body(&sessions, 1, 0);
+        let body = render_prometheus_body(
+            &sessions,
+            1,
+            0,
+            &totals_map(vec![totals("claude", 100, 50)]),
+        );
 
         assert!(body.contains("lobsterpulse_sessions_total 1\n"));
         assert!(body.contains("lobsterpulse_sessions_active 0\n"));
@@ -1883,7 +1947,8 @@ mod render_prometheus_tests {
     #[test]
     fn single_active_session_reported_in_both_provider_lines() {
         let sessions = vec![info("codex", true, 200, 80)];
-        let body = render_prometheus_body(&sessions, 1, 1);
+        let body =
+            render_prometheus_body(&sessions, 1, 1, &totals_map(vec![totals("codex", 200, 80)]));
 
         assert!(body.contains("lobsterpulse_sessions_active 1\n"));
         assert!(body.contains("lobsterpulse_provider_sessions{provider=\"codex\"} 1\n"));
@@ -1894,12 +1959,12 @@ mod render_prometheus_tests {
     fn multiple_providers_counted_separately_and_sorted_alphabetically() {
         // 故意用「非字母序」輸入驗 sort 邏輯：openx 應在 cicx 之前被排序掉
         let sessions = vec![
-            info("openx", false, 10, 5),
-            info("cicx", true, 20, 10),
-            info("gemini", false, 30, 15),
-            info("cicx", true, 40, 20), // 同 provider 重複 → count=2
+            info("openx", false, 0, 0),
+            info("cicx", true, 0, 0),
+            info("gemini", false, 0, 0),
+            info("cicx", true, 0, 0), // 同 provider 重複 → count=2
         ];
-        let body = render_prometheus_body(&sessions, 4, 2);
+        let body = render_prometheus_body(&sessions, 4, 2, &HashMap::new());
 
         // 排序後順序應為 cicx / gemini / openx
         let cicx_sessions_idx = body
@@ -1924,23 +1989,91 @@ mod render_prometheus_tests {
     }
 
     #[test]
-    fn token_counters_sum_across_all_sessions() {
-        let sessions = vec![
-            info("claude", true, 1000, 500),
-            info("codex", false, 2000, 1000),
-            info("cicx", true, 500, 250),
-        ];
-        let body = render_prometheus_body(&sessions, 3, 2);
+    fn token_counters_sum_from_provider_totals_aggregate() {
+        // K6 落地：global token 計數讀 ProviderTotals（lifetime aggregate），不走 live session。
+        // 三個 provider 各有 lifetime token 累計 → global total 應為三者之和。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals("claude", 1000, 500),
+                totals("codex", 2000, 1000),
+                totals("cicx", 500, 250),
+            ]),
+        );
 
         assert!(body.contains("lobsterpulse_tokens_input 3500\n"));
         assert!(body.contains("lobsterpulse_tokens_output 1750\n"));
     }
 
     #[test]
+    fn per_provider_token_metrics_alphabetical_and_separate() {
+        // K6 主軸：per-provider token 細顆度。3 個 provider、不同 token 數、alphabetical 排序。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals("openx", 100, 50), // 故意非字母序
+                totals("cicx", 200, 100),
+                totals("gemini", 300, 150),
+            ]),
+        );
+
+        // 每個 provider 都應該有 input + output 兩條 sample line
+        assert!(body.contains("lobsterpulse_provider_tokens_input{provider=\"cicx\"} 200\n"));
+        assert!(body.contains("lobsterpulse_provider_tokens_input{provider=\"gemini\"} 300\n"));
+        assert!(body.contains("lobsterpulse_provider_tokens_input{provider=\"openx\"} 100\n"));
+        assert!(body.contains("lobsterpulse_provider_tokens_output{provider=\"cicx\"} 100\n"));
+        assert!(body.contains("lobsterpulse_provider_tokens_output{provider=\"gemini\"} 150\n"));
+        assert!(body.contains("lobsterpulse_provider_tokens_output{provider=\"openx\"} 50\n"));
+
+        // 排序驗證：cicx < gemini < openx
+        let cicx_idx = body
+            .find("lobsterpulse_provider_tokens_input{provider=\"cicx\"} 200\n")
+            .expect("cicx input line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_tokens_input{provider=\"gemini\"} 300\n")
+            .expect("gemini input line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_tokens_input{provider=\"openx\"} 100\n")
+            .expect("openx input line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider token input 必須 alphabetical 排序"
+        );
+    }
+
+    #[test]
+    fn token_aggregate_uses_lifetime_not_live_sessions() {
+        // K6 修的 latent bug：原本從 live SessionInfo sum，session 移除後 token 蒸發。
+        // 這裡給 0 個 live session 但 provider_totals 有大量 token，驗證 metric 仍正確反映
+        // lifetime（不會因 session 移除而歸零）。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![totals("claude", 9999, 4444), totals("cicx", 1, 1)]),
+        );
+
+        assert!(body.contains("lobsterpulse_tokens_input 10000\n"));
+        assert!(body.contains("lobsterpulse_tokens_output 4445\n"));
+        // per-provider 細顆度也對
+        assert!(body.contains("lobsterpulse_provider_tokens_input{provider=\"cicx\"} 1\n"));
+        assert!(body.contains("lobsterpulse_provider_tokens_output{provider=\"claude\"} 4444\n"));
+    }
+
+    #[test]
     fn output_includes_help_and_type_headers_for_every_metric() {
         // scrape 端靠 HELP/TYPE 行識別 metric 類型；任何一條 missing 都會讓
         // Prometheus 把該 metric 標成 untyped（功能降級）
-        let body = render_prometheus_body(&[info("claude", true, 1, 1)], 1, 1);
+        let body = render_prometheus_body(
+            &[info("claude", true, 0, 0)],
+            1,
+            1,
+            &totals_map(vec![totals("claude", 1, 1)]),
+        );
 
         let required_headers = [
             "# HELP lobsterpulse_sessions_total",
@@ -1955,6 +2088,11 @@ mod render_prometheus_tests {
             "# TYPE lobsterpulse_tokens_input counter",
             "# HELP lobsterpulse_tokens_output",
             "# TYPE lobsterpulse_tokens_output counter",
+            // K6 新增：per-provider token metric
+            "# HELP lobsterpulse_provider_tokens_input",
+            "# TYPE lobsterpulse_provider_tokens_input counter",
+            "# HELP lobsterpulse_provider_tokens_output",
+            "# TYPE lobsterpulse_provider_tokens_output counter",
         ];
         for h in required_headers {
             assert!(

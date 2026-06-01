@@ -40,11 +40,56 @@ fn offset_path() -> Option<PathBuf> {
     Some(home.join(".lobsterpulse").join(OFFSET_FILE_NAME))
 }
 
+/// Pure fn：從指定 path 讀 offset，回 u64。對齊 R12 `write_offset_at` 的 pure-fn pattern，
+/// 讓 caller 端 `read_offset` 用 `match` 統一 log 處理。
+///
+/// R28：原 `.ok()` chain 吞掉 read + parse 兩條 silent fail 路徑，corrupt offset 檔
+/// （磁碟損壞 / 寫入半截 / 非 u64 字串）會回 0 → `read_events_since` 觸發
+/// `if offset == 0` 跳到 EOF，**靜默丟所有歷史 event**。改為 NotFound 走 debug
+/// （first-run 預期），其餘 fail 走 warn 並回 0。
+fn read_offset_at(path: &std::path::Path) -> u64 {
+    match std::fs::read_to_string(path) {
+        Ok(s) => match s.trim().parse::<u64>() {
+            Ok(n) => n,
+            Err(e) => {
+                log::warn!(
+                    "[openab_bridge] read_offset: parse failed for {:?}: {} — \
+                     returning 0 (next tail will skip to EOF, may reprocess history)",
+                    path,
+                    e
+                );
+                0
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            log::debug!(
+                "[openab_bridge] read_offset: no offset file at {:?} (first-run)",
+                path
+            );
+            0
+        }
+        Err(e) => {
+            log::warn!(
+                "[openab_bridge] read_offset: read failed for {:?}: {} — \
+                 returning 0 (next tail will skip to EOF, may reprocess history)",
+                path,
+                e
+            );
+            0
+        }
+    }
+}
+
 fn read_offset() -> u64 {
-    offset_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0)
+    match offset_path() {
+        Some(p) => read_offset_at(&p),
+        None => {
+            log::debug!(
+                "[openab_bridge] read_offset: no offset path (home_dir missing?) — returning 0"
+            );
+            0
+        }
+    }
 }
 
 /// 寫入 offset 到指定路徑（採用「先 tmp 後 rename」原子寫；rename 失敗 fallback 直接寫）。
@@ -176,13 +221,26 @@ fn read_events_since(
     let complete = &chunk[..=last_nl];
     let text = String::from_utf8_lossy(complete);
     let mut out = Vec::new();
-    for line in text.lines() {
+    for (i, line) in text.lines().enumerate() {
         let l = line.trim();
         if l.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(l) {
-            out.push(v);
+        match serde_json::from_str::<serde_json::Value>(l) {
+            Ok(v) => out.push(v),
+            Err(e) => {
+                // R28：原 `if let Ok(...)` silent skip 壞 JSON 行（OpenAB 上游寫入半截
+                // / encoding 損壞 / 非 JSON 噪音），operator 看不到任何訊號。改為 warn
+                // 帶 line number + 截斷的 preview（120 字元防 log 爆量）。
+                let preview: String = l.chars().take(120).collect();
+                log::warn!(
+                    "[openab_bridge] read_events_since: skip malformed JSON line {}: {} \
+                     — preview: {:?}",
+                    i + 1,
+                    e,
+                    preview
+                );
+            }
         }
     }
     let new_offset = offset.saturating_add((last_nl + 1) as u64);
@@ -394,6 +452,29 @@ mod read_events_since_tests {
     }
 
     #[test]
+    fn read_events_since_malformed_json_line_skipped_other_lines_parsed() {
+        // R28：原 `if let Ok(...)` silent skip 壞 JSON 行，無 log。改為 skip 該行 + log::warn
+        // 後繼續處理其他行。本測試鎖：壞行不污染 batch,壞行被 skip,合法行 parse 成功。
+        // 警告 log 內容不在此測試鎖（無 test logger fixture），只鎖行為。
+        //
+        // 注意：offset 設成 line1 結尾後位置,模擬「運行中」狀態(已追蹤過 line 1)。
+        // offset=0 會觸發 first-run 跳 EOF 邏輯(在 R13 行為),無法測 read loop。
+        let body = "{\"p\":1}\nNOT-VALID-JSON\n{\"q\":2}\n";
+        let path = tmp_jsonl("mixed", body);
+        let line1_end = body.find('\n').expect("body 必有 \\n") as u64 + 1;
+        let (events, new_offset) =
+            read_events_since(&path, line1_end).expect("mixed 應回 Ok 不報錯");
+        assert_eq!(events.len(), 1, "壞行 skip 後 1 個合法 event 應保留");
+        assert_eq!(events[0]["q"], serde_json::json!(2), "q=2 應為 chunk 唯一合法 event");
+        assert_eq!(
+            new_offset,
+            body.len() as u64,
+            "offset 應推到完整 chunk 結尾（含 trailing \\n）"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn read_events_error_display_covers_all_four_variants() {
         // 鎖 4 個 variant 的 Display prefix 穩定，方便 log filter
         // io::Error 沒 Copy/Clone，每個 case 各自構造一次
@@ -414,6 +495,82 @@ mod read_events_since_tests {
                 "Display prefix 應為 {expected_prefix:?}，實際：{msg}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod read_offset_at_tests {
+    //! R28 regression：`read_offset` 之前用 `.ok()` chain 吞 read + parse 兩條 silent fail
+    //! 路徑。corrupt offset 檔（磁碟損壞 / 寫入半截 / 非 u64 字串）會回 0 → 觸發
+    //! `read_events_since` 的 first-run 跳 EOF 邏輯，**靜默丟歷史 event**。
+    //!
+    //! 改為 `read_offset_at(path) -> u64` pure fn + caller 端 `match` 統一 log，
+    //! 對齊 R12 `write_offset_at` pattern。本 module 鎖 5 條契約：
+    //! 1. 檔案不存在（NotFound）→ 回 0（first-run expected，log::debug）
+    //! 2. 檔案存在但內容是 garbage（parse 失敗）→ 回 0 + log::warn
+    //! 3. 檔案存在但內容是空字串（trim 後 parse 失敗）→ 回 0 + log::warn
+    //! 4. 檔案存在且內容是合法 u64 → 原樣回傳
+    //! 5. 檔案存在且內容含 whitespace / newline → trim 後正確解析
+    //!
+    //! 注意：log::warn / log::debug 內容不在此 module 鎖（沒有 test logger fixture），
+    //! 只鎖「回傳值正確」。log 端的契約由「grep 程式碼」保證。
+
+    use super::*;
+
+    /// 為每個 test 製造獨立 tmp offset 路徑（避免 parallel test 互踩 / 污染 home dir）。
+    /// 跟 `write_offset_at_tests::tmp_path` 同 pattern 但 prefix 不同避免撞名。
+    fn tmp_offset(tag: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("lp-roffset-{tag}-{nonce}-{}", std::process::id()));
+        p
+    }
+
+    #[test]
+    fn read_offset_at_missing_file_returns_zero() {
+        let path = tmp_offset("missing");
+        // 不建立檔案
+        let n = read_offset_at(&path);
+        assert_eq!(n, 0, "不存在檔案應回 0（first-run 預期）");
+    }
+
+    #[test]
+    fn read_offset_at_corrupt_content_returns_zero() {
+        let path = tmp_offset("corrupt");
+        std::fs::write(&path, b"not-a-number-at-all").expect("write fixture");
+        let n = read_offset_at(&path);
+        assert_eq!(n, 0, "garbage 內容應 parse 失敗回 0");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_offset_at_empty_file_returns_zero() {
+        let path = tmp_offset("empty");
+        std::fs::write(&path, b"").expect("write fixture");
+        let n = read_offset_at(&path);
+        assert_eq!(n, 0, "空檔 parse 應失敗回 0");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_offset_at_valid_u64_returns_value() {
+        let path = tmp_offset("valid");
+        std::fs::write(&path, b"12345").expect("write fixture");
+        let n = read_offset_at(&path);
+        assert_eq!(n, 12345, "合法 u64 應原樣回傳");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_offset_at_trims_whitespace_and_newlines() {
+        let path = tmp_offset("trim");
+        std::fs::write(&path, b"  42\n").expect("write fixture");
+        let n = read_offset_at(&path);
+        assert_eq!(n, 42, "trim 後的 u64 應正確解析");
+        let _ = std::fs::remove_file(&path);
     }
 }
 

@@ -197,9 +197,61 @@ R1 把它歸 H0 是誤判 — 這是真實的 dev workflow break，升級為 M0�
 
 ---
 
+### [2026-06-01] Round 4 — session_idle 純 toast 模式永久 spam 修掉
+**類型**: M0（user-facing 阻斷 bug：純 toast 模式 session 閒置 30 分鐘後每 5 分鐘永久重發 toast）
+**KPI**: K-session_idle_toast_spam
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| session_idle 純 toast 模式永久重發（30min 後） | 每 5min 一次，永久 | 1 次 / idle 週期 | ✓ |
+| 24h chore_ratio（本輪後） | 0% | 0% | — |
+| cargo test --lib | 15 pass | 18 pass | +3 |
+
+**為什麼**:
+R3 修了 Rule 4/5 (daily/weekly summary) 純 toast 模式 dedup bug 後，往同方向再掃
+Rule 2 (session_idle) 找有沒有相同 pattern。發現：
+- `cfg.dedup_window_secs = 300s`（5min）
+- `cfg.session_idle_trigger_secs = 1800s`（30min）
+- Rule 2 純 toast 模式：30min 觸發後，5min dedup 窗一過就再 fire 一次。
+  由於純 toast 模式無 Discord reaction → 無 `pending_confirm` 紀錄 → 沒有任何
+  機制告訴「這個 session 已經通知過了」。
+- 永久 spam 直到 session 變 active 或被 kill。
+
+這跟 R3 修的 Rule 4/5 bug 結構同形：dedup 錨點用 `now_secs()`，對「事件週期」
+太短。修法對齊：dedup 錨點改成「事件本身的週期」。
+
+**搜尋**: 沒做（這是直接同 pattern 延伸，不是新領域探索）。
+
+**做了什麼**:
+- `AutoRuleState` 新增 `last_session_idle_event_ts: HashMap<String, i64>`
+- 新增 `should_notify_session_idle()` helper：
+  * 以 `session.last_event_time` epoch_secs 為錨點
+  * 同 `(sid, last_event_ts)` 跳過（同一個 idle 週期）
+  * `last_event_ts` 推進（session 變 active）→ 失配 → 允許下輪 idle 再 fire
+  * `> 256` 筆時 lazy GC 64 筆最舊（防外部 session 移除後殘留撐大 map）
+- Rule 2 loop 把 `dedup_gate` 換成 `should_notify_session_idle`
+- 3 個 unit test 覆蓋：同週期去重 / 跨週期放行 / 不同 session 獨立 / lazy GC
+- 後續在 `run_local_usage_runners` 抽 `write_local_usage_snapshot()` helper：
+  * 原 inline 寫入路徑對 direct write fallback 是 silent fail（`let _ = ...`），
+    60s loop 下會讓膠囊 quota 卡舊值且 user 不知是 OpenAB 沒更新還是 LP 自己寫失敗
+  * 改用 `Result<(), String>` + 兩層 `log::error!`（atomic 失敗 + direct 失敗）
+  * 2 個 unit test 覆蓋：happy path JSON 合法 / 不存在目錄必回 Err 且 error chain 含「atomic」
+
+**驗證**:
+- `cargo test --lib` → 20/20 pass（3 + 2 新增）
+- `cargo clippy --lib --tests -- -D warnings` → 0 警告
+- `cargo fmt --check` → 過
+
+**結果**: PASS（M0 bug 修復落地 + 5 個 unit test 覆蓋 + 0 lint warning）
+
+---
+
 ## 觀察事項（給後續輪次）
 
-1. **若 Spectra 變更真的要在本目錄推進**：需要先確認 openclaw agent runtime 的程式碼位址。可能是 sibling repo、或將在後續 round 從 openclaw repo 拉過來。在此之前，openclaw-self-evolution 對本目錄 = 不可執行。
+1. **Spectra change `openclaw-self-evolution` 對 LobsterPulse 不可執行**（記憶 10335 確認）：
+   - 21 個 task 涉及 SQLite FTS5 對話索引 / DSPy+GEPA 反思進化 / skill genesis hook — 全是 OpenAB agent runtime 的概念
+   - 本 repo 是 `lobsterpulse`（Tauri v2 桌面膠囊）+ AgentPulse fork 程式碼，沒有 OpenAB runtime、沒有 agent 對話 log 可索引
+   - R4 結尾的決策：把這 change 視為**跨 repo 誤派**，不在本 loop 推進。後續若要繼續，需 user 端把 change 移到 OpenAB repo（或關閉本 change、在 OpenAB repo 重開）
 2. **若 Spectra 變更其實是 meta-task**（指 loop 自身的演化）：本 loop 還沒產生對話 log（無 .jsonl 對話記錄，只有 burn.log + notify jsonl），FTS5 索引無對象可索引。
 3. **LobsterPulse 端可考慮的 H0 候選**（不在本輪做）：
    - `package.json` version 0.2.2 → 0.5.4 對齊 Cargo.toml / tauri.conf.json

@@ -161,6 +161,12 @@ fn should_notify_session_idle(
     state
         .last_session_idle_event_ts
         .insert(session_id.to_string(), last_event_ts);
+    // 持久化錨點——重啟後 `load_persisted_session_idle_markers` 會讀回，避免重啟
+    // 重新進入的 idle 週期又被通知一次。best-effort：寫入失敗不擋 fire，log
+    // 不 panic，當下 session 仍由 in-memory 擋重複。對齊 R5 summary marker pattern。
+    if let Err(e) = persist_session_idle_markers(&state.last_session_idle_event_ts) {
+        log::error!("[auto_rules] persist session_idle markers: {e}");
+    }
     true
 }
 
@@ -977,6 +983,12 @@ struct PersistedSummaryMarkers {
     last_summary_date: String,
     #[serde(default)]
     last_weekly_key: String,
+    /// session_idle 規則的 last_event_time 錨點：`(session_id, last_event_ts)` 已通知
+    /// 過的紀錄。session 變 active 後錨點失配會自動放行下輪 idle；用「事件週期」做
+    /// dedup 錨點是 R4 fix spam 的設計，持久化是避免重啟後舊 idle 週期又被通知一次。
+    /// 結構沿用 R5 同檔 `auto_state.json` —— summary marker + session_idle marker 共存。
+    #[serde(default)]
+    last_session_idle_event_ts: HashMap<String, i64>,
 }
 
 fn summary_marker_path() -> Option<PathBuf> {
@@ -1002,11 +1014,21 @@ pub fn load_persisted_summary_markers() -> (String, String) {
     let Some(path) = summary_marker_path() else {
         return (String::new(), String::new());
     };
-    let Ok(data) = std::fs::read_to_string(&path) else {
+    load_persisted_summary_markers_at_impl(&path)
+}
+
+fn load_persisted_summary_markers_at_impl(path: &Path) -> (String, String) {
+    let Ok(data) = std::fs::read_to_string(path) else {
         return (String::new(), String::new());
     };
     let parsed: PersistedSummaryMarkers = serde_json::from_str(&data).unwrap_or_default();
     (parsed.last_summary_date, parsed.last_weekly_key)
+}
+
+/// 測試輔助：從傳入 dir 讀 summary markers，避免污染真 `~/.lobsterpulse/`
+#[cfg(test)]
+pub(crate) fn load_persisted_summary_markers_at(dir: &Path) -> (String, String) {
+    load_persisted_summary_markers_at_impl(&dir.join("auto_state.json"))
 }
 
 /// Daily/Weekly summary 真的 fire 出去之後，把當前 marker 寫回磁碟。
@@ -1032,10 +1054,65 @@ fn persist_summary_markers_in(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let payload = PersistedSummaryMarkers {
-        last_summary_date: last_summary_date.to_string(),
-        last_weekly_key: last_weekly_key.to_string(),
+    // Read-modify-write 保留已存在的 session_idle markers——同檔共存
+    let mut payload: PersistedSummaryMarkers = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|d| serde_json::from_str(&d).ok())
+        .unwrap_or_default();
+    payload.last_summary_date = last_summary_date.to_string();
+    payload.last_weekly_key = last_weekly_key.to_string();
+    let data = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(path, data).map_err(|e| e.to_string())
+}
+
+/// 啟動時讀回 session_idle 規則的 dedup 錨點（避免重啟後舊 idle 週期重發 toast）。
+/// 檔案缺 / 壞 JSON → 回空 HashMap（等同 in-memory default，無破壞性）。
+pub fn load_persisted_session_idle_markers() -> HashMap<String, i64> {
+    let Some(path) = summary_marker_path() else {
+        return HashMap::new();
     };
+    load_persisted_session_idle_markers_at_impl(&path)
+}
+
+fn load_persisted_session_idle_markers_at_impl(path: &Path) -> HashMap<String, i64> {
+    let Ok(data) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let parsed: PersistedSummaryMarkers = serde_json::from_str(&data).unwrap_or_default();
+    parsed.last_session_idle_event_ts
+}
+
+/// 測試輔助：從傳入 dir 讀 session_idle markers
+#[cfg(test)]
+pub(crate) fn load_persisted_session_idle_markers_at(dir: &Path) -> HashMap<String, i64> {
+    load_persisted_session_idle_markers_at_impl(&dir.join("auto_state.json"))
+}
+
+/// session_idle 規則真的 fire 出去之後，把當前 (sid → last_event_ts) 錨點寫回磁碟。
+/// 沿用同檔 `auto_state.json`，read-modify-write 保留 summary marker。寫入失敗視為
+/// best-effort：log 不 panic，dedup 仍靠 in-memory 擋當下 session 重複。
+pub fn persist_session_idle_markers(markers: &HashMap<String, i64>) -> Result<(), String> {
+    persist_session_idle_markers_in(
+        summary_marker_path()
+            .ok_or_else(|| "no home dir".to_string())?
+            .as_path(),
+        markers,
+    )
+}
+
+fn persist_session_idle_markers_in(
+    path: &Path,
+    markers: &HashMap<String, i64>,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // Read-modify-write 保留已存在的 summary marker——同檔共存
+    let mut payload: PersistedSummaryMarkers = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|d| serde_json::from_str(&d).ok())
+        .unwrap_or_default();
+    payload.last_session_idle_event_ts = markers.clone();
     let data = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
     std::fs::write(path, data).map_err(|e| e.to_string())
 }
@@ -1697,5 +1774,50 @@ mod tests {
         let invalid = blocker.join("auto_state.json"); // blocker 是檔案，不能在其下 mkdir
         let result = persist_summary_markers_in(&invalid, "x", "y");
         assert!(result.is_err());
+    }
+
+    // ─── session_idle marker 持久化 ───
+    //
+    // R16 補：沿用 R5 `auto_state.json` 同檔共存，read-modify-write 保留 summary marker。
+    // 測試重點：(1) round-trip 不丟資料 (2) 檔案缺 → 空 HashMap（行為等同 in-memory default）
+
+    /// round-trip 寫入 + 讀回不丟失；空 map / 多 entry 都要對
+    #[test]
+    fn session_idle_markers_round_trip_preserves_all_entries() {
+        let tmp = TmpDir::new("sidle_rt");
+        let mut markers = HashMap::new();
+        markers.insert("sess-A".into(), 1700000000);
+        markers.insert("sess-B".into(), 1700001234);
+        markers.insert("sess-C".into(), 1_700_005_000);
+
+        persist_session_idle_markers_in(&tmp.0.join("auto_state.json"), &markers)
+            .expect("persist ok");
+
+        let loaded = load_persisted_session_idle_markers_at(&tmp.0);
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded.get("sess-A"), Some(&1700000000));
+        assert_eq!(loaded.get("sess-B"), Some(&1700001234));
+        assert_eq!(loaded.get("sess-C"), Some(&1_700_005_000));
+    }
+
+    /// session_idle 寫入時，summary marker 不被覆蓋——驗 read-modify-write 行為
+    #[test]
+    fn persist_session_idle_preserves_summary_markers_in_same_file() {
+        let tmp = TmpDir::new("sidle_preserve");
+        // 先寫 summary marker
+        persist_summary_markers_in(&tmp.0.join("auto_state.json"), "2026-06-01", "2026-W22")
+            .expect("summary persist ok");
+        // 再寫 session_idle marker
+        let mut markers = HashMap::new();
+        markers.insert("sess-X".into(), 1700000000);
+        persist_session_idle_markers_in(&tmp.0.join("auto_state.json"), &markers)
+            .expect("session_idle persist ok");
+
+        // 從同一檔讀回，summary + session_idle 都要在
+        let (date, week) = load_persisted_summary_markers_at(&tmp.0);
+        assert_eq!(date, "2026-06-01");
+        assert_eq!(week, "2026-W22");
+        let sidle = load_persisted_session_idle_markers_at(&tmp.0);
+        assert_eq!(sidle.get("sess-X"), Some(&1700000000));
     }
 }

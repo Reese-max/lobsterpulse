@@ -15,6 +15,7 @@ use log::info;
 use session::{AppState, SessionManager};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuItemBuilder},
@@ -991,15 +992,89 @@ struct ServerPort(u16);
 fn render_prometheus(handle: &tauri::AppHandle) -> String {
     let mgr = handle.state::<AppSessionManager>();
     let state = mgr.0.lock().unwrap().get_state();
-    // K8 落地：傳入 `now` 給 pure fn 計算 per-provider idle_seconds，
-    // 把時鐘從 pure fn 隔離出來、unit test 注入固定時間驗證 idle 數學。
+    // K11 落地：K8 之後新加的 quota snapshot 資料源在磁碟上（不在 SessionManager），
+    // 須從 `render_prometheus` 這層讀 mtime → 算 age 再餵進 pure body fn。
+    // 抽 `compute_quota_snapshot_age_seconds` 為 pure fn 後，body 仍維持「不讀 fs」
+    // 不變式，time-dependent math（future mtime / saturating）也能 unit test 注入。
+    let now = Utc::now();
+    let quota_snapshot_mtimes = collect_quota_snapshot_mtimes(&dirs::home_dir());
+    let quota_snapshot_ages: std::collections::HashMap<String, i64> = quota_snapshot_mtimes
+        .iter()
+        .filter_map(|(p, m)| {
+            compute_quota_snapshot_age_seconds(now, *m).map(|age| (p.clone(), age))
+        })
+        .collect();
     render_prometheus_body(
         &state.sessions,
         state.session_count as u64,
         state.active_count as u64,
         &state.provider_totals,
-        Utc::now(),
+        &quota_snapshot_ages,
+        now,
     )
+}
+
+/// K11 配套 helper：把 wall clock 跟檔案 mtime 差值轉成 seconds。
+/// 抽出理由：
+///   - body 仍保持 pure（不直接 `std::fs::metadata`），filesystem 讀取只發生在
+///     `render_prometheus` 這層（呼叫 `collect_quota_snapshot_mtimes`）
+///   - future mtime（clock skew / 剛寫完 race）→ saturating 到 0，不輸出負值
+///   - file 不存在（`metadata()` 失敗）→ `None`，caller 端不在 metric map 裡放 entry
+///     → 對齊 K8 `last_event_at = None` 跳過策略 + K10 `since = None` 跳過策略：
+///     避免 Prometheus 把「沒看到」當「age=0」誤判「snapshot 剛剛還在」
+fn compute_quota_snapshot_age_seconds(
+    now: DateTime<Utc>,
+    mtime: Option<SystemTime>,
+) -> Option<i64> {
+    let mtime = mtime?;
+    let mtime_chrono: DateTime<Utc> = mtime.into();
+    let elapsed = now.signed_duration_since(mtime_chrono).num_seconds();
+    Some(elapsed.max(0))
+}
+
+/// K11 配套 helper：讀 `~/.lobsterpulse/usage-{bot}.json` + `usage-local.json` 的
+/// mtime，回 `provider_name → mtime`。檔案不存在或無法 stat 都回 `None`（不是 Err）：
+/// 對齊 `read_usage_snapshots`（line 314）的「fs 失敗不報錯、視為沒資料」語意，
+/// 避免新增 silent fail 路徑。`usage-bot.json` legacy alias 同 `read_usage_snapshots`：
+/// 只在 `openx` 缺資料時讀它（避免和 `usage-openx.json` 雙重計算）。
+fn collect_quota_snapshot_mtimes(
+    home: &Option<std::path::PathBuf>,
+) -> std::collections::HashMap<String, Option<SystemTime>> {
+    let mut out: std::collections::HashMap<String, Option<SystemTime>> =
+        std::collections::HashMap::new();
+    let Some(dir) = home.as_ref().map(|h| h.join(".lobsterpulse")) else {
+        // 5 個 OpenAB bot + 1 個 local runner 全填 None，caller 端 filter 後不出現
+        // 在 metric map（age 段就只 emit header、沒 sample）。
+        for p in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
+            out.insert(p.to_string(), None);
+        }
+        return out;
+    };
+    for bot in ["cicx", "gitx", "giminix", "codex_bot", "openx"] {
+        let path = dir.join(format!("usage-{bot}.json"));
+        out.insert(
+            bot.to_string(),
+            std::fs::metadata(&path).and_then(|m| m.modified()).ok(),
+        );
+    }
+    // Legacy alias：同 `read_usage_snapshots`，只在 `openx` 缺資料時讀 usage-bot.json。
+    // 對 mtime 視角：openx 已存在的情況下 legacy file 沒用 → 跳過 mtime 收集。
+    if out.get("openx").and_then(|m| m.as_ref()).is_none() {
+        let path = dir.join("usage-bot.json");
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if let Ok(modified) = meta.modified() {
+                out.insert("openx".to_string(), Some(modified));
+            }
+        }
+    }
+    let local_path = dir.join("usage-local.json");
+    out.insert(
+        "__local__".to_string(),
+        std::fs::metadata(&local_path)
+            .and_then(|m| m.modified())
+            .ok(),
+    );
+    out
 }
 
 /// Pure formatter：把 `SessionInfo` 切片 + aggregate 計數 + `ProviderTotals` lifetime
@@ -1022,6 +1097,7 @@ fn render_prometheus_body(
     session_count: u64,
     active_count: u64,
     provider_totals: &std::collections::HashMap<String, session::ProviderTotals>,
+    quota_snapshot_ages: &std::collections::HashMap<String, i64>,
     now: DateTime<Utc>,
 ) -> String {
     let mut provider_counts: std::collections::HashMap<String, usize> =
@@ -1174,6 +1250,25 @@ fn render_prometheus_body(
     for (p, ts) in &provider_since_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_since_timestamp{{provider=\"{p}\"}} {ts}\n"
+        ));
+    }
+    // K11 落地：per-provider quota snapshot age（seconds since last mtime update）——
+    // 對齊 K6/K7/K8/K9/K10 對 `provider_totals` 的 lifetime 視角，本 metric 是對
+    // 磁碟 `~/.lobsterpulse/usage-{bot}.json` 與 `usage-local.json` 的「資料新鮮度」：
+    //   - age 0 = snapshot 剛寫（runner OK）
+    //   - age 持續飆高 = runner 卡住 / process dead / 沒裝 OpenAB
+    //   - 沒出現在 map（file 不存在）= 跳過 sample，不當 0 誤判「剛剛還在」
+    // User 在 dashboard 看「quota 0%」分不清是「真的用完」 vs 「snapshot 30 分鐘沒更新
+    // （runner 死了）」，K11 直接量化後者。Prometheus alert rule 可設
+    // `quota_snapshot_age_seconds > 600` 觸發「quota runner 可能停擺」。
+    // 注意：這是「runtime freshness」訊號，不是 lifetime aggregate —— snapshot file
+    // 一直沒人寫就會累加，直到有 runner 重新寫才歸 0。
+    out.push_str("# HELP lobsterpulse_provider_quota_snapshot_age_seconds Seconds since ~/.lobsterpulse/usage-{provider}.json was last modified (data freshness)\n# TYPE lobsterpulse_provider_quota_snapshot_age_seconds gauge\n");
+    let mut quota_snapshot_ages_sorted: Vec<_> = quota_snapshot_ages.iter().collect();
+    quota_snapshot_ages_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, age) in &quota_snapshot_ages_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_quota_snapshot_age_seconds{{provider=\"{p}\"}} {age}\n"
         ));
     }
     out
@@ -1955,6 +2050,7 @@ mod render_prometheus_tests {
     use crate::session::{ProviderTotals, SessionInfo, SessionState};
     use chrono::TimeZone;
     use std::collections::HashMap;
+    use std::path::PathBuf;
 
     /// 為 test 製造 SessionInfo fixture（只填 render_prometheus_body 讀的欄位）。
     /// K6 落地後 `tokens_input` / `tokens_output` 仍記在 SessionInfo 但 metric 不再讀它
@@ -2114,7 +2210,7 @@ mod render_prometheus_tests {
 
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
 
         assert!(body.contains("lobsterpulse_sessions_total 0\n"));
         assert!(body.contains("lobsterpulse_sessions_active 0\n"));
@@ -2132,6 +2228,8 @@ mod render_prometheus_tests {
         assert!(!body.contains("lobsterpulse_provider_session_count{"));
         // K10 落地：per-provider since_timestamp 段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_since_timestamp{"));
+        // K11 落地：per-provider quota_snapshot_age 段同樣：空 map → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_quota_snapshot_age_seconds{"));
     }
 
     #[test]
@@ -2142,6 +2240,7 @@ mod render_prometheus_tests {
             1,
             0,
             &totals_map(vec![totals("claude", 100, 50)]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2162,6 +2261,7 @@ mod render_prometheus_tests {
             1,
             1,
             &totals_map(vec![totals("codex", 200, 80)]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2179,7 +2279,14 @@ mod render_prometheus_tests {
             info("gemini", false, 0, 0),
             info("cicx", true, 0, 0), // 同 provider 重複 → count=2
         ];
-        let body = render_prometheus_body(&sessions, 4, 2, &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &sessions,
+            4,
+            2,
+            &HashMap::new(),
+            &HashMap::new(),
+            Utc::now(),
+        );
 
         // 排序後順序應為 cicx / gemini / openx
         let cicx_sessions_idx = body
@@ -2216,6 +2323,7 @@ mod render_prometheus_tests {
                 totals("codex", 2000, 1000),
                 totals("cicx", 500, 250),
             ]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2235,6 +2343,7 @@ mod render_prometheus_tests {
                 totals("cicx", 200, 100),
                 totals("gemini", 300, 150),
             ]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2272,6 +2381,7 @@ mod render_prometheus_tests {
             0,
             0,
             &totals_map(vec![totals("claude", 9999, 4444), totals("cicx", 1, 1)]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2291,6 +2401,7 @@ mod render_prometheus_tests {
             1,
             1,
             &totals_map(vec![totals("claude", 1, 1)]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2324,6 +2435,9 @@ mod render_prometheus_tests {
             // K10 新增：per-provider first-seen timestamp gauge
             "# HELP lobsterpulse_provider_since_timestamp",
             "# TYPE lobsterpulse_provider_since_timestamp gauge",
+            // K11 新增：per-provider quota snapshot age gauge
+            "# HELP lobsterpulse_provider_quota_snapshot_age_seconds",
+            "# TYPE lobsterpulse_provider_quota_snapshot_age_seconds gauge",
         ];
         for h in required_headers {
             assert!(
@@ -2346,6 +2460,7 @@ mod render_prometheus_tests {
                 totals_with_failures("cicx", 0, 0, 3),
                 totals_with_failures("gemini", 0, 0, 12),
             ]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2377,7 +2492,7 @@ mod render_prometheus_tests {
         // 但 ProviderTotals 仍保留累計 → metric 仍正確反映歷史失敗總數。
         // 這也避免 Prometheus counter 倒退（alert 誤觸發）。
         let body = render_prometheus_body(
-            &[], // 0 個 live session
+            &[],
             0,
             0,
             &totals_map(vec![
@@ -2385,8 +2500,9 @@ mod render_prometheus_tests {
                 totals_with_failures("codex", 0, 0, 5),  // 5 次失敗
                 totals_with_failures("cicx", 0, 0, 2),   // 2 次失敗
             ]),
+            &HashMap::new(),
             Utc::now(),
-        );
+        ); // 0 個 live session
 
         // 即使 live sessions = []，failure metric 仍要反映出 ProviderTotals 累計
         assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"claude\"} 0\n"));
@@ -2398,7 +2514,7 @@ mod render_prometheus_tests {
     fn idle_seconds_empty_state_emits_header_only() {
         // 沒有任何 provider → idle 段只有 HELP/TYPE、沒有 sample line。
         // 對齊 K6/K7「empty state 不假裝 0 秒 idle」語意。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
 
         assert!(body.contains("# HELP lobsterpulse_provider_idle_seconds"));
         assert!(body.contains("# TYPE lobsterpulse_provider_idle_seconds gauge"));
@@ -2418,6 +2534,7 @@ mod render_prometheus_tests {
                 totals_at("claude", 0, 0, 0, now - chrono::Duration::seconds(120)),
                 totals_no_event("cicx"), // 從未收過 event
             ]),
+            &HashMap::new(),
             now,
         );
 
@@ -2433,15 +2550,16 @@ mod render_prometheus_tests {
         // 0 個 live session，但 ProviderTotals 仍有 last_event_at → metric 正確反映。
         let now = Utc::now();
         let body = render_prometheus_body(
-            &[], // 0 個 live session
+            &[],
             0,
             0,
             &totals_map(vec![
                 totals_at("claude", 0, 0, 0, now - chrono::Duration::seconds(60)),
                 totals_at("cicx", 0, 0, 0, now - chrono::Duration::seconds(30)),
             ]),
+            &HashMap::new(),
             now,
-        );
+        ); // 0 個 live session
 
         // 與 K6/K7 一致：lifetime aggregate 讓 session 移除 / stale 回收後仍能看 idle
         assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"claude\"} 60\n"));
@@ -2461,6 +2579,7 @@ mod render_prometheus_tests {
                 totals_at("cicx", 0, 0, 0, now - chrono::Duration::seconds(60)),
                 totals_at("gemini", 0, 0, 0, now - chrono::Duration::seconds(3600)),
             ]),
+            &HashMap::new(),
             now,
         );
 
@@ -2502,6 +2621,7 @@ mod render_prometheus_tests {
                 0,
                 now + chrono::Duration::seconds(1), // 故意未來 1 秒
             )]),
+            &HashMap::new(),
             now,
         );
 
@@ -2513,7 +2633,7 @@ mod render_prometheus_tests {
     fn session_count_empty_state_emits_header_only() {
         // 沒任何 provider → K9 段只有 HELP/TYPE、沒有 sample line。
         // 對齊 K6/K7/K8「empty state 不假裝 0 session」語意。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
 
         assert!(body.contains("# HELP lobsterpulse_provider_session_count"));
         assert!(body.contains("# TYPE lobsterpulse_provider_session_count counter"));
@@ -2527,7 +2647,7 @@ mod render_prometheus_tests {
         // 跟 K6/K7/K8 一致：session 結束 + 30 min stale 回收後 live 為 0，但 lifetime
         // ProviderTotals.session_count 仍保留 → Prometheus 不會誤判 counter 倒退。
         let body = render_prometheus_body(
-            &[], // 0 個 live session
+            &[],
             0,
             0,
             &totals_map(vec![
@@ -2535,8 +2655,9 @@ mod render_prometheus_tests {
                 totals_with_session_count("codex", 1),  // 1 個 session
                 totals_with_session_count("claude", 0), // 0（理論不會出現，但驗 0 也輸出）
             ]),
+            &HashMap::new(),
             Utc::now(),
-        );
+        ); // 0 個 live session
 
         assert!(body.contains("lobsterpulse_provider_session_count{provider=\"cicx\"} 5\n"));
         assert!(body.contains("lobsterpulse_provider_session_count{provider=\"codex\"} 1\n"));
@@ -2555,6 +2676,7 @@ mod render_prometheus_tests {
                 totals_with_session_count("cicx", 3),
                 totals_with_session_count("gemini", 7),
             ]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2585,7 +2707,7 @@ mod render_prometheus_tests {
     fn since_timestamp_empty_state_emits_header_only() {
         // 沒任何 provider → K10 段只有 HELP/TYPE、沒有 sample line。
         // 對齊 K6/K7/K8/K9「empty state 不假裝 0 timestamp」語意。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
 
         assert!(body.contains("# HELP lobsterpulse_provider_since_timestamp"));
         assert!(body.contains("# TYPE lobsterpulse_provider_since_timestamp gauge"));
@@ -2610,6 +2732,7 @@ mod render_prometheus_tests {
                 totals_with_since("cicx", cicx_since),
                 totals_with_since("gemini", gemini_since),
             ]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2642,6 +2765,7 @@ mod render_prometheus_tests {
                 totals_with_since("claude", now - chrono::Duration::days(365)),
                 totals_no_since("cicx"), // 故意不填 since
             ]),
+            &HashMap::new(),
             now,
         );
 
@@ -2664,15 +2788,16 @@ mod render_prometheus_tests {
         // 何時第一次被監控到」（用 now - since_timestamp 算 uptime 對等量）。
         let now = Utc::now();
         let body = render_prometheus_body(
-            &[], // 0 個 live session
+            &[],
             0,
             0,
             &totals_map(vec![
                 totals_with_since("claude", now - chrono::Duration::days(30)),
                 totals_with_since("cicx", now - chrono::Duration::days(7)),
             ]),
+            &HashMap::new(),
             now,
-        );
+        ); // 0 個 live session
 
         // lifetime aggregate 確保 since 不被 live session 影響
         assert!(body.contains(&format!(
@@ -2700,6 +2825,7 @@ mod render_prometheus_tests {
                 totals_with_since("cicx", cicx_since),
                 totals_with_since("gemini", gemini_since),
             ]),
+            &HashMap::new(),
             Utc::now(),
         );
 
@@ -2740,5 +2866,277 @@ mod render_prometheus_tests {
             cicx_idx < gemini_idx && gemini_idx < openx_idx,
             "per-provider since_timestamp 必須 alphabetical 排序"
         );
+    }
+
+    // ===== K11 per-provider quota_snapshot_age gauge =====
+
+    /// K11 測試 fixture：把 `(provider, age_seconds)` tuple 收進 HashMap。
+    /// `render_prometheus_body` 的 `quota_snapshot_ages` 參數吃 `HashMap<String, i64>`，
+    /// 這層 helper 只讓測試呼叫處比直接 `.collect()` 鏈短一點。
+    fn quota_age_map(entries: Vec<(String, i64)>) -> std::collections::HashMap<String, i64> {
+        entries.into_iter().collect()
+    }
+
+    // ----- pure fn 測試：compute_quota_snapshot_age_seconds -----
+
+    #[test]
+    fn compute_quota_snapshot_age_returns_none_when_mtime_is_none() {
+        // 邊界：呼叫端拿不到 mtime（檔案不存在 / 權限錯誤）→ 純函式必須回 `None`。
+        // 對齊 K8 `last_event_at = None` 跳過策略 + K10 `since = None` 跳過策略：
+        // 沒有資料時不應該假裝「age = 0」誤判「snapshot 剛剛還在」。
+        let now = Utc::now();
+        assert_eq!(compute_quota_snapshot_age_seconds(now, None), None);
+    }
+
+    #[test]
+    fn compute_quota_snapshot_age_returns_positive_for_past_mtime() {
+        // 主軸：mtime 在過去 N 秒 → 回 `Some(N)`，caller 端會放進 age map → emit sample。
+        // 鎖定「`Utc::now()` 用 chrono 跟 SystemTime 轉換後的秒數差」算法。
+        let now = Utc::now();
+        let mtime: std::time::SystemTime = (now - chrono::Duration::seconds(60)).into();
+        assert_eq!(
+            compute_quota_snapshot_age_seconds(now, Some(mtime)),
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn compute_quota_snapshot_age_saturates_future_mtime_to_zero() {
+        // 邊界：clock skew / 寫檔 race → mtime 可能在 now 之後。
+        // 對齊 K8 `idle_seconds_clamps_negative_to_zero`（line 2595）守門員：
+        // gauge 永遠 ≥ 0，負值會被 Prometheus / Grafana 視為 anomaly。
+        let now = Utc::now();
+        let future_mtime: std::time::SystemTime = (now + chrono::Duration::seconds(5)).into();
+        assert_eq!(
+            compute_quota_snapshot_age_seconds(now, Some(future_mtime)),
+            Some(0)
+        );
+    }
+
+    // ----- render_prometheus_body 端對端：K11 段 -----
+
+    #[test]
+    fn quota_snapshot_age_empty_state_emits_header_only() {
+        // 對齊 K6/K7/K8/K9/K10「empty state 不假裝 0」語意：空 map → 沒 sample line。
+        // `quota_snapshot_age = 0` 語意危險（會被誤判「snapshot 剛剛更新」），所以「不輸出」
+        // 比「輸出 0」更安全。
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+
+        assert!(body.contains("# HELP lobsterpulse_provider_quota_snapshot_age_seconds"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_quota_snapshot_age_seconds gauge"));
+        assert!(!body.contains("lobsterpulse_provider_quota_snapshot_age_seconds{"));
+    }
+
+    #[test]
+    fn quota_snapshot_age_emits_seconds_per_provider() {
+        // K11 主軸：3 個 provider 各自 age → 3 條 sample line，數值與輸入一致。
+        // 5 OpenAB bot + 1 local runner 是 6 個固定 key，本測試只取 3 個子集合驗樣板格式。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &quota_age_map(vec![
+                ("cicx".to_string(), 45),
+                ("gemini".to_string(), 120),
+                ("openx".to_string(), 600),
+            ]),
+            Utc::now(),
+        );
+
+        assert!(body
+            .contains("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"cicx\"} 45\n"));
+        assert!(body.contains(
+            "lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"gemini\"} 120\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"openx\"} 600\n"
+        ));
+    }
+
+    #[test]
+    fn quota_snapshot_age_alphabetical_and_deterministic() {
+        // 排序驗證：故意非字母序輸入 → alphabetical 輸出。
+        // 對齊 K6/K7/K8/K9/K10 既有的 deterministic 排序保證。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &quota_age_map(vec![
+                ("openx".to_string(), 30),
+                ("cicx".to_string(), 10),
+                ("__local__".to_string(), 5),
+            ]),
+            Utc::now(),
+        );
+
+        // `__local__` 在 ASCII 比字母小（`_` = 0x5F < `a` = 0x61），
+        // 所以排序順序為 `__local__` < `cicx` < `openx`。
+        let local_idx = body
+            .find("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"__local__\"} 5\n")
+            .expect("__local__ quota age line");
+        let cicx_idx = body
+            .find("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"cicx\"} 10\n")
+            .expect("cicx quota age line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"openx\"} 30\n")
+            .expect("openx quota age line");
+        assert!(
+            local_idx < cicx_idx && cicx_idx < openx_idx,
+            "per-provider quota_snapshot_age 必須 alphabetical 排序"
+        );
+    }
+
+    #[test]
+    fn quota_snapshot_age_zero_is_distinguishable_from_absent() {
+        // 邊界：age = 0（snapshot 剛剛寫入）vs 不在 map（檔案不存在）。
+        // 兩種語意差很多：age=0 = runner 健康；absent = snapshot 從沒出現或 runner 死了。
+        // 對齊 K11 設計原則：寧可「少一條 sample」也不要「假裝 0」誤導監控。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &quota_age_map(vec![("cicx".to_string(), 0)]), // 只有 cicx
+            Utc::now(),
+        );
+
+        // cicx 有 age=0 → 必須 emit sample line（0 不是「absent」）
+        assert!(body
+            .contains("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"cicx\"} 0\n"));
+        // 其他 provider（gemini / openx / __local__）都不在 map → 不 emit
+        assert!(
+            !body.contains("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"gemini\"}")
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"openx\"}")
+        );
+    }
+
+    // ----- fs helper 測試：collect_quota_snapshot_mtimes -----
+
+    /// K11 fs helper 測試 fixture：借用 R12/R22 config.rs 既有的 TmpDir pattern
+    /// （pid 後綴命名 + Drop 自動清），避免本輪新引入 `tempfile` crate。
+    /// YAGNI：1 個 helper struct 就夠 4 條 fs test 共享。
+    struct QuotaSnapshotTmpDir(PathBuf);
+
+    impl QuotaSnapshotTmpDir {
+        fn new(label: &str) -> Self {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "lobsterpulse-k11-test-{}-{}",
+                label,
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).expect("mkdir tmpdir");
+            Self(p)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for QuotaSnapshotTmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn collect_quota_snapshot_mtimes_returns_none_for_all_when_home_is_none() {
+        // 邊界：dirs::home_dir() 回 None（無 HOME env、罕見但可能）→ 不 crash，
+        // 5 個 OpenAB bot + 1 個 local runner 全填 None，caller 端 filter 後不出現在
+        // metric map（age 段就只 emit header、沒 sample）。
+        let out = collect_quota_snapshot_mtimes(&None);
+
+        assert_eq!(out.len(), 6, "5 OpenAB bot + __local__ 共 6 個 key");
+        for p in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
+            assert_eq!(out.get(p).copied(), Some(None), "{p} 應該是 None");
+        }
+    }
+
+    #[test]
+    fn collect_quota_snapshot_mtimes_returns_mtime_for_existing_files() {
+        // 主軸：home 存在 → 對 `~/.lobsterpulse/usage-{bot}.json` 與 `usage-local.json`
+        // 做 `metadata()`，有檔案 → Some(mtime)、沒檔案 → None。
+        // 寫 2 個假檔（cicx + __local__）→ 該 2 個 key 有 mtime、其他 4 個 None。
+        // 注意：helper 內部會 `home.join(".lobsterpulse")` 當資料目錄，所以測試要把檔案寫
+        // 在 `<tmp>/.lobsterpulse/` 下對齊 production shape。
+        let tmp = QuotaSnapshotTmpDir::new("mixed");
+        let data_dir = tmp.path().join(".lobsterpulse");
+        std::fs::create_dir_all(&data_dir).expect("mkdir .lobsterpulse");
+        std::fs::write(data_dir.join("usage-cicx.json"), b"{}").expect("write cicx");
+        std::fs::write(data_dir.join("usage-local.json"), b"{}").expect("write local");
+
+        let home = Some(tmp.0.clone());
+        let out = collect_quota_snapshot_mtimes(&home);
+
+        // 有寫的 2 個 key → mtime 不是 None
+        assert!(out.get("cicx").and_then(|m| m.as_ref()).is_some());
+        assert!(out.get("__local__").and_then(|m| m.as_ref()).is_some());
+        // 沒寫的 4 個 key → None
+        for p in ["gitx", "giminix", "codex_bot", "openx"] {
+            assert_eq!(out.get(p).copied(), Some(None), "{p} 不存在檔案，應回 None");
+        }
+    }
+
+    #[test]
+    fn collect_quota_snapshot_mtimes_openx_legacy_alias_fallback() {
+        // Legacy alias：對齊 `read_usage_snapshots`（line 314-336）的語意——
+        // 沒 `usage-openx.json` 但有 `usage-bot.json`（OpenAB BackendType::Other 寫法）
+        // → openx 拿到 usage-bot.json 的 mtime，避免 Prometheus 端 openx 永遠缺席。
+        let tmp = QuotaSnapshotTmpDir::new("legacy");
+        let data_dir = tmp.path().join(".lobsterpulse");
+        std::fs::create_dir_all(&data_dir).expect("mkdir .lobsterpulse");
+        // 故意不寫 usage-openx.json，只寫 usage-bot.json
+        std::fs::write(data_dir.join("usage-bot.json"), b"{}").expect("write legacy bot");
+
+        let home = Some(tmp.0.clone());
+        let out = collect_quota_snapshot_mtimes(&home);
+
+        // openx 應該走 legacy fallback 拿到 mtime
+        assert!(
+            out.get("openx").and_then(|m| m.as_ref()).is_some(),
+            "openx 缺 usage-openx.json 時應 fallback 到 usage-bot.json 的 mtime"
+        );
+    }
+
+    #[test]
+    fn collect_quota_snapshot_mtimes_skips_legacy_when_openx_exists() {
+        // 對齊 legacy alias 對稱語意：usage-openx.json 已存在 → 不讀 usage-bot.json
+        // （避免兩個檔案 mtime 不同導致 openx 顯示「非主要檔案的時間」混淆）。
+        // 製造方式：先寫 primary 等 50ms 再寫 legacy，確保兩個 mtime 在任何 fs 精度下
+        // 都必然不同 → 鎖定 helper 不會回 legacy 的 mtime。
+        let tmp = QuotaSnapshotTmpDir::new("primary");
+        let data_dir = tmp.path().join(".lobsterpulse");
+        std::fs::create_dir_all(&data_dir).expect("mkdir .lobsterpulse");
+        std::fs::write(data_dir.join("usage-openx.json"), b"{}").expect("write openx primary");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(data_dir.join("usage-bot.json"), b"{}").expect("write legacy bot");
+
+        let home = Some(tmp.0.clone());
+        let openx_mtime = std::fs::metadata(data_dir.join("usage-openx.json"))
+            .and_then(|m| m.modified())
+            .expect("primary mtime");
+        let legacy_mtime = std::fs::metadata(data_dir.join("usage-bot.json"))
+            .and_then(|m| m.modified())
+            .expect("legacy mtime");
+
+        let out = collect_quota_snapshot_mtimes(&home);
+
+        // openx 應拿 primary 檔案的 mtime（不是 legacy）
+        let actual = out
+            .get("openx")
+            .and_then(|m| m.as_ref())
+            .expect("openx mtime");
+        assert_eq!(
+            *actual, openx_mtime,
+            "openx 應以 usage-openx.json 為主、不採 usage-bot.json"
+        );
+        // 50ms 間隔保證 mtime 差異，鎖定 helper 不會回 legacy 的 mtime。
+        assert_ne!(*actual, legacy_mtime, "不應回 legacy mtime");
     }
 }

@@ -79,6 +79,13 @@ fn truncate_utf8_bytes(s: &str, max_bytes: usize) -> String {
     s[..end].to_string()
 }
 
+/// 統一格式化 Discord 呼叫失敗的 log 字串。
+/// 修前 14 處 `let _ = discord::xxx(...)` 直接吞 error，R2 修了 curl `-f` 讓 4xx/5xx 不再 silent，
+/// 但呼叫端仍 swallow → log 系統看不到。本 helper 集中格式，便於 log filter / unit test 鎖定 prefix。
+pub(crate) fn discord_err_msg(ctx: &str, err: &str) -> String {
+    format!("[auto_rules] discord {ctx} failed: {err}")
+}
+
 fn dedup_gate(state: &mut AutoRuleState, key: &str, dedup_secs: i64) -> bool {
     let now = now_secs();
     if let Some(&last) = state.last_fired.get(key) {
@@ -263,13 +270,18 @@ fn tick_inner(
                     cfg.quota_low_threshold_pct
                 );
                 if discord_active {
-                    let _ = discord::send_embed(
+                    if let Err(e) = discord::send_embed(
                         notify.discord_token,
                         notify.discord_channel,
                         &title,
                         &desc,
                         0xFFA500,
-                    );
+                    ) {
+                        log::warn!(
+                            "{}",
+                            discord_err_msg(&format!("quota_low name={name} pct={pct}"), &e)
+                        );
+                    }
                 }
                 if toast_active {
                     if let Some(a) = &notify.app {
@@ -372,18 +384,34 @@ fn tick_inner(
                 if let Ok(mid) =
                     discord::send_message(notify.discord_token, notify.discord_channel, &content)
                 {
-                    let _ = discord::add_reaction(
+                    if let Err(e) = discord::add_reaction(
                         notify.discord_token,
                         notify.discord_channel,
                         &mid,
                         "✅",
-                    );
-                    let _ = discord::add_reaction(
+                    ) {
+                        log::warn!(
+                            "{}",
+                            discord_err_msg(
+                                &format!("session_idle sid={} reaction=✅", prefix_chars(&sid, 8)),
+                                &e
+                            )
+                        );
+                    }
+                    if let Err(e) = discord::add_reaction(
                         notify.discord_token,
                         notify.discord_channel,
                         &mid,
                         "❌",
-                    );
+                    ) {
+                        log::warn!(
+                            "{}",
+                            discord_err_msg(
+                                &format!("session_idle sid={} reaction=❌", prefix_chars(&sid, 8)),
+                                &e
+                            )
+                        );
+                    }
                     state.lock().unwrap().pending_confirms.push(PendingConfirm {
                         kind: "session_idle",
                         session_id: sid.clone(),
@@ -404,7 +432,7 @@ fn tick_inner(
             let sid_short = prefix_chars(&p.session_id, 12);
             if age > Duration::from_secs(cfg.confirm_timeout_secs as u64) {
                 if discord_active {
-                    let _ = discord::send_message(
+                    if let Err(e) = discord::send_message(
                         notify.discord_token,
                         notify.discord_channel,
                         &format!(
@@ -412,7 +440,12 @@ fn tick_inner(
                             cfg.confirm_timeout_secs / 60,
                             sid_short
                         ),
-                    );
+                    ) {
+                        log::warn!(
+                            "{}",
+                            discord_err_msg(&format!("session_idle timeout sid={sid_short}"), &e)
+                        );
+                    }
                 }
                 resolved_ids.push(p.message_id.clone());
                 continue;
@@ -443,18 +476,34 @@ fn tick_inner(
                     m.active_session_id = m.sessions.keys().next().cloned();
                 }
                 drop(m);
-                let _ = discord::send_message(
+                if let Err(e) = discord::send_message(
                     notify.discord_token,
                     notify.discord_channel,
                     &format!("✅ 已 kill session `{}`（來源：{}）", sid_short, p.kind),
-                );
+                ) {
+                    log::warn!(
+                        "{}",
+                        discord_err_msg(
+                            &format!("session_idle yes-kill sid={sid_short} kind={}", p.kind),
+                            &e
+                        )
+                    );
+                }
                 resolved_ids.push(p.message_id.clone());
             } else if no {
-                let _ = discord::send_message(
+                if let Err(e) = discord::send_message(
                     notify.discord_token,
                     notify.discord_channel,
                     &format!("❌ 取消 session `{}`（來源：{}）", sid_short, p.kind),
-                );
+                ) {
+                    log::warn!(
+                        "{}",
+                        discord_err_msg(
+                            &format!("session_idle no-cancel sid={sid_short} kind={}", p.kind),
+                            &e
+                        )
+                    );
+                }
                 resolved_ids.push(p.message_id.clone());
             }
         }
@@ -526,13 +575,18 @@ fn tick_inner(
                 sample,
             );
             if discord_active {
-                let _ = discord::send_embed(
+                if let Err(e) = discord::send_embed(
                     notify.discord_token,
                     notify.discord_channel,
                     &title,
                     &desc,
                     0xFF0000,
-                );
+                ) {
+                    log::warn!(
+                        "{}",
+                        discord_err_msg(&format!("hook_failure_burst provider={provider}"), &e)
+                    );
+                }
             }
             if toast_active {
                 if let Some(a) = &notify.app {
@@ -552,11 +606,16 @@ fn tick_inner(
                 let _ = std::process::Command::new("powershell.exe")
                     .args(["-NoProfile", "-Command", openab_restart_command])
                     .spawn();
-                let _ = discord::send_message(
+                if let Err(e) = discord::send_message(
                     notify.discord_token,
                     notify.discord_channel,
                     "🔄 已觸發 OpenAB 重啟",
-                );
+                ) {
+                    log::warn!(
+                        "{}",
+                        discord_err_msg("hook_failure_burst restart-notice", &e)
+                    );
+                }
             }
         }
     }
@@ -622,13 +681,15 @@ fn tick_inner(
                 }
             }
             // Discord 為 best-effort；失敗不再 unblock dedup（避免失敗重試轟炸）
-            let _ = discord::send_embed(
+            if let Err(e) = discord::send_embed(
                 notify.discord_token,
                 notify.discord_channel,
                 &title,
                 &desc,
                 0x4169E1,
-            );
+            ) {
+                log::warn!("{}", discord_err_msg("daily_summary", &e));
+            }
             // 持久化 marker——避免重啟後整點 double-fire。失敗 best-effort log 不 panic
             let (persisted_date, persisted_week) = {
                 let s = state.lock().unwrap();
@@ -701,13 +762,15 @@ fn tick_inner(
                 }
             }
             // Discord 為 best-effort；失敗不再 unblock dedup
-            let _ = discord::send_embed(
+            if let Err(e) = discord::send_embed(
                 notify.discord_token,
                 notify.discord_channel,
                 &title,
                 &desc,
                 0x9370DB,
-            );
+            ) {
+                log::warn!("{}", discord_err_msg("weekly_summary", &e));
+            }
             // 持久化 marker——避免重啟後整點 double-fire。失敗 best-effort log 不 panic
             let (persisted_date, persisted_week) = {
                 let s = state.lock().unwrap();
@@ -791,13 +854,21 @@ fn tick_inner(
                     today_consumed, avg, ratio, cfg.token_spike_multiplier
                 );
                 if discord_active {
-                    let _ = discord::send_embed(
+                    if let Err(e) = discord::send_embed(
                         notify.discord_token,
                         notify.discord_channel,
                         &title,
                         &desc,
                         0xFF6B6B,
-                    );
+                    ) {
+                        log::warn!(
+                            "{}",
+                            discord_err_msg(
+                                &format!("token_spike name={name} pct={today_consumed}"),
+                                &e
+                            )
+                        );
+                    }
                 }
                 if toast_active {
                     if let Some(a) = &notify.app {
@@ -980,8 +1051,24 @@ pub fn poll_discord_commands(
                 prefix_chars(sid, 12)
             );
             if let Ok(mid) = discord::send_message(token, channel, &content) {
-                let _ = discord::add_reaction(token, channel, &mid, "✅");
-                let _ = discord::add_reaction(token, channel, &mid, "❌");
+                if let Err(e) = discord::add_reaction(token, channel, &mid, "✅") {
+                    log::warn!(
+                        "{}",
+                        discord_err_msg(
+                            &format!("discord_kill_cmd sid={} reaction=✅", prefix_chars(sid, 8)),
+                            &e
+                        )
+                    );
+                }
+                if let Err(e) = discord::add_reaction(token, channel, &mid, "❌") {
+                    log::warn!(
+                        "{}",
+                        discord_err_msg(
+                            &format!("discord_kill_cmd sid={} reaction=❌", prefix_chars(sid, 8)),
+                            &e
+                        )
+                    );
+                }
                 state.lock().unwrap().pending_confirms.push(PendingConfirm {
                     kind: "discord_kill_cmd",
                     session_id: sid.to_string(),
@@ -990,7 +1077,9 @@ pub fn poll_discord_commands(
                 });
             }
         } else {
-            let _ = discord::send_message(token, channel, &reply);
+            if let Err(e) = discord::send_message(token, channel, &reply) {
+                log::warn!("{}", discord_err_msg("discord_cmd reply", &e));
+            }
         }
     }
     if let Some(id) = new_last_id {
@@ -1247,6 +1336,21 @@ mod tests {
     fn prefix_chars_handles_unicode() {
         assert_eq!(prefix_chars("abc測試", 4), "abc測");
         assert_eq!(prefix_chars("🙂🙂🙂", 2), "🙂🙂");
+    }
+
+    /// R6 regression：14 處 `let _ = discord::xxx(...)` 改成 `if let Err(e) = ... { log::warn!(...) }`
+    /// —— 集中 prefix `[auto_rules] discord <ctx> failed: <err>`，log filter 可一條 query 抓全部。
+    #[test]
+    fn discord_err_msg_unifies_prefix() {
+        assert_eq!(
+            discord_err_msg("quota_low name=claude pct=10", "curl exit 22: HTTP/1.1 401"),
+            "[auto_rules] discord quota_low name=claude pct=10 failed: curl exit 22: HTTP/1.1 401"
+        );
+        // 中文 ctx 也應原樣保留（無 trim / lower-case）
+        assert_eq!(
+            discord_err_msg("session_idle 確認", "timeout"),
+            "[auto_rules] discord session_idle 確認 failed: timeout"
+        );
     }
 
     #[test]

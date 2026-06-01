@@ -1004,12 +1004,17 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
             compute_quota_snapshot_age_seconds(now, *m).map(|age| (p.clone(), age))
         })
         .collect();
+    // K14 落地：讀 Discord health state（process-level，單一 Discord 端點）。
+    // 從模組級 `discord::health_snapshot()` 拿 snapshot,避免 render 端持鎖跨越整個
+    // string 構造（snapshot 是 `DiscordHealth` 是 `Copy`,複製成本 = 4 個 u64 + 1 個 enum）。
+    let discord_health = discord::health_snapshot();
     render_prometheus_body(
         &state.sessions,
         state.session_count as u64,
         state.active_count as u64,
         &state.provider_totals,
         &quota_snapshot_ages,
+        &discord_health,
         now,
     )
 }
@@ -1128,6 +1133,7 @@ fn render_prometheus_body(
     active_count: u64,
     provider_totals: &std::collections::HashMap<String, session::ProviderTotals>,
     quota_snapshot_ages: &std::collections::HashMap<String, i64>,
+    discord_health: &discord::DiscordHealth,
     now: DateTime<Utc>,
 ) -> String {
     let mut provider_counts: std::collections::HashMap<String, usize> =
@@ -1352,6 +1358,43 @@ fn render_prometheus_body(
             "lobsterpulse_provider_events_total{{provider=\"{p}\"}} {n}\n"
         ));
     }
+    // K14 落地：Discord 健康度 (process-level,單一端點非 per-provider)。
+    //   - `lobsterpulse_discord_health` gauge:0=ok / 1=4xx / 2=5xx / 3=network
+    //     (4xx 通常配置問題;5xx server 端;network 需查 DNS / 連線)
+    //   - `lobsterpulse_discord_send_failures_total{class}` counter:lifetime
+    //     累計,對齊 K6/K7/K9/K13 aggregate 語意 → operator 用
+    //     `rate(...[5m])` 算 throughput
+    //   - `lobsterpulse_discord_last_event_unix` gauge:0 表示啟動後還沒失敗過
+    //     (跟 K8 `last_event_at = None` 跳過策略相反 — K14 是「有 alert value
+    //     才有意義」語意,但 spec 鎖 0 = 沒歷史,Prometheus 端可用
+    //     `last_event_unix == 0` 觸發「Discord 還沒成功發過」alert)
+    // 來源:`discord::health_snapshot()` 從模組級 OnceLock clone 出來,
+    // 避免 render 端持鎖跨越 string 構造。`health_gauge()` 把 enum 攤平
+    // 成穩定整數 (`label()` 是另一個 stable string 給 counter label 用)。
+    out.push_str("# HELP lobsterpulse_discord_health Discord health gauge (0=ok,1=4xx,2=5xx,3=network)\n# TYPE lobsterpulse_discord_health gauge\n");
+    let last_gauge = discord_health
+        .last_class
+        .map(|c| c.health_gauge())
+        .unwrap_or(0);
+    out.push_str(&format!("lobsterpulse_discord_health {last_gauge}\n"));
+    out.push_str("# HELP lobsterpulse_discord_send_failures_total Lifetime send failure count by class (counter; rate() for throughput)\n# TYPE lobsterpulse_discord_send_failures_total counter\n");
+    out.push_str(&format!(
+        "lobsterpulse_discord_send_failures_total{{class=\"4xx\"}} {}\n",
+        discord_health.class_4xx
+    ));
+    out.push_str(&format!(
+        "lobsterpulse_discord_send_failures_total{{class=\"5xx\"}} {}\n",
+        discord_health.class_5xx
+    ));
+    out.push_str(&format!(
+        "lobsterpulse_discord_send_failures_total{{class=\"network\"}} {}\n",
+        discord_health.class_network
+    ));
+    out.push_str("# HELP lobsterpulse_discord_last_event_unix Unix epoch seconds of last recorded Discord failure (0 = never failed since startup)\n# TYPE lobsterpulse_discord_last_event_unix gauge\n");
+    out.push_str(&format!(
+        "lobsterpulse_discord_last_event_unix {}\n",
+        discord_health.last_event_unix
+    ));
     out
 }
 
@@ -1519,6 +1562,12 @@ pub fn run() {
             save_config(&config).ok(); // Ensure file exists with defaults
             let startup_capsule_w = config.appearance.capsule_width as f64;
             app.manage(AppConfigState(Mutex::new(config)));
+
+            // K14 落地：初始化 process-level Discord health state。
+            // OnceLock get_or_init idempotent,重複呼叫安全;沒呼叫前
+            // `record_*_failure` 走 no-op、`health_snapshot()` 退化為 Default
+            // → 提早 init 確保後續 send 失敗能正確累加。
+            discord::init_health();
 
             // Window setup — 套用使用者偏好的 capsule 寬度（非硬編 300）
             if let Some(window) = app.get_webview_window("main") {
@@ -2375,7 +2424,15 @@ mod render_prometheus_tests {
 
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
 
         assert!(body.contains("lobsterpulse_sessions_total 0\n"));
         assert!(body.contains("lobsterpulse_sessions_active 0\n"));
@@ -2410,6 +2467,7 @@ mod render_prometheus_tests {
             0,
             &totals_map(vec![totals("claude", 100, 50)]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2431,6 +2489,7 @@ mod render_prometheus_tests {
             1,
             &totals_map(vec![totals("codex", 200, 80)]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2454,6 +2513,7 @@ mod render_prometheus_tests {
             2,
             &HashMap::new(),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2493,6 +2553,7 @@ mod render_prometheus_tests {
                 totals("cicx", 500, 250),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2513,6 +2574,7 @@ mod render_prometheus_tests {
                 totals("gemini", 300, 150),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2551,6 +2613,7 @@ mod render_prometheus_tests {
             0,
             &totals_map(vec![totals("claude", 9999, 4444), totals("cicx", 1, 1)]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2571,6 +2634,7 @@ mod render_prometheus_tests {
             1,
             &totals_map(vec![totals("claude", 1, 1)]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2636,6 +2700,7 @@ mod render_prometheus_tests {
                 totals_with_failures("gemini", 0, 0, 12),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2676,6 +2741,7 @@ mod render_prometheus_tests {
                 totals_with_failures("cicx", 0, 0, 2),   // 2 次失敗
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         ); // 0 個 live session
 
@@ -2689,7 +2755,15 @@ mod render_prometheus_tests {
     fn idle_seconds_empty_state_emits_header_only() {
         // 沒有任何 provider → idle 段只有 HELP/TYPE、沒有 sample line。
         // 對齊 K6/K7「empty state 不假裝 0 秒 idle」語意。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
 
         assert!(body.contains("# HELP lobsterpulse_provider_idle_seconds"));
         assert!(body.contains("# TYPE lobsterpulse_provider_idle_seconds gauge"));
@@ -2710,6 +2784,7 @@ mod render_prometheus_tests {
                 totals_no_event("cicx"), // 從未收過 event
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -2733,6 +2808,7 @@ mod render_prometheus_tests {
                 totals_at("cicx", 0, 0, 0, now - chrono::Duration::seconds(30)),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         ); // 0 個 live session
 
@@ -2755,6 +2831,7 @@ mod render_prometheus_tests {
                 totals_at("gemini", 0, 0, 0, now - chrono::Duration::seconds(3600)),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -2797,6 +2874,7 @@ mod render_prometheus_tests {
                 now + chrono::Duration::seconds(1), // 故意未來 1 秒
             )]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -2808,7 +2886,15 @@ mod render_prometheus_tests {
     fn session_count_empty_state_emits_header_only() {
         // 沒任何 provider → K9 段只有 HELP/TYPE、沒有 sample line。
         // 對齊 K6/K7/K8「empty state 不假裝 0 session」語意。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
 
         assert!(body.contains("# HELP lobsterpulse_provider_session_count"));
         assert!(body.contains("# TYPE lobsterpulse_provider_session_count counter"));
@@ -2831,6 +2917,7 @@ mod render_prometheus_tests {
                 totals_with_session_count("claude", 0), // 0（理論不會出現，但驗 0 也輸出）
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         ); // 0 個 live session
 
@@ -2852,6 +2939,7 @@ mod render_prometheus_tests {
                 totals_with_session_count("gemini", 7),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2882,7 +2970,15 @@ mod render_prometheus_tests {
     fn since_timestamp_empty_state_emits_header_only() {
         // 沒任何 provider → K10 段只有 HELP/TYPE、沒有 sample line。
         // 對齊 K6/K7/K8/K9「empty state 不假裝 0 timestamp」語意。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
 
         assert!(body.contains("# HELP lobsterpulse_provider_since_timestamp"));
         assert!(body.contains("# TYPE lobsterpulse_provider_since_timestamp gauge"));
@@ -2908,6 +3004,7 @@ mod render_prometheus_tests {
                 totals_with_since("gemini", gemini_since),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -2941,6 +3038,7 @@ mod render_prometheus_tests {
                 totals_no_since("cicx"), // 故意不填 since
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -2971,6 +3069,7 @@ mod render_prometheus_tests {
                 totals_with_since("cicx", now - chrono::Duration::days(7)),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         ); // 0 個 live session
 
@@ -3001,6 +3100,7 @@ mod render_prometheus_tests {
                 totals_with_since("gemini", gemini_since),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3095,7 +3195,15 @@ mod render_prometheus_tests {
         // 對齊 K6/K7/K8/K9/K10「empty state 不假裝 0」語意：空 map → 沒 sample line。
         // `quota_snapshot_age = 0` 語意危險（會被誤判「snapshot 剛剛更新」），所以「不輸出」
         // 比「輸出 0」更安全。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
 
         assert!(body.contains("# HELP lobsterpulse_provider_quota_snapshot_age_seconds"));
         assert!(body.contains("# TYPE lobsterpulse_provider_quota_snapshot_age_seconds gauge"));
@@ -3116,6 +3224,7 @@ mod render_prometheus_tests {
                 ("gemini".to_string(), 120),
                 ("openx".to_string(), 600),
             ]),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3143,6 +3252,7 @@ mod render_prometheus_tests {
                 ("cicx".to_string(), 10),
                 ("__local__".to_string(), 5),
             ]),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3174,6 +3284,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &quota_age_map(vec![("cicx".to_string(), 0)]), // 只有 cicx
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3297,7 +3408,15 @@ mod render_prometheus_tests {
     fn idle_ratio_empty_state_emits_header_only() {
         // 對齊 K6/K7/K8/K9/K10/K11「empty state 不假裝 0」語意：空 map → 沒 sample line。
         // ratio = 0.0 語意危險（會被誤判「剛剛在動」），所以「不輸出」比「輸出 0」更安全。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
 
         assert!(body.contains("# HELP lobsterpulse_provider_idle_ratio"));
         assert!(body.contains("# TYPE lobsterpulse_provider_idle_ratio gauge"));
@@ -3323,6 +3442,7 @@ mod render_prometheus_tests {
                 // cicx 從未收過 event → 跳過
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -3345,6 +3465,7 @@ mod render_prometheus_tests {
                 totals_no_since("cicx"), // since=None → K10 也跳過，但 K12 額外驗
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -3369,6 +3490,7 @@ mod render_prometheus_tests {
                 ),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -3406,6 +3528,7 @@ mod render_prometheus_tests {
                 ),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -3453,6 +3576,7 @@ mod render_prometheus_tests {
                 totals_with_since_and_last_at("cicx", now - chrono::Duration::seconds(120), now),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         ); // 0 個 live session
 
@@ -3477,6 +3601,7 @@ mod render_prometheus_tests {
                 totals_with_since_and_last_at("claude", now - chrono::Duration::days(30), now),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             now,
         );
 
@@ -3619,7 +3744,15 @@ mod render_prometheus_tests {
     fn events_total_empty_state_emits_header_only() {
         // 0 provider → header 有、sample line 沒有。對齊 K7 failure_count / K9
         // session_count 既有 empty-state 契約。
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
 
         assert!(body.contains("# HELP lobsterpulse_provider_events_total"));
         assert!(body.contains("# TYPE lobsterpulse_provider_events_total counter"));
@@ -3638,6 +3771,7 @@ mod render_prometheus_tests {
                 totals_with_events("cicx", 7),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3667,6 +3801,7 @@ mod render_prometheus_tests {
                 totals_with_events("gemini", 0), // 從未收過 event
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3693,6 +3828,7 @@ mod render_prometheus_tests {
                 totals_with_events("gemini", 2),
             ]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3721,6 +3857,7 @@ mod render_prometheus_tests {
             0,
             &totals_map(vec![totals_with_events("claude", 42)]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3751,6 +3888,7 @@ mod render_prometheus_tests {
             0,
             &totals_map(vec![totals_with_events("claude", u64::MAX)]),
             &HashMap::new(),
+            &discord::DiscordHealth::default(),
             Utc::now(),
         );
 
@@ -3760,6 +3898,102 @@ mod render_prometheus_tests {
                 "lobsterpulse_provider_events_total{provider=\"claude\"} 18446744073709551615\n"
             ),
             "u64::MAX 應原樣 emit 整數，不 panic 不截斷"
+        );
+    }
+
+    // ─── K14 Discord health metrics (process-level, 非 per-provider) ─────
+
+    #[test]
+    fn discord_health_default_state_emits_zero_gauge_and_empty_counters() {
+        // 預設 DiscordHealth → gauge 0 (last_class=None), 三個 counter 0,
+        // last_event_unix 0 (「啟動後還沒失敗過」語意)。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains("# HELP lobsterpulse_discord_health"));
+        assert!(body.contains("# TYPE lobsterpulse_discord_health gauge"));
+        assert!(body.contains("lobsterpulse_discord_health 0\n"));
+
+        assert!(body.contains("# HELP lobsterpulse_discord_send_failures_total"));
+        assert!(body.contains("# TYPE lobsterpulse_discord_send_failures_total counter"));
+        assert!(body.contains("lobsterpulse_discord_send_failures_total{class=\"4xx\"} 0\n"));
+        assert!(body.contains("lobsterpulse_discord_send_failures_total{class=\"5xx\"} 0\n"));
+        assert!(body.contains("lobsterpulse_discord_send_failures_total{class=\"network\"} 0\n"));
+
+        assert!(body.contains("# HELP lobsterpulse_discord_last_event_unix"));
+        assert!(body.contains("# TYPE lobsterpulse_discord_last_event_unix gauge"));
+        assert!(body.contains("lobsterpulse_discord_last_event_unix 0\n"));
+    }
+
+    #[test]
+    fn discord_health_with_4xx_5xx_and_network_failures_renders_all_four_lines() {
+        // 模擬 lifetime state:4xx=3 次 / 5xx=1 次 / network=2 次,
+        // 最後一筆是 Network (gauge=3), last_event_unix=1700000000
+        let h = discord::DiscordHealth {
+            class_4xx: 3,
+            class_5xx: 1,
+            class_network: 2,
+            last_class: Some(discord::DiscordHealthClass::Network),
+            last_event_unix: 1_700_000_000,
+        };
+
+        let body =
+            render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), &h, Utc::now());
+
+        // 3 個 counter 都 emit 正確數值
+        assert!(body.contains("lobsterpulse_discord_send_failures_total{class=\"4xx\"} 3\n"));
+        assert!(body.contains("lobsterpulse_discord_send_failures_total{class=\"5xx\"} 1\n"));
+        assert!(body.contains("lobsterpulse_discord_send_failures_total{class=\"network\"} 2\n"));
+        // last_class=Network → gauge 3
+        assert!(body.contains("lobsterpulse_discord_health 3\n"));
+        // last_event_unix 透出
+        assert!(body.contains("lobsterpulse_discord_last_event_unix 1700000000\n"));
+    }
+
+    #[test]
+    fn discord_health_class_to_gauge_mapping_in_render_output() {
+        // 驗證 enum → 穩定整數映射在 render 端正確:4xx→1, 5xx→2
+        let h_4xx = discord::DiscordHealth {
+            last_class: Some(discord::DiscordHealthClass::Client4xx(401)),
+            ..discord::DiscordHealth::default()
+        };
+        let body_4xx = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &h_4xx,
+            Utc::now(),
+        );
+        assert!(
+            body_4xx.contains("lobsterpulse_discord_health 1\n"),
+            "Client4xx → gauge 1, body: {body_4xx}"
+        );
+
+        let h_5xx = discord::DiscordHealth {
+            last_class: Some(discord::DiscordHealthClass::Server5xx(503)),
+            ..discord::DiscordHealth::default()
+        };
+        let body_5xx = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &h_5xx,
+            Utc::now(),
+        );
+        assert!(
+            body_5xx.contains("lobsterpulse_discord_health 2\n"),
+            "Server5xx → gauge 2, body: {body_5xx}"
         );
     }
 }

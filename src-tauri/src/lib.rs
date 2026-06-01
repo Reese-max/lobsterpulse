@@ -1337,7 +1337,14 @@ pub fn run() {
 
             // Auto-action 規則引擎 tick（每 15s 跑一次）
             let handle_auto = app.handle().clone();
-            let auto_state: auto_rules::SharedAutoState = Arc::new(Mutex::new(auto_rules::AutoRuleState::default()));
+            // 從磁碟讀回 daily/weekly summary 的 dedup marker——避免重啟後整點 double-fire
+            let (loaded_date, loaded_week) = auto_rules::load_persisted_summary_markers();
+            let mut initial_auto_state = auto_rules::AutoRuleState::default();
+            if !loaded_date.is_empty() || !loaded_week.is_empty() {
+                initial_auto_state.last_summary_date = loaded_date;
+                initial_auto_state.last_weekly_key = loaded_week;
+            }
+            let auto_state: auto_rules::SharedAutoState = Arc::new(Mutex::new(initial_auto_state));
             app.manage(auto_state.clone());
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(15));

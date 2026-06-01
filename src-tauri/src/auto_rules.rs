@@ -11,6 +11,7 @@ use crate::discord;
 use crate::session::SessionManager;
 use chrono::Timelike;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -628,6 +629,14 @@ fn tick_inner(
                 &desc,
                 0x4169E1,
             );
+            // 持久化 marker——避免重啟後整點 double-fire。失敗 best-effort log 不 panic
+            let (persisted_date, persisted_week) = {
+                let s = state.lock().unwrap();
+                (s.last_summary_date.clone(), s.last_weekly_key.clone())
+            };
+            if let Err(e) = persist_summary_markers(&persisted_date, &persisted_week) {
+                log::error!("[auto_rules] persist summary markers after daily: {e}");
+            }
         }
     }
 
@@ -699,6 +708,14 @@ fn tick_inner(
                 &desc,
                 0x9370DB,
             );
+            // 持久化 marker——避免重啟後整點 double-fire。失敗 best-effort log 不 panic
+            let (persisted_date, persisted_week) = {
+                let s = state.lock().unwrap();
+                (s.last_summary_date.clone(), s.last_weekly_key.clone())
+            };
+            if let Err(e) = persist_summary_markers(&persisted_date, &persisted_week) {
+                log::error!("[auto_rules] persist summary markers after weekly: {e}");
+            }
         }
     }
 
@@ -832,6 +849,84 @@ pub(crate) fn mark_summary_fired_if_new(
 pub(crate) enum SummaryMarker {
     Daily,
     Weekly,
+}
+
+// ─── summary marker 持久化 ───
+//
+// 修正前 `last_summary_date` / `last_weekly_key` 是純 in-memory `Arc<Mutex<…>>`：
+// 每天 9:00 整點推完 daily summary 後若 app 重啟，state 回到 default ""，
+// 下一個 15s tick 又符合「今天 != last_summary_date」→ 整點後短窗內 double-fire toast/embed。
+// 持久化到 `~/.lobsterpulse/auto_state.json`，重啟讀回。
+//
+// 寫入失敗視為 best-effort：log 不 panic，dedup 仍靠 in-memory 擋當下 session 重複。
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct PersistedSummaryMarkers {
+    #[serde(default)]
+    last_summary_date: String,
+    #[serde(default)]
+    last_weekly_key: String,
+}
+
+fn summary_marker_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".lobsterpulse").join("auto_state.json"))
+}
+
+// 對外暴露給 test 模組：用傳入 dir 模擬 `~/.lobsterpulse/`，避免污染真 home
+#[cfg(test)]
+pub(crate) fn persist_summary_markers_at(
+    dir: &Path,
+    last_summary_date: &str,
+    last_weekly_key: &str,
+) -> Result<(), String> {
+    persist_summary_markers_in(
+        &dir.join("auto_state.json"),
+        last_summary_date,
+        last_weekly_key,
+    )
+}
+
+/// 啟動時讀回上次 daily/weekly summary 觸發標記。檔案缺 / 壞 JSON → 回空字串。
+pub fn load_persisted_summary_markers() -> (String, String) {
+    let Some(path) = summary_marker_path() else {
+        return (String::new(), String::new());
+    };
+    let Ok(data) = std::fs::read_to_string(&path) else {
+        return (String::new(), String::new());
+    };
+    let parsed: PersistedSummaryMarkers = serde_json::from_str(&data).unwrap_or_default();
+    (parsed.last_summary_date, parsed.last_weekly_key)
+}
+
+/// Daily/Weekly summary 真的 fire 出去之後，把當前 marker 寫回磁碟。
+/// 重啟後 `load_persisted_summary_markers` 會讀回，避免整點重發。
+pub fn persist_summary_markers(
+    last_summary_date: &str,
+    last_weekly_key: &str,
+) -> Result<(), String> {
+    persist_summary_markers_in(
+        summary_marker_path()
+            .ok_or_else(|| "no home dir".to_string())?
+            .as_path(),
+        last_summary_date,
+        last_weekly_key,
+    )
+}
+
+fn persist_summary_markers_in(
+    path: &Path,
+    last_summary_date: &str,
+    last_weekly_key: &str,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let payload = PersistedSummaryMarkers {
+        last_summary_date: last_summary_date.to_string(),
+        last_weekly_key: last_weekly_key.to_string(),
+    };
+    let data = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(path, data).map_err(|e| e.to_string())
 }
 
 /// Discord command polling — 看 #cctest 有沒有新 `!lp ...` 訊息，有就執行並回覆。
@@ -1274,5 +1369,103 @@ mod tests {
         assert!(should_notify_session_idle(&mut state, "trigger", 9999, 256));
         // GC 後 map 應該 < 300
         assert!(state.last_session_idle_event_ts.len() < 300);
+    }
+
+    // ─── summary marker 持久化測試 ───
+    // 用 std::env::temp_dir() 開專屬 subdir（避免污染真 ~/.lobsterpulse/），
+    // 測試結束靠 struct Drop 回收。
+
+    struct TmpDir(PathBuf);
+
+    impl TmpDir {
+        fn new(tag: &str) -> Self {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!("lp-auto-rules-test-{tag}-{nanos}"));
+            std::fs::create_dir_all(&path).expect("create tmpdir");
+            Self(path)
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 寫入後能原樣讀回——驗證 JSON round-trip + payload 對應欄位
+    #[test]
+    fn persist_then_load_round_trip() {
+        let tmp = TmpDir::new("roundtrip");
+        persist_summary_markers_at(&tmp.0, "2026-06-01", "2026-W22").expect("persist ok");
+        let data = std::fs::read_to_string(tmp.0.join("auto_state.json")).expect("read file");
+        // 直接驗 JSON 內容（不依賴 load_persisted_summary_markers，那條路讀真 home）
+        let parsed: PersistedSummaryMarkers = serde_json::from_str(&data).expect("parse ok");
+        assert_eq!(parsed.last_summary_date, "2026-06-01");
+        assert_eq!(parsed.last_weekly_key, "2026-W22");
+    }
+
+    /// 父目錄不存在時 persist 會自己 mkdir——避免首次寫入因目錄缺失敗
+    #[test]
+    fn persist_creates_parent_dir() {
+        let tmp = TmpDir::new("mkdir");
+        // tmp 已存在；多挖一層 subdir 確認 mkdir 走到
+        let nested = tmp.0.join("nested");
+        assert!(!nested.exists());
+        persist_summary_markers_at(&nested, "2026-06-01", "").expect("persist ok");
+        assert!(nested.join("auto_state.json").exists());
+    }
+
+    /// 持久化後的 marker 餵回 AutoRuleState，隔天能再 fire、當天擋——重啟 dedup 行為正確
+    #[test]
+    fn persisted_markers_dedup_across_simulated_restart() {
+        let tmp = TmpDir::new("restart");
+
+        // 第一次啟動：daily 觸發、persist
+        let mut state = AutoRuleState::default();
+        assert!(mark_summary_fired_if_new(
+            &mut state,
+            SummaryMarker::Daily,
+            "2026-06-01"
+        ));
+        persist_summary_markers_at(&tmp.0, &state.last_summary_date, &state.last_weekly_key)
+            .expect("persist");
+
+        // 模擬重啟：開新 state 餵回持久化值
+        let data = std::fs::read_to_string(tmp.0.join("auto_state.json")).expect("read");
+        let restored: PersistedSummaryMarkers = serde_json::from_str(&data).expect("parse");
+        let mut state2 = AutoRuleState {
+            last_summary_date: restored.last_summary_date,
+            last_weekly_key: restored.last_weekly_key,
+            ..AutoRuleState::default()
+        };
+
+        // 同日重啟：dedup 應擋下，不再 fire
+        assert!(!mark_summary_fired_if_new(
+            &mut state2,
+            SummaryMarker::Daily,
+            "2026-06-01"
+        ));
+        // 隔天：可再 fire
+        assert!(mark_summary_fired_if_new(
+            &mut state2,
+            SummaryMarker::Daily,
+            "2026-06-02"
+        ));
+    }
+
+    /// 寫到不可寫目錄（這裡用「path 本身是檔案當 parent」模擬）應回 Err，不 panic
+    #[test]
+    fn persist_to_invalid_path_returns_err() {
+        let tmp = TmpDir::new("invalid");
+        // 把 parent 換成一個「是檔案不是目錄」的位置 → create_dir_all 會失敗
+        let blocker = tmp.0.join("blocker");
+        std::fs::write(&blocker, "not a dir").expect("write blocker");
+        let invalid = blocker.join("auto_state.json"); // blocker 是檔案，不能在其下 mkdir
+        let result = persist_summary_markers_in(&invalid, "x", "y");
+        assert!(result.is_err());
     }
 }

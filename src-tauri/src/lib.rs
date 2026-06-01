@@ -1058,6 +1058,18 @@ fn render_prometheus_body(
     // 該 provider 累計被 stale 回收的 session 數 = 使用量信號。
     let mut provider_session_count: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
+    // K10 落地：per-provider first-seen timestamp（Unix epoch seconds）——
+    // `ProviderTotals.since` 在 `bump_provider_totals` 第一次被收過 event 時設定、
+    // 之後 `if is_none()` guard 不覆寫。本 metric 暴露該值給 Prometheus，
+    // user 可用 `(now - since_timestamp)` 算「該 provider 已監控多久」（uptime
+    // 對等物），或結合 K8 idle_seconds 算「最近一次活動佔 lifetime 比例」。
+    // 跟 K6/K7/K8/K9 lifetime aggregate 對齊：`since` 進 ProviderTotals 後就不
+    // 蒸發，session 結束 / stale 回收後仍能看出「這 provider 何時第一次接入」。
+    // `since = None` 的 provider（理論上不會出現 — bump_provider_totals 第一次
+    // event 就會填）→ 不輸出 sample，跟 K8 idle_seconds 的 `last_event_at = None`
+    // 跳過策略一致，避免 Prometheus 端把缺失當 0 timestamp 誤判「1970-01-01」。
+    let mut provider_since: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
     for (p, t) in provider_totals {
         tot_in = tot_in.saturating_add(t.tokens_input);
         tot_out = tot_out.saturating_add(t.tokens_output);
@@ -1068,6 +1080,9 @@ fn render_prometheus_body(
         if let Some(last) = t.last_event_at {
             let elapsed = now.signed_duration_since(last).num_seconds().max(0);
             provider_idle.insert(p.clone(), elapsed);
+        }
+        if let Some(since) = t.since {
+            provider_since.insert(p.clone(), since.timestamp());
         }
     }
 
@@ -1085,6 +1100,8 @@ fn render_prometheus_body(
     provider_idle_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_session_count_sorted: Vec<_> = provider_session_count.iter().collect();
     provider_session_count_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_since_sorted: Vec<_> = provider_since.iter().collect();
+    provider_since_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
@@ -1146,6 +1163,17 @@ fn render_prometheus_body(
     for (p, n) in &provider_session_count_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_session_count{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    // K10 落地：per-provider first-seen timestamp（Unix epoch seconds）——
+    // 對齊 K6/K7/K8/K9 lifetime 語意：ProviderTotals.since 一旦填入就不蒸發，
+    // session 結束 / stale 回收後仍能看出「該 provider 何時第一次被監控到」。
+    // User 可用 `now - since_timestamp` 算 uptime 對等量；結合 K8 idle_seconds
+    // 算「最近一次活動佔 lifetime 比例」= 健康度信號。
+    out.push_str("# HELP lobsterpulse_provider_since_timestamp Unix epoch seconds when this provider was first seen (lifetime aggregate)\n# TYPE lobsterpulse_provider_since_timestamp gauge\n");
+    for (p, ts) in &provider_since_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"{p}\"}} {ts}\n"
         ));
     }
     out
@@ -1925,6 +1953,7 @@ mod write_local_usage_snapshot_tests {
 mod render_prometheus_tests {
     use super::*;
     use crate::session::{ProviderTotals, SessionInfo, SessionState};
+    use chrono::TimeZone;
     use std::collections::HashMap;
 
     /// 為 test 製造 SessionInfo fixture（只填 render_prometheus_body 讀的欄位）。
@@ -2050,6 +2079,39 @@ mod render_prometheus_tests {
         )
     }
 
+    /// K10 測試用：為 test 製造 ProviderTotals fixture，指定 `since`（first-seen 時間）。
+    /// `last_event_at` 設同 `since` 避免干擾 K8 idle 計算（idle = now - last = now - since）。
+    /// token / failure / session_count 留 0（K10 不讀這些欄位，設 0 表語意單純）。
+    fn totals_with_since(provider: &str, since: DateTime<Utc>) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                since: Some(since),
+                last_event_at: Some(since),
+            },
+        )
+    }
+
+    /// K10 測試用：ProviderTotals 但 `since = None`（理論上 bump_provider_totals 第一次
+    /// event 會填，測試故意不填驗「since = None 跳過 sample」契約）。
+    fn totals_no_since(provider: &str) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                since: None,
+                last_event_at: Some(Utc::now()),
+            },
+        )
+    }
+
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
         let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
@@ -2068,6 +2130,8 @@ mod render_prometheus_tests {
         assert!(!body.contains("lobsterpulse_provider_failure_count{"));
         // K9 落地：per-provider lifetime session count 段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_session_count{"));
+        // K10 落地：per-provider since_timestamp 段同樣：空 map → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_since_timestamp{"));
     }
 
     #[test]
@@ -2257,6 +2321,9 @@ mod render_prometheus_tests {
             // K9 新增：per-provider lifetime session count counter
             "# HELP lobsterpulse_provider_session_count",
             "# TYPE lobsterpulse_provider_session_count counter",
+            // K10 新增：per-provider first-seen timestamp gauge
+            "# HELP lobsterpulse_provider_since_timestamp",
+            "# TYPE lobsterpulse_provider_since_timestamp gauge",
         ];
         for h in required_headers {
             assert!(
@@ -2509,6 +2576,169 @@ mod render_prometheus_tests {
         assert!(
             cicx_idx < gemini_idx && gemini_idx < openx_idx,
             "per-provider session_count 必須 alphabetical 排序"
+        );
+    }
+
+    // ===== K10 per-provider since_timestamp gauge =====
+
+    #[test]
+    fn since_timestamp_empty_state_emits_header_only() {
+        // 沒任何 provider → K10 段只有 HELP/TYPE、沒有 sample line。
+        // 對齊 K6/K7/K8/K9「empty state 不假裝 0 timestamp」語意。
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
+
+        assert!(body.contains("# HELP lobsterpulse_provider_since_timestamp"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_since_timestamp gauge"));
+        assert!(!body.contains("lobsterpulse_provider_since_timestamp{"));
+    }
+
+    #[test]
+    fn since_timestamp_emits_unix_seconds_per_provider() {
+        // K10 主軸：每個有 `since` 的 provider 輸出 Unix epoch seconds。
+        // 用 3 個 fixture timestamp（2024 / 2025 / 2026），驗證 timestamp 正確進 sample。
+        // 注意：`render_prometheus_body` 只讀 `since` 欄位、token / failure / session_count
+        // 都留 0 — 這測試斷言只看 K10 sample line、其它 metric 細節不在 K10 範圍。
+        let claude_since = Utc.with_ymd_and_hms(2024, 1, 15, 10, 0, 0).unwrap();
+        let cicx_since = Utc.with_ymd_and_hms(2025, 6, 1, 12, 30, 0).unwrap();
+        let gemini_since = Utc.with_ymd_and_hms(2026, 3, 20, 8, 15, 0).unwrap();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_since("claude", claude_since),
+                totals_with_since("cicx", cicx_since),
+                totals_with_since("gemini", gemini_since),
+            ]),
+            Utc::now(),
+        );
+
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"claude\"}} {}\n",
+            claude_since.timestamp()
+        )));
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"cicx\"}} {}\n",
+            cicx_since.timestamp()
+        )));
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"gemini\"}} {}\n",
+            gemini_since.timestamp()
+        )));
+    }
+
+    #[test]
+    fn since_timestamp_skips_providers_with_no_since() {
+        // K10 語意：provider 的 `since = None`（理論上 bump_provider_totals 第一次
+        // event 會填，測試故意不填）→ 不輸出 sample。對齊 K8 idle_seconds 跳過
+        // `last_event_at = None` 的策略，避免 Prometheus 端把缺失當 0 timestamp
+        // （= 1970-01-01 unix epoch）誤判「該 provider 從 1970 就開始」。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_since("claude", now - chrono::Duration::days(365)),
+                totals_no_since("cicx"), // 故意不填 since
+            ]),
+            now,
+        );
+
+        // claude 有 since → 有 sample
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"claude\"}} {}\n",
+            (now - chrono::Duration::days(365)).timestamp()
+        )));
+        // cicx 沒 since → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_since_timestamp{provider=\"cicx\"}"));
+    }
+
+    #[test]
+    fn since_timestamp_uses_lifetime_aggregate_not_live_sessions() {
+        // K10 核心 regression guard：lifetime-vs-live。
+        // 0 個 live session（sessions=[]）但 ProviderTotals.since 已填 →
+        // metric 仍輸出該 timestamp。
+        // 跟 K6/K7/K8/K9 一致：session 結束 + 30 min stale 回收後 live 為 0，
+        // 但 lifetime ProviderTotals.since 仍保留 → user 仍能看出「該 provider
+        // 何時第一次被監控到」（用 now - since_timestamp 算 uptime 對等量）。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[], // 0 個 live session
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_since("claude", now - chrono::Duration::days(30)),
+                totals_with_since("cicx", now - chrono::Duration::days(7)),
+            ]),
+            now,
+        );
+
+        // lifetime aggregate 確保 since 不被 live session 影響
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"claude\"}} {}\n",
+            (now - chrono::Duration::days(30)).timestamp()
+        )));
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"cicx\"}} {}\n",
+            (now - chrono::Duration::days(7)).timestamp()
+        )));
+    }
+
+    #[test]
+    fn since_timestamp_alphabetical_and_deterministic() {
+        // 3 個 provider、不同 since timestamp、故意非字母序輸入 → 驗 alphabetical 排序。
+        let openx_since = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let cicx_since = Utc.with_ymd_and_hms(2025, 6, 1, 0, 0, 0).unwrap();
+        let gemini_since = Utc.with_ymd_and_hms(2026, 3, 20, 0, 0, 0).unwrap();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_since("openx", openx_since),
+                totals_with_since("cicx", cicx_since),
+                totals_with_since("gemini", gemini_since),
+            ]),
+            Utc::now(),
+        );
+
+        // 每個 provider 都應該有對應 sample line
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"cicx\"}} {}\n",
+            cicx_since.timestamp()
+        )));
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"gemini\"}} {}\n",
+            gemini_since.timestamp()
+        )));
+        assert!(body.contains(&format!(
+            "lobsterpulse_provider_since_timestamp{{provider=\"openx\"}} {}\n",
+            openx_since.timestamp()
+        )));
+
+        // 排序驗證：cicx < gemini < openx
+        let cicx_idx = body
+            .find(&format!(
+                "lobsterpulse_provider_since_timestamp{{provider=\"cicx\"}} {}\n",
+                cicx_since.timestamp()
+            ))
+            .expect("cicx since line");
+        let gemini_idx = body
+            .find(&format!(
+                "lobsterpulse_provider_since_timestamp{{provider=\"gemini\"}} {}\n",
+                gemini_since.timestamp()
+            ))
+            .expect("gemini since line");
+        let openx_idx = body
+            .find(&format!(
+                "lobsterpulse_provider_since_timestamp{{provider=\"openx\"}} {}\n",
+                openx_since.timestamp()
+            ))
+            .expect("openx since line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider since_timestamp 必須 alphabetical 排序"
         );
     }
 }

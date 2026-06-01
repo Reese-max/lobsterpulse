@@ -4,6 +4,56 @@
 
 ## 改善紀錄
 
+### [2026-06-01] Round 9 — hook_failure_burst 5 條 false-positive 命中改 silent → log::debug surface
+**類型**: M0（user-facing observability bug：Rule 3 hook_failure_burst 對 5 條已知誤報 pattern 命中即 silent continue，真實 hook 失敗若撞子字串會被一起吃掉且無 log）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K-hook-failure-observability：false-positive 命中可觀察性 | 0/5 sites (silent) | 5/5 sites (log::debug) | +5 |
+| false-positive pattern 命名清楚度 | inline 字串、無名 | 5 個具名 const | ✓ |
+| latent bug：後段 pattern 永遠 unreachable | 是（`ripgrep` 永遠先吃） | 否（specific-first 排序） | ✓ |
+| Lib unit tests | 30 | 33 | +3 |
+| 24h chore_ratio（chore type 無 K-tag） | 58% (R8 觸發紅線) | — | 本輪 fix type，cap 用 0/5 |
+| 24h 連續 M0 推進輪數 | 4 (R2/R2二/R3/R4/R6/R8) | 5 | +1 |
+
+**為什麼**:
+- R6 修 Discord 14 sites transport-layer silent fail、R8 修 hook_server 2 sites event-entry silent fail — 都是 surface-fail pattern
+- R3 留下的「不做的範圍」清單 #1 就是 Rule 3 中文硬碼 filter：當時歸 noise reduction / 非 user-facing 阻斷
+- 本輪重評估：filter 行為不變（命中即丟避免誤報）≠ silent。silent 的問題是「為什麼這次失敗沒被算」沒 log 可查 → 對齊 R6/R8，命中時 log::debug 留 pattern name + provider + 80 byte err preview，RUST_LOG=debug 才會看到，user 平時零噪聲
+- 順手發現 latent bug：原 inline `.contains() ||` 順序下，`ripgrep` 永遠先吃「取代 find/grep」組合案例，後 2 條 pattern 永遠 unreachable。改 const 排序 specific-first 後 log pattern name 更精準，filter 行為不變（命中即丟）
+
+**搜尋**:
+- R3 / R5 log 「不做的範圍」段找候選
+- Grep 5 條 inline `err_s.contains(` 鎖定位置
+- 沒做 WebSearch（這是既有程式碼 pattern 重構，不是新領域）
+
+**做了什麼**:
+- 加 module-level const `HOOK_FAILURE_FALSE_POSITIVE_PATTERNS: &[(&str, &str)]`（name + needle pair）
+- 加 helper `fn hook_failure_false_positive(err: &str) -> Option<&'static str>`（純函式，回第一個命中的 pattern name）
+- `tick_inner` Rule 3 區段：5 條 inline `.contains() ||` → `if let Some(pattern) = hook_failure_false_positive(err_s) { log::debug!(...); continue; }`
+- 加 3 個 unit test：
+  - `hook_false_positive_matches_each_known_pattern`：5 條 pattern 各自命中驗
+  - `hook_false_positive_returns_none_for_legit_errors`：空字串、ENOENT、permission、裸 "rg"、單獨 "取代" 都回 None
+  - `hook_false_positive_pattern_names_are_stable`：const 順序鎖定（log 端能依賴 name 而非 index）
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 33/33 pass（30 prior + 3 new）
+- `bash test/smoke-test.sh quick` PASS
+- 過程中抓出 1 個 latent test failure（`ripgrep` pattern 太廣導致後 2 條 unreachable）→ 改 const 排序後 33/33 綠
+
+**結果**: PASS（M0 observability 改善落地 + 順手修 latent 排序 bug + 3 unit test + 0 lint warning，commit `9a14387`）
+
+**不做的範圍**（給後續輪次）:
+- Rule 3 的 5 條 pattern 改為 user-configurable（config 暴露）：超出本輪 surgical 範圍
+- 加 log::debug 對 `quota_low` / `token_spike` 等其他 rule 的命中也 surface：scope 漸進、未有 user report
+- `daily_summary_hour == now_local.hour()` 整點 + 15s tick 精度（R3 提）：1 分鐘內容忍，未有 user report
+- `last_summary_date` 持久化（R3 提）：R5 觀察時已驗證 wired up（lib.rs:1341 呼叫 `load_persisted_summary_markers`、auto_rules.rs:698/779 呼叫 `persist_summary_markers`），非遺留
+
+---
+
 ### [2026-06-01] Round 3 — daily/weekly summary 純 toast 模式瘋狂重發
 **類型**: M0（user-facing 阻斷 bug：純 toast 模式開 daily/weekly 會被 15s tick 反覆推）
 **KPI**: K-summary-dedup-correctness
@@ -333,6 +383,7 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - **R6**: Discord 14 處 fire-and-forget silent fail 全面 surfaced（M0），K2 0/14 → 14/14。
 - **R7**: 本 loop 漏記（supervisor 標 1 輪無改善）。M0-3 未推進。
 - **R8**: hook_server 2 處 silent fail surfaced + process_body 抽 pure fn + 5 unit tests（M0），K3 0/2 → 2/2。Lib tests 25 → 30。chore treadmill 紅線觸發（58% > 50% cap），本輪嚴守 M0-3、H0 cap 仍 1/5。
+- **R9**: hook_failure_burst 5 條 false-positive pattern 命中改 silent → log::debug surfaced（M0），K-hook-failure-observability 0/5 → 5/5。順手修 latent bug：原 inline `.contains() ||` 順序下「ripgrep」會先吃「取代 find/grep」組合案例，後 2 條 unreachable → const 改 specific-first 排序。Lib tests 30 → 33。Chore treadmill 紅線未消（本輪 fix type），H0 cap 仍 1/5。
 
 ### 2026-06-01 R5 — 👁️ AI Supervisor 審查
 **品質**: PASS|WARN|FAIL (1/10)

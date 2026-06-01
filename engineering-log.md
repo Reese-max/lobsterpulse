@@ -330,6 +330,9 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - **R3**: daily/weekly summary 純 toast 模式 dedup 提前 set（M0）。
 - **R4**: session_idle 純 toast 永久 spam 修掉（M0）；抽出 `write_local_usage_snapshot` helper 修 direct write silent fail（M0 連帶）。
 - **R5**: baseline 16 髒檔 → 0 髒檔（declarative .gitignore，H0）。H0 cap 0/5 → 1/5 啟用。M0-3 程式碼改動 deferred 給 R6，候選清單在 R5 log 「不做的範圍」段。
+- **R6**: Discord 14 處 fire-and-forget silent fail 全面 surfaced（M0），K2 0/14 → 14/14。
+- **R7**: 本 loop 漏記（supervisor 標 1 輪無改善）。M0-3 未推進。
+- **R8**: hook_server 2 處 silent fail surfaced + process_body 抽 pure fn + 5 unit tests（M0），K3 0/2 → 2/2。Lib tests 25 → 30。chore treadmill 紅線觸發（58% > 50% cap），本輪嚴守 M0-3、H0 cap 仍 1/5。
 
 ### 2026-06-01 R5 — 👁️ AI Supervisor 審查
 **品質**: PASS|WARN|FAIL (1/10)
@@ -364,5 +367,43 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 |---|---:|---:|---:|
 | K2 discord error logging 覆蓋 | 0/14 sites | 14/14 sites | +14 |
 | Lib unit tests | 24 | 25 | +1 |
+
+**結果**: PASS
+
+### 2026-06-01 R8 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### [2026-06-01] Round 8 — hook_server 2 處 silent fail surfaced + 5 unit tests
+**類型**: M0（user-facing observability bug：9 個 provider 全部事件入口 hook_server::handle_client 對 JSON parse 失敗 + tx.send 失敗皆 silently dropped，operator 無 log 可查「事件送達失敗」）
+
+**KPI**: K3-hook-event-observability（0/2 sites surfaced → 2/2 sites surfaced）
+
+**為什麼**: R6 修了 Discord 14 處 transport-layer silent fail，但 hook_server 自身才是 9 providers 全部事件的入口。`Err(_) => 400` 直接吞 parse error、`let _ = tx.send(event)` 直接吞 channel send error——operator 看到的現象是「capsule 不動 / 名單沒新事件」，但 log 系統完全沒線索區分「無事件」 vs 「事件被吞」。對齊 R6 模式：fail 路徑 surfaced via log::warn，body 截 200 byte preview 避免 log 爆。
+
+**搜尋**: Grep `let _ =` hook_server.rs 鎖定 2 條 fail 路徑（JSON parse 400 + tx.send 丟 event）。process_body 抽 pure function 方便 unit test 鎖 normalize + session_id default + failed status promote 行為。
+
+**做了什麼**:
+- 抽 `fn process_body(body, provider) -> Result<HookEvent, ()>` 為 pure function（從 handle_client 內聯展開）
+- `Err(())` arm 改 `log::warn!("[hook_server] JSON parse failed for provider={} body={}", provider, preview)` + 200 byte body preview（`from_utf8_lossy` 處理非 UTF-8）
+- `tx.send` 失敗改 `log::warn!("[hook_server] tx.send failed (receiver dropped) for provider={}", provider)`
+- 加 5 個 unit test 鎖 process_body 行為：valid parse、invalid json → Err、session_id missing → default、snake_case → PascalCase、failed PostToolUse → PostToolUseFailure
+
+**驗證**:
+- `cargo test --lib` 30/30 pass（25 prior + 5 new process_body tests）
+- `cargo fmt --check` clean
+- `cargo clippy --lib -- -D warnings` clean
+- commit `61de03a`：1 file +71 / -15
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K3 hook event logging 覆蓋 | 0/2 sites | 2/2 sites | +2 |
+| Lib unit tests | 25 | 30 | +5 |
+| 24h chore_ratio | 58% (10/17) | — | （R8 不做 H0，cap 用 0/5） |
 
 **結果**: PASS

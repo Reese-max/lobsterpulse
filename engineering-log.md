@@ -330,3 +330,39 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - **R3**: daily/weekly summary 純 toast 模式 dedup 提前 set（M0）。
 - **R4**: session_idle 純 toast 永久 spam 修掉（M0）；抽出 `write_local_usage_snapshot` helper 修 direct write silent fail（M0 連帶）。
 - **R5**: baseline 16 髒檔 → 0 髒檔（declarative .gitignore，H0）。H0 cap 0/5 → 1/5 啟用。M0-3 程式碼改動 deferred 給 R6，候選清單在 R5 log 「不做的範圍」段。
+
+### 2026-06-01 R5 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### [2026-06-01] Round 6 — Discord 14 處 silent error swallowing 全面 surfaced
+**類型**: M0（user-facing observability bug：Discord 4xx/5xx 在 14 處 fire-and-forget 通知點被吞 → operator 看不到 quota_low / session_idle / hook_failure_burst / daily- weekly summary / token_spike / discord_kill_cmd 任何一條推不出去）
+**KPI**: K2-discord-delivery-observability（0/14 surfaced → 14/14 surfaced）
+
+**為什麼**: R2 修了 curl `-f` 讓 transport 不 silent，但呼叫端仍 `let _ = discord::xxx(...)` 吞 error → log 系統完全沒有軌跡。Discord outage 無法與「無事可報」區分。修這個對齊 MISSION「事件流可靠 + 錯誤可見」。
+
+**搜尋**: 直接 Grep `let _ = discord::` 14 處全在 `auto_rules.rs`（驗證 R5 觀察 10355），無需 WebSearch。
+
+**做了什麼**:
+- 加 `pub(crate) fn discord_err_msg(ctx, err) -> String` 統一 prefix `[auto_rules] discord <ctx> failed: <err>`（一個 log filter 抓全部 14 類）
+- 14 sites 改 `if let Err(e) = ... { log::warn!("{}", discord_err_msg(ctx, &e)) }`，ctx 含 rule + id（quota_low name+pct、session_idle sid_short + kind、hook_failure_burst provider、token_spike name+pct、discord_kill_cmd sid+reaction、daily/weekly summary 用 rule name）
+- 加 unit test `discord_err_msg_unifies_prefix` 鎖 format + 中文 ctx 不被 trim/lower
+- 0 個 `let _ = discord::` 殘留（1 個是 doc comment 範例）
+
+**驗證**:
+- `cargo test --lib` 25/25 pass（24 prior + 1 new）
+- `cargo build --lib` clean
+- `cargo clippy --lib -- -D warnings` clean
+- commit `da71ddc`：1 file +129 / -25
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K2 discord error logging 覆蓋 | 0/14 sites | 14/14 sites | +14 |
+| Lib unit tests | 24 | 25 | +1 |
+
+**結果**: PASS

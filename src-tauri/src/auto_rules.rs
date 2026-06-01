@@ -1098,6 +1098,41 @@ fn load_persisted_summary_markers_at_impl(path: &Path) -> (String, String) {
     (parsed.last_summary_date, parsed.last_weekly_key)
 }
 
+/// 讀本機 CLI quota snapshot（`~/.lobsterpulse/usage-local.json`），給
+/// Discord `!lp quota` 指令顯示用。三條路徑分流（對齊 R28
+/// `load_config_at` / R29 `parse_quota_history_row`）：
+/// 1. `NotFound` → `Ok(None)`（first-run 預期,正常情況）
+/// 2. 其他 IO 錯（權限拒絕 / 磁碟鎖住 / cross-device）→ `Err`，caller 端 log warn
+/// 3. JSON 解析失敗（磁碟寫入半截 / 編碼錯）→ `Err`，caller 端 log warn
+///
+/// 修前 `!lp quota` 兩條 silent chain：
+///   - `read_to_string(&path).unwrap_or_default()` 吞 IO 錯誤
+///   - `from_str(&data).unwrap_or_default()` 吞壞 JSON
+///     → 用戶在 `usage-local.json` 損壞（CLI crash 中斷寫入 / 磁碟滿）時點
+///     `!lp quota` 看到「無 runner」訊息，operator 完全無 log 可查哪條 chain 失敗。
+pub fn load_local_usage_snapshot() -> Result<Option<serde_json::Value>, String> {
+    let Some(home) = dirs::home_dir() else {
+        return Err("no home dir".into());
+    };
+    let path = home.join(".lobsterpulse").join("usage-local.json");
+    load_local_usage_snapshot_at(&path)
+}
+
+/// Test 入口：抽 path 參數讓 unit test 可注入 tmpdir / 不存在路徑 / 壞 JSON，
+/// 不必碰 process env。對齊 R28 `load_config_at` pattern。
+pub(crate) fn load_local_usage_snapshot_at(
+    path: &Path,
+) -> Result<Option<serde_json::Value>, String> {
+    let data = match std::fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("read {}: {e}", path.display())),
+    };
+    serde_json::from_str(&data)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
 /// 測試輔助：從傳入 dir 讀 summary markers，避免污染真 `~/.lobsterpulse/`
 #[cfg(test)]
 pub(crate) fn load_persisted_summary_markers_at(dir: &Path) -> (String, String) {
@@ -1351,19 +1386,29 @@ fn handle_command(
         }
 
         "quota" => {
-            let Some(home) = dirs::home_dir() else {
-                return "no home dir".into();
+            // 對齊 R30 silent-fail surfacing：`usage-local.json` 讀壞 / parse 壞
+            // 不再默默回「無 runner」,改 log warn + 區分「不存在」/「損壞」/
+            // 「空 runners」三條路徑給 Discord 使用者。
+            let v = match load_local_usage_snapshot() {
+                Ok(Some(v)) => v,
+                Ok(None) => {
+                    return "（沒有 runner 結果，usage-local.json 不存在）".into();
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[auto_rules] !lp quota: usage-local.json load failed: {e} \
+                         — 回「無 runner」訊息給 Discord,但 log 可查根因"
+                    );
+                    return "（沒有 runner 結果，usage-local.json 損壞，詳見 log）".into();
+                }
             };
-            let path = home.join(".lobsterpulse").join("usage-local.json");
-            let data = std::fs::read_to_string(&path).unwrap_or_default();
-            let v: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
             let runners = v
                 .get("runners")
                 .and_then(|r| r.as_array())
                 .cloned()
                 .unwrap_or_default();
             if runners.is_empty() {
-                return "（沒有 runner 結果，usage-local.json 不存在或為空）".into();
+                return "（沒有 runner 結果，usage-local.json 為空）".into();
             }
             let mut lines = vec!["**本機額度**".to_string()];
             for r in runners {
@@ -2074,5 +2119,87 @@ mod tests {
         let (date, week) = load_persisted_summary_markers_at(&tmp.0);
         assert_eq!(date, "");
         assert_eq!(week, "");
+    }
+
+    // ─── R30 silent-fail surfacing: load_local_usage_snapshot_at ───
+    //
+    // 修前 `!lp quota` 路徑兩條 silent chain:
+    //   - `read_to_string(&path).unwrap_or_default()` 吞 IO 錯誤
+    //   - `from_str(&data).unwrap_or_default()` 吞壞 JSON
+    // 結果: usage-local.json 損壞（CLI 中斷寫入 / 磁碟滿 / 手動編輯）時 Discord 使用者
+    // 點 `!lp quota` 看到「無 runner」訊息,operator 完全無 log 可查。
+    //
+    // 修後 `load_local_usage_snapshot_at(path) -> Result<Option<Value>, String>`
+    // 三條分流: NotFound 靜默回 Ok(None) / IO 錯 Err / parse 錯 Err,
+    // caller 端 `match` 顯式分流 + log warn。
+
+    #[test]
+    fn load_local_usage_snapshot_at_missing_returns_ok_none() {
+        // first-run 預期: 檔不存在不要 spam log, 直接 Ok(None) 讓 caller 走
+        // 「無 runner 結果，usage-local.json 不存在」訊息。
+        let tmp = TmpDir::new("quota-missing");
+        let path = tmp.0.join("usage-local.json");
+        assert!(!path.exists());
+        let r = load_local_usage_snapshot_at(&path);
+        assert!(
+            matches!(r, Ok(None)),
+            "first-run 應回 Ok(None), 實際: {r:?}"
+        );
+    }
+
+    #[test]
+    fn load_local_usage_snapshot_at_valid_returns_some() {
+        // happy path: valid JSON → Ok(Some(Value)) 帶 runners array,
+        // caller 端後續按原本 render 邏輯組訊息。
+        let tmp = TmpDir::new("quota-valid");
+        let path = tmp.0.join("usage-local.json");
+        let payload = serde_json::json!({
+            "runners": [
+                {"label": "claude", "text": "剩 42%"},
+                {"label": "codex", "text": "剩 7%"}
+            ]
+        });
+        std::fs::write(&path, payload.to_string()).expect("write ok");
+        let v = load_local_usage_snapshot_at(&path).expect("ok");
+        let v = v.expect("some");
+        let runners = v.get("runners").and_then(|r| r.as_array()).expect("arr");
+        assert_eq!(runners.len(), 2);
+        assert_eq!(
+            runners[0].get("label").and_then(|x| x.as_str()),
+            Some("claude")
+        );
+    }
+
+    #[test]
+    fn load_local_usage_snapshot_at_corrupt_json_returns_err() {
+        // 對齊 R29 `parse_quota_history_row` contract: 壞 JSON 必須 Err,
+        // 不能 unwrap_or_default() 變成空 Value 污染 render。修前 silent
+        // chain 會把半截 JSON 當空 Value,呼叫端「無 runner」訊息完全看不出
+        // 「是 usage-local.json 壞掉」,operator 一行 grep 都找不到。
+        let tmp = TmpDir::new("quota-corrupt");
+        let path = tmp.0.join("usage-local.json");
+        // 半截 JSON (模擬磁碟寫入中斷 / OOM kill)
+        let bad = br#"{"runners": [{"label": "claude","#;
+        std::fs::write(&path, bad).expect("write bad");
+        let r = load_local_usage_snapshot_at(&path);
+        assert!(
+            matches!(r, Err(_)),
+            "壞 JSON 應回 Err 讓 caller log warn, 實際: {r:?}"
+        );
+    }
+
+    #[test]
+    fn load_local_usage_snapshot_at_io_error_returns_err() {
+        // 對齊 R28 `load_config_at_io_error_warns_and_returns_default` pattern:
+        // NotFound 以外 IO 錯（權限拒絕 / 磁碟鎖住 / NUL 路徑）必須 Err,
+        // 不能默默當 NotFound 處理。
+        //
+        // 用 NUL 路徑是跨平台拒絕 IO 的最小依賴:
+        // - Windows: 路徑含 NUL 直接拒絕
+        // - Unix: 大多數 fs 拒絕
+        // 跟 config.rs R28 同樣,只驗「不 panic + 回 Err」,不鎖特定 kind。
+        let bad_path = std::path::Path::new("\x00not-a-real-path\x00");
+        let r = load_local_usage_snapshot_at(bad_path);
+        assert!(r.is_err(), "NUL 路徑應回 Err（IO 失敗），實際: {r:?}");
     }
 }

@@ -87,10 +87,25 @@ pub fn load_history() -> Result<std::collections::HashMap<String, Vec<(u64, u8)>
     let Some(path) = csv_path() else {
         return Err("no path".into());
     };
+    load_history_at(&path)
+}
+
+/// 從指定 path 讀 quota-history。抽成 pure fn 方便 unit test 鎖 contract：
+/// - NotFound（檔不存在）→ `Ok(HashMap::new())`（first-run 預期，不算 silent-fail）
+/// - IO 錯（權限拒絕 / 磁碟鎖住）→ `Err(String)`（caller 端要 log warn）
+/// - 壞 CSV row → skip + log warn，繼續 parse 其他 row（既有 `parse_quota_history_row` 行為）
+/// - 超過 `KEEP_DAYS` 30 天的 row → skip（既有的時間窗過濾）
+///
+/// 對齊 R28 `load_config_at` / R30 `load_local_usage_snapshot_at` pattern：
+/// 公開 wrapper 只負責 path 解析 + lock，IO/parse 邏輯下沉到 `_at(path)` 純 fn
+/// 讓 unit test 用 tempdir + 餵假檔案驗契約，不依賴真實 `~/.lobsterpulse/quota-history.csv`。
+pub fn load_history_at(
+    path: &std::path::Path,
+) -> Result<std::collections::HashMap<String, Vec<(u64, u8)>>, String> {
     if !path.exists() {
         return Ok(std::collections::HashMap::new());
     }
-    let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let cutoff = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -299,5 +314,92 @@ mod tests {
         // 對齊 write 半截場景：disk full / 斷電留下 `"1700000000,cicx,\n"`。
         let parts = vec!["1700000000", "cicx", ""];
         assert_eq!(parse_quota_history_row(&parts, 9), None);
+    }
+
+    /// 為 load_history_at 系列 test 製造獨立 tmp CSV 路徑（避免污染真實
+    /// `~/.lobsterpulse/quota-history.csv` + parallel test 互踩）。
+    fn tmp_csv(tag: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("lp-load-history-{tag}-{nonce}.csv"));
+        p
+    }
+
+    /// R32 contract：first-run 情境（quota-history.csv 還沒建立）必須回 `Ok(empty)`，
+    /// 讓 caller（`get_quota_history` Dashboard / `!lp trend` cmd / `token_spike` rule）
+    /// 不會誤觸 silent-fail warn 路徑。
+    #[test]
+    fn load_history_at_not_found_returns_ok_empty() {
+        let path = tmp_csv("notfound");
+        // 確保檔案不存在
+        let _ = std::fs::remove_file(&path);
+        let r = load_history_at(&path);
+        assert!(
+            matches!(r, Ok(ref m) if m.is_empty()),
+            "NotFound 應回 Ok(empty HashMap)，實際: {r:?}"
+        );
+    }
+
+    /// R32 contract：合法 CSV（含 2 runner 各 1 row）應正確 parse，欄位對應到 (ts, pct)。
+    /// ts 用 dynamic `now() - N` 而非寫死 1700000000：寫死 2023-11 會被 `KEEP_DAYS=30`
+    /// cutoff 過濾掉，map 變空（測試 fail），用 dynamic ts 才能穩定在 30 天窗內。
+    #[test]
+    fn load_history_at_valid_csv_parses_rows() {
+        let path = tmp_csv("valid");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let ts1 = now - 100;
+        let ts2 = now - 200;
+        let body = format!("{ts1},cicx,42\n{ts2},openx,7\n");
+        std::fs::write(&path, body).expect("write csv");
+        let r = load_history_at(&path).expect("valid csv 應回 Ok");
+        assert_eq!(r.len(), 2, "2 runner 應都進 map，實際: {r:?}");
+        assert_eq!(r.get("cicx").map(|v| v.as_slice()), Some(&[(ts1, 42)][..]));
+        assert_eq!(r.get("openx").map(|v| v.as_slice()), Some(&[(ts2, 7)][..]));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// R32 contract：0-byte 檔（disk full / 寫入中斷常見殘留）應回 `Ok(empty)`，
+    /// 對齊 first-run NotFound 契約。`parse_quota_history_row` 對壞 row 採「log warn
+    /// + skip」策略、不會讓整檔變 Err，所以「全檔都是壞 row」也是 `Ok(empty)`
+    /// 帶 log warn。真正的 IO 錯（如磁碟鎖、目錄）才會回 Err（見
+    /// `load_history_at_io_error_returns_err`）。
+    #[test]
+    fn load_history_at_empty_file_returns_ok_empty() {
+        let path = tmp_csv("empty");
+        std::fs::write(&path, b"").expect("write empty");
+        let r = load_history_at(&path);
+        assert!(
+            matches!(r, Ok(ref m) if m.is_empty()),
+            "0-byte 檔應回 Ok(empty)，實際: {r:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// R32 contract：IO 錯（檔案存在但 read 失敗）必須回 `Err`，
+    /// 對齊 R30 `load_local_usage_snapshot_at_io_error_returns_err` pattern。
+    /// **不能** silent 當 NotFound 處理（會讓 `get_quota_history` Dashboard sparkline
+    /// 在「壞檔」時渲染空白卻無 log）。
+    ///
+    /// 觸發 IO 錯策略：用「path 是目錄（不是檔案）」— `std::fs::read_to_string` 對
+    /// 目錄 path 在 Unix/Windows 都會回 IO 錯（Not a directory / Access denied），
+    /// 而 `path.exists()` 對目錄回 true → 不會被 NotFound 短路。
+    /// 比 R30 用的 NUL path 更可靠：NUL path 在 Windows 上 `path.exists()` 視為 false
+    /// 走 NotFound 分支（`load_history_at` 開頭有 `if !path.exists() { return Ok(empty) }`
+    /// 短路），改用目錄 path 才能確定觸發 read 階段的 IO 錯。
+    #[test]
+    fn load_history_at_io_error_returns_err() {
+        // `std::env::temp_dir()` 一定存在 + 一定是目錄
+        let dir_path = std::env::temp_dir();
+        let r = load_history_at(&dir_path);
+        assert!(
+            r.is_err(),
+            "目錄 path 應回 Err（read_to_string 對目錄 IO 失敗）讓 caller log warn，實際: {r:?}"
+        );
     }
 }

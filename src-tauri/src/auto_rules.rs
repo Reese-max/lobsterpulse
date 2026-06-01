@@ -906,103 +906,113 @@ fn tick_inner(
 
     // ─── Rule 6: token_spike — 當日消耗 > N× 近 7 日均值 → 告警 ───
     if cfg.token_spike_enabled {
-        if let Ok(hist) = crate::quota_history::load_history() {
-            let now_s = now_secs();
-            let today_start = now_s - (now_s % 86400);
-            for (name, series) in hist.iter() {
-                if series.len() < 2 {
-                    continue;
-                }
-                // 以 ts 排序 (load_history 保持插入序 ≈ 時間序)
-                let mut sorted: Vec<&(u64, u8)> = series.iter().collect();
-                sorted.sort_by_key(|(t, _)| *t);
-                // 分組：今日 vs 近 7 日（不含今日）
-                let today: Vec<&(u64, u8)> = sorted
-                    .iter()
-                    .filter(|(t, _)| *t as i64 >= today_start)
-                    .copied()
-                    .collect();
-                if today.len() < 2 {
-                    continue;
-                }
-                let today_first = today.first().unwrap().1 as i32;
-                let today_last = today.last().unwrap().1 as i32;
-                let today_consumed = (today_first - today_last).max(0) as u32;
-                if today_consumed < cfg.token_spike_min_consumption_pct as u32 {
-                    continue;
-                }
-                // 計算近 7 天每日消耗：用 day_bucket groupBy
-                let mut daily: std::collections::BTreeMap<i64, Vec<u8>> =
-                    std::collections::BTreeMap::new();
-                for (t, p) in sorted.iter() {
-                    let day = (*t as i64) / 86400;
-                    if day < today_start / 86400 && day >= (today_start / 86400) - 7 {
-                        daily.entry(day).or_default().push(*p);
-                    }
-                }
-                if daily.is_empty() {
-                    continue;
-                }
-                let mut day_consumptions: Vec<u32> = daily
-                    .values()
-                    .filter(|v| v.len() >= 2)
-                    .map(|v| (v.first().unwrap().saturating_sub(*v.last().unwrap())) as u32)
-                    .collect();
-                if day_consumptions.is_empty() {
-                    continue;
-                }
-                day_consumptions.sort();
-                let avg: f64 =
-                    day_consumptions.iter().sum::<u32>() as f64 / day_consumptions.len() as f64;
-                if avg < 1.0 {
-                    continue;
-                } // 避免除 0 近值
-                let ratio = today_consumed as f64 / avg;
-                if ratio < cfg.token_spike_multiplier {
-                    continue;
-                }
-                // Fire
-                let key = format!("token_spike:{name}");
-                let fire = {
-                    let mut s = state.lock().unwrap();
-                    dedup_gate(&mut s, &key, 86400) // 一天一次
-                };
-                if !fire {
-                    continue;
-                }
-                let title = format!("{name} · 用量異常");
-                let desc = format!(
-                    "今日消耗 **{}%**，是近 7 日平均 **{:.1}%** 的 **{:.1}×**（門檻 {}×）",
-                    today_consumed, avg, ratio, cfg.token_spike_multiplier
+        // R30 silent-fail surfacing: 修前 `if let Ok(hist) = ...` 在 quota-history.csv
+        // 損壞 / IO 錯 / 鎖 poison 時整條 token_spike 規則被 bypass 卻無 log, operator 看 alert
+        // 沒觸發還以為是 token 沒爆, 其實是 history 讀不到. 改 match Err + 結構化 warn.
+        let hist = match crate::quota_history::load_history() {
+            Ok(h) => h,
+            Err(e) => {
+                log::warn!(
+                    "[auto_rules] token_spike rule skipped: quota-history.csv load failed: {e}"
                 );
-                if discord_active {
-                    if let Err(e) = discord::send_embed(
-                        notify.discord_token,
-                        notify.discord_channel,
-                        &title,
-                        &desc,
-                        0xFF6B6B,
-                    ) {
-                        log::warn!(
-                            "{}",
-                            discord_err_msg(
-                                &format!("token_spike name={name} pct={today_consumed}"),
-                                &e
-                            )
-                        );
-                    }
+                return;
+            }
+        };
+        let now_s = now_secs();
+        let today_start = now_s - (now_s % 86400);
+        for (name, series) in hist.iter() {
+            if series.len() < 2 {
+                continue;
+            }
+            // 以 ts 排序 (load_history 保持插入序 ≈ 時間序)
+            let mut sorted: Vec<&(u64, u8)> = series.iter().collect();
+            sorted.sort_by_key(|(t, _)| *t);
+            // 分組：今日 vs 近 7 日（不含今日）
+            let today: Vec<&(u64, u8)> = sorted
+                .iter()
+                .filter(|(t, _)| *t as i64 >= today_start)
+                .copied()
+                .collect();
+            if today.len() < 2 {
+                continue;
+            }
+            let today_first = today.first().unwrap().1 as i32;
+            let today_last = today.last().unwrap().1 as i32;
+            let today_consumed = (today_first - today_last).max(0) as u32;
+            if today_consumed < cfg.token_spike_min_consumption_pct as u32 {
+                continue;
+            }
+            // 計算近 7 天每日消耗：用 day_bucket groupBy
+            let mut daily: std::collections::BTreeMap<i64, Vec<u8>> =
+                std::collections::BTreeMap::new();
+            for (t, p) in sorted.iter() {
+                let day = (*t as i64) / 86400;
+                if day < today_start / 86400 && day >= (today_start / 86400) - 7 {
+                    daily.entry(day).or_default().push(*p);
                 }
-                if toast_active {
-                    if let Some(a) = &notify.app {
-                        send_toast(
-                            a,
-                            &title,
-                            &format!(
-                                "{name} 今日 {}% · 平均 {:.0}% · {:.1}×",
-                                today_consumed, avg, ratio
-                            ),
-                        );
-                    }
+            }
+            if daily.is_empty() {
+                continue;
+            }
+            let mut day_consumptions: Vec<u32> = daily
+                .values()
+                .filter(|v| v.len() >= 2)
+                .map(|v| (v.first().unwrap().saturating_sub(*v.last().unwrap())) as u32)
+                .collect();
+            if day_consumptions.is_empty() {
+                continue;
+            }
+            day_consumptions.sort();
+            let avg: f64 =
+                day_consumptions.iter().sum::<u32>() as f64 / day_consumptions.len() as f64;
+            if avg < 1.0 {
+                continue;
+            } // 避免除 0 近值
+            let ratio = today_consumed as f64 / avg;
+            if ratio < cfg.token_spike_multiplier {
+                continue;
+            }
+            // Fire
+            let key = format!("token_spike:{name}");
+            let fire = {
+                let mut s = state.lock().unwrap();
+                dedup_gate(&mut s, &key, 86400) // 一天一次
+            };
+            if !fire {
+                continue;
+            }
+            let title = format!("{name} · 用量異常");
+            let desc = format!(
+                "今日消耗 **{}%**，是近 7 日平均 **{:.1}%** 的 **{:.1}×**（門檻 {}×）",
+                today_consumed, avg, ratio, cfg.token_spike_multiplier
+            );
+            if discord_active {
+                if let Err(e) = discord::send_embed(
+                    notify.discord_token,
+                    notify.discord_channel,
+                    &title,
+                    &desc,
+                    0xFF6B6B,
+                ) {
+                    log::warn!(
+                        "{}",
+                        discord_err_msg(
+                            &format!("token_spike name={name} pct={today_consumed}"),
+                            &e
+                        )
+                    );
+                }
+            }
+            if toast_active {
+                if let Some(a) = &notify.app {
+                    send_toast(
+                        a,
+                        &title,
+                        &format!(
+                            "{name} 今日 {}% · 平均 {:.0}% · {:.1}×",
+                            today_consumed, avg, ratio
+                        ),
+                    );
                 }
             }
         }
@@ -1555,7 +1565,17 @@ fn handle_command(
             if arg.is_empty() {
                 return "用法：`!lp trend <runner>`（runner 名稱如 claude / codex / copilot / gemini）".into();
             }
-            let hist = crate::quota_history::load_history().unwrap_or_default();
+            // R30 silent-fail surfacing: 修前 `unwrap_or_default()` 在 quota-history.csv
+            // 損壞 / IO 錯 / 鎖 poison 時把 hist 變空 HashMap, 後續 `hist.get(arg)` miss
+            // 會誤導 operator 回「找不到 runner `claude`」實際是 history 讀不到. 改 match Err
+            // 三條分流 + 結構化 warn, Discord 端給明確「讀取失敗, 詳見 log」訊息.
+            let hist = match crate::quota_history::load_history() {
+                Ok(h) => h,
+                Err(e) => {
+                    log::warn!("[auto_rules] !lp trend: quota-history.csv load failed: {e}");
+                    return "quota-history.csv 讀取失敗, 詳見 log（prefix: `[auto_rules] !lp trend: quota-history.csv load failed`）".into();
+                }
+            };
             let Some(series) = hist.get(arg) else {
                 return format!(
                     "找不到 runner `{arg}`（已有：{}）",

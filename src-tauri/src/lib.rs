@@ -1513,7 +1513,21 @@ fn send_discord_test(config_state: tauri::State<AppConfigState>) -> Result<Strin
 /// 讀 quota 歷史 → 給 Dashboard 畫 sparkline。回傳 { name: [[ts, pct], ...] }。
 #[tauri::command]
 fn get_quota_history() -> std::collections::HashMap<String, Vec<(u64, u8)>> {
-    quota_history::load_history().unwrap_or_default()
+    // R30 silent-fail surfacing (接續 R28/R29/R30/R31 同一主題線):
+    // 修前 `load_history().unwrap_or_default()` 在 quota-history.csv 損壞 / IO 錯 /
+    // 鎖 poison 時, 前端 Dashboard 拿到空 HashMap 畫不出 sparkline 卻完全無 log,
+    // operator 無從分辨「沒有 history」還是「壞檔」. 改為 match Err 三條分流 +
+    // 結構化 log warn 帶 caller context.
+    match quota_history::load_history() {
+        Ok(h) => h,
+        Err(e) => {
+            log::warn!(
+                "[lib::get_quota_history] quota-history.csv load failed: {e} \
+                 — Dashboard 將以空 history 渲染（sparkline 全空）"
+            );
+            std::collections::HashMap::new()
+        }
+    }
 }
 
 /// 前端「🧪 試跑」單一 runner，不寫進 snapshot。

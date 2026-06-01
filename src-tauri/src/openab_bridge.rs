@@ -26,22 +26,48 @@ fn read_offset() -> u64 {
         .unwrap_or(0)
 }
 
+/// 寫入 offset 到指定路徑（採用「先 tmp 後 rename」原子寫；rename 失敗 fallback 直接寫）。
+/// 失敗回 `io::Error` — caller 必須 log warning，因 offset 追蹤壞掉會導致下次重複發同批
+/// OpenAB event，operator 無 log 就分不清「無新事件」 vs 「offset 寫失敗」。
+///
+/// **不** surface 的一條：`remove_file(&tmp)` 清理是 best-effort，下輪 tmp 名稱帶 PID 會換新，
+/// 留著 stale tmp 不會擋寫入。
+fn write_offset_at(path: &std::path::Path, pos: u64) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let data = pos.to_string();
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("offset");
+    let tmp = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+    if std::fs::write(&tmp, data.as_bytes()).is_ok() {
+        if std::fs::rename(&tmp, path).is_err() {
+            // rename 失敗（Windows target 被 hold / 跨 device）→ best-effort 清理 tmp 後直接寫
+            let _ = std::fs::remove_file(&tmp);
+            std::fs::write(path, data.as_bytes())?;
+        }
+    } else {
+        // tmp 寫失敗（磁碟滿 / 權限）→ 直接寫 final
+        std::fs::write(path, data.as_bytes())?;
+    }
+    Ok(())
+}
+
 fn write_offset(pos: u64) {
-    if let Some(p) = offset_path() {
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let data = pos.to_string();
-        let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("offset");
-        let tmp = p.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
-        if std::fs::write(&tmp, data.as_bytes()).is_ok() {
-            if std::fs::rename(&tmp, &p).is_err() {
-                let _ = std::fs::remove_file(&tmp);
-                let _ = std::fs::write(&p, data.as_bytes());
-            }
-        } else {
-            let _ = std::fs::write(&p, data.as_bytes());
-        }
+    let Some(p) = offset_path() else {
+        return;
+    };
+    if let Err(e) = write_offset_at(&p, pos) {
+        // 對齊 R6/R8 surface pattern：offset tracking 失敗要可觀察，否則 next tick
+        // 會重複發同批 event，user 端分不清「OpenAB 沒新事件」vs「我們自己 offset 寫失敗」。
+        log::warn!(
+            "[openab_bridge] write_offset({}) failed: {} — offset tracking broken, \
+             may reprocess events next tick",
+            pos,
+            e
+        );
     }
 }
 
@@ -119,5 +145,70 @@ pub fn dispatch_event(
             crate::discord::send_embed(discord_token, discord_channel, &title, &desc, 0x5865F2)
         }
         _ => Err(format!("unknown event {source}/{kind}")),
+    }
+}
+
+#[cfg(test)]
+mod write_offset_at_tests {
+    //! R12 regression：`write_offset` 之前 3 條 `let _ =` 沉默吞 fs error（create_dir_all、
+    //! rename fallback write、tmp fallback write），offset 追蹤壞掉時 operator 完全無
+    //! log 可查。改 `write_offset_at(path, pos) -> io::Result<()>` 後 caller 端 `if let Err`
+    //! 統一 log warning。本 module 鎖「寫入值正確」「parent dir 自動建立」「invalid path
+    //! 回 Err」三條契約。
+
+    use super::*;
+
+    /// 為每個 test 製造獨立 tmp 路徑（避免 parallel test 互踩 / 污染 home dir）。
+    /// 用 nanos 當 nonce，比 R4 的 SystemTime-based nonce 更不會撞（同進程內連呼叫）。
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("lp-offset-{tag}-{nonce}-{}", std::process::id()));
+        p
+    }
+
+    #[test]
+    fn write_offset_at_writes_value_atomically() {
+        let path = tmp_path("happy");
+        write_offset_at(&path, 12345).expect("happy path should succeed");
+        let raw = std::fs::read_to_string(&path).expect("file should exist after write");
+        assert_eq!(raw, "12345", "offset 應原樣寫入檔案");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_offset_at_creates_parent_dir_on_demand() {
+        let mut path = tmp_path("parent");
+        path.pop(); // 拿掉檔名留下 dir parent
+        let nested = path.join("sub").join("nested").join("offset");
+        // 故意不先建 dir → 測 create_dir_all 自動建立
+        write_offset_at(&nested, 99).expect("nested write should auto-create parents");
+        let raw = std::fs::read_to_string(&nested).expect("file should exist after write");
+        assert_eq!(raw, "99");
+        // cleanup：nested + 中間空目錄
+        let _ = std::fs::remove_file(&nested);
+        let _ = std::fs::remove_dir(nested.parent().unwrap());
+    }
+
+    #[test]
+    fn write_offset_at_returns_err_on_invalid_path() {
+        // Windows / Unix 都會拒絕 NUL 裝置或不可寫的 path
+        // 用 control char（U+0001）做檔名 → 大多 fs 拒絕
+        let bad = std::path::PathBuf::from("\x01invalid\x02");
+        let result = write_offset_at(&bad, 1);
+        assert!(result.is_err(), "invalid path 應回 Err 而不是 silent fail");
+    }
+
+    #[test]
+    fn write_offset_overwrites_existing_value() {
+        let path = tmp_path("overwrite");
+        write_offset_at(&path, 100).expect("first write should succeed");
+        write_offset_at(&path, 200).expect("second write should succeed");
+        let raw = std::fs::read_to_string(&path).expect("file should exist after overwrite");
+        assert_eq!(raw, "200", "第二次寫入應覆蓋而非 append");
+        let _ = std::fs::remove_file(&path);
     }
 }

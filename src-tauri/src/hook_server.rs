@@ -424,8 +424,15 @@ async fn is_port_listening(port: u16) -> bool {
 fn write_port_file(port: u16) {
     if let Some(home) = dirs::home_dir() {
         let dir = home.join(".lobsterpulse");
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(dir.join("port"), port.to_string());
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            log::warn!("write_port_file: create dir {} failed: {e}", dir.display());
+        }
+        if let Err(e) = std::fs::write(dir.join("port"), port.to_string()) {
+            log::warn!(
+                "write_port_file: write port={port} to {}/port failed: {e}",
+                dir.display()
+            );
+        }
     }
 }
 

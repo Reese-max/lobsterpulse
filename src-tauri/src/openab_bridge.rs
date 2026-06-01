@@ -9,6 +9,27 @@ use std::path::PathBuf;
 
 const OFFSET_FILE_NAME: &str = ".openab-bridge-offset";
 
+/// R13：`tail_new_events` 內 fs 操作的錯誤分類。caller 端靠 `Display` 落 log，
+/// 4 個 variant 各對應一條原 silent fail 路徑，方便 log filter 一次定位。
+#[derive(Debug)]
+enum ReadEventsError {
+    Metadata(std::io::Error),
+    Open(std::io::Error),
+    Seek(std::io::Error),
+    Read(std::io::Error),
+}
+
+impl std::fmt::Display for ReadEventsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Metadata(e) => write!(f, "metadata failed: {e}"),
+            Self::Open(e) => write!(f, "file open failed: {e}"),
+            Self::Seek(e) => write!(f, "seek to offset failed: {e}"),
+            Self::Read(e) => write!(f, "read_to_end failed: {e}"),
+        }
+    }
+}
+
 fn events_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     Some(home.join("openab").join("logs").join("cctest-events.jsonl"))
@@ -74,42 +95,83 @@ fn write_offset(pos: u64) {
 /// 讀 jsonl 從 offset 到 EOF，回傳 (events, new_offset)。
 /// 新安裝（offset=0 + file 很大）會一口氣吃掉所有歷史 event —— 避免此情況，
 /// 第一次碰到的狀況直接跳到 EOF，標記成「從現在開始追」。
+///
+/// R13：把 fs + parse 抽到 `read_events_since` 為 pure fn，讓 caller 端
+/// `tail_new_events` 用 `log::warn!` surfaced 5 條原 silent fail 路徑
+/// （metadata / file open / seek / read_to_end，events_path()→None）。原先每條
+/// 都用 `let Ok(...) = ... else { return vec![]; }` 沉默吞 error，operator
+/// 看到的現象是「OpenAB 橋接停了」但 log 完全沒線索區分「OpenAB 沒新事件」
+/// vs「我們 fs 讀失敗」。`!path.exists()` 視為 first-run expected 走 log::debug。
 pub fn tail_new_events() -> Vec<serde_json::Value> {
     let Some(path) = events_path() else {
+        log::warn!(
+            "[openab_bridge] tail_new_events: events_path() returned None \
+             (home_dir missing?) — OpenAB 橋接整輪停擺"
+        );
         return vec![];
     };
     if !path.exists() {
+        log::debug!(
+            "[openab_bridge] tail_new_events: events file not found at {} \
+             (first-run or OpenAB not installed yet)",
+            path.display()
+        );
         return vec![];
     }
-    let Ok(meta) = std::fs::metadata(&path) else {
-        return vec![];
-    };
-    let file_size = meta.len();
     let offset = read_offset();
+    match read_events_since(&path, offset) {
+        Ok((events, new_offset)) => {
+            if new_offset != offset {
+                write_offset(new_offset);
+            }
+            events
+        }
+        Err(e) => {
+            log::warn!(
+                "[openab_bridge] tail_new_events failed at offset={}: {} — \
+                 next tick will re-read from same offset, may reprocess events",
+                offset,
+                e
+            );
+            vec![]
+        }
+    }
+}
+
+/// Pure fn：給定 `events_path` + `offset`，回 (events, new_offset)。
+/// - `offset=0` 或 `file_size < offset`（rotate）→ 跳到 EOF，回 (vec![], file_size)
+/// - `file_size == offset` → 沒新事件，回 (vec![], offset)
+/// - 讀到 `chunk` 但無 newline（partial line）→ 保留到下輪，回 (vec![], offset)
+/// - 任何 fs 操作失敗 → 對應 variant 的 `ReadEventsError`
+///
+/// 抽這條出來是為了 unit test 鎖行為（happy / rotate / partial line / metadata fail），
+/// 並把 4 條原 silent fail 集中到一個 enum，caller 端 1 個 `match` 統一 log。
+fn read_events_since(
+    events_path: &std::path::Path,
+    offset: u64,
+) -> Result<(Vec<serde_json::Value>, u64), ReadEventsError> {
+    let meta = std::fs::metadata(events_path).map_err(ReadEventsError::Metadata)?;
+    let file_size = meta.len();
 
     // 首次啟動（offset=0）或檔案被 rotate（size 變小）→ 跳到 EOF 不吃歷史
     if offset == 0 || file_size < offset {
-        write_offset(file_size);
-        return vec![];
+        return Ok((vec![], file_size));
     }
     if file_size == offset {
-        return vec![];
+        return Ok((vec![], offset));
     }
 
-    // 讀從 offset 到 EOF（避免每輪把整個檔案讀進記憶體）
-    let Ok(mut file) = std::fs::File::open(&path) else {
-        return vec![];
-    };
-    if file.seek(SeekFrom::Start(offset)).is_err() {
-        return vec![];
-    }
+    let mut file = std::fs::File::open(events_path).map_err(ReadEventsError::Open)?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(ReadEventsError::Seek)?;
+
     let mut chunk = Vec::new();
-    if file.read_to_end(&mut chunk).is_err() {
-        return vec![];
-    }
+    file.read_to_end(&mut chunk)
+        .map_err(ReadEventsError::Read)?;
+
     // 只處理「完整行」：若最後一行尚未寫完（無 '\n'），保留到下輪，避免掉事件。
     let Some(last_nl) = chunk.iter().rposition(|b| *b == b'\n') else {
-        return vec![];
+        return Ok((vec![], offset));
     };
     let complete = &chunk[..=last_nl];
     let text = String::from_utf8_lossy(complete);
@@ -124,8 +186,7 @@ pub fn tail_new_events() -> Vec<serde_json::Value> {
         }
     }
     let new_offset = offset.saturating_add((last_nl + 1) as u64);
-    write_offset(new_offset);
-    out
+    Ok((out, new_offset))
 }
 
 /// 把 event 轉成 Discord embed 發出去。目前支援 source="bots-watchdog" event="state_change"。
@@ -134,14 +195,8 @@ pub fn dispatch_event(
     discord_token: &str,
     discord_channel: &str,
 ) -> Result<String, String> {
-    let source = event
-        .get("source")
-        .and_then(|x| x.as_str())
-        .unwrap_or("?");
-    let kind = event
-        .get("event")
-        .and_then(|x| x.as_str())
-        .unwrap_or("?");
+    let source = event.get("source").and_then(|x| x.as_str()).unwrap_or("?");
+    let kind = event.get("event").and_then(|x| x.as_str()).unwrap_or("?");
     match (source, kind) {
         ("bots-watchdog", "state_change") => {
             let changes = event.get("changes").and_then(|x| x.as_str()).unwrap_or("?");
@@ -216,6 +271,149 @@ mod write_offset_at_tests {
         let raw = std::fs::read_to_string(&path).expect("file should exist after overwrite");
         assert_eq!(raw, "200", "第二次寫入應覆蓋而非 append");
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod read_events_since_tests {
+    //! R13 regression：`tail_new_events` 之前 5 條 `let Ok(...) = ... else { return vec![]; }`
+    //! 沉默吞 fs error（events_path()→None、metadata、file open、seek、read_to_end），
+    //! OpenAB 橋接 fs 路徑失敗時 operator 完全無 log 可查。改 `read_events_since(path, offset)
+    //! -> Result<(events, new_offset), ReadEventsError>` 為 pure fn，4 個 variant 對應 4 條
+    //! fs 失敗點，caller 端 `tail_new_events` 用 `match` 統一 log warning。
+    //!
+    //! 本 module 鎖 7 條契約：
+    //! 1. happy path：offset 設在 line 1 之後，回剩餘 event + 正確 new_offset
+    //! 2. offset=0 → first-launch 跳到 EOF
+    //! 3. offset==file_size → 沒新事件
+    //! 4. offset>file_size → rotate 跳到 EOF
+    //! 5. partial line 保留到下輪
+    //! 6. 不存在路徑 → ReadEventsError::Metadata
+    //! 7. 4 個 variant 的 Display 都帶 fs error reason（log grep 用）
+
+    use super::*;
+    use std::io::Write;
+
+    /// 為每個 test 製造獨立 tmp jsonl，避免 parallel test 互踩。
+    fn tmp_jsonl(tag: &str, body: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("lp-events-{tag}-{nonce}-{}", std::process::id()));
+        let mut f = std::fs::File::create(&p).expect("tmp file create");
+        f.write_all(body.as_bytes()).expect("tmp file write");
+        p
+    }
+
+    #[test]
+    fn read_events_since_happy_path_returns_events_and_new_offset() {
+        // 3 條 newline-terminated jsonl + offset 設在 line 1 結尾後 → 預期讀到剩 2 條
+        let body = "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n";
+        let path = tmp_jsonl("happy", body);
+        let line1_end = body.find('\n').unwrap() as u64 + 1; // 第一條 newline 之後
+        let (events, new_offset) = read_events_since(&path, line1_end).expect("happy path 應成功");
+        assert_eq!(events.len(), 2, "offset 在 line 1 後應讀到剩 2 條");
+        assert_eq!(events[0]["b"], 2);
+        assert_eq!(events[1]["c"], 3);
+        assert_eq!(new_offset, body.len() as u64, "new_offset 應指到 EOF");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_events_since_offset_zero_jumps_to_eof() {
+        let body = "{\"x\":1}\n{\"y\":2}\n";
+        let path = tmp_jsonl("zero", body);
+        let (events, new_offset) = read_events_since(&path, 0).expect("first-launch 應回 Ok");
+        assert!(events.is_empty(), "offset=0 不應吃歷史");
+        assert_eq!(new_offset, body.len() as u64, "應跳到 EOF");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_events_since_offset_equals_size_returns_empty() {
+        let body = "{\"k\":1}\n";
+        let path = tmp_jsonl("eqsize", body);
+        let (events, new_offset) =
+            read_events_since(&path, body.len() as u64).expect("無新事件應回 Ok");
+        assert!(events.is_empty());
+        assert_eq!(new_offset, body.len() as u64);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_events_since_offset_greater_than_size_jumps_to_eof() {
+        // 模擬 rotate：原本 offset 500，現 file size 變 50
+        let body = "{\"r\":1}\n";
+        let path = tmp_jsonl("rotate", body);
+        let (events, new_offset) = read_events_since(&path, 500).expect("rotate 應回 Ok 不報錯");
+        assert!(events.is_empty(), "rotate 不應吃舊資料");
+        assert_eq!(
+            new_offset,
+            body.len() as u64,
+            "rotate 應把 offset 推到新 EOF"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_events_since_partial_line_dropped_for_next_tick() {
+        // 1 完整行 + 1 個 partial（沒 newline）。offset 設在 line 1 結尾後
+        // 走真正 read loop：partial line 不算完整行 → events 為空，offset 不動
+        // 留給下輪 tail 抓。
+        let body = "{\"p\":1}\n{\"q\":2"; // 第二條無 \n
+        let path = tmp_jsonl("partial", body);
+        let line1_end = body.find('\n').unwrap() as u64 + 1;
+        let (events, new_offset) = read_events_since(&path, line1_end).expect("partial 應回 Ok");
+        assert!(events.is_empty(), "partial line 不算完整行");
+        assert_eq!(new_offset, line1_end, "partial 時 offset 不動，留給下輪");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_events_since_metadata_error_for_missing_file() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("lp-events-missing-{nonce}-{}", std::process::id()));
+        // 不建立檔案
+        let err = read_events_since(&p, 0).expect_err("不存在路徑應回 Err");
+        assert!(
+            matches!(err, ReadEventsError::Metadata(_)),
+            "不存在的 path 應觸發 Metadata variant，實際：{err:?}"
+        );
+        // Display 應帶 "metadata failed" prefix 給 log filter grep
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("metadata failed:"),
+            "Display 應含 'metadata failed:' prefix，實際：{msg}"
+        );
+    }
+
+    #[test]
+    fn read_events_error_display_covers_all_four_variants() {
+        // 鎖 4 個 variant 的 Display prefix 穩定，方便 log filter
+        // io::Error 沒 Copy/Clone，每個 case 各自構造一次
+        let make_err = || -> std::io::Error {
+            std::fs::File::open("/nonexistent/lp-test-does-not-exist")
+                .expect_err("non-existent path 應有 io::Error")
+        };
+        let cases: Vec<(ReadEventsError, &str)> = vec![
+            (ReadEventsError::Metadata(make_err()), "metadata failed:"),
+            (ReadEventsError::Open(make_err()), "file open failed:"),
+            (ReadEventsError::Seek(make_err()), "seek to offset failed:"),
+            (ReadEventsError::Read(make_err()), "read_to_end failed:"),
+        ];
+        for (err, expected_prefix) in cases {
+            let msg = err.to_string();
+            assert!(
+                msg.starts_with(expected_prefix),
+                "Display prefix 應為 {expected_prefix:?}，實際：{msg}"
+            );
+        }
     }
 }
 

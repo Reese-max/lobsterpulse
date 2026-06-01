@@ -86,6 +86,35 @@ pub(crate) fn discord_err_msg(ctx: &str, err: &str) -> String {
     format!("[auto_rules] discord {ctx} failed: {err}")
 }
 
+// ─── Rule 3 hook_failure_burst 誤報過濾 ───
+// 修前 5 條 hardcoded 子字串直接 inline 在 tick_inner，命中即 silent continue：
+// 真實 hook 失敗若撞到這 5 個子字串會被一起吃掉，operator 沒 log 可查「為什麼某次
+// PostToolUseFailure 沒被算進去」。抽成具名 const + helper，命中時 log::debug! 帶
+// pattern name + provider，與 R6 Discord 14 sites / R8 hook_server 2 sites 同 surface pattern。
+//
+// 命名原則：name 描述「這是什麼誤報類型」，不是「為什麼觸發」（reason 在 commit log 留）。
+//
+// 順序重要：sub-match 是 `.find()` first-hit，specific pattern 必須排在一般 catch-all
+// 之前。原 5 條 inline 用 `.contains() ||` 順序相同 → 「ripgrep」會先吃掉「取代 find/grep」
+// 組合案例（latent 行為瑕疵）。本版先排 specific 再排 general，filter 行為不變（命中即丟）、
+// 僅讓 log pattern name 更精準。
+const HOOK_FAILURE_FALSE_POSITIVE_PATTERNS: &[(&str, &str)] = &[
+    ("shell-enforce-preflight-hint", "請用"),
+    ("ripgrep-replaces-find", "取代 find"),
+    ("ripgrep-replaces-grep", "取代 grep"),
+    ("ripgrep-enoent", "ripgrep"),
+    ("rg-exe-enoent", "rg.exe"),
+];
+
+/// 若 `err` 內含已知誤報子字串，回 Some(pattern_name)，否則 None。
+/// 名稱回傳值方便 log 端 grep 對應是哪條規則被觸發。
+fn hook_failure_false_positive(err: &str) -> Option<&'static str> {
+    HOOK_FAILURE_FALSE_POSITIVE_PATTERNS
+        .iter()
+        .find(|(_, needle)| err.contains(needle))
+        .map(|(name, _)| *name)
+}
+
 fn dedup_gate(state: &mut AutoRuleState, key: &str, dedup_secs: i64) -> bool {
     let now = now_secs();
     if let Some(&last) = state.last_fired.get(key) {
@@ -527,12 +556,15 @@ fn tick_inner(
                 if e.event_name == "PostToolUseFailure" && e.timestamp >= cutoff {
                     // Filter 掉 shell-enforce-hook 的誤報（中文提示 / ripgrep 被擋）— 不算真失敗
                     let err_s = e.error.as_deref().unwrap_or("");
-                    if err_s.contains("請用")          // /c/Users/*/.claude/hooks/enforce-shell-tools.sh 用的前置提示
-                        || err_s.contains("ripgrep")   // rg 被 attack 時 ENOENT
-                        || err_s.contains("rg.exe")
-                        || err_s.contains("取代 find")
-                        || err_s.contains("取代 grep")
-                    {
+                    if let Some(pattern) = hook_failure_false_positive(err_s) {
+                        // 命中已知誤報 pattern → 計數不算，但 log::debug 留下「為什麼被濾掉」的軌跡
+                        // 與 R6/R8 同 surface pattern：silent 行為改為 debug-level 可觀察
+                        log::debug!(
+                            "[auto_rules] hook_failure_burst filtered: pattern={} provider={} err_preview={}",
+                            pattern,
+                            e.provider,
+                            truncate_utf8_bytes(err_s, 80)
+                        );
                         continue;
                     }
                     *counter.entry(e.provider.clone()).or_insert(0) += 1;
@@ -1366,6 +1398,62 @@ mod tests {
     fn extract_min_percent_ignores_invalid_values() {
         let t = "A: **49.7%** B: **N/A%** C: **101%** D: **-5%**";
         assert_eq!(extract_min_percent(t), Some(50));
+    }
+
+    /// R9 regression：5 條已知誤報子字串逐一命中要回對應 pattern name
+    #[test]
+    fn hook_false_positive_matches_each_known_pattern() {
+        assert_eq!(
+            hook_failure_false_positive("請用 rg 取代 grep"),
+            Some("shell-enforce-preflight-hint")
+        );
+        assert_eq!(
+            hook_failure_false_positive("ripgrep: command not found"),
+            Some("ripgrep-enoent")
+        );
+        assert_eq!(
+            hook_failure_false_positive(r"C:\rg.exe not found"),
+            Some("rg-exe-enoent")
+        );
+        assert_eq!(
+            hook_failure_false_positive("建議用 ripgrep 取代 find"),
+            Some("ripgrep-replaces-find")
+        );
+        assert_eq!(
+            hook_failure_false_positive("建議用 ripgrep 取代 grep"),
+            Some("ripgrep-replaces-grep")
+        );
+    }
+
+    /// R9 regression：合法 hook 錯誤（沒撞 5 條子字串）必須 None，否則會誤吞真失敗
+    #[test]
+    fn hook_false_positive_returns_none_for_legit_errors() {
+        assert_eq!(hook_failure_false_positive(""), None);
+        assert_eq!(hook_failure_false_positive("ENOENT: file not found"), None);
+        assert_eq!(hook_failure_false_positive("permission denied"), None);
+        // 裸 "rg" 不算 — 必須 "rg.exe" 或 "ripgrep" 才算誤報 pattern
+        assert_eq!(hook_failure_false_positive("rg failed"), None);
+        // "取代" 但沒 "find"/"grep" 也不算
+        assert_eq!(hook_failure_false_positive("取代舊工具"), None);
+    }
+
+    /// R9 regression：const 順序固定，log 端能依賴 pattern name 而非 index
+    #[test]
+    fn hook_false_positive_pattern_names_are_stable() {
+        let names: Vec<&str> = HOOK_FAILURE_FALSE_POSITIVE_PATTERNS
+            .iter()
+            .map(|(n, _)| *n)
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "shell-enforce-preflight-hint",
+                "ripgrep-replaces-find",
+                "ripgrep-replaces-grep",
+                "ripgrep-enoent",
+                "rg-exe-enoent",
+            ]
+        );
     }
 
     /// Regression：純 toast 模式（無 Discord 成功路徑）下，dedup marker 必須在「決定要 fire」

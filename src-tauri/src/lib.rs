@@ -1223,6 +1223,12 @@ fn render_prometheus_body(
     // 吞吐量，補 K7 failure / K9 session 沒覆蓋的「整體事件流量」信號。
     let mut provider_events_total: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
+    // K17 落地：per-provider × per-event-type 計數。ProviderTotals 內是
+    // `BTreeMap<String, u64>`（type → count），render 端攤平成 (provider,
+    // type) 排序 vector —— 兩段排序確保 Prometheus 文字輸出 byte-deterministic
+    // （對齊既有 K6/K7/K8/K9/K10/K12/K13 排序契約）。空 `event_type_counts`
+    // 的 provider 自然不會產出 sample。
+    let mut provider_event_type_total: Vec<(String, String, u64)> = Vec::new();
     for (p, t) in provider_totals {
         tot_in = tot_in.saturating_add(t.tokens_input);
         tot_out = tot_out.saturating_add(t.tokens_output);
@@ -1241,7 +1247,11 @@ fn render_prometheus_body(
             provider_idle_ratio.insert(p.clone(), ratio);
         }
         provider_events_total.insert(p.clone(), t.events_total);
+        for (etype, n) in &t.event_type_counts {
+            provider_event_type_total.push((p.clone(), etype.clone(), *n));
+        }
     }
+    provider_event_type_total.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
     let mut provider_counts_sorted: Vec<_> = provider_counts.iter().collect();
     provider_counts_sorted.sort_by(|a, b| a.0.cmp(b.0));
@@ -1379,6 +1389,28 @@ fn render_prometheus_body(
     for (p, n) in &provider_events_total_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_events_total{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    // K17 落地：per-provider × per-event-type 細顆度計數（counter）。
+    // 補 K13 缺 type 維度的盲點 —— `lobsterpulse_provider_events_total` 只
+    // 反映「該 provider 共收過幾個 event」，本 metric 切開 type 給 operator
+    // 看具體事件類型配比。SLO 用途：
+    //   - `rate(...{type="Stop"}[5m])` 對 `rate(...{type="UserPromptSubmit"}[5m])`
+    //     → 偵測「runner 一直發 Stop 但沒人 prompt」= 卡住
+    //   - `rate(...{type="PreToolUse"}[5m])` 對 `rate(...{type="PostToolUse"}[5m])`
+    //     → 偵測「Pre 一直進來 Post 都沒回」= tool 呼叫卡住
+    //   - `rate(...{type="TokenUpdate"}[5m])` → 各 provider quota 事件 throughput
+    //
+    // 跟 K6/K7/K9/K13 lifetime aggregate 對齊：ProviderTotals.event_type_counts
+    // session 結束 + 30 min stale 回收後仍保留 → Prometheus 端 counter 不倒退。
+    //
+    // Cardinality:9 provider × ~10 known event type ≈ 90 series 上限,可控。
+    // 空 `event_type_counts` 的 provider 不會產出 sample（`for` 自然跳過）。
+    // 排序:by (provider, type) 兩段排序,跟既有 K6-K13 排序契約一致。
+    out.push_str("# HELP lobsterpulse_provider_event_type_total Lifetime event count per provider per event type (counter; rate() per type label)\n# TYPE lobsterpulse_provider_event_type_total counter\n");
+    for (p, etype, n) in &provider_event_type_total {
+        out.push_str(&format!(
+            "lobsterpulse_provider_event_type_total{{provider=\"{p}\",type=\"{etype}\"}} {n}\n"
         ));
     }
     // K14 落地：Discord 健康度 (process-level,單一端點非 per-provider)。
@@ -2288,6 +2320,9 @@ mod render_prometheus_tests {
                 session_count: 1,
                 failure_count: 0,
                 events_total: 0,
+                // K17 落地：event type 維度計數 map 留空,既有 fixture 不主動填
+                // type,新測試用專屬 fixture (`totals_with_event_type_counts`) 控制。
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2313,6 +2348,9 @@ mod render_prometheus_tests {
                 session_count: 1,
                 failure_count: fail,
                 events_total: 0,
+                // K17 落地：event type 維度計數 map 留空,既有 fixture 不主動填
+                // type,新測試用專屬 fixture (`totals_with_event_type_counts`) 控制。
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2337,6 +2375,9 @@ mod render_prometheus_tests {
                 session_count: 1,
                 failure_count: fail,
                 events_total: 0,
+                // K17 落地：event type 維度計數 map 留空,既有 fixture 不主動填
+                // type,新測試用專屬 fixture (`totals_with_event_type_counts`) 控制。
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(last_at),
             },
@@ -2353,6 +2394,9 @@ mod render_prometheus_tests {
                 session_count: 0,
                 failure_count: 0,
                 events_total: 0,
+                // K17 落地：event type 維度計數 map 留空,既有 fixture 不主動填
+                // type,新測試用專屬 fixture (`totals_with_event_type_counts`) 控制。
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: None,
             },
@@ -2370,6 +2414,9 @@ mod render_prometheus_tests {
                 session_count,
                 failure_count: 0,
                 events_total: 0,
+                // K17 落地：event type 維度計數 map 留空,既有 fixture 不主動填
+                // type,新測試用專屬 fixture (`totals_with_event_type_counts`) 控制。
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2388,6 +2435,7 @@ mod render_prometheus_tests {
                 session_count: 0,
                 failure_count: 0,
                 events_total: 0,
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(since),
                 last_event_at: Some(since),
             },
@@ -2405,6 +2453,9 @@ mod render_prometheus_tests {
                 session_count: 0,
                 failure_count: 0,
                 events_total: 0,
+                // K17 落地：event type 維度計數 map 留空,既有 fixture 不主動填
+                // type,新測試用專屬 fixture (`totals_with_event_type_counts`) 控制。
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2428,6 +2479,7 @@ mod render_prometheus_tests {
                 session_count: 0,
                 failure_count: 0,
                 events_total: 0,
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(since),
                 last_event_at: Some(last_event_at),
             },
@@ -2448,6 +2500,7 @@ mod render_prometheus_tests {
                 session_count: 0,
                 failure_count: 0,
                 events_total: 0,
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(since),
                 last_event_at: None,
             },
@@ -2465,6 +2518,7 @@ mod render_prometheus_tests {
                 session_count: 0,
                 failure_count: 0,
                 events_total: 0,
+                event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(now),
                 last_event_at: Some(now),
             },
@@ -2482,6 +2536,39 @@ mod render_prometheus_tests {
                 session_count: 0,
                 failure_count: 0,
                 events_total: events,
+                // K17 落地：event type 維度計數 map 留空,既有 fixture 不主動填
+                // type,新測試用專屬 fixture (`totals_with_event_type_counts`) 控制。
+                event_type_counts: std::collections::BTreeMap::new(),
+                since: None,
+                last_event_at: Some(Utc::now()),
+            },
+        )
+    }
+
+    /// K17 測試用：為 test 製造 ProviderTotals fixture，指定 `event_type_counts`
+    /// （per-event-type 維度計數 map）。`type_counts` 接受 `&[(&str, u64)]` 切片
+    /// 方便 test 內聯構造 —— e.g. `&[("UserPromptSubmit", 3), ("Stop", 1)]`。
+    /// 其他欄位（events_total / token / failure）留 0/預設值,聚焦 K17 行為。
+    /// 用 `BTreeMap` 而非 `HashMap` 構造 —— 對齊 `ProviderTotals.event_type_counts`
+    /// 型別,render 端 `for (etype, n) in &t.event_type_counts` 直接 iterate
+    /// 已是 alphabetical sorted by key。
+    fn totals_with_event_type_counts(
+        provider: &str,
+        type_counts: &[(&str, u64)],
+    ) -> (String, ProviderTotals) {
+        let event_type_counts: std::collections::BTreeMap<String, u64> = type_counts
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect();
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                events_total: 0,
+                event_type_counts,
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2517,6 +2604,9 @@ mod render_prometheus_tests {
         assert!(!body.contains("lobsterpulse_provider_session_count{"));
         // K13 落地：per-provider lifetime event counter 段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_events_total{"));
+        // K17 落地：per-provider × per-event-type 細顆度 counter 段同樣：
+        // 空 event_type_counts → 沒 sample line（HELP/TYPE 標頭仍輸出）
+        assert!(!body.contains("lobsterpulse_provider_event_type_total{"));
         // K10 落地：per-provider since_timestamp 段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_since_timestamp{"));
         // K11 落地：per-provider quota_snapshot_age 段同樣：空 map → 沒 sample line
@@ -2757,6 +2847,9 @@ mod render_prometheus_tests {
             // K13 新增：per-provider lifetime event counter（任何 event 都 +1）
             "# HELP lobsterpulse_provider_events_total",
             "# TYPE lobsterpulse_provider_events_total counter",
+            // K17 新增：per-provider × per-event-type 細顆度 counter
+            "# HELP lobsterpulse_provider_event_type_total",
+            "# TYPE lobsterpulse_provider_event_type_total counter",
         ];
         for h in required_headers {
             assert!(
@@ -4118,5 +4211,152 @@ mod render_prometheus_tests {
             body_5xx.contains("lobsterpulse_discord_health 2\n"),
             "Server5xx → gauge 2, body: {body_5xx}"
         );
+    }
+
+    // ===== K17 落地：per-provider × per-event-type counter 測試群 =====
+    //
+    // 對齊 K13 lifetime aggregate 語意 + K6/K7/K9 既有 pattern：
+    // 4 個測試覆蓋關鍵契約（empty / 單 type / 多 type 排序 / lifetime 保留）,
+    // 任何後續 fixture 改動若打破 K17 契約會在這層炸出來。
+
+    #[test]
+    fn event_type_total_empty_state_emits_header_only() {
+        // 跟 K13 / K9 / K6 等既有「空 state → 沒 sample line」契約一致。
+        // render 端 for-loop 在空 event_type_counts 自然不產出 sample,
+        // 但 HELP/TYPE 標頭仍輸出（對齊 K13 既有測試）。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains("# HELP lobsterpulse_provider_event_type_total"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_event_type_total counter"));
+        // 空 map → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_event_type_total{"));
+    }
+
+    #[test]
+    fn event_type_total_single_type_emits_one_sample_per_provider() {
+        // K17 主軸 1:單 event type → 一條 sample line 帶 (provider, type) 兩 label。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![totals_with_event_type_counts(
+                "claude",
+                &[("UserPromptSubmit", 3)],
+            )]),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains(
+            "lobsterpulse_provider_event_type_total{provider=\"claude\",type=\"UserPromptSubmit\"} 3\n"
+        ));
+    }
+
+    #[test]
+    fn event_type_total_multiple_types_sorted_by_provider_then_type() {
+        // K17 主軸 2:多 provider × 多 type → 兩段排序（先 provider 後 type）
+        // 跟既有 K6-K13 排序契約一致,確保 Prometheus scrape byte-deterministic。
+        // 故意用「非字母序」輸入:openx 先於 cicx,Stop 先於 UserPromptSubmit。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_event_type_counts("openx", &[("UserPromptSubmit", 5), ("Stop", 2)]),
+                totals_with_event_type_counts(
+                    "cicx",
+                    &[("PostToolUseFailure", 1), ("UserPromptSubmit", 4)],
+                ),
+            ]),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // cicx 系列（PostToolUseFailure < UserPromptSubmit alphabetical）
+        assert!(body.contains(
+            "lobsterpulse_provider_event_type_total{provider=\"cicx\",type=\"PostToolUseFailure\"} 1\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_event_type_total{provider=\"cicx\",type=\"UserPromptSubmit\"} 4\n"
+        ));
+        // openx 系列
+        assert!(body.contains(
+            "lobsterpulse_provider_event_type_total{provider=\"openx\",type=\"Stop\"} 2\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_event_type_total{provider=\"openx\",type=\"UserPromptSubmit\"} 5\n"
+        ));
+
+        // 排序驗證:cicx < openx（provider 主排序）
+        let cicx_pp_idx = body
+            .find(
+                "lobsterpulse_provider_event_type_total{provider=\"cicx\",type=\"PostToolUseFailure\"} 1\n",
+            )
+            .expect("cicx PostToolUseFailure line");
+        let openx_stop_idx = body
+            .find("lobsterpulse_provider_event_type_total{provider=\"openx\",type=\"Stop\"} 2\n")
+            .expect("openx Stop line");
+        assert!(
+            cicx_pp_idx < openx_stop_idx,
+            "provider 主排序必須 alphabetical (cicx < openx)"
+        );
+
+        // 同 provider 內 type 副排序:PostToolUseFailure < UserPromptSubmit
+        let cicx_pp_idx2 = body
+            .find(
+                "lobsterpulse_provider_event_type_total{provider=\"cicx\",type=\"PostToolUseFailure\"} 1\n",
+            )
+            .expect("cicx PostToolUseFailure line 2");
+        let cicx_up_idx = body
+            .find(
+                "lobsterpulse_provider_event_type_total{provider=\"cicx\",type=\"UserPromptSubmit\"} 4\n",
+            )
+            .expect("cicx UserPromptSubmit line");
+        assert!(
+            cicx_pp_idx2 < cicx_up_idx,
+            "同 provider 內 type 副排序必須 alphabetical (PostToolUseFailure < UserPromptSubmit)"
+        );
+    }
+
+    #[test]
+    fn event_type_total_uses_lifetime_aggregate_not_live_sessions() {
+        // K17 lifetime-vs-live 契約:跟 K6/K7/K9/K13 對齊 —— 就算 0 個 live
+        // session,ProviderTotals.event_type_counts 仍保留 → metric 正確反映
+        // lifetime（session 結束 + 30 min stale 回收後不蒸發）。
+        // 給 0 session 但 provider_totals 有 type 累計 → 仍要產出 sample。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![totals_with_event_type_counts(
+                "claude",
+                &[("UserPromptSubmit", 100), ("Stop", 99)],
+            )]),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // 0 live session,但 lifetime event_type_counts 仍有值 → sample 仍輸出
+        assert!(body.contains(
+            "lobsterpulse_provider_event_type_total{provider=\"claude\",type=\"UserPromptSubmit\"} 100\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_event_type_total{provider=\"claude\",type=\"Stop\"} 99\n"
+        ));
     }
 }

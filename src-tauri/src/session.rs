@@ -326,6 +326,14 @@ pub struct ProviderTotals {
     /// `rate(events_total[5m])` = 每分鐘 ingest 吞吐量，補 K7 failure / K9 session 沒覆蓋的
     /// 「整體事件流量」信號（純 counter，lifetime aggregate 不蒸發）。
     pub events_total: u64,
+    /// K17 落地：累計收到的 event 數按 event type 切開（`hook_event_name` → count）。
+    /// 補 K13 缺 type 維度的盲點 —— operator 端可算
+    /// `rate(...{type="Stop"}[5m]) - rate(...{type="UserPromptSubmit"}[5m])` 偵測
+    /// 「某 provider Stop 一直來但沒 UserPromptSubmit」= runner 卡住的 SLO 信號。
+    /// 用 `BTreeMap` 而非 `HashMap`：render 端要按 (provider, type) 排序輸出
+    /// Prometheus 文字格式、確定性比隨機好，且已知 type 數量 ≤ ~10、sort 成本可忽略。
+    /// 空 `hook_event_name` 不入 map（避免 `"":0` 這種語意空污 noise 流入 metric）。
+    pub event_type_counts: std::collections::BTreeMap<String, u64>,
     /// 累計起始時間（第一次 event 進來）——給 UI 顯示「自何時累計」
     pub since: Option<DateTime<Utc>>,
     /// 最近一次 event 時間戳（任何 event 都會更新，不只在 TokenUpdate / Failure）——
@@ -366,6 +374,19 @@ impl SessionManager {
         // counter —— `rate(events_total[5m])` = 該 provider 事件 throughput。
         // lifetime aggregate 對齊 K6/K7/K9：session 結束 + 30 min stale 回收後仍保留。
         entry.events_total = entry.events_total.saturating_add(1);
+        // K17 落地：對非空 `hook_event_name` 累加 type 維度計數。
+        // 空字串防呆：`RawHookEvent::normalize` 在所有 alias field 都缺失時
+        // 會回 `""`（見 hook_event.rs:62 `unwrap_or_default()`）—— 這種
+        // 「未識別 schema」事件不該被算進任何具名 type bucket,寧可漏計也不
+        // 讓 `lobsterpulse_provider_event_type_total{type=""}` 污染 metric 視圖。
+        // 對齊 K13 lifetime aggregate 語意：session 結束 + 30 min stale 回收後
+        // `ProviderTotals` 仍保留 → Prometheus 端不會誤判 counter 倒退。
+        if !event.hook_event_name.is_empty() {
+            *entry
+                .event_type_counts
+                .entry(event.hook_event_name.clone())
+                .or_insert(0) += 1;
+        }
         match event.hook_event_name.as_str() {
             "PostToolUseFailure" => entry.failure_count += 1,
             "TokenUpdate" => {

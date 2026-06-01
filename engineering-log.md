@@ -529,3 +529,55 @@
 **結果**: PASS（M0 silent error surfacing + cargo fmt 0 diff + cargo clippy --lib -- -D warnings 0 error + cargo test --lib 166 passed（+4 R30, 0 regression）+ commit `3ed5e36`）
 
 **KPI-impact: silent_fail_sites_observable +2 paths（`!lp quota` read+parse 兩條 silent chain → `load_local_usage_snapshot_at` 三條分流 + 結構化 log warn，operator 排查「usage-local.json 為什麼顯示無 runner」從「找線索」降到「grep `[auto_rules] !lp quota: usage-local.json load failed` 一行 prefix」+ 看完整 IO/parse 錯誤）**
+
+### [2026-06-02] R32 — `load_history` silent chain surfaced（2 caller 改 match warn + `load_history_at` 純 fn + 4 tests）
+
+**類型**: M0（silent fail surfacing，持續 M0 收尾系列 R6-R31）
+**KPI**: silent_fail_sites_observable 累計 +2 paths（R32 加 2 sites: `get_quota_history` Dashboard + `token_spike` rule）
+
+**KPI 進展表**:
+| KPI | 前值 (R31) | 後值 (R32) | 變化 |
+|---|---:|---:|---:|
+| `load_history` silent chains | 2 (`unwrap_or_default` + `if let Ok`) | 0 | -2 |
+| Lib 總 unit tests | 166 (R30) | 170 (R32: +4) | +4 |
+| Log prefix 新增 | — | `[lib::get_quota_history] quota-history.csv load failed` + `[auto_rules] token_spike rule skipped: quota-history.csv load failed` | +2 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8% | 持平 |
+
+**為什麼**: 對齊 mission「觀察 / 監控桌面 AI 工具」的可觀察性 — 跟 R28/R29/R30/R31 同一條 silent-fail surfacing 主題線收尾 quota-history.csv 鏈。Dashboard 拿空 HashMap 渲染空白 sparkline + alert 規則被 silent bypass,operator 排查要猜「是 history 沒有 / 損壞 / IO 鎖住」三種根因中的哪條。修後 caller 端顯式分流 + 結構化 log warn 帶 IO/parse 錯誤內容。
+
+**搜尋**: 沿用 R28 `load_config_at` / R29 `parse_quota_history_row` / R30 `load_local_usage_snapshot_at` 既有 pattern — `Result<HashMap, String>` + NotFound 靜默 / 其他 IO 錯 Err / parse 錯由既有 `parse_quota_history_row` log warn + skip。沒新搜。
+
+**做了什麼**:
+- `quota_history.rs:102` 抽 `load_history_at(path: &Path) -> Result<HashMap<...>, String>` pub fn 純 fn
+  - 三條分流對齊 R28 contract:NotFound → `Ok(empty)`（first-run 預期,不算 silent-fail）/ IO 錯 → `Err(String)` / 壞 CSV row → `parse_quota_history_row` 內部 log warn + skip,整檔仍 `Ok`
+  - `if !path.exists() { return Ok(empty) }` 短路:NotFound 不算 silent-fail 對齊 R28 NotFound 契約,但**會**讓 NUL path 走 NotFound（Windows 平台問題,看下面 test 設計）
+- 公開 `load_history()` 變薄殼:lock + path 解析 + 呼叫 `load_history_at`
+- `lib.rs:1513` `get_quota_history` 從 `unwrap_or_default()` 改 match Err + 結構化 log::warn! 帶 caller context「Dashboard 將以空 history 渲染（sparkline 全空）」
+- `auto_rules.rs:906` `tick_inner` token_spike 規則從 `if let Ok(hist)` 改 match Err + log::warn! + return
+  - 關鍵:Err 時 `return`（不繼續往下走假裝有 history）,對齊「壞 history 不該讓 alert 假綠」語意
+- 4 個新 unit test 鎖契約（位於既有 `parse_quota_history_row` 測試群同 pattern,獨立 `tmp_csv(tag)` 製造 nanos 後綴避免 parallel test 互踩）:
+  1. `load_history_at_not_found_returns_ok_empty` — NotFound 靜默契約
+  2. `load_history_at_valid_csv_parses_rows` — happy path round-trip,**用 dynamic `now() - N` ts**（KEEP_DAYS=30 切窗內）避免寫死 2023 年被 cutoff 過濾
+  3. `load_history_at_empty_file_returns_ok_empty` — 0-byte 殘留（disk full / 寫入中斷）→ `Ok(empty)`
+  4. `load_history_at_io_error_returns_err` — **用 `std::env::temp_dir()`（目錄 path）觸發 read_to_string IO 錯**,比 R30 的 NUL path 更可靠:NUL path 在 Windows 會被 `path.exists()` 視為 false 走 NotFound 短路（修前 `corrupt_csv_returns_err` test 用 NUL path 失敗的根因）,目錄 path 才能確定觸發 read 階段 IO 錯
+
+**為什麼 R32 改 IO 錯 test 從 NUL path 改 temp_dir**:working tree 留下的 R32 程式碼原本 NUL path test 在 Windows fail（`path.exists()` 對 NUL path 回 false → 走 NotFound → `Ok(empty)` → 斷言 `is_err()` 失敗）。改用 temp_dir() 目錄 path 後 `path.exists()` 回 true → 走到 `read_to_string` → read 目錄在 Unix/Windows 都 Err → 觸發 Err 路徑,跨平台穩定。
+
+**為什麼 R32 不做 R28 的 `if !path.exists()` 短路移除**:
+- R28 `load_config_at` 也有這個短路（NotFound 靜默契約）
+- 兩個 `_at` helper 統一契約,未來 caller 端可以信賴「NotFound 一定 Ok,IO 錯一定 Err」二元語意
+- 把短路移掉會讓「first-run 沒 history.csv」誤觸 silent-fail warn 路徑,operator 端會被「剛裝好就 warn」noise 淹沒,降低 silent-fail warn 本身的信號強度
+
+**驗證**:
+- `cargo fmt --check` 0 diff
+- `cargo clippy --lib -- -D warnings` 0 error
+- `cargo test --lib` **170 passed**（166 既有 + 4 R32 新增,0 regression）+ commit `afb99b2`
+
+**不做的範圍**（給後續輪次）:
+- `load_history_at` 也回 `Result<HashMap, LoadError>` 帶 NotFound/IO/Parse 三態 enum,讓 caller 端 `get_quota_history` 跟 `token_spike` 各自選 warn 策略:目前契約單純（只有 Ok/Err + Err 內含 reason string）已足夠,需求未浮現不動
+- `quota_history` snapshot_once 寫入失敗已有 R12 `write_csv_row failed` log warn 覆蓋（見 R12 entry）,本輪不重複
+- engineering-log.md 531 行接近 500 cap → R33+ H0 候選 rotate（本輪 M0 順,禁 H0）
+
+**結果**: PASS（M0 silent error surfacing 收尾 quota-history 鏈 + 2 caller 改 match warn + 0 lint warning + 0 regression + commit `afb99b2`）
+
+**KPI-impact: silent_fail_sites_observable +2 paths（`get_quota_history` Dashboard 空白 sparkline + `token_spike` rule silent bypass 兩條 silent chain → `load_history_at` 三條分流 + 兩條 caller 結構化 log warn,operator 排查「quota-history.csv 為什麼圖空 / alert 沒觸發」從「猜三種根因」降到「grep 一行 prefix」+ 看完整 IO/parse 錯誤）**

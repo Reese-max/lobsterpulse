@@ -964,8 +964,61 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 **KPI-impact: K11-quota-snapshot-observability 6 provider 監控點落地；unit test 80 → 91 (+11)**
 
 **不做的範圍**（給後續輪次）:
-- K10 since_timestamp 接到 Discord Bot 通知（idle 比例 > 80% 觸發「該 provider 半年沒新事件」提醒）：R22/R23 兩輪都列為下輪 M1 候選沒動，可能 R24 該做了
+- K10 since_timestamp 接到 Discord Bot 通知（idle 比例 > 80% 觸發「該 provider 半年沒新事件」提醒）：R22/R23 兩輪都列為下輪 M1 候選沒動，本輪 K12 idle_ratio 上線後可直接餵 `> 0.8` alert
 - 把 K11 age gauge 接到 Discord Bot：同樣列下輪 M1 候選
 - K10 / K11 → 額外 derive metric（uptime / data-freshness 混合 score）：scope 大，需另開 M1 輪
 - 全 codebase sweep 剩餘 33 條 silent fail sites（`openab_bridge::tail_new_events` 6 條 `Ok(_) => ... else { return vec![]; }` + 其他 system-initiated 點）：R22 末已列、scope 仍大
 - 把 K6-K11 整合成 single `MetricsSnapshot` struct 餵前端：範圍跨前後端，本輪 M1 surgical 不動
+
+---
+
+### [2026-06-01] Round 24 — K12 per-provider idle_ratio gauge 落地 + 15 unit tests
+**類型**: M1（operator 端 metrics 擴展：K12 idle_ratio gauge，K8/K10 派生，0..1 統一健康度信號）
+**KPI**: K12-idle-ratio-observability（落地：15 個 unit test 全綠，0 false positive / 0 false negative）
+
+**為什麼**: K8 絕對秒數容易被 provider age 短誤觸（剛上線 5 min 的 provider 收個 60s 沒 event 就 0.5，沒意義），K10 絕對時間（unix seconds）不會主動告訴 operator 怎麼判斷；K12 ratio 0=fresh / 1=never seen 是 0..1 統一閾值，alert rule `> 0.8` 一行就懂，且跨 provider 公平比較。純組合 K8 + K10、無新 fs / event 收集點 = 0 增加 cost 換一條新信號。
+
+**搜尋**: 無（K8 idle_seconds / K10 since_timestamp 都已落地 + tests 完整，組合新 metric 是 trivial 推導；無需 WebSearch）。
+
+**做了什麼**:
+- `compute_provider_idle_ratio(now, last_event_at, since) -> Option<f64>` pure fn：
+  - 任一 `None` → `None`（對齊 K8/K10 跳過策略：缺失值不該被當 0）
+  - `lifetime ≤ 0`（`since == now` / 時鐘回撥）→ `None`（避免 NaN 誤判）
+  - `idle > lifetime`（純函式防呆，理論不會發生）→ clamp 1.0
+  - `idle < 0`（時鐘序列化時差）→ saturate 0
+  - `idle = 0`（剛剛在動）→ 0.0 = 100% 健康，不丟這條信號
+- `render_prometheus_body` 新增 `lobsterpulse_provider_idle_ratio` gauge，4-decimal 固定 precision（避免 IEEE 754 尾數雜訊導致 Prometheus diff 不穩）
+- 15 個 unit test 涵蓋 pure fn 7 條 + end-to-end 8 條（含 alphabetical 排序 / 4-decimal 格式 / lifetime-vs-live regression guard / 與 K8+K10 跳過策略一致性）
+- 修 1 個 fixture 數值錯誤：`idle_ratio_emits_fractional_value_with_four_decimals` openx 原本 `last_event_at=now-1s / since=now-30s` → ratio=0.0333 跟 comment 寫的 29/30≈0.9667 矛盾，改 `last_event_at=now-29s` 對齊 `idle 29s / lifetime 30s` 意圖
+- 修 1 個 rustfmt diff（pure fn 鏈結斷行）：原 commit 沒跑 `cargo fmt`、留下 fmt diff 1 處，本輪順手補
+
+**驗證**:
+- `cargo test --lib` → 106 passed; 0 failed（baseline 91 → +15）
+- `cargo fmt --check` → clean
+- `cargo clippy --lib --tests -- -D warnings` → clean
+- 修 fixture 後 K12 test `idle_ratio_emits_fractional_value_with_four_decimals` 從 panic 變 ok，0 false positive
+- Prometheus 輸出 sample（manual 構造）：
+  ```
+  # HELP lobsterpulse_provider_idle_ratio Fraction of provider lifetime spent idle (0=fresh, 1=never seen activity); composite of K8 idle_seconds / K10 lifetime_seconds
+  # TYPE lobsterpulse_provider_idle_ratio gauge
+  lobsterpulse_provider_idle_ratio{provider="cicx"} 0.5000
+  lobsterpulse_provider_idle_ratio{provider="gemini"} 0.5000
+  lobsterpulse_provider_idle_ratio{provider="openx"} 0.9667
+  ```
+- commit `06d4ccf`：1 file +419 / -0
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K12 idle ratio metric | 0/0 (無) | 15/15 tests | +15 |
+| Lib unit tests | 91 | 106 | +15 |
+| Prometheus metrics gauge 數 | 5 (K6/K7/K8/K10/K11) | 6 (含 K12) | +1 |
+| 跨 gauge 派生 metric | 0 | 1 (K8+K10→K12) | +1 |
+
+**結果**: PASS
+
+**不做的範圍**（給後續輪次）:
+- K12 idle_ratio 接到 Discord Bot alert（`> 0.8` 觸發「該 provider lifetime 80% 在 idle」提醒）：本輪 M1 surgical 沒做，K12 signal 已就緒、下輪可一鍵接
+- K10 since_timestamp 接到 Discord Bot 通知（同 R22/R23 候選沒動）
+- K6-K11 + K12 → 整合成 single `MetricsSnapshot` struct 餵前端：範圍跨前後端、需另開 M1 輪
+- 全 codebase sweep 剩餘 silent fail sites（`openab_bridge::tail_new_events` 等 33 條）：M0 surgical、可分多輪推進

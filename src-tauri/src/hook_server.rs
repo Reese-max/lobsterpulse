@@ -18,9 +18,7 @@ impl HookServer {
         self.port
     }
 
-    pub async fn start(
-        &mut self,
-    ) -> Result<mpsc::UnboundedReceiver<HookEvent>, ServerError> {
+    pub async fn start(&mut self) -> Result<mpsc::UnboundedReceiver<HookEvent>, ServerError> {
         if let Some(existing_port) = read_existing_port_file() {
             if is_port_listening(existing_port).await {
                 return Err(ServerError::AnotherInstanceRunning(existing_port));
@@ -68,11 +66,8 @@ async fn handle_client(
     tx: Arc<mpsc::UnboundedSender<HookEvent>>,
 ) {
     let mut buf = vec![0u8; 65536];
-    let n = match tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        stream.read(&mut buf),
-    )
-    .await
+    let n = match tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut buf))
+        .await
     {
         Ok(Ok(n)) if n > 0 => n,
         _ => return,
@@ -100,9 +95,7 @@ async fn handle_client(
                 let _ = tx.send(event);
                 "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
             }
-            Err(_) => {
-                "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            }
+            Err(_) => "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         }
     } else {
         "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -113,7 +106,8 @@ async fn handle_client(
 
 /// Parse provider from HTTP request line: "POST /hook/claude HTTP/1.1"
 fn parse_provider(data: &[u8]) -> String {
-    let request_line = data.split(|&b| b == b'\r' || b == b'\n')
+    let request_line = data
+        .split(|&b| b == b'\r' || b == b'\n')
         .next()
         .unwrap_or(b"");
     let line = String::from_utf8_lossy(request_line);
@@ -121,13 +115,18 @@ fn parse_provider(data: &[u8]) -> String {
     // Extract path from "POST /hook/provider HTTP/1.1"
     if let Some(path_start) = line.find("/hook/") {
         let after = &line[path_start + 6..];
-        if let Some(end) = after.find(|c: char| c == ' ' || c == '/' || c == '?') {
-            return after[..end].to_string();
+        let raw = if let Some(end) = after.find([' ', '/', '?']) {
+            after[..end].to_string()
+        } else if let Some(end) = after.find(' ') {
+            after[..end].to_string()
+        } else {
+            return "claude".to_string();
+        };
+        // OpenAB BackendType::Other 回 "bot"（= OpenCode/OPENX）legacy alias
+        if raw == "bot" {
+            return "openx".to_string();
         }
-        // No space found, take rest (shouldn't happen with valid HTTP)
-        if let Some(end) = after.find(' ') {
-            return after[..end].to_string();
-        }
+        return raw;
     }
 
     // Fallback: /hook without provider = claude (backward compat)
@@ -154,13 +153,71 @@ fn normalize_event_name(event: &mut HookEvent) {
         "userPromptSubmitted" => "UserPromptSubmit",
         "agentStop" | "subagentStop" => "Stop",
         "errorOccurred" => "Notification",
+        // snake_case aliases
+        "session_start" => "SessionStart",
+        "session_end" => "SessionEnd",
+        "pre_tool_use" => "PreToolUse",
+        "post_tool_use" => "PostToolUse",
+        "user_prompt_submit" => "UserPromptSubmit",
+        "permission_request" => "PermissionRequest",
+        "post_tool_use_failure" => "PostToolUseFailure",
+        // OpenAB push 的細粒度事件（alias 到標準名）
+        "thinking_delta" | "agent_thought_chunk" => "ThinkingDelta",
+        "token_update" | "usage_update" => "TokenUpdate",
+        "tool_call" => "PreToolUse",
+        "tool_call_done" | "tool_call_update" => "PostToolUse",
         // Already standard names (Claude + Codex use PascalCase)
-        "SessionStart" | "SessionEnd" | "PreToolUse" | "PostToolUse" |
-        "UserPromptSubmit" | "Stop" | "PermissionRequest" |
-        "PostToolUseFailure" | "Notification" => event.hook_event_name.as_str(),
+        "SessionStart" | "SessionEnd" | "PreToolUse" | "PostToolUse" | "UserPromptSubmit"
+        | "Stop" | "PermissionRequest" | "PostToolUseFailure" | "Notification"
+        | "ThinkingDelta" | "TokenUpdate" => event.hook_event_name.as_str(),
         other => other,
     };
     event.hook_event_name = normalized.to_string();
+
+    // 某些來源只在 payload.status 標示 failed，事件名仍是 PostToolUse。
+    // 為了和統計/告警規則一致，統一提升為 PostToolUseFailure。
+    if event.hook_event_name == "PostToolUse"
+        && matches!(event.tool_status.as_deref(), Some("failed"))
+    {
+        event.hook_event_name = "PostToolUseFailure".to_string();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_event_name;
+    use crate::hook_event::HookEvent;
+
+    fn make_event(name: &str, status: Option<&str>) -> HookEvent {
+        HookEvent {
+            provider: "openx".to_string(),
+            session_id: "s1".to_string(),
+            hook_event_name: name.to_string(),
+            cwd: None,
+            tool_name: Some("shell".to_string()),
+            notification_type: None,
+            prompt: None,
+            tool_call_id: Some("c1".to_string()),
+            tool_status: status.map(|s| s.to_string()),
+            tokens_input: None,
+            tokens_output: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn normalize_snake_case_events() {
+        let mut e = make_event("pre_tool_use", None);
+        normalize_event_name(&mut e);
+        assert_eq!(e.hook_event_name, "PreToolUse");
+    }
+
+    #[test]
+    fn normalize_failed_status_to_post_tool_use_failure() {
+        let mut e = make_event("tool_call_update", Some("failed"));
+        normalize_event_name(&mut e);
+        assert_eq!(e.hook_event_name, "PostToolUseFailure");
+    }
 }
 
 fn find_body_start(data: &[u8]) -> Option<usize> {
@@ -178,15 +235,14 @@ fn read_existing_port_file() -> Option<u16> {
 }
 
 async fn is_port_listening(port: u16) -> bool {
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")),
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")),
+        )
+        .await,
+        Ok(Ok(_))
     )
-    .await
-    {
-        Ok(Ok(_)) => true,
-        _ => false,
-    }
 }
 
 fn write_port_file(port: u16) {

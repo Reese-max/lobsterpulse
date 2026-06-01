@@ -1,0 +1,410 @@
+/* =============================================================
+   lp-patch-v3.css — LobsterPulse visual upgrade Phase 3
+   Target: align LP chrome with Claude Design mockup layout
+   Append after lp-patch-v2.css. Scope: [data-theme="light"]
+   Source: lp-tauri-redesign-v1.html (2026-04-18)
+   ============================================================= */
+
+/* -------- 內部 solid bg 防 transparent window 穿透桌面 -------- */
+/* 只有 `.capsule` / `#view-expanded` 這些 rounded container 才該有 bg；
+   html/body 本體保持 transparent 讓 rounded 外部真透（露桌面=正常圓角效果） */
+[data-theme="light"] .capsule{
+  background: #faf9f5 !important;
+}
+[data-theme="light"] #view-expanded{
+  background: #faf9f5 !important;
+}
+[data-theme="light"] #view-settings,
+[data-theme="light"] #view-dashboard,
+[data-theme="light"] #view-events-log{
+  background: #faf9f5 !important;
+}
+
+/* -------- 0. local tokens (mockup compatibility) -------- */
+[data-theme="light"]{
+  --accent-soft-2: #fde7dd;
+  --accent-ink: #8a3f23;
+  --mute-2: #8a8680;
+  --hair-soft: rgba(26,26,23,0.06);
+  --ok: #4ea677;
+  --ok-soft: rgba(78,166,119,0.20);
+  --radius-lg: 22px;
+}
+
+/* =============================================================
+   1. Capsule brand — 升級為 rounded badge square 包 white star
+   （覆蓋 v2 的 22px 純 SVG 版本 → mockup 34x34 gradient box）
+   ============================================================= */
+[data-theme="light"] #capsule::before{
+  content: "";
+  flex-shrink: 0;
+  width: 26px; height: 26px;
+  margin-right: 4px;
+  border-radius: 9px;
+  background:
+    linear-gradient(160deg, #f0906d 0%, #d97757 55%, #b85a3d 100%),
+    #d97757;
+  background-size: 22px 22px, cover;
+  background-repeat: no-repeat, no-repeat;
+  background-position: -999px -999px, center; /* hide v2 big SVG */
+  box-shadow:
+    0 2px 6px rgba(217,119,87,0.35),
+    inset 0 1px 0 rgba(255,255,255,0.45);
+  /* 用 mask 畫 white star overlay */
+  position: relative;
+  transition: filter .25s ease, transform .35s cubic-bezier(.2,.7,.25,1);
+}
+[data-theme="light"] #capsule{
+  position: relative;
+}
+/* white star via separate inline SVG injected by ::after-chain (保留 ::before 當底) */
+[data-theme="light"] #capsule > #capsule-icons{
+  position: relative;
+}
+/* mockup cap-meta proj 升級 */
+[data-theme="light"] #capsule-project{
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+/* mockup capsule 整體 padding 重整 */
+[data-theme="light"] #capsule{
+  gap: 7px;
+}
+
+/* =============================================================
+   2. Pulse dot — 綠色脈動 on #capsule-status 有 "執行中" 時
+   ============================================================= */
+/* Pulse dot — 保證即使 capsule-status 空字串也顯示 */
+[data-theme="light"] #capsule-status{
+  position: relative;
+  padding-left: 14px;
+  min-width: 14px;
+  min-height: 12px;
+  color: var(--ok) !important;
+  font-size: 11px;
+  font-weight: 500;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+[data-theme="light"] #capsule-status::before{
+  content: "";
+  position: absolute;
+  left: 1px; top: 50%;
+  width: 8px; height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow:
+    0 0 0 3px var(--ok-soft),
+    0 0 6px rgba(78,166,119,0.5);
+  z-index: 2;
+}
+[data-theme="light"] #capsule-status::after{
+  content: "";
+  position: absolute;
+  left: -2px; top: 50%;
+  width: 14px; height: 14px;
+  margin-top: -7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--ok);
+  opacity: 0.55;
+  pointer-events: none;
+  animation: lp-pulse 1.8s ease-out infinite;
+  z-index: 1;
+}
+/* waiting_for_user / stale: dot 變色 */
+[data-theme="light"] #capsule-status.waiting_for_user::before{
+  background: #e8b94a;
+  box-shadow: 0 0 0 3px rgba(232,185,74,0.25), 0 0 6px rgba(232,185,74,0.5);
+}
+[data-theme="light"] #capsule-status.waiting_for_user::after{
+  border-color: #e8b94a;
+}
+[data-theme="light"] #capsule-status.stale::before,
+[data-theme="light"] #capsule-status.idle::before{
+  background: #8a8680;
+  box-shadow: 0 0 0 3px rgba(138,134,128,0.20);
+}
+[data-theme="light"] #capsule-status.stale::after,
+[data-theme="light"] #capsule-status.idle::after{
+  animation: none; /* idle/stale 不要 pulse */
+  opacity: 0;
+}
+@keyframes lp-pulse{
+  0%   { transform: scale(0.8); opacity: 0.55; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+
+/* ============================================================= */
+/* 10. Hero 頂條 — #view-expanded 前加裝 branding header          */
+/* ============================================================= */
+[data-theme="light"] #view-expanded::before{
+  content: "LobsterPulse";
+  display: block;
+  padding: 8px 4px 6px;
+  margin-bottom: 6px;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-style: italic;
+  font-weight: 600;
+  font-size: 14px;
+  color: #1a1a17;
+  letter-spacing: -0.01em;
+  border-bottom: 1px solid rgba(217,119,87,0.15);
+  text-align: left;
+}
+
+/* ============================================================= */
+/* 11. Settings hero — #view-settings 頂條                        */
+/* ============================================================= */
+[data-theme="light"] #view-settings .settings-header{
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(26,26,23,0.06);
+  margin-bottom: 10px;
+}
+[data-theme="light"] #view-settings::before{
+  content: "⚙  設定";
+  display: block;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-style: italic;
+  font-weight: 500;
+  font-size: 15px;
+  color: #1a1a17;
+  padding: 4px 0 8px;
+  letter-spacing: -0.01em;
+}
+
+/* =============================================================
+   3. Cap chip — capsule-quota 套 coral accent-soft badge
+   ============================================================= */
+[data-theme="light"] #capsule-quota{
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 11px;
+  background: var(--accent-soft-2);
+  padding: 3px 7px;
+  border-radius: 8px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+[data-theme="light"] #capsule-time{
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: #5a564f;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* =============================================================
+   4. Eyebrow — section titles (.quota-bar-header, .dashboard-section-title)
+   mockup 大寫小字 mono + coral dot + rule line
+   ============================================================= */
+[data-theme="light"] #quota-bar-header,
+[data-theme="light"] .dashboard-section-title,
+[data-theme="light"] .quota-bar-header{
+  display: flex !important;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 2px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #6b6862;
+  cursor: pointer;
+  user-select: none;
+}
+[data-theme="light"] #quota-bar-header::before,
+[data-theme="light"] .dashboard-section-title::before,
+[data-theme="light"] .quota-bar-header::before{
+  content: "";
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #d97757;
+  box-shadow: 0 0 0 2px rgba(217,119,87,0.22);
+  flex-shrink: 0;
+}
+[data-theme="light"] #quota-bar-header::after,
+[data-theme="light"] .dashboard-section-title::after,
+[data-theme="light"] .quota-bar-header::after{
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(26,26,23,0.06);
+  margin: 0 2px;
+}
+/* hide default caret if any */
+[data-theme="light"] #quota-bar-header .section-caret,
+[data-theme="light"] .dashboard-section-title .section-caret,
+[data-theme="light"] .quota-bar-header .section-caret{
+  display: none;
+}
+
+/* =============================================================
+   5. Sessions list — 升級 mockup grid card 風格
+   ============================================================= */
+[data-theme="light"] #session-list > *,
+[data-theme="light"] .session-item,
+[data-theme="light"] .session-card{
+  background: rgba(255,255,255,0.72);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  backdrop-filter: blur(12px) saturate(180%);
+  border: 1px solid rgba(255,255,255,0.4);
+  border-radius: 12px;
+  padding: 8px 11px;
+  margin-bottom: 4px;
+  box-shadow:
+    0 2px 10px rgba(26,26,23,0.04),
+    inset 0 1px 0 rgba(255,255,255,0.6);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+[data-theme="light"] #session-list > *:hover{
+  transform: translateY(-1px);
+  box-shadow:
+    0 6px 18px rgba(26,26,23,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.7);
+}
+
+/* =============================================================
+   6. Quota grid spacing & alignment — 補齊
+   ============================================================= */
+[data-theme="light"] #quota-bar{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px;
+}
+[data-theme="light"] .quota-row-global{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+[data-theme="light"] .quota-section-title{
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8a8680;
+  padding: 2px 4px 4px;
+}
+
+/* =============================================================
+   7. Panel container (view-expanded) — mockup 圓角大容器
+   ============================================================= */
+[data-theme="light"] #view-expanded{
+  border-radius: 22px;
+  background: rgba(255,253,248,0.85);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow:
+    0 16px 40px rgba(26,26,23,0.1),
+    0 2px 4px rgba(26,26,23,0.04),
+    inset 0 1px 0 rgba(255,255,255,0.6);
+  padding: 10px 10px 4px;
+  margin-top: 6px;
+}
+
+/* =============================================================
+   8. Settings view — glass hero + eyebrow labels
+   ============================================================= */
+[data-theme="light"] #view-settings{
+  background: rgba(255,253,248,0.88);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 22px;
+  padding: 12px;
+  box-shadow:
+    0 16px 40px rgba(26,26,23,0.1),
+    inset 0 1px 0 rgba(255,255,255,0.6);
+}
+[data-theme="light"] .settings-tab{
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #6b6862;
+  padding: 6px 10px;
+  border-radius: 10px;
+  transition: background .15s ease, color .15s ease;
+}
+[data-theme="light"] .settings-tab.active{
+  background: var(--accent-soft-2);
+  color: var(--accent-ink);
+}
+
+/* =============================================================
+   8.5 Settings body — 強制可捲動（tab 內容太長時不卡死）
+   ============================================================= */
+.settings-body{
+  max-height: calc(100vh - 90px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(217,119,87,0.35) transparent;
+  padding-right: 8px !important;
+}
+.settings-body::-webkit-scrollbar{ width: 6px; }
+.settings-body::-webkit-scrollbar-track{ background: transparent; }
+.settings-body::-webkit-scrollbar-thumb{
+  background: rgba(217,119,87,0.35);
+  border-radius: 3px;
+}
+.settings-body::-webkit-scrollbar-thumb:hover{ background: rgba(217,119,87,0.55); }
+
+/* =============================================================
+   8.9 Multi-provider capsule tab — #10
+   capsule-icons 每個 provider slot 可點擊切換 active；active 的加 coral underline
+   ============================================================= */
+#capsule-icons .provider-icon-slot{
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 3px;
+  margin: 0 1px;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity .18s ease, background .18s ease, transform .15s ease;
+  position: relative;
+}
+#capsule-icons .provider-icon-slot:hover{
+  opacity: 0.85;
+  background: rgba(217,119,87,0.08);
+}
+#capsule-icons .provider-icon-slot.active{
+  opacity: 1;
+  background: rgba(217,119,87,0.10);
+}
+#capsule-icons .provider-icon-slot.active::after{
+  content: "";
+  position: absolute;
+  left: 20%; right: 20%;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: #d97757;
+  box-shadow: 0 0 4px rgba(217,119,87,0.6);
+}
+
+/* =============================================================
+   9. Action bar icon buttons — mockup 圓角統一
+   ============================================================= */
+[data-theme="light"] .action-bar .icon-btn{
+  border-radius: 10px;
+  width: 30px; height: 30px;
+  color: #6b6862;
+  transition: background .15s ease, color .15s ease, transform .15s ease;
+}
+[data-theme="light"] .action-bar .icon-btn:hover{
+  background: rgba(217,119,87,0.12);
+  color: #d97757;
+  transform: translateY(-1px);
+}

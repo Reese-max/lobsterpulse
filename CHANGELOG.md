@@ -1,111 +1,44 @@
 # Changelog
 
-All notable changes land here. Each tagged release on
-[GitHub Releases](https://github.com/yazelin/AgentPulse/releases) pulls its
-description from the matching `## [vX.Y.Z]` section via `release.yml`.
+## v0.5.4 · 2026-04-17 — 完整度補齊
 
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+### 新增
+- 🤖 **9 provider 雙軌架構**：5 OpenAB bot（CICX/GITX/GIMINIX/CODEX/OPENX）+ 4 本機 CLI（claude/codex/copilot/gemini）
+- ⚡ **全域快捷鍵**：Ctrl+Shift+L 切換 / D 開 Bot 總覽 / E 開事件診斷
+- 📊 **Prometheus `/metrics` exporter** on port+100
+- 🔔 **Windows toast 系統通知** + 失敗警示紅點
+- 🚀 **Task Scheduler 開機自啟**（tauri-plugin-autostart）
+- ☁️ **Bot 總覽 Dashboard 雙區塊**：OpenAB + 本機 CLI
+- 🔍 **事件診斷 view**：2s auto-refresh + 手動刷新 + 10 filter tabs + errors 專 tab
+- 📱 **Telegram 長任務推播**（curl.exe 不依賴 reqwest）+ 測試發送按鈕
+- 🖥️ **OpenAB 重啟按鈕**（Tray menu）+ 可 config 的重啟指令
+- 🎨 **5 個折疊入口**：session row / Dashboard 雙區塊 / Quota bar / Chat close / 膠囊整體隱藏
+- ⏱️ **Session 閾值可調**：idle/stale/remove 三個秒數
+- 🦞 **Tray 左鍵單擊 toggle**（對齊 Discord/Steam 慣例）
+- 🗑️ **清空所有 session** action-bar 按鈕
+- 💻 **OPENX (OpenCode bot)** — 專屬 terminal SVG icon + 粉紅 #f472b6 配色 + Grid 跨全寬對稱
 
-## [v0.2.2] — 2026-04-17
+### 改動
+- **Provider name 統一前綴**：🤖 OpenAB / 💻 本機，強制 forward migration
+- **Quota 雙資料源**：runtime `provider_totals` +  OpenAB snapshot，BOT_RUNNER_KEYWORDS 按 backend 過濾避重複
+- **CWD 跨平台縮短**：Linux `/home/xxx`、macOS `/Users/xxx`、Windows `C:\Users\xxx`、MSYS2 `/c/Users/xxx` 全縮 `~`
+- **build 指令**：必用 `cargo tauri build --no-bundle`（純 `cargo build --release` 會 webview 白屏）
 
-Hotfix for Gemini CLI hook execution on Windows.
+### 修復
+- **Tauri setup tokio::spawn panic**：metrics server 改 std::thread + Runtime::new
+- **Windows `.cmd` shim spawn**：Rust `Command::new` 只找 .exe，改 claude.cmd + cmd.exe /C fallback
+- **OPENX 身份混淆**：拆 `codex_bot` / `codex` 獨立 id；`bot→openx` legacy alias
+- **BOT_RUNNER_KEYWORDS null 語意**：null=skip snapshot，undefined=show all，有值=filter
 
-### Fixed
+### 下架
+- 膠囊內 chat 輸入框（UX 不佳，使用者拍板移除）
+- 位置記憶（使用者拒）
 
-- **Gemini CLI hooks on Windows** — Gemini hardcodes
-  `powershell.exe -NoProfile -Command` for hook execution, and PowerShell
-  parses `"path\to\exe.exe" arg` as a bare string expression (ParserError:
-  UnexpectedToken at the argument) rather than a call. The Gemini hook
-  command is now prefixed with PowerShell's `&` call operator on Windows
-  only; cmd.exe and bash on other platforms still see the unchanged form.
-- **Hook dedup marker** — `provider_needs_setup` / `remove_provider` looked
-  for the substring `"agentpulse"` to identify previously installed
-  AgentPulse hooks, but the v0.2 sidecar command contains
-  `agent-pulse-hook` (hyphenated). The marker never matched, so toggling a
-  provider on/off accumulated duplicate hook entries. Marker now matches
-  the sidecar filename across shells and OSes.
+### 架構
+- `~/.lobsterpulse/port` hook server port file
+- `~/.lobsterpulse/usage-{bot}.json` OpenAB 寫 snapshot
+- Tauri v2.10 · tauri-cli 2.10.1 · Rust 1.77+
 
-[v0.2.2]: https://github.com/yazelin/AgentPulse/releases/tag/v0.2.2
-
-## [v0.2.1] — 2026-04-16
-
-First public release. Multi-provider hook monitoring with a sidecar-binary
-architecture that works across Linux, macOS (Apple Silicon + Intel), and
-Windows.
-
-### Supported platforms
-
-Each tag produces four zip archives: `linux`, `macos-arm64`, `macos-x64`,
-`windows`. The two macOS zips are cross-compiled on the same Apple-Silicon
-runner (GitHub retired the standalone Intel runner).
-
-### Added
-
-- **Sidecar hook binary** — CLI hooks invoke a standalone executable
-  (`agent-pulse-hook`) instead of an inline bash one-liner. The sidecar reads
-  the event JSON from stdin, resolves the server port from
-  `~/.agentpulse/port`, and POSTs to the AgentPulse HTTP server. One command
-  string works identically across bash, PowerShell, and cmd.exe, so
-  Claude Code, Gemini CLI, Codex, and GitHub Copilot all share the same
-  hook invocation.
-- **Per-provider waiting sounds** — new `SessionTransition::StartedWaiting`
-  fires a `task-waiting` event whenever a session first hits
-  `WaitingForUser`; the frontend plays a dedicated per-provider clip
-  independent of the completion clip. Ships eight bundled TTS sounds
-  (`{provider}.mp3` + `{provider}-waiting.mp3`, voiced with
-  `zh-TW-HsiaoChenNeural` / 曉臻).
-- **Single-instance plugin** — `tauri-plugin-single-instance` forwards a
-  second launch to the running window (show + focus) and exits. Fixes the
-  ghost tray icon that appeared when a duplicate launch's HTTP server
-  refused the port but the UI still spawned.
-- **Landing page + live demo** — `docs/` is a GitHub Pages site with a
-  full interactive AgentPulse embedded in an iframe (powered by a mocked
-  Tauri IPC shim so the real `src/main.js` boots without a backend).
-  Download buttons auto-fill from the GitHub releases API.
-- **CHANGELOG + auto-populated release notes** — this file. The release
-  workflow extracts the section matching the tag and passes it to
-  `softprops/action-gh-release` as the draft body.
-- **Project docs** — `CLAUDE.md` committed, covering the v0.2 architecture
-  for anyone cloning the repo.
-
-### Changed
-
-- **Providers default to disabled** — toggling a provider on in Settings
-  now immediately installs its hooks. Claude previously defaulted to
-  `enabled: true` but the install flow didn't fire at startup, leaving the
-  checkbox "on" with no actual hook installed.
-- **Notification Sounds toggle label** — renamed from "Sound on Complete"
-  to "Notification Sounds" since it now gates both completion and waiting
-  clips.
-- **Capsule bounce animation** — the collapse-to-capsule bounce runs as a
-  pure CSS `@keyframes` animation (`capsuleCollapseBounce`) instead of the
-  Rust-side `bounce_window` shim. Transform-only + 260 ms keeps it on the
-  GPU and avoids X11 ghosting on transparent windows.
-- **`seed_default_sounds` runs on every launch** — idempotent write, so
-  existing installs pick up newly bundled defaults automatically.
-- **CI speedups** — `cargo-binstall` for the Tauri CLI (dropped Windows
-  install from ~10 min to ~45 s). Upgraded `actions/checkout@v5` and
-  `actions/upload-artifact@v6` to clear Node 20 deprecation warnings.
-
-### Fixed
-
-- **Windows DWM border** — `"shadow": false` in `tauri.conf.json` removes
-  the halo/ghost border visible on Windows 10/11.
-- **Capsule count `3/3`** — when every session was active, the `/`
-  separator was dropped and the counts jammed together as `33`. Always
-  renders the slash now when at least one session is active.
-
-### Known limitations
-
-- **No installer** (`.msi` / `.deb` / `.dmg`) yet — bundle packaging of the
-  sidecar binary across installer formats is still unresolved. Ships as
-  zip only; keep the two binaries in the same folder.
-- **Codex CLI on Windows** — upstream disables hook execution. AgentPulse
-  still writes the hook config, so when OpenAI re-enables it the
-  integration lights up automatically.
-- **No code signing** — macOS users need `xattr -cr` to bypass Gatekeeper;
-  Windows users see SmartScreen's "More info → Run anyway". Apple
-  Developer cert ($99/yr) is the real fix — intentionally deferred.
-
-[v0.2.1]: https://github.com/yazelin/AgentPulse/releases/tag/v0.2.1
+## v0.2.2 · 前身 AgentPulse fork 基線
+- Dynamic Island-style floating status indicator
+- macOS/Linux/Windows 跨平台

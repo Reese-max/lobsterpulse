@@ -4,9 +4,26 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>龍蝦監控</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preload" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,500;0,700;1,500&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;600;700&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,500;0,700;1,500&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;600;700&display=swap"></noscript>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="lp-patch-v2.css" />
+  <link rel="stylesheet" href="lp-patch-v3.css" />
 </head>
 <body>
+  <!-- 務實方案：z-index 高 + 半透明，視覺上像背景。WebView2 負 z-index 被透明處理吃掉故放棄 -->
+  <img id="bg-fullscreen" src="" alt=""
+       style="position:fixed;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:9999;pointer-events:none;display:none">
+  <video id="bg-fullscreen-video" muted loop playsinline
+       style="position:fixed;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:9999;pointer-events:none;display:none"></video>
+  <!-- 保留原 bg-layer 不用了 -->
+  <div id="bg-layer" class="bg-layer hidden" aria-hidden="true">
+    <img id="bg-image" alt="" />
+    <video id="bg-video" autoplay muted loop playsinline></video>
+  </div>
   <div id="app">
     <!-- Capsule (always on top, always draggable) -->
     <div id="capsule" class="capsule">
@@ -14,33 +31,88 @@
       <span id="capsule-project" class="capsule-project">龍蝦監控</span>
       <span id="capsule-status" class="capsule-status"></span>
       <span class="capsule-spacer"></span>
+      <span id="capsule-quota" class="capsule-quota hidden" title="最緊 provider 剩餘配額"></span>
       <span id="capsule-time" class="capsule-time"></span>
       <span id="capsule-count" class="capsule-count hidden"></span>
+      <span id="capsule-error-dot" class="capsule-error-dot hidden" title="近 10 分鐘內失敗事件數"></span>
     </div>
 
     <!-- Expanded view (sessions) -->
     <div id="view-expanded" class="hidden">
+      <div id="filter-bar" class="filter-bar hidden"></div>
       <div id="session-list" class="session-list"></div>
+      <div id="quota-bar-wrap" class="quota-bar-wrap hidden">
+        <div class="quota-bar-header" id="quota-bar-header">
+          <span class="section-caret">▾</span> 📊 Quota
+        </div>
+        <div id="quota-bar" class="quota-bar"></div>
+      </div>
       <div class="action-bar">
-        <button id="btn-github" class="icon-btn" title="開啟監控設定檔" style="margin-right:auto">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 4h16v16H4z"/>
-            <path d="M8 4v6h8V4"/>
-            <path d="M8 14h8"/>
-            <path d="M8 18h5"/>
-          </svg>
-        </button>
-        <button id="btn-settings" class="icon-btn" title="設定">
+        <!-- 去油 pass（2026-04-19）：visible 3 icon = settings / auto-toggle / hide -->
+        <!-- 保留 dev 工具 (snap-now/rebuild) visible 給用戶自己加的快捷；其他 (github/clear/pin) hidden -->
+        <button id="btn-settings" class="icon-btn" style="margin-right:auto" title="設定">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
           </svg>
         </button>
-        <button id="btn-pin" class="icon-btn" title="固定展開">
-          <svg viewBox="0 0 24 24" fill="currentColor">
-            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5v6h2v-6h5v-2z"/>
+        <button id="btn-snap-now" class="icon-btn" title="強制記錄一筆 quota 歷史（trend 立即有）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </button>
+        <button id="btn-rebuild" class="icon-btn" title="cargo build --release + 重啟 LP">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
+        <button id="btn-auto-toggle" class="icon-btn" title="暫停/恢復 自動化規則">
+          <span id="btn-auto-icon" style="font-size:12px;letter-spacing:-1px">▶</span>
+        </button>
+        <button id="btn-hide" class="icon-btn" title="縮小到工具列（tray menu 可叫回）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12"/>
           </svg>
         </button>
+        <!-- 隱藏不砍：JS event listener 仍綁定（tray menu / shortcut 會用） -->
+        <button id="btn-github" hidden></button>
+        <button id="btn-clear-sessions" hidden></button>
+        <button id="btn-pin" hidden></button>
       </div>
+    </div>
+
+    <!-- Bot Dashboard view (OpenAB 4 + 本機 CLI 4 = 8 卡片) -->
+    <div id="view-dashboard" class="hidden">
+      <div class="dashboard-header">
+        <span class="dashboard-title">總覽</span>
+        <button id="btn-close-dashboard" class="icon-btn" title="關閉">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="dashboard-section-title" data-toggle="bot-grid">
+        <span class="section-caret">▾</span> ☁️ OpenAB Bot
+      </div>
+      <div id="bot-grid" class="bot-grid"></div>
+      <div class="dashboard-section-title" data-toggle="local-grid">
+        <span class="section-caret">▾</span> 💻 本機 CLI
+      </div>
+      <div id="local-grid" class="bot-grid"></div>
+      <div class="dashboard-section-title" data-toggle="trend-grid">
+        <span class="section-caret">▾</span> 📈 額度趨勢（7 天）
+      </div>
+      <div id="trend-grid" class="bot-grid"></div>
+    </div>
+
+    <!-- Events log view -->
+    <div id="view-events-log" class="hidden">
+      <div class="dashboard-header">
+        <span class="dashboard-title">事件診斷（最近 50 筆 · 2s 自動更新）</span>
+        <div class="dashboard-header-btns">
+          <button id="btn-refresh-events" class="icon-btn" title="手動刷新">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15A9 9 0 1 1 5.64 5.64L23 10"/></svg>
+          </button>
+          <button id="btn-close-events" class="icon-btn" title="關閉">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="events-filter" class="events-filter"></div>
+      <div id="events-list" class="events-list"></div>
     </div>
 
     <!-- Settings view -->
@@ -50,6 +122,8 @@
           <button class="settings-tab active" data-tab="providers">助手</button>
           <button class="settings-tab" data-tab="sounds">音效</button>
           <button class="settings-tab" data-tab="appearance">外觀</button>
+          <button class="settings-tab" data-tab="runners">📦 Runners</button>
+          <button class="settings-tab" data-tab="automation">🔔 自動化</button>
         </div>
         <button id="btn-close-settings" class="icon-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -87,6 +161,46 @@
             <div><div class="setting-main-label">固定展開</div><div class="setting-sub-label">不用滑鼠停留也保持展開</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-pin" /><span class="toggle-slider"></span></label>
           </div>
+          <div class="setting-group">
+            <div><div class="setting-main-label">開機自動啟動</div><div class="setting-sub-label">登入 Windows 後背景啟動（Task Scheduler）</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-autostart" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group">
+            <div><div class="setting-main-label">系統通知</div><div class="setting-sub-label">auto_rules 告警走 Windows toast（zero Telegram 依賴）</div></div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button id="btn-test-toast" class="mini-btn" title="現在彈一個測試 toast">🧪 測試</button>
+              <label class="toggle"><input type="checkbox" id="toggle-notify" /><span class="toggle-slider"></span></label>
+            </div>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">Session 時間閾值（秒）</label>
+            <div class="threshold-row">
+              <div><span class="threshold-label">閒置</span><input type="number" id="idle-secs" min="10" step="10"></div>
+              <div><span class="threshold-label">過舊</span><input type="number" id="stale-secs" min="60" step="60"></div>
+              <div><span class="threshold-label">移除</span><input type="number" id="remove-secs" min="300" step="60"></div>
+            </div>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">視窗寬度（px，140-600）</label>
+            <div class="threshold-row">
+              <div><span class="threshold-label">Capsule</span><input type="number" id="capsule-width" min="140" max="600" step="10"></div>
+              <div><span class="threshold-label">Expanded</span><input type="number" id="expanded-width" min="140" max="600" step="10"></div>
+            </div>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">Telegram 推播（長任務）</label>
+            <input type="text" id="tg-token" placeholder="Bot token" class="text-input">
+            <input type="text" id="tg-chat" placeholder="Chat ID" class="text-input">
+            <div class="threshold-row">
+              <div><span class="threshold-label">門檻秒數</span><input type="number" id="tg-threshold" min="60" step="60"></div>
+              <div><span class="threshold-label">&nbsp;</span><button id="tg-test" class="mini-btn">🧪 測試發送</button></div>
+            </div>
+            <span id="tg-test-result" class="threshold-label"></span>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">OpenAB 重啟指令（tray 按鈕觸發）</label>
+            <input type="text" id="openab-restart-cmd" placeholder='e.g. schtasks /run /tn "OpenAB-CICX"' class="text-input">
+          </div>
           <div class="setting-group-col">
             <label class="setting-label">重點色</label>
             <div class="color-picker">
@@ -95,6 +209,7 @@
               <button class="color-dot" data-color="green" style="--dot:rgb(77,242,153)"></button>
               <button class="color-dot" data-color="orange" style="--dot:rgb(255,153,51)"></button>
               <button class="color-dot" data-color="pink" style="--dot:rgb(255,102,153)"></button>
+              <input type="color" id="accent-custom" class="color-custom" title="自訂顏色（hex）">
             </div>
           </div>
           <div class="setting-group-col">
@@ -105,6 +220,148 @@
               <button class="size-btn" data-size="large">L</button>
             </div>
           </div>
+          <div class="setting-group-col">
+            <label class="setting-label">字型</label>
+            <select id="font-family-select" class="text-input">
+              <option value="">系統預設</option>
+              <option value="ui-sans-serif, -apple-system, 'Segoe UI', system-ui">無襯線 (System)</option>
+              <option value="ui-monospace, 'SF Mono', 'Cascadia Code', 'Consolas', monospace">等寬 (Mono)</option>
+              <option value="'Noto Sans TC', 'Microsoft JhengHei', sans-serif">黑體繁中</option>
+              <option value="'Noto Serif TC', 'PMingLiU', serif">宋體繁中</option>
+            </select>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">背景不透明度（%）</label>
+            <input type="range" id="bg-opacity" min="30" max="100" step="5" value="100" class="slider-input">
+            <span class="threshold-label" id="bg-opacity-val">100</span>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">背景照片/影片</label>
+            <select id="background-type" class="text-input" style="width:100%">
+              <option value="none">無</option>
+              <option value="image">圖片（本機或 URL）</option>
+              <option value="video">影片（本機或 URL）</option>
+            </select>
+            <div class="threshold-row" style="margin-top:6px">
+              <div style="flex:3"><input type="text" id="background-path" placeholder="C:\path\to\bg.jpg 或 https://..." class="text-input" style="width:100%"></div>
+              <div style="flex:1"><button id="btn-pick-bg" class="mini-btn">📁 選檔</button></div>
+            </div>
+            <div class="threshold-row" style="margin-top:6px">
+              <div><span class="threshold-label">模糊</span><input type="range" id="bg-blur" min="0" max="30" step="1" value="0" class="slider-input"><span class="threshold-label" id="bg-blur-val">0 px</span></div>
+            </div>
+            <div class="threshold-row" style="margin-top:6px">
+              <div><span class="threshold-label">背景亮度</span><input type="range" id="bg-image-opacity" min="10" max="100" step="5" value="60" class="slider-input"><span class="threshold-label" id="bg-image-opacity-val">60%</span></div>
+            </div>
+            <span class="threshold-label">影片需 mp4/webm，本機路徑會自動轉 asset://</span>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">外部調整器</label>
+            <div class="threshold-row">
+              <div style="flex:1"><button id="btn-open-configurator" class="mini-btn">🌐 在瀏覽器開啟</button></div>
+              <div style="flex:1"><button id="btn-import-appearance" class="mini-btn">⬆ 匯入 JSON</button></div>
+            </div>
+            <span class="threshold-label">大畫面 live preview / 匯出 appearance.json</span>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">📖 使用說明</label>
+            <div class="threshold-row">
+              <div style="flex:1"><button id="btn-open-help" class="mini-btn">📚 功能手冊 + 網頁配置教學</button></div>
+            </div>
+            <span class="threshold-label">LP 全部功能 / configurator 操作 / Auto-Rules / Discord 指令</span>
+          </div>
+        </div>
+
+        <!-- 📦 Runners Tab —— 本機 usage runner 增刪改 -->
+        <div class="settings-tab-panel" data-panel="runners">
+          <div class="setting-group-col">
+            <label class="setting-label">本機 Usage Runner（每 60s 執行，結果寫 usage-local.json）</label>
+            <div id="runner-list"></div>
+            <button id="btn-add-runner" class="mini-btn" style="margin-top:8px">➕ 新增 Runner</button>
+          </div>
+          <!-- 編輯 form（藏起來，按 ➕ 或 ✏️ 才顯示） -->
+          <div id="runner-edit" class="setting-group-col hidden" style="border:1px dashed var(--border);padding:8px;margin-top:8px;border-radius:6px">
+            <label class="setting-label">編輯 Runner <span id="runner-edit-idx" class="threshold-label"></span></label>
+            <div class="threshold-row">
+              <div><span class="threshold-label">name (唯一 id)</span><input type="text" id="runner-name" class="text-input"></div>
+              <div><span class="threshold-label">label (顯示)</span><input type="text" id="runner-label" class="text-input"></div>
+            </div>
+            <div class="threshold-row">
+              <div><span class="threshold-label">color (#hex)</span><input type="text" id="runner-color" placeholder="#10a37f" class="text-input"></div>
+              <div><span class="threshold-label">command</span><input type="text" id="runner-command" placeholder="node" class="text-input"></div>
+            </div>
+            <label class="setting-label">args（每行一個）</label>
+            <textarea id="runner-args" class="text-input" rows="3" style="font-family:monospace"></textarea>
+            <label class="setting-label">template（Handlebars `{{ key }}`，可空）</label>
+            <textarea id="runner-template" class="text-input" rows="3" style="font-family:monospace"></textarea>
+            <div class="threshold-row" style="margin-top:6px">
+              <div><button id="btn-save-runner" class="mini-btn">💾 儲存</button></div>
+              <div><button id="btn-cancel-runner" class="mini-btn">取消</button></div>
+              <div><button id="btn-test-runner" class="mini-btn">🧪 試跑</button></div>
+            </div>
+            <span id="runner-test-result" class="threshold-label" style="white-space:pre-wrap;display:block"></span>
+          </div>
+        </div>
+
+        <!-- 🔔 自動化 Tab —— Discord bot + auto-action 三條規則 -->
+        <div class="settings-tab-panel" data-panel="automation">
+          <div class="setting-group">
+            <div><div class="setting-main-label">Discord 推播</div><div class="setting-sub-label">啟用後所有 auto-action 走此頻道</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-discord" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">Bot Token（輸入後會自動遮蔽）</label>
+            <input type="password" id="dc-token" placeholder="MTxxxxx..." class="text-input">
+            <label class="setting-label">Channel ID</label>
+            <input type="text" id="dc-channel" placeholder="1494779722314285179" class="text-input">
+            <div class="threshold-row">
+              <div><span class="threshold-label">&nbsp;</span><button id="dc-test" class="mini-btn">🧪 測試發送</button></div>
+              <div><span id="dc-test-result" class="threshold-label"></span></div>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <div><div class="setting-main-label">Rule 1: 額度低於門檻</div><div class="setting-sub-label">任一 runner 剩餘 < N% 推 embed</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-rule-quota" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group-col">
+            <div class="threshold-row">
+              <div><span class="threshold-label">門檻 %</span><input type="number" id="rule-quota-pct" min="1" max="100" step="1"></div>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <div><div class="setting-main-label">Rule 2: Session 閒置提問</div><div class="setting-sub-label">閒置 N 分鐘後發 Discord 確認是否 kill</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-rule-idle" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group-col">
+            <div class="threshold-row">
+              <div><span class="threshold-label">閒置秒數</span><input type="number" id="rule-idle-secs" min="60" step="60"></div>
+              <div><span class="threshold-label">確認 timeout 秒</span><input type="number" id="rule-confirm-secs" min="60" step="60"></div>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <div><div class="setting-main-label">Rule 3: 失敗爆發</div><div class="setting-sub-label">窗口內失敗 ≥ N 次 → 推通知 + 自動重啟 OpenAB</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-rule-burst" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group-col">
+            <div class="threshold-row">
+              <div><span class="threshold-label">窗口秒</span><input type="number" id="rule-burst-window" min="60" step="60"></div>
+              <div><span class="threshold-label">觸發次數</span><input type="number" id="rule-burst-count" min="1" step="1"></div>
+              <div><span class="threshold-label">去重秒</span><input type="number" id="rule-dedup" min="60" step="60"></div>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <div><div class="setting-main-label">Rule 4: 每日摘要</div><div class="setting-sub-label">每天指定時刻推昨日 sessions/tokens/failures</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-rule-summary" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group-col">
+            <div class="threshold-row">
+              <div><span class="threshold-label">推播時刻（0-23 整點）</span><input type="number" id="rule-summary-hour" min="0" max="23" step="1"></div>
+            </div>
+          </div>
+
         </div>
       </div>
     </div>

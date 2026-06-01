@@ -1162,38 +1162,109 @@ body.has-bg #view-events-log {
   font-weight: 500;
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   Claude Design patch — phase 2: DOM-equivalent via CSS only
+   ═══════════════════════════════════════════════════════════════ */
 
-/* Claude Design patch phase 2 (small-step) — Step 2: 字體切換 */
+/* Google Font load — Source Serif 4 for italic display + JetBrains Mono for numerics */
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,wght@0,400;0,500;0,700;1,400;1,500&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* Capsule 左側 8-pointed coral star（LobsterPulse logo mark）*/
+[data-theme="light"] .capsule::before {
+  content: "";
+  width: 14px; height: 14px;
+  background: var(--accent);
+  -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2 L13.5 9 L20 10.5 L13.5 13 L12 22 L10.5 13 L4 10.5 L10.5 9 Z M12 2 L10.5 9 L12 2 M12 22 L10.5 13 L4 10.5"/></svg>') center/contain no-repeat;
+  mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2 L13.5 9 L20 10.5 L13.5 13 L12 22 L10.5 13 L4 10.5 L10.5 9 Z M12 2 L10.5 9 L12 2 M12 22 L10.5 13 L4 10.5"/></svg>') center/contain no-repeat;
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
+/* Capsule-project 標題 Source Serif 4 italic 氣質 */
 [data-theme="light"] .capsule-project {
-  font-family: "Source Serif 4", Georgia, serif;
+  font-family: "Source Serif 4", Georgia, serif !important;
   font-weight: 500;
   font-style: italic;
+  font-size: calc(14px * var(--scale));
   letter-spacing: -0.01em;
 }
+
+/* 數字 JetBrains Mono */
 [data-theme="light"] .capsule-time,
-[data-theme="light"] .capsule-quota {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
+[data-theme="light"] .capsule-quota,
+[data-theme="light"] .quota-runner-text {
+  font-family: "JetBrains Mono", ui-monospace, monospace !important;
   font-variant-numeric: tabular-nums;
-}
-[data-theme="light"] .quota-runner-text,
-[data-theme="light"] .bot-card-quota {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 
-/* Step 3: eyebrow section labels — 純 CSS uppercase + coral dot */
+/* Quota runner 1-line compact — label + text 同一行用 flex */
+[data-theme="light"] .quota-runner {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 14px !important;
+  font-size: 11.5px;
+  min-height: auto;
+}
+[data-theme="light"] .quota-runner-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  flex-shrink: 0;
+  max-width: 40%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-theme="light"] .quota-runner-text {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  flex: 1;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Section eyebrow (SESSIONS / QUOTA / 本機額度) — JetBrains Mono uppercase */
 [data-theme="light"] .dashboard-section-title,
+[data-theme="light"] .quota-section-title,
 [data-theme="light"] .quota-bar-header {
-  font-family: "JetBrains Mono", monospace;
-  font-size: 10px;
-  font-weight: 500;
+  font-family: "JetBrains Mono", monospace !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--text-dim) !important;
+  padding: 8px 14px 4px !important;
 }
+[data-theme="light"] .dashboard-section-title::before,
 [data-theme="light"] .quota-bar-header::before {
-  content: "● ";
+  content: "●";
   color: var(--accent);
-  font-size: 8px;
-  margin-right: 4px;
+  margin-right: 8px;
+  font-size: 6px;
+  vertical-align: middle;
+}
+
+/* Action-bar minimal icons */
+[data-theme="light"] .action-bar {
+  background: var(--bg-warm) !important;
+  border-top: 1px solid var(--hair);
+  padding: 6px 12px !important;
+  gap: 4px !important;
+}
+[data-theme="light"] .action-bar .icon-btn {
+  color: var(--text-dim);
+  opacity: 0.75;
+  transition: opacity 0.15s, color 0.15s;
+}
+[data-theme="light"] .action-bar .icon-btn:hover {
+  color: var(--accent-ink);
+  opacity: 1;
+}
+[data-theme="light"] .action-bar #btn-pin.active {
+  color: var(--accent);
+  background: var(--accent-soft);
 }

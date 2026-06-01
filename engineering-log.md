@@ -620,3 +620,92 @@
 - K12 idle_ratio 接到 Discord Bot alert（K12 signal 已就緒,R24 候選）
 - 全 codebase sweep 剩餘 silent fail sites（`openab_bridge::tail_new_events` 等,R24 候選）
 - K6/K7/K9/K13 lifetime-vs-live → 整合 single `MetricsSnapshot` struct 餵前端:範圍跨前後端,另開 M1 輪
+
+---
+
+### [2026-06-01] R27 — K14 Discord health monitoring + 4 Prometheus metrics
+**類型**: M1（operator 端 metrics 擴展：K14 Discord endpoint health 落地,補齊 K6-K13 per-provider lifetime metrics 之後「end-to-end 監控拼圖」的最後一塊 — Discord 單端點 health 沒有 per-provider 概念,curl 失敗時 stderr 沒結構化觀察 → operator 只能反推）
+**KPI**: K14-discord-health-metrics（落地:17 個 test 全綠,132/132 pass,0 false positive）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K14 Discord health metrics | 0 | 4 (`discord_health` gauge + `send_failures_total{class}` counter + `last_event_unix` gauge + 對應 HELP/TYPE) | +4 |
+| K14 unit tests | 0 | 17 | +17 |
+| Lib unit tests | 115 (R26 baseline) | 132 | +17 |
+| Prometheus metrics series 數 | K6+K7+K8+K9+K10+K11+K12+K13 = 8 series | 12 series (+K14 4 條) | +4 |
+| end-to-end 監控覆蓋 | per-provider × 8 metric | per-provider × 8 metric + Discord endpoint × 4 metric | 全覆蓋 |
+| 24h chore_ratio | 0% (rolling 24h 內 0 H0) | 0% (本輪 M1 順) | 0 |
+
+**為什麼**:
+- 對齊 R2/R25 Discord 401 silent-surfacing 主題：curl `-f` flag 修了之後,失敗時 error 走 `format!("curl exit {:?}: {}", exit, stderr)`,但「為什麼失敗」只有 stderr 字串,operator 看 log 才能事後反推
+- K6-K13 已經是 per-provider × 8 metric (sessions / tokens_input / tokens_output / failure_count / idle_seconds / idle_ratio / session_count / since_timestamp / events_total),都是「事件流量」維度;**Discord 端點 health** 是 orthogonal 維度 — 沒這塊,4xx/5xx/網路問題只能在應用層 stderr 反推,Prometheus alert 看不到
+- Discord 端點是 process-level（單一端點不是 per-provider）,所以 K14 用 `OnceLock<Mutex<DiscordHealth>>` 模組級 state,跟 K6-K13 HashMap<Provider, Totals> 結構不同 — 這是設計上必要的,不是 over-engineering
+- 對齊 K6/K7/K9/K13 lifetime aggregate 語意:counter 一旦累加就不蒸發,operator 端 `rate(send_failures_total{class="5xx"}[5m])` 是標準 throughput 公式,跟既有 per-provider counter pattern 一致
+- 24h chore_ratio 0% → 本輪 M1 順
+
+**搜尋**:
+- 沒做 WebSearch（沿用 K6/K7/K9/K13 lifetime aggregate pattern + R2 curl `-f` 修法的 error string 格式已固定）
+- 對照 R2 commit `10334`（Discord HTTP error handling surfaced via curl -f flag）— 修在那邊是「讓錯誤可見」,K14 是「讓錯誤可量化」
+
+**做了什麼**:
+- `discord.rs:156-216` 新增 `DiscordHealthClass` enum (Client4xx(u16) / Server5xx(u16) / Network) + `health_gauge()` 穩定整數映射 (0/1/2/3) + `DiscordHealth` struct (3 個 u64 counter + last_class + last_event_unix) + `record()` saturating_add 防 overflow
+- `discord.rs:218-260` `classify_error_str()` 純函式:parse curl stderr "The requested URL returned error: NNN",boundary 400-499=4xx / 500-599=5xx / 其他=network（含 DNS / conn refused / timeout / SSL / spawn fail / empty）
+- `discord.rs:262-300` 模組級 `OnceLock<Mutex<DiscordHealth>>` + `init_health()` (idempotent,get_or_init) + `health_snapshot()` (退化為 Default 當未 init) + `record_classified_failure()` (no-op 當未 init,純函式 caller 注 now_unix)
+- `discord.rs:284-296` `curl_recorded()` wrapper:失敗時 `inspect_err` 觸發 record,4 個高層 fn (send_message / send_embed / add_reaction / list_messages) signature 零改動
+- `lib.rs:1004-1017` `render_prometheus()` 從 `discord::health_snapshot()` 拿 snapshot（Copy struct,鎖粒度 = `*lock()` 一次,後續 string 構造不持鎖）
+- `lib.rs:1136-1136` `render_prometheus_body()` signature 加 `&discord::DiscordHealth` 參數
+- `lib.rs:1358-1395` emit 4 條 metrics:
+  - gauge `lobsterpulse_discord_health` (0=ok / 1=4xx / 2=5xx / 3=network)
+  - counter `lobsterpulse_discord_send_failures_total{class="4xx"|"5xx"|"network"}` lifetime
+  - gauge `lobsterpulse_discord_last_event_unix` (0 = 啟動後還沒失敗過)
+- `lib.rs:1565-1571` `lib::run()` 啟動時 `discord::init_health()`
+- 17 個新 unit test:
+  - 12 個在 `discord.rs::k14_health_tests`:
+    1. `classify_4xx_codes` — 400/401/403/404/429 5 個 code 走 Client4xx
+    2. `classify_5xx_codes` — 500/502/503/504 4 個 code 走 Server5xx
+    3. `classify_3xx_and_2xx_fall_through_to_network` — 200/204/301/302/999 走 network（curl `-f` 不在 4xx/5xx 都視為非預期,歸 network 合理）
+    4. `classify_unparseable_returns_network` — DNS/conn refused/timeout/SSL/spawn fail 5 個常見 variant 走 network
+    5. `classify_empty_string_returns_network` — auth_ok 失敗傳空字串歸 network
+    6. `health_gauge_stable_mapping` — 鎖住 1/2/3 對應 4xx/5xx/network（order 對齊 operator 嚴重度邏輯）
+    7. `record_increments_correct_counter` — 4xx/5xx/network 各 +1 進對應欄位
+    8. `record_updates_last_class_and_event_unix` — 「最後一筆」語意:第二次 record 覆寫前一次
+    9. `record_saturates_no_overflow` — `u64::MAX` 邊界 saturating_add 不 panic,last_class 仍更新
+    10. `default_state_is_all_zero` — Default = 5 個欄位全 0/last_class None
+    11. `init_health_is_idempotent` — 多次呼叫 get_or_init 不重置 state
+    12. `health_snapshot_does_not_block_on_uninit` — 未 init 時回 Default 不 panic
+    13. `record_classified_failure_noop_when_uninit_or_otherwise_safe` — 至少不 panic
+    14. `record_classified_failure_with_network_string` — 不可解析字串走 network 分支
+  - 1 個在 `lib.rs::render_prometheus_tests`:
+    15. `discord_health_with_4xx_5xx_and_network_failures_renders_all_four_lines` — 模擬 4xx=3/5xx=1/network=2 + last_class=Network + last_event_unix=1700000000,驗證 render 完整 4 行
+  - 2 個其他歸類為 fixture 更新:
+    16-17. 既有 19 個 render_prometheus_body test call site 補 `&discord::DiscordHealth::default()`（簽名加參數強迫）
+- 修 2 處 clippy `field_reassign_with_default`:用 struct literal `DiscordHealth { class_4xx: u64::MAX, ..Default::default() }` 替代 `let mut h = default(); h.x = ...;` pattern
+
+**為什麼 process-level 而非 per-provider**:
+- Discord 是單一端點（不是 9 個 provider 各有自己的 webhook）— health 只有一份,不是 provider 維度
+- 對齊 K6/K7/K9 lifetime aggregate 語意:lifetime 累計 = monotonic counter,Prometheus 端 `rate()` 標準用法
+- 若改用 HashMap<Provider, ...> 反而是 over-engineering — 沒任何呼叫端有「per-provider Discord health」需求
+
+**為什麼 classify parse 字串而非結構化**:
+- 既有 4 個高層 fn 全部 `Result<_, String>`,call site 只看得到字串
+- 改成結構化傳 status code 要動 4 個 signature + 4 個 call site + curl() 內部結構 → surgical 改動不開
+- 選 parse string 鎖定 `The requested URL returned error: NNN`（curl 對 4xx/5xx 慣用 stderr 格式）,boundary 測試覆蓋 5 個 4xx + 4 個 5xx + 5 個 network 變體
+- 將來若改用 reqwest/ureq 結構化傳,只換 `classify_error_str` 內部,call site 不動 — 鎖住 boundary 的純函式設計付了保險
+
+**驗證**:
+- `cargo fmt --check` 過（cargo fmt 自動重排了 `curl_recorded` 6 個參數換行 + 2 個 record helper 呼叫）
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib --no-fail-fast` **132 passed; 0 failed; 0 ignored**（R26 baseline 115 + K14 17 = 132,0 regression）
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked supervisor 檔,符合 R13 防護）
+
+**結果**: PASS（K14 落地 + end-to-end 監控拼圖補齊 + 0 lint warning + 0 regression + commit `4e9eb5f`,2 files / +601 / -12）
+
+**KPI-impact: K14 Discord health 4 new metrics 從 0 → 4 (gauge 1 + counter 1 + gauge 1 + HELP/TYPE 共 4 series) + end-to-end 監控拼圖 K6-K14 全覆蓋**
+
+**不做的範圍**（給後續輪次）:
+- K15 candidate: 整合 single `MetricsSnapshot` struct 餵前端（K6-K14 lifetime-vs-live state 一份 snapshot,前端少一次 IPC）—— 範圍跨前後端,另開 M1 輪
+- K12 idle_ratio 接到 Discord Bot alert（K12 signal 已就緒,R26 候選未動）
+- 全 codebase sweep 剩餘 silent fail sites（`openab_bridge::tail_new_events` 等,R24 候選未動）
+- K14 alert rules 寫進 Prometheus alertmanager（4 條 metric 已就緒,但 alert 規則需要 alertmanager 端 config,非程式碼改動）
+- engineering-log.md 622 行超 500 cap → 下輪 H0 rotate（本輪 M1 順,禁 H0）

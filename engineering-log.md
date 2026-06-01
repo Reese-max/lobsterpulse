@@ -835,3 +835,84 @@
 **結果**: PASS（M0 silent error surfacing 收尾 quota_history CSV row parse 路徑 + 0 lint warning + 0 regression）
 
 **KPI-impact: silent_fail_sites_observable +2 paths（ts/pct unwrap_or(0) 假資料點 → log warn 帶 line_no + raw value）,operator 排查 quota 圖漂移時間從「找線索」降到「grep 一行 prefix」**
+
+### [2026-06-02] R30 — K16 hook_server HTTP response status class counter（3 條 metric + 3 個 unit test）
+
+**類型**: M1（metrics observability — 對齊 K6-K15 lifetime counter 主題線）
+
+**KPI**: HTTP response status class observability 從無到有 — 0 → 3 metrics（2xx/4xx/5xx）
+
+**為什麼**:
+- 觀察 10786: K15 parse_failures 只給「JSON 壞掉多少」視角，operator 還缺「server 對外 wire-level 回了什麼 status code」視角
+- K16 落地動機：3 個 status class (2xx/4xx/5xx) 拆 3 條 counter，operator 端 alert rule 寫一次就 work：
+  - `rate(lobsterpulse_hook_responses_total{class="4xx"}[5m]) > N` → CLI schema 漂移 / network 注入垃圾
+  - `rate(lobsterpulse_hook_responses_total{class="5xx"}[5m]) > 0` → server 內部炸（目前永遠 0，保留欄位等未來真的有 5xx 不用改 schema）
+- 跟 K15 維度不同但可共現：同一個 4xx 失敗會同時 ++ K15 (parse_failures) + K16 (responses 4xx) — 一個給 payload 語意、一個給 wire 結果，分層排查用
+- 5xx 永遠 0 不算浪費：operator 端 alert 規則一裝上就 work，未來 handle_client 加 5xx branch 不用改 schema / 改 alert rule（純 add-side，零 breaking change）
+
+**搜尋**: 沒做 WebSearch（K6-K15 同 pattern 延伸：process-level AtomicU64 + snapshot struct + render 端不持鎖）
+
+**做了什麼**:
+- `hook_server.rs:43-45` 新增 3 個 process-level `AtomicU64`:
+  - `HOOK_RESPONSES_2XX` / `HOOK_RESPONSES_4XX` / `HOOK_RESPONSES_5XX`
+- `hook_server.rs:49-58` 新增 `HookServerMetrics` struct（`Copy` 4 個 u64 = 32 byte）— 對齊 K15 模式：避免每加 metric 多一個 fn param
+- `hook_server.rs:64-71` `hook_server_metrics()` snapshot fn：4 個 atomic 各自獨立 load，無 race
+- `hook_server.rs:178-185` `process_body` Err 分支內 `HOOK_RESPONSES_4XX.fetch_add(1, ...)` 跟 K15 同一處觸發 — 設計意圖「同一個 4xx 失敗同時 ++ K15 + K16」在 process_body 內落地，unit test 可直接驗證
+- `hook_server.rs:165` `handle_client` else branch（body 缺失）保留 `HOOK_RESPONSES_4XX.fetch_add(1, ...)` — 那條路 process_body 沒經過，必須在 wire-level ++
+- `lib.rs::render_prometheus` 改讀 `hook_server::hook_server_metrics()`（單次 snapshot）
+- `lib.rs::render_prometheus_body` signature `hook_parse_failures: u64` → `hook_metrics: hook_server::HookServerMetrics`，9 個 call site 同步更新
+- `lib.rs` render 端新增 3 條 metric line：
+  ```
+  # HELP lobsterpulse_hook_responses_total Lifetime count of HTTP responses by status class (counter; rate() for throughput)
+  # TYPE lobsterpulse_hook_responses_total counter
+  lobsterpulse_hook_responses_total{class="2xx"} N
+  lobsterpulse_hook_responses_total{class="4xx"} N
+  lobsterpulse_hook_responses_total{class="5xx"} N
+  ```
+- 3 個新 unit test 落地：
+  1. `hook_server_metrics_default_snapshot_is_all_zeros` — `HookServerMetrics::default()` 4 欄位皆 0
+  2. `hook_server_metrics_increments_2xx_on_valid_json_parse` — valid JSON 經 process_body Ok 不會誤 ++ 4xx（snapshot delta 模式防平行 test 噪音）
+  3. `hook_server_metrics_increments_4xx_on_invalid_json` — 壞 JSON → K16 4xx counter 至少 +1
+- 刪 unused `hook_parse_failures()` fn（K15 改用 `hook_server_metrics().parse_failures` 後 dead code，warning 觸發 → 直接刪除比加 `#[allow(dead_code)]` 乾淨）
+- 既有 2 個 K15 test（`hook_parse_failures_counter_*`）改用 `super::hook_server_metrics().parse_failures` 取值
+
+**為什麼 K16 4xx counter ++ 從 handle_client 移到 process_body**:
+- 原本 K16 4xx 在 `handle_client` 內 2 處 ++（Err branch + else branch），跟 K15 parse_failures 在 `process_body` 內 ++ 完全分離
+- 結果 K16 4xx test 呼叫 `process_body(...)` 觸發不了 K16 4xx → 1 個 test 失敗（`壞 JSON 應讓 K16 4xx counter 至少 +1, before=0 after=0`）
+- 修法選擇：把 K16 4xx ++ 從 handle_client Err branch 移到 process_body Err branch，跟 K15 同一處 ++。handle_client else branch（body 缺失）保留 ++（那條沒 process_body 經過）
+- 語意對齊原 commit msg 設計意圖「同一個 4xx 失敗會同時 ++ K15 和 K16 4xx」— 兩個 counter 維度不同（payload 語意 vs wire 結果）但 increment trigger 共置在 process_body
+- 紅利：unit test 可直接透過 process_body 純 fn 驗證 K16 4xx，不需要 spawn TcpStream mock wire-level 整合測試
+
+**為什麼 K15 parse_failures 沒跟 K16 4xx 合併成單一 counter**:
+- 兩個 metric 維度不同：K15 = 「JSON 壞掉多少」（payload 語意）、K16 = 「server 對外回了什麼」（wire 結果）
+- 同一個事件兩條 counter 都 ++，但 operator 依查詢需求選用：
+  - 排查「CLI 升版改了 schema？」→ 看 K15
+  - 排查「server 是不是開始吐 5xx？」→ 看 K16 5xx（目前永遠 0，保留供未來）
+  - 排查「client 端有沒有收 4xx 跟 server 預期一致？」→ 看 K16 4xx
+- 合併會丟失維度分離，不做
+
+**驗證**:
+- `cargo fmt --check` 0 diff
+- `cargo build --lib` 0 warning（移除 unused `hook_parse_failures()` fn 後 dead_code warning 消失）
+- `cargo test --lib` **154 passed**（151 既有 + 3 R30 K16 test；K15 2 個既有 test 改用新 struct 欄位讀取，仍通過）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| Hook server response status class metric | 0 條 | 3 條 (2xx/4xx/5xx) | +3 |
+| Hook server Prometheus metrics 總計 | 1 (K15 parse_failures) | 4 (K15 + K16×3) | +3 |
+| `HookServerMetrics` struct 欄位 | 0 | 4 (parse_failures, responses_2xx, responses_4xx, responses_5xx) | +1 struct |
+| hook_server unit tests | 8 (K15: 3 個 + 既有 5 個) | 11 (8 + 3 K16) | +3 |
+| Lib 總 unit tests | 151 (R29) | 154 | +3 |
+| Rust dead_code warnings | 1 (unused `hook_parse_failures()`) | 0 | -1 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8% (本輪 M1 不計入 chore) | 持平 |
+
+**不做的範圍**（給後續輪次）:
+- handle_client 5xx branch 落地：目前永遠 0 是合理 design（沒對外 error response code 來源），未來真要加（例：tx.send 失敗、queue 滿）再說
+- per-provider response counter（4xx {provider="claude"}）：K6-K15 都做 per-provider 維度了，K16 沒做是因為 wire-level 4xx 通常跟 schema 漂移有關（多 provider 同時掛），全局視角更實用
+- response latency histogram（`lobsterpulse_hook_response_seconds`）：要 timestamp in/out 對 + bucket 設定，屬於下一個 metrics theme（M2 量測加強）
+- 5xx counter 拿掉：保留欄位是 forward-compat 設計，未來 handle_client 真的有 5xx branch 不用改 alert rule
+
+**結果**: PASS（M1 metrics observability + K16 hook_server HTTP response status class counter 3 條 metric 落地 + 0 lint warning + 0 regression）
+
+**KPI-impact: hook_server HTTP response status class observability 0→3 metrics（2xx/4xx/5xx）,operator 端 alert rule 一裝就 work（4xx alert 立即看見 CLI schema 漂移 / 5xx 預留供未來）**

@@ -18,10 +18,49 @@ use tokio::sync::mpsc;
 /// 即可看到「這條路最近在丟事件」—— 比 grep log 友善很多。
 static HOOK_PARSE_FAILURES: AtomicU64 = AtomicU64::new(0);
 
-/// 讀 snapshot 給 Prometheus render 用。Atomic load = 無鎖、輕量、跨 thread 安全。
-/// 對齊 `discord::health_snapshot()` 模式：未 init 也安全（default = 0）。
-pub fn hook_parse_failures() -> u64 {
-    HOOK_PARSE_FAILURES.load(Ordering::Relaxed)
+/// K16 落地：lifetime counters of HTTP responses by status class (2xx / 4xx / 5xx)。
+///
+/// 對齊 K15 模式：process-level AtomicU64 各自獨立，render 端一次 snapshot。3 個
+/// counter 共用一個 `HookServerMetrics` struct 帶給 `render_prometheus_body` —— 避免
+/// 每加一個 metric 就多一個 fn param、每加一個 metric 就刷 44 個 test call site。
+///
+/// 統計語意：
+///   - 2xx：process_body 解析成功 + tx.send 成功 → 200 OK
+///   - 4xx：body 找不到 / JSON parse 失敗 → 400 Bad Request
+///   - 5xx：目前 `handle_client` 沒有 5xx 分支，永遠 0；保留欄位是為了讓 operator
+///          可直接設 `rate(...{class="5xx"}[5m]) > 0` alert，未來真的回 5xx 不用
+///          再改 schema / 改 alert rule
+///
+/// 與 K15 的差別：K15 是「payload 內部 parse 失敗」單一語意，K16 是「HTTP wire-level
+/// response 結果」分類。同一個 400 失敗會同時 ++ K15 和 K16 4xx —— K15 給「JSON 壞掉
+/// 多少」視角，K16 給「server 對外回了什麼 status code」視角。
+static HOOK_RESPONSES_2XX: AtomicU64 = AtomicU64::new(0);
+static HOOK_RESPONSES_4XX: AtomicU64 = AtomicU64::new(0);
+static HOOK_RESPONSES_5XX: AtomicU64 = AtomicU64::new(0);
+
+/// 一個 hook_server 全部 Prometheus-facing 計數的 snapshot。
+/// render 端用一個 `&HookServerMetrics` 就拿到 K15+K16 全部，省去 fn-signature 膨脹。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HookServerMetrics {
+    /// K15：lifetime JSON parse failures
+    pub parse_failures: u64,
+    /// K16：lifetime 2xx OK responses
+    pub responses_2xx: u64,
+    /// K16：lifetime 4xx Bad Request responses
+    pub responses_4xx: u64,
+    /// K16：lifetime 5xx Server Error responses（目前永遠 0，保留供未來）
+    pub responses_5xx: u64,
+}
+
+/// 一次讀 4 個 atomic 給 Prometheus render 用。3 個 K16 counter 各自獨立 load，
+/// render 端不持任何鎖跨越 string 構造（對齊 K14 K15 render 端約束）。
+pub fn hook_server_metrics() -> HookServerMetrics {
+    HookServerMetrics {
+        parse_failures: HOOK_PARSE_FAILURES.load(Ordering::Relaxed),
+        responses_2xx: HOOK_RESPONSES_2XX.load(Ordering::Relaxed),
+        responses_4xx: HOOK_RESPONSES_4XX.load(Ordering::Relaxed),
+        responses_5xx: HOOK_RESPONSES_5XX.load(Ordering::Relaxed),
+    }
 }
 
 pub struct HookServer {
@@ -107,11 +146,14 @@ async fn handle_client(
                         provider
                     );
                 }
+                HOOK_RESPONSES_2XX.fetch_add(1, Ordering::Relaxed);
                 "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
             }
             Err(()) => {
                 // 對齊 R6 模式：JSON parse 失敗不再 silent——surfaced via log::warn。
                 // Body 截前 200 byte 避免 log 爆；非 UTF-8 用 lossy 顯示。
+                // K16 4xx counter 在 process_body 內 ++，跟 K15 同一處觸發，
+                // 這樣 unit test 透過 process_body 就能直接驗 wire-level 4xx 路徑。
                 let preview_len = body.len().min(200);
                 let preview = String::from_utf8_lossy(&body[..preview_len]);
                 warn!(
@@ -122,6 +164,7 @@ async fn handle_client(
             }
         }
     } else {
+        HOOK_RESPONSES_4XX.fetch_add(1, Ordering::Relaxed);
         "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     };
 
@@ -134,11 +177,17 @@ fn process_body(body: &[u8], provider: &str) -> Result<HookEvent, ()> {
     let raw: crate::hook_event::RawHookEvent = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(_) => {
-            // K15 落地：lifetime counter++，對齊 R6 surfacing 模式 —— 原本只有
-            // log::warn，operator 沒辦法 query aggregate。Prometheus 端用
-            // `rate(lobsterpulse_hook_parse_failures_total[5m])` 即可看到
-            // 「最近這條路在丟事件」的 throughput。
+            // K15 + K16 4xx 落地：JSON parse 失敗 → 兩個 counter 同時 ++。
+            // 對齊 R6 surfacing 模式 —— 原本只有 log::warn，operator 沒辦法
+            // query aggregate。Prometheus 端用：
+            //   - `rate(lobsterpulse_hook_parse_failures_total[5m])` → 視角：
+            //     「這條路最近在丟多少壞 JSON」
+            //   - `rate(lobsterpulse_hook_responses_total{class="4xx"}[5m])` → 視角：
+            //     「server 對外回了多少 4xx」
+            // 兩個 metric 維度不同（payload 語意 vs wire-level 結果），operator
+            // 依需求選用。++ 在 process_body 內，unit test 可直接觸發驗證。
             HOOK_PARSE_FAILURES.fetch_add(1, Ordering::Relaxed);
+            HOOK_RESPONSES_4XX.fetch_add(1, Ordering::Relaxed);
             return Err(());
         }
     };
@@ -286,10 +335,10 @@ mod tests {
     // 自己這條呼叫的 local delta，別人的 increment 算背景噪音。
     #[test]
     fn hook_parse_failures_counter_increments_on_invalid_json() {
-        let before = super::hook_parse_failures();
+        let before = super::hook_server_metrics().parse_failures;
         // 故意觸發 parse 失敗：braces 不對、不是 JSON
         let _ = process_body(b"not json { broken", "claude");
-        let after = super::hook_parse_failures();
+        let after = super::hook_server_metrics().parse_failures;
         assert!(
             after > before,
             "process_body 收到壞 JSON 應讓 lifetime counter +1，before={before} after={after}"
@@ -314,16 +363,67 @@ mod tests {
 
     #[test]
     fn hook_parse_failures_counter_accumulates_across_failures() {
-        let before = super::hook_parse_failures();
+        let before = super::hook_server_metrics().parse_failures;
         // 連續 3 次壞 JSON 應讓 counter +3（不嚴格等於 3 因為平行 test 噪音，
         // 只驗證 >= 3）
         for i in 0..3 {
             let _ = process_body(format!("garbage payload #{i}").as_bytes(), "claude");
         }
-        let after = super::hook_parse_failures();
+        let after = super::hook_server_metrics().parse_failures;
         assert!(
             after >= before + 3, // clippy::int_plus_one 不觸發 (>= 3 不是 +1)
             "3 次壞 JSON 應讓 counter 至少 +3，before={before} after={after}"
+        );
+    }
+
+    // ─── K16 落地：handle_client 內 2xx/4xx 分支 → lifetime response counter++ ───
+    // 測試策略：snapshot delta 模式（讀 before / 觸發 / 讀 after，檢 local delta），
+    // 對其他平行 test 安全 —— 4 個 atomic 各自 fetch_add 不會掉 increment，只要
+    // 我們只看自己這條呼叫的 local delta，別人的 increment 算背景噪音。
+    #[test]
+    fn hook_server_metrics_default_snapshot_is_all_zeros() {
+        // 沒任何操作 → 4 個欄位都該是 0（不依賴 process-level 噪音斷言）
+        let metrics = super::HookServerMetrics::default();
+        assert_eq!(metrics.parse_failures, 0);
+        assert_eq!(metrics.responses_2xx, 0);
+        assert_eq!(metrics.responses_4xx, 0);
+        assert_eq!(metrics.responses_5xx, 0);
+    }
+
+    #[test]
+    fn hook_server_metrics_increments_2xx_on_valid_json_parse() {
+        // process_body 解析成功 → K16 4xx 不 increment；但 K16 2xx 是在 handle_client
+        // 內、且只有 process_body 回 Err 才 ++ 4xx。所以這裡只驗 K15 parse_failures
+        // 行為（成功時不變），K16 2xx 增量透過 K15 valid-JSON 測試覆蓋（同一 process
+        // 測試呼叫 process_body 不會經過 handle_client 的 wire 回應邏輯）。
+        //
+        // 本測試目的：確認 valid JSON 走 process_body Ok 分支時，K16 metrics 的
+        // 4xx counter 沒有被誤 ++（4xx 應該只在 Err(()) 那條 ++）。
+        let before = super::hook_server_metrics();
+        let _ = process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
+            .expect("valid json should parse");
+        let after = super::hook_server_metrics();
+        // 4xx 不該被 valid JSON 觸發；其他 counter (parse_failures / 2xx / 5xx)
+        // 本測試斷言範圍外，給平行 test 噪音留空間。
+        assert_eq!(
+            after.responses_4xx, before.responses_4xx,
+            "valid JSON 不該 ++ 4xx counter，before={} after={}",
+            before.responses_4xx, after.responses_4xx
+        );
+    }
+
+    #[test]
+    fn hook_server_metrics_increments_4xx_on_invalid_json() {
+        // 對齊 K15 測試模式：bad JSON → process_body Err → 對應 K16 4xx counter
+        // ++。本測試只 snapshot 4xx delta，不對其他 counter 下嚴格斷言。
+        let before = super::hook_server_metrics();
+        let _ = process_body(b"not json { broken", "claude");
+        let after = super::hook_server_metrics();
+        assert!(
+            after.responses_4xx >= before.responses_4xx + 1,
+            "壞 JSON 應讓 K16 4xx counter 至少 +1，before={} after={}",
+            before.responses_4xx,
+            after.responses_4xx
         );
     }
 

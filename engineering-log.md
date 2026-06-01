@@ -4,6 +4,62 @@
 
 ## 改善紀錄
 
+### [2026-06-01] Round 12 — lib.rs spawn loop 3 條 silent fail 補 surface (quota_history × 2 + openab_bridge dispatch × 1)
+**類型**: M0（user-facing observability bug：3 條 spawn-loop 內 `let _ = 函式()` 沉默吞 error）
+**KPI**: K-silent-fail-surface
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| lib.rs spawn-loop 沉默吞 error sites | 3 (post-runners snap / hourly snap / dispatch_event) | 0 (if let Err + log::warn) | −3 |
+| dispatch_event 「?」 fallback 一致性 | 內層有 / 外層無（`""`） | 內外層都有 | ✓ |
+| unit tests 覆蓋（dispatch_event Err path） | 0 | 3 | +3 |
+| cargo test --lib | 39 pass | 42 pass | +3 |
+| 24h chore_ratio | 0% (R10/R11 兩輪 fix) | 0% | — |
+| 24h 連續 M0 推進輪數 | 5 (R6/R8/R9/R11/本輪) | 6 | +1 |
+
+**為什麼**:
+- R6/R8/R9/R11 連續 surface silent fail pattern，但**只 cover 到 module 內部**的 call sites
+- 本輪往** caller 端**再掃（grep `let _ = .*::` 對 7 個 module），發現 3 條 spawn-loop 內遺漏：
+  - `lib.rs:1329` `let _ = quota_history::snapshot_once()`（post-runners 60s 補 snap）→ CSV 寫失敗 user 端 quota-history 缺資料、無 log
+  - `lib.rs:1335` 同上（hourly 3600s 排程）
+  - `lib.rs:1393` `let _ = openab_bridge::dispatch_event(...)`（15s tick 對每個 OpenAB event 呼叫）→ 事件沒到 Discord、user 端 OpenAB 狀態變化消失、無 log
+- 影響面：quota-history.csv 是 user 看 trend chart 的唯一依據、OpenAB 通知是 OpenAB 跨進程的**唯一對外通道** — 兩個都 silent 等於「整個 observability 層壞掉 user 也不知道」
+- 對齊 R6/R8/R11 改法：inline `let _ =` → `if let Err(e) = ... { log::warn!(...) }`，訊息含 function 名 + 失敗原因 + 可觀察 context（dispatch 還帶 source/event）
+- 順手修 consistency bug：`dispatch_event` 的 outer source/kind fallback 是 `unwrap_or("")`、inner changes/summary 是 `unwrap_or("?")`，log 端會看到 `source= event=`（空字串）vs `source=? event=?` — 改外層對齊內層 convention
+
+**搜尋**:
+- 沒做 WebSearch（同 R6/R8/R11 既有 pattern 延伸、非新領域）
+- Grep `let _ = .*::` 對 7 個 module（auto_rules/hook_server/openab_bridge/discord/lib/session/config）
+- 確認 auto_rules.rs 14 處已在 R6 改完、hook_server.rs 2 處在 R8、openab_bridge.rs 3 處在 R11
+- 確認 discord.rs 本身 caller 端不吞（直接 `?` propagation）
+
+**做了什麼**:
+- `lib.rs` 3 call sites：`let _ = quota_history::snapshot_once()` × 2 + `let _ = openab_bridge::dispatch_event(...)` → `if let Err(e) = ... { log::warn!(...) }`
+- `openab_bridge::dispatch_event`：outer source/kind `unwrap_or("")` → `unwrap_or("?")`
+- 加 3 個 unit test 覆蓋 dispatch_event：
+  - `dispatch_event_returns_err_for_unknown_source_kind`：unknown pair → Err 含 source + kind
+  - `dispatch_event_falls_back_to_question_mark_for_missing_fields`：缺欄位 → "?" fallback 走 unknown branch
+  - `dispatch_event_handles_known_kind_with_bogus_inner_shape`：known pair + 假 token → Err path 可達
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 42/42 pass（39 prior + 3 new）
+- 過程中抓出 1 個 latent consistency bug（dispatch_event outer fallback 是 `""` 不是 `"?"`，與 inner field 不一致）→ 改一致後 42/42 綠
+- `bash test/smoke-test.sh quick` PASS
+
+**結果**: PASS（M0 observability 改善落地 + 順手修 outer/inner fallback consistency + 3 unit test + 0 lint warning，commit `7778960`）
+
+**不做的範圍**（給後續輪次）:
+- `lib.rs:1329` 60s 補 snap 跟 1335 hourly 兩個 quota_history::snapshot_once 是否要合併到單一 thread（避免重複 IO）— 純 refactor、無 observability 改善
+- `openab_bridge::tail_new_events` 內 5 處 `let Ok(_) = ...`（read_to_string / metadata / File::open / seek / read_to_end）— 是「檔案不存在 = 無新事件」的 expected 場景、不是 silent fail
+- `lib.rs:1553/1576` monitor 偵測 silent fail — 是 best-effort UI placement fallback、無 user-facing impact
+- `lib.rs:169-173` rodio 音訊 nested `if let Ok(...)` 鏈 — 是「無音檔 = 靜默」 的設計意圖、非 bug
+- `quota_history::snapshot_once` 內 line 39 `let _ = std::fs::create_dir_all(parent)` — 後續 open() 會回 Err 暴露、caller 已 log、雙層保護
+
+---
+
 ### [2026-06-01] Round 9 — hook_failure_burst 5 條 false-positive 命中改 silent → log::debug surface
 **類型**: M0（user-facing observability bug：Rule 3 hook_failure_burst 對 5 條已知誤報 pattern 命中即 silent continue，真實 hook 失敗若撞子字串會被一起吃掉且無 log）
 

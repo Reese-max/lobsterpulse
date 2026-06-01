@@ -572,11 +572,30 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
         "runners": results,
     });
     let path = dir.join("usage-local.json");
-    if let Ok(data) = serde_json::to_vec_pretty(&snapshot) {
-        if write_file_atomic_with_retry(&path, &data).is_err() {
-            let _ = std::fs::write(&path, data);
-        }
+    if let Err(e) = write_local_usage_snapshot(&path, &snapshot) {
+        log::error!(
+            "usage-local.json write failed: {e}; capsule quota bar will show stale \
+             data until the next 60s cycle recovers"
+        );
     }
+}
+
+/// 序列化 + 原子寫 usage snapshot。失敗回 Err 並在內部 log — 不要 silent,
+/// 因為 60s loop 下 snapshot 寫失敗會讓膠囊 quota 卡舊值,user 不知是 OpenAB
+/// 沒更新還是 LP 自己寫失敗。`run_local_usage_runners` 是唯一 caller。
+fn write_local_usage_snapshot(
+    path: &std::path::Path,
+    snapshot: &serde_json::Value,
+) -> Result<(), String> {
+    let data = serde_json::to_vec_pretty(snapshot).map_err(|e| format!("serialize: {e}"))?;
+    if let Err(e) = write_file_atomic_with_retry(path, &data) {
+        log::error!("usage-local.json atomic write failed: {e}, falling back to direct write");
+        std::fs::write(path, &data).map_err(|e2| {
+            log::error!("usage-local.json direct write failed: {e2}");
+            format!("atomic: {e}, direct: {e2}")
+        })?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1676,4 +1695,66 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running LobsterPulse");
+}
+
+#[cfg(test)]
+mod write_local_usage_snapshot_tests {
+    use super::*;
+
+    /// 為每個 test 製造獨立 tmp 路徑（避免 parallel test 互踩 / 污染 home dir）。
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("lp-snap-{tag}-{nonce}.json"));
+        p
+    }
+
+    #[test]
+    fn happy_path_writes_valid_json() {
+        let path = tmp_path("happy");
+        let snap = serde_json::json!({
+            "source": "local",
+            "updated_at": 1700000000_u64,
+            "runners": [
+                {"ok": true, "name": "r1", "text": "ok"}
+            ],
+        });
+
+        write_local_usage_snapshot(&path, &snap).expect("write should succeed");
+
+        let raw = std::fs::read_to_string(&path).expect("file should exist after write");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&raw).expect("written file should be valid JSON");
+        assert_eq!(parsed["source"], "local");
+        assert_eq!(parsed["updated_at"], 1700000000_u64);
+        assert!(parsed["runners"].is_array());
+        assert_eq!(parsed["runners"][0]["name"], "r1");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn returns_err_when_target_dir_missing() {
+        // 故意指向不存在的中間目錄 → 兩層 write 都不該成功 → 必須回 Err
+        let mut path = std::env::temp_dir();
+        path.push("lp-snap-no-such-dir-99887766");
+        path.push("nested");
+        path.push("snapshot.json");
+
+        let snap = serde_json::json!({"source": "local", "runners": []});
+        let result = write_local_usage_snapshot(&path, &snap);
+        assert!(
+            result.is_err(),
+            "write to non-existent dir should return Err"
+        );
+        let err = result.unwrap_err();
+        // 兩層 fallback 都會 log，這條 assert 確認 error chain 包含「atomic」失敗訊息
+        assert!(
+            err.contains("atomic"),
+            "error should mention atomic write failure, got: {err}"
+        );
+    }
 }

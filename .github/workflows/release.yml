@@ -1,7 +1,7 @@
 name: Release
 
 # Tag-triggered release: builds all 3 platforms, zips the two binaries
-# (agent-pulse + agent-pulse-hook sidecar), and attaches each platform's
+# (lobster-pulse + lobster-pulse-hook sidecar), and attaches each platform's
 # zip to a GitHub Release. The Release is created as a draft so you can
 # review and publish manually.
 #
@@ -96,11 +96,11 @@ jobs:
             BUILD_DIR="src-tauri/target/release"
           fi
           cd "$BUILD_DIR"
-          ZIP_NAME="agent-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip"
+          ZIP_NAME="lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            7z a -tzip "$ZIP_NAME" agent-pulse.exe agent-pulse-hook.exe
+            7z a -tzip "$ZIP_NAME" lobster-pulse.exe lobster-pulse-hook.exe
           else
-            zip "$ZIP_NAME" agent-pulse agent-pulse-hook
+            zip "$ZIP_NAME" lobster-pulse lobster-pulse-hook
           fi
           mv "$ZIP_NAME" "$GITHUB_WORKSPACE/"
 
@@ -128,6 +128,6 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: agent-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip
+          files: lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip
           draft: true
           body_path: release-notes.md

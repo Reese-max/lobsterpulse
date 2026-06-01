@@ -164,9 +164,14 @@ fn install_claude_hooks(path: &PathBuf) -> Result<(), String> {
     let cmd = hook_cmd("claude");
 
     let events = [
-        "SessionStart", "SessionEnd", "UserPromptSubmit",
-        "PreToolUse", "PostToolUse", "PostToolUseFailure",
-        "PermissionRequest", "Stop",
+        "SessionStart",
+        "SessionEnd",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "PermissionRequest",
+        "Stop",
     ];
 
     for event in events {
@@ -208,10 +213,14 @@ fn install_gemini_hooks(path: &PathBuf) -> Result<(), String> {
     let cmd = hook_cmd_powershell("gemini");
 
     let events = [
-        "SessionStart", "SessionEnd",
-        "BeforeAgent", "AfterAgent",
-        "BeforeModel", "AfterModel",
-        "BeforeTool", "AfterTool",
+        "SessionStart",
+        "SessionEnd",
+        "BeforeAgent",
+        "AfterAgent",
+        "BeforeModel",
+        "AfterModel",
+        "BeforeTool",
+        "AfterTool",
         "Notification",
     ];
 
@@ -244,7 +253,8 @@ fn install_gemini_hooks(path: &PathBuf) -> Result<(), String> {
 /// Codex CLI: hooks in ~/.codex/hooks.json + enable feature flag in config.toml
 fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
     // 1. Enable codex_hooks feature flag in config.toml
-    let config_toml = path.parent()
+    let config_toml = path
+        .parent()
         .ok_or("Invalid hooks.json path")?
         .join("config.toml");
 
@@ -305,8 +315,12 @@ fn install_copilot_hooks(path: &PathBuf) -> Result<(), String> {
     let cmd = hook_cmd("copilot");
 
     let events = [
-        "sessionStart", "sessionEnd", "userPromptSubmitted",
-        "preToolUse", "postToolUse", "agentStop",
+        "sessionStart",
+        "sessionEnd",
+        "userPromptSubmitted",
+        "preToolUse",
+        "postToolUse",
+        "agentStop",
     ];
 
     for event in events {
@@ -334,7 +348,8 @@ fn install_copilot_hooks(path: &PathBuf) -> Result<(), String> {
 fn load_or_create_json(path: &PathBuf) -> Result<Value, String> {
     if path.exists() {
         let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&data).map_err(|e| format!("{} contains malformed JSON: {e}", path.display()))
+        serde_json::from_str(&data)
+            .map_err(|e| format!("{} contains malformed JSON: {e}", path.display()))
     } else {
         Ok(json!({}))
     }

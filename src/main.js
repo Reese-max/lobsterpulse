@@ -10,11 +10,25 @@ const PROVIDER_ICONS = {
   codex: `<svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"/></svg>`,
 };
 
+// OpenAB bot 繼承各自底層 CLI 的圖示（視覺一致），配色改成 bot 人設色。
+PROVIDER_ICONS.cicx = PROVIDER_ICONS.claude;
+PROVIDER_ICONS.gitx = PROVIDER_ICONS.copilot;
+PROVIDER_ICONS.giminix = PROVIDER_ICONS.gemini;
+PROVIDER_ICONS.codex_bot = PROVIDER_ICONS.codex;
+// OPENX 專屬 icon：terminal 風格（矩形 + 尖括號 prompt + 底線），辨識 OpenCode = polymorphic CLI
+PROVIDER_ICONS.openx = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><polyline points="7 10 10 12 7 14"/><line x1="12" y1="14" x2="18" y2="14"/></svg>`;
+
 const PROVIDER_COLORS = {
   claude: "#d97757",
   gemini: "#4285f4",
   copilot: "#6e40c9",
   codex: "#10a37f",
+  // OpenAB bot 人設色
+  cicx: "#ff8c42",      // CICX 橘
+  gitx: "#7c3aed",      // GITX 紫
+  giminix: "#3b82f6",   // GIMINIX 藍
+  codex_bot: "#22c55e", // CODEX bot 亮綠
+  openx: "#f472b6",     // OPENX 粉紅（OpenCode 辨識色）
 };
 
 const APP_NAME = "龍蝦監控";
@@ -25,12 +39,35 @@ const COLORS = {
   green: "rgb(77,242,153)", orange: "rgb(255,153,51)", pink: "rgb(255,102,153)",
 };
 const SCALES = { small: 0.85, medium: 1, large: 1.15 };
-const W = 300;
+const DEFAULT_CAPSULE_W = 300;
+const DEFAULT_EXPANDED_W = 300;
+// 依當前視圖選寬度（capsule 是小方塊，其他視圖用 expanded_width）
+function currentW() {
+  if (!appConfig) return DEFAULT_EXPANDED_W;
+  return currentView === "capsule"
+    ? (appConfig.appearance.capsule_width || DEFAULT_CAPSULE_W)
+    : (appConfig.appearance.expanded_width || DEFAULT_EXPANDED_W);
+}
 
 let currentView = "capsule";
 let serverPort = 0;
 let appConfig = null;
 let collapsedAt = 0;
+let sessionFilter = null; // bot card 點選後過濾 session list 的 provider id
+let notifiedLongSessions = new Set(); // 避免同一 long session 重複發 Telegram
+let sessionExpanded = new Set(); // 被展開的 session id（預設 compact）
+let dashboardCollapsed = { "bot-grid": false, "local-grid": false }; // 兩區塊都預設展開，讓用戶一眼看到 OpenAB 和本機兩條路徑
+let quotaCollapsed = false;
+let refreshStateInFlight = false;
+let refreshStateQueued = false;
+let refreshQuotasInFlight = false;
+let refreshQuotasQueued = false;
+let recentFailuresInFlight = false;
+let recentFailuresQueued = false;
+let eventsRenderInFlight = false;
+let eventsRenderQueued = false;
+const notifyDedupeTs = new Map();
+const NOTIFY_DEDUPE_MAX_KEYS = 256;
 
 const $ = (id) => document.getElementById(id);
 
@@ -38,16 +75,22 @@ const $ = (id) => document.getElementById(id);
 async function fitWindow() {
   await new Promise(r => requestAnimationFrame(r));
   const h = Math.max(Math.ceil(document.getElementById("app").scrollHeight) + 2, 46);
-  await invoke("resize_window", { width: W, height: h });
+  await invoke("resize_window", { width: currentW(), height: h });
 }
 
 // ─── View switching ───
 function showView(view) {
   const wasExpanded = currentView !== "capsule";
+  const prevView = currentView;
   currentView = view;
   $("view-expanded").classList.toggle("hidden", view !== "expanded");
   $("view-settings").classList.toggle("hidden", view !== "settings");
-  $("capsule").classList.toggle("has-panel-below", view === "expanded" || view === "settings");
+  $("view-dashboard").classList.toggle("hidden", view !== "dashboard");
+  $("view-events-log").classList.toggle("hidden", view !== "events");
+  $("capsule").classList.toggle(
+    "has-panel-below",
+    view === "expanded" || view === "settings" || view === "dashboard" || view === "events"
+  );
   fitWindow();
   if (view === "capsule" && wasExpanded) {
     collapsedAt = Date.now();
@@ -60,26 +103,53 @@ function showView(view) {
     cap.classList.add("bouncing");
     setTimeout(() => cap.classList.remove("bouncing"), 300);
   }
+  if (view === "events" && prevView !== "events") {
+    startEventsAutoRefresh();
+  } else if (view !== "events" && prevView === "events") {
+    stopEventsAutoRefresh();
+  }
 }
 
 // ─── Provider icon HTML ───
 function providerIconHtml(providerId, size = 16) {
   const svg = PROVIDER_ICONS[providerId] || PROVIDER_ICONS.claude;
   const color = PROVIDER_COLORS[providerId] || "#888";
-  return `<span class="provider-icon" style="width:${size}px;height:${size}px;color:${color}">${svg}</span>`;
+  return `<span class="provider-icon" data-provider="${providerId}" style="width:${size}px;height:${size}px;color:${color}">${svg}</span>`;
 }
+
+// #10 Multi-provider capsule tab —— frontend 覆寫 active_session
+let manualActiveProvider = null;
 
 // ─── Init ───
 async function init() {
   if (!window.__TAURI_INTERNALS__) { setTimeout(init, 200); return; }
+
+  // 強制 resize — 繞開 Tauri 2.10 + transparent=true + decorations=false 下 setup。
+  // init 先執行一次（此時 appConfig 可能未載入），用 DEFAULT；後續 showView/fitWindow 會按 appConfig 重算。
+  // 的 set_size 被 Windows DWM 合成器忽略導致 window 卡 14×14 的 bug
+  try { await invoke("resize_window", { width: 300, height: 46 }); } catch (e) {}
 
   try {
     serverPort = await invoke("get_server_port");
     appConfig = await invoke("get_config");
   } catch (e) { return; }
 
+  // 快速路徑：先套 CSS var / 字型（synchronous），capsule 立刻渲染
   applyAccentColor(appConfig.appearance.accent_color);
   applyTextSize(appConfig.appearance.text_size);
+  applyFontFamily(appConfig.appearance.font_family);
+  applyBgOpacity(appConfig.appearance.bg_opacity);
+  // 背景 async 延遲 150ms 跑（capsule 先露面，避免 bg video/image 卡住首屏）
+  setTimeout(() => {
+    applyBackground(
+      appConfig.appearance.background_type,
+      appConfig.appearance.background_path,
+      appConfig.appearance.background_blur,
+      appConfig.appearance.background_image_opacity
+    );
+  }, 150);
+  // 載完 config 後立刻套用使用者偏好寬度（capsule 起始視圖）
+  try { await invoke("resize_window", { width: currentW(), height: 46 }); } catch (e) {}
   applyTheme(appConfig.appearance.theme || "dark");
   $("toggle-sound").checked = appConfig.appearance.sound_enabled;
   $("toggle-pin").checked = appConfig.appearance.pin_expanded;
@@ -131,6 +201,49 @@ async function init() {
   });
   invoke("plugin:event|listen", { event: "open-settings", target: { kind: "Any" }, handler: openSettingsCb }).catch(() => {});
 
+  // #8 Configurator live sync — Rust watcher emit 後即時套用
+  const appearanceSyncedCb = window.__TAURI_INTERNALS__.transformCallback(async () => {
+    try {
+      appConfig = await invoke("get_config");
+      applyAccentColor(appConfig.appearance.accent_color);
+      applyTextSize(appConfig.appearance.text_size);
+      applyFontFamily(appConfig.appearance.font_family);
+      applyBgOpacity(appConfig.appearance.bg_opacity);
+      applyBackground(
+        appConfig.appearance.background_type,
+        appConfig.appearance.background_path,
+        appConfig.appearance.background_blur,
+        appConfig.appearance.background_image_opacity
+      );
+      applyTheme(appConfig.appearance.theme || "dark");
+    } catch (e) { console.error("appearance-synced:", e); }
+  });
+  invoke("plugin:event|listen", { event: "appearance-synced", target: { kind: "Any" }, handler: appearanceSyncedCb }).catch(() => {});
+
+  // Tray → Bot Dashboard
+  const openDashboardCb = window.__TAURI_INTERNALS__.transformCallback(() => {
+    renderDashboard(lastState);
+    showView("dashboard");
+  });
+  invoke("plugin:event|listen", { event: "open-dashboard", target: { kind: "Any" }, handler: openDashboardCb }).catch(() => {});
+
+  // Tray → Events Log
+  const openEventsCb = window.__TAURI_INTERNALS__.transformCallback(async () => {
+    await renderEventsLog();
+    showView("events");
+    startEventsAutoRefresh();
+  });
+  invoke("plugin:event|listen", { event: "open-events-log", target: { kind: "Any" }, handler: openEventsCb }).catch(() => {});
+
+  // ESC 鍵清除 session filter
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && sessionFilter) {
+      sessionFilter = null;
+      if (lastState) renderSessions(lastState);
+      fitWindow();
+    }
+  });
+
   // Listen for tray → Toggle Theme
   const toggleThemeCb = window.__TAURI_INTERNALS__.transformCallback(() => {
     const newTheme = (appConfig.appearance.theme || "dark") === "dark" ? "light" : "dark";
@@ -148,19 +261,31 @@ async function init() {
     });
     invoke("plugin:event|listen", { event: "cursor-left", target: { kind: "Any" }, handler: cb2 }).catch(() => {});
 
-    // Listen for task-completed → play provider-specific completion sound
+    // Listen for task-completed → play sound + optional Windows toast
     const soundCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
-      if (!appConfig.appearance.sound_enabled) return;
-      const provider = (evt && evt.payload) || "claude";
-      playProviderSound(provider, "completion");
+      const provider = (evt && evt.payload) || "cicx";
+      const label = PROVIDER_LABEL?.[provider] || provider;
+      if (appConfig.appearance.sound_enabled) playProviderSound(provider, "completion");
+      if (appConfig.appearance.system_notifications) {
+        systemNotify(`${label} ✅ 完成`, "任務結束，可回覆或收尾。", {
+          dedupeKey: `task-completed:${provider}`,
+          windowMs: 5000,
+        });
+      }
     });
     invoke("plugin:event|listen", { event: "task-completed", target: { kind: "Any" }, handler: soundCb }).catch(() => {});
 
-    // Listen for task-waiting → play provider-specific waiting sound
+    // Listen for task-waiting → play sound + optional Windows toast
     const waitingCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
-      if (!appConfig.appearance.sound_enabled) return;
-      const provider = (evt && evt.payload) || "claude";
-      playProviderSound(provider, "waiting");
+      const provider = (evt && evt.payload) || "cicx";
+      const label = PROVIDER_LABEL?.[provider] || provider;
+      if (appConfig.appearance.sound_enabled) playProviderSound(provider, "waiting");
+      if (appConfig.appearance.system_notifications) {
+        systemNotify(`${label} ⏸ 等待你處理`, "agent 需要你回應。", {
+          dedupeKey: `task-waiting:${provider}`,
+          windowMs: 5000,
+        });
+      }
     });
     invoke("plugin:event|listen", { event: "task-waiting", target: { kind: "Any" }, handler: waitingCb }).catch(() => {});
   }, 2000);
@@ -201,6 +326,23 @@ async function init() {
     saveConfig();
   });
 
+  // Autostart toggle — 初始化為實際狀態（plugin 才是 source of truth）
+  getAutostart().then(enabled => { $("toggle-autostart").checked = enabled; });
+  $("toggle-autostart").addEventListener("change", async (e) => {
+    const ok = await setAutostart(e.target.checked);
+    if (!ok) e.target.checked = !e.target.checked; // revert on failure
+  });
+
+  $("toggle-notify").checked = !!appConfig.appearance.system_notifications;
+  $("btn-test-toast")?.addEventListener("click", async () => {
+    try { await invoke("test_toast"); } catch (e) { alert("toast 失敗: " + e); }
+  });
+  $("toggle-notify").addEventListener("change", (e) => {
+    appConfig.appearance.system_notifications = e.target.checked;
+    saveConfig();
+    if (e.target.checked) systemNotify("龍蝦監控", "系統通知已啟用");
+  });
+
   $("toggle-sound").addEventListener("change", (e) => {
     appConfig.appearance.sound_enabled = e.target.checked;
     $("sound-picker").classList.toggle("hidden", !e.target.checked);
@@ -229,6 +371,68 @@ async function init() {
     invoke("open_app_config").catch(() => {});
   });
 
+  $("btn-hide").addEventListener("click", () => {
+    invoke("hide_window").catch(() => {});
+  });
+
+  // 強制 snapshot — 立即寫一筆 quota-history.csv
+  $("btn-snap-now")?.addEventListener("click", async () => {
+    const btn = $("btn-snap-now");
+    const orig = btn.innerHTML;
+    try {
+      const n = await invoke("manual_snapshot_once");
+      btn.innerHTML = `<span style="font-size:10px;font-weight:700">✓${n}</span>`;
+    } catch (e) {
+      btn.innerHTML = `<span style="font-size:10px;color:#ff5050">✗</span>`;
+      console.error("snap failed:", e);
+    }
+    setTimeout(() => { btn.innerHTML = orig; }, 2200);
+  });
+
+  // 一鍵 rebuild + relaunch（背景 cargo build → LP exit → 新 exe 自動起）
+  $("btn-rebuild")?.addEventListener("click", async () => {
+    if (!confirm("確定要 cargo build --release 並重啟 LP？\n（背景跑約 1 分鐘，完成會自動 relaunch）")) return;
+    const btn = $("btn-rebuild");
+    btn.innerHTML = `<span style="font-size:10px;font-weight:700">⏳</span>`;
+    try { await invoke("rebuild_and_relaunch"); }
+    catch (e) { alert("rebuild 失敗: " + e); btn.innerHTML = "⟳"; }
+  });
+
+  // ⏸/▶️ 自動化主開關
+  const updateAutoIcon = () => {
+    const on = appConfig?.appearance?.auto_actions?.master_enabled !== false;
+    const btn = $("btn-auto-toggle"), ic = $("btn-auto-icon");
+    if (!btn || !ic) return;
+    ic.textContent = on ? "▶️" : "⏸";
+    btn.title = on ? "自動化：運作中（點擊暫停）" : "自動化：已暫停（點擊恢復）";
+    btn.style.opacity = on ? "1" : "0.5";
+  };
+  $("btn-auto-toggle").addEventListener("click", () => {
+    if (!appConfig.appearance.auto_actions) return;
+    appConfig.appearance.auto_actions.master_enabled = !appConfig.appearance.auto_actions.master_enabled;
+    updateAutoIcon();
+    saveConfig();
+  });
+  setTimeout(updateAutoIcon, 500);
+
+  // 清空所有 session（保留 recent_events + provider_totals 歷史累計）
+  $("btn-clear-sessions").addEventListener("click", async () => {
+    try { await invoke("remove_all_sessions"); } catch (e) {}
+    sessionExpanded.clear();
+    sessionFilter = null;
+    refreshState();
+  });
+
+  // 事件診斷手動刷新
+  $("btn-refresh-events").addEventListener("click", () => renderEventsLog());
+
+  $("btn-close-dashboard").addEventListener("click", () => {
+    showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
+  });
+  $("btn-close-events").addEventListener("click", () => {
+    showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
+  });
+
   // Settings tab switching
   document.querySelectorAll(".settings-tab").forEach(tab => {
     tab.addEventListener("click", () => {
@@ -241,12 +445,1073 @@ async function init() {
     });
   });
 
+  // 初始化 3 個 threshold input
+  $("idle-secs").value = appConfig.appearance.idle_threshold_secs ?? 30;
+  $("stale-secs").value = appConfig.appearance.stale_threshold_secs ?? 600;
+  $("remove-secs").value = appConfig.appearance.remove_threshold_secs ?? 1800;
+  $("tg-token").value = appConfig.appearance.telegram_bot_token ?? "";
+  $("tg-chat").value = appConfig.appearance.telegram_chat_id ?? "";
+  $("tg-threshold").value = appConfig.appearance.telegram_notify_threshold_secs ?? 600;
+
+  const bindNumInput = (id, key) => $(id).addEventListener("change", (e) => {
+    const n = parseInt(e.target.value, 10);
+    if (!isNaN(n)) { appConfig.appearance[key] = n; saveConfig(); }
+  });
+  bindNumInput("idle-secs", "idle_threshold_secs");
+  bindNumInput("stale-secs", "stale_threshold_secs");
+  bindNumInput("remove-secs", "remove_threshold_secs");
+  bindNumInput("tg-threshold", "telegram_notify_threshold_secs");
+  // 視窗寬度（修改後立即 resize + persist）
+  $("capsule-width").value = appConfig.appearance.capsule_width ?? DEFAULT_CAPSULE_W;
+  $("expanded-width").value = appConfig.appearance.expanded_width ?? DEFAULT_EXPANDED_W;
+  const bindWidthInput = (id, key) => $(id).addEventListener("change", (e) => {
+    const n = parseInt(e.target.value, 10);
+    if (!isNaN(n) && n >= 140 && n <= 600) {
+      appConfig.appearance[key] = n;
+      saveConfig();
+      fitWindow();
+    }
+  });
+  bindWidthInput("capsule-width", "capsule_width");
+  bindWidthInput("expanded-width", "expanded_width");
+
+  // 背景照片/影片
+  const bgType = $("background-type");
+  const bgPath = $("background-path");
+  const bgBlur = $("bg-blur");
+  const bgBlurVal = $("bg-blur-val");
+  const bgImgOp = $("bg-image-opacity");
+  const bgImgOpVal = $("bg-image-opacity-val");
+  const btnPickBg = $("btn-pick-bg");
+  const refreshBg = () => applyBackground(
+    appConfig.appearance.background_type,
+    appConfig.appearance.background_path,
+    appConfig.appearance.background_blur,
+    appConfig.appearance.background_image_opacity
+  );
+  if (bgType) {
+    bgType.value = appConfig.appearance.background_type || "none";
+    bgType.addEventListener("change", e => { appConfig.appearance.background_type = e.target.value; refreshBg(); saveConfig(); });
+  }
+  if (bgPath) {
+    bgPath.value = appConfig.appearance.background_path || "";
+    bgPath.addEventListener("change", e => { appConfig.appearance.background_path = e.target.value; refreshBg(); saveConfig(); });
+  }
+  if (bgBlur) {
+    const v = appConfig.appearance.background_blur || 0;
+    bgBlur.value = v; if (bgBlurVal) bgBlurVal.textContent = v + " px";
+    bgBlur.addEventListener("input", e => {
+      const n = parseInt(e.target.value, 10);
+      appConfig.appearance.background_blur = n;
+      if (bgBlurVal) bgBlurVal.textContent = n + " px";
+      refreshBg(); saveConfig();
+    });
+  }
+  if (bgImgOp) {
+    const v = appConfig.appearance.background_image_opacity || 60;
+    bgImgOp.value = v; if (bgImgOpVal) bgImgOpVal.textContent = v + "%";
+    bgImgOp.addEventListener("input", e => {
+      const n = parseInt(e.target.value, 10);
+      appConfig.appearance.background_image_opacity = n;
+      if (bgImgOpVal) bgImgOpVal.textContent = n + "%";
+      refreshBg(); saveConfig();
+    });
+  }
+  if (btnPickBg) {
+    btnPickBg.addEventListener("click", async () => {
+      try {
+        const picked = await invoke("pick_background_file");
+        if (picked) {
+          appConfig.appearance.background_path = picked;
+          bgPath.value = picked;
+          // 自動偵測 type
+          const ext = picked.split(".").pop().toLowerCase();
+          if (["mp4","webm","mov","mkv"].includes(ext)) {
+            appConfig.appearance.background_type = "video";
+            bgType.value = "video";
+          } else if (["jpg","jpeg","png","gif","webp","bmp","svg"].includes(ext)) {
+            appConfig.appearance.background_type = "image";
+            bgType.value = "image";
+          }
+          refreshBg(); saveConfig();
+        }
+      } catch (e) { console.error("pick bg failed:", e); }
+    });
+  }
+
+  // 外部調整器按鈕：開 configurator.html / 匯入 appearance.json
+  const openBtn = $("btn-open-configurator");
+  if (openBtn) openBtn.addEventListener("click", async () => {
+    try { await invoke("open_configurator"); } catch (e) { console.error(e); }
+  });
+  const helpBtn = $("btn-open-help");
+  if (helpBtn) helpBtn.addEventListener("click", async () => {
+    try { await invoke("open_help_page"); } catch (e) { alert("開啟說明失敗: " + e); }
+  });
+  const importBtn = $("btn-import-appearance");
+  if (importBtn) importBtn.addEventListener("click", async () => {
+    try {
+      const result = await invoke("import_appearance_json");
+      if (result && result.ok) {
+        // reload config + re-apply visuals
+        appConfig = await invoke("get_config");
+        applyAccentColor(appConfig.appearance.accent_color);
+        applyTextSize(appConfig.appearance.text_size);
+        applyFontFamily(appConfig.appearance.font_family);
+        applyBgOpacity(appConfig.appearance.bg_opacity);
+        applyTheme(appConfig.appearance.theme);
+        fitWindow();
+        importBtn.textContent = "✓ 已匯入";
+        setTimeout(() => importBtn.textContent = "⬆ 匯入 JSON", 1800);
+      }
+    } catch (e) { alert("匯入失敗: " + e); }
+  });
+
+  // 自訂 accent hex（即時套 + persist；清空時回預設 color dot）
+  const accentInput = $("accent-custom");
+  if (accentInput) {
+    accentInput.value = appConfig.appearance.accent_custom_hex || "#d980ff";
+    accentInput.addEventListener("input", (e) => {
+      const v = e.target.value;
+      appConfig.appearance.accent_custom_hex = v;
+      applyAccentColor(appConfig.appearance.accent_color);
+      saveConfig();
+    });
+  }
+
+  // 字型 family 下拉
+  const ff = $("font-family-select");
+  if (ff) {
+    ff.value = appConfig.appearance.font_family || "";
+    ff.addEventListener("change", (e) => {
+      appConfig.appearance.font_family = e.target.value;
+      applyFontFamily(e.target.value);
+      saveConfig();
+    });
+  }
+
+  // 背景不透明度 slider
+  const bgOp = $("bg-opacity");
+  const bgOpVal = $("bg-opacity-val");
+  if (bgOp) {
+    const cur = appConfig.appearance.bg_opacity || 100;
+    bgOp.value = cur;
+    if (bgOpVal) bgOpVal.textContent = cur;
+    bgOp.addEventListener("input", (e) => {
+      const v = parseInt(e.target.value, 10);
+      appConfig.appearance.bg_opacity = v;
+      applyBgOpacity(v);
+      if (bgOpVal) bgOpVal.textContent = v;
+      saveConfig();
+    });
+  }
+  const bindTextInput = (id, key) => $(id).addEventListener("change", (e) => {
+    appConfig.appearance[key] = e.target.value;
+    saveConfig();
+  });
+  bindTextInput("tg-token", "telegram_bot_token");
+  bindTextInput("tg-chat", "telegram_chat_id");
+
+  // openab_restart_command 文字欄位
+  $("openab-restart-cmd").value = appConfig.appearance.openab_restart_command ?? "";
+  bindTextInput("openab-restart-cmd", "openab_restart_command");
+
+  // Telegram 測試發送
+  $("tg-test").addEventListener("click", async () => {
+    const result = $("tg-test-result");
+    result.textContent = "送出中...";
+    try {
+      await invoke("send_telegram", { text: "🦞 LobsterPulse 測試訊息（external 按鈕觸發）" });
+      result.textContent = "✅ 已送出，檢查 Telegram";
+    } catch (e) {
+      result.textContent = `❌ ${String(e)}`;
+    }
+  });
+
+  // ─── 🔔 自動化 Tab：Discord + 3 條 auto-action 規則 ───
+  // 保底 default（若 config 舊版無此欄位）
+  appConfig.appearance.discord = appConfig.appearance.discord || { bot_token: "", channel_id: "", enabled: false };
+  appConfig.appearance.auto_actions = appConfig.appearance.auto_actions || {
+    quota_low_enabled: true, quota_low_threshold_pct: 5,
+    session_idle_enabled: true, session_idle_trigger_secs: 1800, confirm_timeout_secs: 600,
+    hook_failure_burst_enabled: true, failure_window_secs: 600, failure_count_threshold: 3,
+    dedup_window_secs: 300,
+    daily_summary_enabled: true, daily_summary_hour: 9,
+  };
+  const dc = appConfig.appearance.discord;
+  const aa = appConfig.appearance.auto_actions;
+  $("toggle-discord").checked = dc.enabled;
+  $("dc-token").value = dc.bot_token || "";
+  $("dc-channel").value = dc.channel_id || "";
+  $("toggle-rule-quota").checked = aa.quota_low_enabled;
+  $("rule-quota-pct").value = aa.quota_low_threshold_pct;
+  $("toggle-rule-idle").checked = aa.session_idle_enabled;
+  $("rule-idle-secs").value = aa.session_idle_trigger_secs;
+  $("rule-confirm-secs").value = aa.confirm_timeout_secs;
+  $("toggle-rule-burst").checked = aa.hook_failure_burst_enabled;
+  $("rule-burst-window").value = aa.failure_window_secs;
+  $("rule-burst-count").value = aa.failure_count_threshold;
+  $("rule-dedup").value = aa.dedup_window_secs;
+  $("toggle-rule-summary").checked = aa.daily_summary_enabled ?? true;
+  $("rule-summary-hour").value = aa.daily_summary_hour ?? 9;
+
+  const bindDiscord = (id, field) => $(id).addEventListener("change", (e) => {
+    appConfig.appearance.discord[field] = (typeof e.target.checked === "boolean" && e.target.type === "checkbox")
+      ? e.target.checked : e.target.value;
+    saveConfig();
+  });
+  bindDiscord("toggle-discord", "enabled");
+  bindDiscord("dc-token", "bot_token");
+  bindDiscord("dc-channel", "channel_id");
+  const bindAuto = (id, field, isBool, isNum) => $(id).addEventListener("change", (e) => {
+    let v = e.target.value;
+    if (isBool) v = e.target.checked;
+    else if (isNum) v = parseInt(v, 10) || 0;
+    appConfig.appearance.auto_actions[field] = v;
+    saveConfig();
+  });
+  bindAuto("toggle-rule-quota", "quota_low_enabled", true);
+  bindAuto("rule-quota-pct", "quota_low_threshold_pct", false, true);
+  bindAuto("toggle-rule-idle", "session_idle_enabled", true);
+  bindAuto("rule-idle-secs", "session_idle_trigger_secs", false, true);
+  bindAuto("rule-confirm-secs", "confirm_timeout_secs", false, true);
+  bindAuto("toggle-rule-burst", "hook_failure_burst_enabled", true);
+  bindAuto("rule-burst-window", "failure_window_secs", false, true);
+  bindAuto("rule-burst-count", "failure_count_threshold", false, true);
+  bindAuto("rule-dedup", "dedup_window_secs", false, true);
+  bindAuto("toggle-rule-summary", "daily_summary_enabled", true);
+  bindAuto("rule-summary-hour", "daily_summary_hour", false, true);
+
+  // ─── 📦 Runners Tab 邏輯 ───
+  let editingRunnerIdx = -1; // -1 = 新增，其他 = 編輯該 index
+  const renderRunners = () => {
+    const list = $("runner-list");
+    const runners = appConfig.appearance.usage_runners || [];
+    list.innerHTML = runners.length === 0
+      ? `<div class="threshold-label">（尚無 runner，點「➕ 新增」加一個）</div>`
+      : runners.map((r, i) => `
+        <div class="provider-row">
+          <div class="provider-meta">
+            <span class="provider-dot" style="background:${r.color || "#888"}"></span>
+            <div><div>${escHtml(r.label || r.name)}</div>
+            <div class="setting-sub-label" style="font-size:11px">${escHtml(r.command)} ${escHtml((r.args||[]).join(" "))}</div></div>
+          </div>
+          <div>
+            <button class="mini-btn" data-edit="${i}">✏️</button>
+            <button class="mini-btn" data-del="${i}">🗑</button>
+          </div>
+        </div>
+      `).join("");
+    // bind edit/delete
+    list.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => openRunnerEdit(parseInt(b.dataset.edit,10))));
+    list.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
+      const i = parseInt(b.dataset.del, 10);
+      if (!confirm(`刪除 runner "${appConfig.appearance.usage_runners[i]?.name}"?`)) return;
+      appConfig.appearance.usage_runners.splice(i, 1);
+      saveConfig(); renderRunners();
+    }));
+  };
+  const escHtml = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const openRunnerEdit = (idx) => {
+    editingRunnerIdx = idx;
+    const r = idx === -1 ? { name:"", label:"", color:"#888", command:"", args:[], template:"" }
+                         : appConfig.appearance.usage_runners[idx];
+    $("runner-edit-idx").textContent = idx === -1 ? "（新增）" : `(index ${idx})`;
+    $("runner-name").value = r.name || "";
+    $("runner-label").value = r.label || "";
+    $("runner-color").value = r.color || "#888";
+    $("runner-command").value = r.command || "";
+    $("runner-args").value = (r.args || []).join("\n");
+    $("runner-template").value = r.template || "";
+    $("runner-test-result").textContent = "";
+    $("runner-edit").classList.remove("hidden");
+  };
+  $("btn-add-runner").addEventListener("click", () => openRunnerEdit(-1));
+  $("btn-cancel-runner").addEventListener("click", () => $("runner-edit").classList.add("hidden"));
+  $("btn-save-runner").addEventListener("click", () => {
+    const r = {
+      name: $("runner-name").value.trim(),
+      label: $("runner-label").value.trim(),
+      color: $("runner-color").value.trim() || "#888",
+      command: $("runner-command").value.trim(),
+      args: $("runner-args").value.split("\n").map(s => s.trim()).filter(Boolean),
+      env: {},
+      timeout_secs: 15,
+      template: $("runner-template").value.trim() || null,
+      cwd: null,
+    };
+    if (!r.name || !r.command) { alert("name + command 必填"); return; }
+    appConfig.appearance.usage_runners = appConfig.appearance.usage_runners || [];
+    if (editingRunnerIdx === -1) appConfig.appearance.usage_runners.push(r);
+    else appConfig.appearance.usage_runners[editingRunnerIdx] = r;
+    saveConfig();
+    renderRunners();
+    $("runner-edit").classList.add("hidden");
+  });
+  $("btn-test-runner").addEventListener("click", async () => {
+    const result = $("runner-test-result");
+    result.textContent = "試跑中...";
+    const r = {
+      name: $("runner-name").value.trim() || "test",
+      label: $("runner-label").value.trim() || "test",
+      color: $("runner-color").value.trim() || "#888",
+      command: $("runner-command").value.trim(),
+      args: $("runner-args").value.split("\n").map(s => s.trim()).filter(Boolean),
+      env: {},
+      timeout_secs: 15,
+      template: $("runner-template").value.trim() || null,
+      cwd: null,
+    };
+    try {
+      const out = await invoke("test_usage_runner", { runner: r });
+      result.textContent = out;
+    } catch (e) {
+      result.textContent = "❌ " + String(e);
+    }
+  });
+  renderRunners();
+
+  // Discord 測試發送
+  $("dc-test").addEventListener("click", async () => {
+    const r = $("dc-test-result");
+    r.textContent = "送出中...";
+    try {
+      const msg = await invoke("send_discord_test");
+      r.textContent = `✅ ${msg}`;
+    } catch (e) {
+      r.textContent = `❌ ${String(e)}`;
+    }
+  });
+
+  // Dashboard 區塊折疊
+  document.querySelectorAll(".dashboard-section-title[data-toggle]").forEach(h => {
+    h.addEventListener("click", () => {
+      const id = h.dataset.toggle;
+      const grid = document.getElementById(id);
+      if (!grid) return;
+      dashboardCollapsed[id] = !dashboardCollapsed[id];
+      grid.classList.toggle("collapsed", dashboardCollapsed[id]);
+      h.querySelector(".section-caret").textContent = dashboardCollapsed[id] ? "▸" : "▾";
+      fitWindow();
+    });
+  });
+
+  // Quota bar 折疊
+  $("quota-bar-header").addEventListener("click", () => {
+    quotaCollapsed = !quotaCollapsed;
+    $("quota-bar").classList.toggle("collapsed", quotaCollapsed);
+    $("quota-bar-header").querySelector(".section-caret").textContent = quotaCollapsed ? "▸" : "▾";
+    fitWindow();
+  });
+
   refreshState();
   setInterval(refreshState, 1000);
+  refreshQuotas();
+  setInterval(refreshQuotas, 15000);
+}
+
+// ─── Bot quota runner filter ───
+// OpenAB 各 bot 共用一套 /usage runner 配置（每個 snapshot 都 N 份相同 runner），
+// 按 backend 關鍵字過濾讓 bot card 只顯示自己的：CICX→Claude、GITX→Copilot、GIMINIX→Gemini、CODEX→Codex、OPENX→OpenCode。
+// null = 明確跳過（該 bot 無對應 /usage runner）
+// 空陣列 = 全部顯示（預留給未來新 bot）
+// 有值 = 按關鍵字過濾
+const BOT_RUNNER_KEYWORDS = {
+  cicx: ["claude"],
+  gitx: ["copilot"],
+  giminix: ["gemini"],
+  codex_bot: ["codex", "openai"],
+  // OPENX (OpenCode) 有自己的 API provider（Zen/OpenRouter/Z.AI），
+  // 不等於那 4 個基礎 CLI runner 的 aggregate → 跳過 snapshot，只顯示 runtime totals
+  // 預備：OpenAB 未來加 OpenCode quota runner（e.g. Zen API）時自動接上，不用改 code
+  openx: ["opencode", "zen"],
+};
+
+function filterRunnersForBot(botId, runners) {
+  if (!runners) return [];
+  const kws = BOT_RUNNER_KEYWORDS[botId];
+  if (kws === null) return []; // 明確跳過（該 bot 沒有對應的 /usage runner）
+  if (!kws || kws.length === 0) return runners; // undefined/空陣列 = 顯示全部
+  return runners.filter(r => {
+    const label = (r.label || "").toLowerCase();
+    return kws.some(kw => label.includes(kw));
+  });
+}
+
+// ─── Sparkline canvas ───
+function drawSparkline(canvasId, samples) {
+  const cv = document.getElementById(canvasId);
+  if (!cv || !samples || samples.length < 2) return;
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  const vals = samples.map(s => (s.tokens_input || 0) + (s.tokens_output || 0));
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = Math.max(1, max - min);
+  const style = getComputedStyle(document.documentElement);
+  const accent = style.getPropertyValue("--accent").trim() || "#ff8c42";
+  ctx.strokeStyle = accent;
+  ctx.fillStyle = accent + "33";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  samples.forEach((s, i) => {
+    const x = (i / (samples.length - 1)) * W;
+    const y = H - ((vals[i] - min) / range) * (H - 4) - 2;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  // area
+  ctx.lineTo(W, H);
+  ctx.lineTo(0, H);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ─── 失敗警示 ───
+let lastFailureNotifiedAt = 0;
+async function checkRecentFailures() {
+  if (recentFailuresInFlight) {
+    recentFailuresQueued = true;
+    return;
+  }
+  recentFailuresInFlight = true;
+  let events = [];
+  try {
+    try { events = await invoke("get_recent_events"); } catch (e) { return; }
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    const failures = events.filter(e =>
+      e.event_name === "PostToolUseFailure" &&
+      new Date(e.timestamp).getTime() > cutoff
+    );
+    const dot = $("capsule-error-dot");
+    if (!dot) return;
+    if (failures.length > 0) {
+      dot.classList.remove("hidden");
+      dot.textContent = failures.length > 9 ? "9+" : String(failures.length);
+      // 新失敗 → 彈 toast（不看 system_notifications 設定，失敗永遠推）
+      const latest = failures[failures.length - 1];
+      const latestTs = new Date(latest.timestamp).getTime();
+      if (latestTs > lastFailureNotifiedAt) {
+        lastFailureNotifiedAt = latestTs;
+        const label = PROVIDER_LABEL[latest.provider] || latest.provider;
+        systemNotify(`${label} ❌ 工具失敗`, `${latest.tool_name || "tool"} — 檢查事件診斷`, {
+          dedupeKey: `tool-failure:${latest.provider}:${latest.tool_name || "tool"}`,
+          windowMs: 10000,
+        });
+      }
+    } else {
+      dot.classList.add("hidden");
+      dot.textContent = "";
+    }
+  } finally {
+    recentFailuresInFlight = false;
+    if (recentFailuresQueued) {
+      recentFailuresQueued = false;
+      checkRecentFailures();
+    }
+  }
+}
+
+// ─── Telegram 長任務推播 ───
+async function maybeSendTelegramLongTask(sessions) {
+  if (!appConfig.appearance.telegram_bot_token || !appConfig.appearance.telegram_chat_id) return;
+  const threshold = appConfig.appearance.telegram_notify_threshold_secs ?? 600;
+  for (const s of sessions) {
+    // 只在完成（state=idle 但剛結束 working）且持續時間 >= threshold 的 session 推一次
+    if (s.is_active) continue;
+    if ((s.duration_secs || 0) < threshold) continue;
+    if (notifiedLongSessions.has(s.id)) continue;
+    notifiedLongSessions.add(s.id);
+    const label = PROVIDER_LABEL[s.provider] || s.provider;
+    const mins = Math.floor(s.duration_secs / 60);
+    const text = `*${label}* 長任務完成 ⏱ ${mins} 分鐘\n${s.project_name || ""}`;
+    try { await invoke("send_telegram", { text }); } catch (e) {}
+  }
+}
+
+// ─── Autostart / Notifications ───
+async function getAutostart() {
+  try { return await invoke("plugin:autostart|is_enabled"); }
+  catch (e) { return false; }
+}
+async function setAutostart(enabled) {
+  try {
+    if (enabled) await invoke("plugin:autostart|enable");
+    else await invoke("plugin:autostart|disable");
+    return true;
+  } catch (e) { return false; }
+}
+
+function shouldSuppressSystemNotify(dedupeKey, windowMs) {
+  if (!dedupeKey || !Number.isFinite(windowMs) || windowMs <= 0) return false;
+  const now = Date.now();
+  const lastTs = notifyDedupeTs.get(dedupeKey);
+  if (typeof lastTs === "number" && now - lastTs < windowMs) {
+    return true;
+  }
+  notifyDedupeTs.set(dedupeKey, now);
+  if (notifyDedupeTs.size > NOTIFY_DEDUPE_MAX_KEYS) {
+    const removeCount = notifyDedupeTs.size - Math.floor(NOTIFY_DEDUPE_MAX_KEYS * 0.75);
+    let i = 0;
+    for (const key of notifyDedupeTs.keys()) {
+      notifyDedupeTs.delete(key);
+      i += 1;
+      if (i >= removeCount) break;
+    }
+  }
+  return false;
+}
+
+// Windows toast / macOS banner。Fallback 到 Notification API（webview）
+async function systemNotify(title, body, opts = {}) {
+  const dedupeKey = typeof opts.dedupeKey === "string" && opts.dedupeKey
+    ? opts.dedupeKey
+    : `${title}|${body}`;
+  const windowMs = Number.isFinite(opts.windowMs) ? opts.windowMs : 0;
+  if (shouldSuppressSystemNotify(dedupeKey, windowMs)) return;
+  try {
+    await invoke("plugin:notification|notify", { options: { title, body } });
+  } catch (e) {
+    // 靜默失敗——通知是錦上添花，不該中斷主流程
+  }
+}
+
+// ─── Dashboard (OpenAB bot + 本機 CLI 雙區塊) ───
+// 以 bot 為單位聚合所有 session 資訊，即使沒 active session 也能看到 quota / 最近活動
+function formatRelativeTime(secs) {
+  if (secs < 0) return "剛剛";
+  if (secs < 60) return `${secs} 秒前`;
+  if (secs < 3600) return `${Math.floor(secs / 60)} 分鐘前`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)} 小時前`;
+  return `${Math.floor(secs / 86400)} 天前`;
+}
+
+function renderDashboard(st) {
+  const sessions = st?.sessions || [];
+  renderDashboardGrid("bot-grid", ["cicx", "gitx", "giminix", "codex_bot", "openx"], sessions);
+  renderDashboardGrid("local-grid", ["claude", "codex", "copilot", "gemini"], sessions);
+  renderTrendGrid();
+}
+
+async function renderTrendGrid() {
+  const grid = document.getElementById("trend-grid");
+  if (!grid) return;
+  let hist = {};
+  try { hist = await invoke("get_quota_history"); } catch (e) { return; }
+
+  // 過濾最近 N 天（7/30 可切）
+  const rangeDays = window.__trendRangeDays || 7;
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - rangeDays * 86400;
+  const filtered = {};
+  for (const [name, series] of Object.entries(hist)) {
+    filtered[name] = series.filter(([ts]) => ts >= cutoff);
+  }
+
+  // runner name → 顏色（對齊 dashboard 既有 PROVIDER_COLORS；usage runner name 是 claude/copilot/gemini/codex）
+  const TREND_COLORS = {
+    claude: "rgba(217,119,87,1)",      // #d97757
+    copilot: "rgba(100,100,110,1)",    // github 黑灰
+    gemini: "rgba(66,133,244,1)",      // #4285f4
+    codex: "rgba(16,163,127,1)",       // #10a37f
+  };
+
+  const names = Object.keys(filtered).sort();
+  const hasAny = names.some(n => (filtered[n] || []).length >= 2);
+
+  // 頂部控制列：7/30 天切換 + CSV 匯出
+  const ctrlHtml = `<div class="trend-ctrl" style="display:flex;gap:6px;align-items:center;padding:4px 2px 8px;font-size:11px">
+    <span style="opacity:0.7">區間：</span>
+    <button class="mini-btn" data-range="7" style="${rangeDays===7?'background:var(--accent);color:#111':''}">7 天</button>
+    <button class="mini-btn" data-range="30" style="${rangeDays===30?'background:var(--accent);color:#111':''}">30 天</button>
+    <span style="flex:1"></span>
+    <button class="mini-btn" id="btn-trend-csv" title="下載完整 quota-history.csv">📥 CSV</button>
+  </div>`;
+  if (!hasAny) {
+    grid.innerHTML = ctrlHtml + `<div class="bot-card"><div class="bot-card-name">（${rangeDays} 天內至少需 2 筆才畫圖，等 1~2 小時累積）</div></div>`;
+    wireTrendCtrls(grid);
+    return;
+  }
+
+  grid.innerHTML = ctrlHtml + names.map(name => {
+    const series = filtered[name] || [];
+    const pcts = series.map(([_, p]) => p);
+    if (pcts.length === 0) return "";
+    const last = pcts[pcts.length - 1];
+    const min = Math.min(...pcts);
+    const max = Math.max(...pcts);
+    const color = TREND_COLORS[name] || "rgba(150,150,150,1)";
+    return `<div class="bot-card" style="border-left:3px solid ${color}">
+      <div class="bot-card-name">${escHtmlT(name)} <span style="opacity:0.5;font-size:10px">${series.length} 點 · ${rangeDays} 天</span></div>
+      <div style="font-size:11px;opacity:0.7">當前 <b>${last}%</b> · 低 ${min}% · 高 ${max}%</div>
+      <canvas data-trend="${escHtmlT(name)}" width="280" height="40" style="width:100%;height:40px;display:block;margin-top:4px;cursor:crosshair"></canvas>
+      <div data-tooltip="${escHtmlT(name)}" style="font-size:10px;opacity:0.6;min-height:12px"></div>
+    </div>`;
+  }).join("");
+  wireTrendCtrls(grid);
+
+  // 畫 sparkline + tooltip
+  for (const name of names) {
+    const cv = grid.querySelector(`canvas[data-trend="${cssEsc(name)}"]`);
+    const tt = grid.querySelector(`[data-tooltip="${cssEsc(name)}"]`);
+    if (!cv) continue;
+    const ctx = cv.getContext("2d");
+    const w = cv.width, h = cv.height;
+    const series = filtered[name] || [];
+    ctx.clearRect(0, 0, w, h);
+    if (series.length < 2) continue;
+    const color = TREND_COLORS[name] || "rgba(150,150,150,1)";
+
+    // 畫 100% 基準線
+    ctx.strokeStyle = "rgba(128,128,128,0.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, 1); ctx.lineTo(w, 1); ctx.stroke();
+
+    // 填色下層
+    ctx.fillStyle = color.replace(",1)", ",0.12)");
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    series.forEach(([_, pct], i) => {
+      const x = (i / (series.length - 1)) * w;
+      const y = h - (pct / 100) * h;
+      ctx.lineTo(x, y);
+    });
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+
+    // 線
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    series.forEach(([_, pct], i) => {
+      const x = (i / (series.length - 1)) * w;
+      const y = h - (pct / 100) * h;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Hover tooltip + 垂直游標線 —— 滑鼠 x 映射到最近 data point
+    cv.addEventListener("mousemove", (e) => {
+      const rect = cv.getBoundingClientRect();
+      const ratio = (e.clientX - rect.left) / rect.width;
+      const idx = Math.min(series.length - 1, Math.max(0, Math.round(ratio * (series.length - 1))));
+      const [ts, pct] = series[idx];
+      const d = new Date(ts * 1000);
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mi = String(d.getMinutes()).padStart(2, "0");
+      if (tt) tt.textContent = `${mm}/${dd} ${hh}:${mi} → ${pct}%`;
+      // 重畫加游標線（idx 對應的 x 座標）
+      ctx.clearRect(0, 0, w, h);
+      // 重畫底層
+      ctx.strokeStyle = "rgba(128,128,128,0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, 1); ctx.lineTo(w, 1); ctx.stroke();
+      ctx.fillStyle = color.replace(",1)", ",0.12)");
+      ctx.beginPath(); ctx.moveTo(0, h);
+      series.forEach(([_, p], i) => { const x = (i/(series.length-1))*w; const y = h - (p/100)*h; ctx.lineTo(x, y); });
+      ctx.lineTo(w, h); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      series.forEach(([_, p], i) => { const x = (i/(series.length-1))*w; const y = h - (p/100)*h; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+      ctx.stroke();
+      // 垂直游標
+      const cx = (idx/(series.length-1))*w;
+      const cy = h - (pct/100)*h;
+      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
+      ctx.setLineDash([]);
+      // 高亮點
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI*2); ctx.fill();
+    });
+    cv.addEventListener("mouseleave", () => {
+      if (tt) tt.textContent = "";
+      // 重畫清除游標
+      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = "rgba(128,128,128,0.15)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, 1); ctx.lineTo(w, 1); ctx.stroke();
+      ctx.fillStyle = color.replace(",1)", ",0.12)");
+      ctx.beginPath(); ctx.moveTo(0, h);
+      series.forEach(([_, p], i) => { const x = (i/(series.length-1))*w; const y = h - (p/100)*h; ctx.lineTo(x, y); });
+      ctx.lineTo(w, h); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      series.forEach(([_, p], i) => { const x = (i/(series.length-1))*w; const y = h - (p/100)*h; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+      ctx.stroke();
+    });
+  }
+}
+
+function escHtmlT(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function cssEsc(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&"); }
+
+// Ring progress：從 r.raw 的多個 %-欄位取最小值（最緊配額）；無 → null
+function runnerPct(r) {
+  if (!r || r.ok === false || !r.raw) return null;
+  const raw = r.raw;
+  const cand = [
+    raw.session_5h_remaining, raw.week_7d_remaining,
+    raw.h5_remaining, raw.wk_remaining, raw.remaining_pct,
+  ].filter(v => typeof v === "number" && v >= 0 && v <= 100);
+  if (cand.length === 0) return null;
+  return Math.round(Math.min(...cand));
+}
+
+// Trend 控制列：7/30 切換 + CSV export
+function wireTrendCtrls(grid) {
+  grid.querySelectorAll("button[data-range]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      window.__trendRangeDays = parseInt(btn.dataset.range, 10) || 7;
+      renderTrendGrid();
+    });
+  });
+  const csvBtn = grid.querySelector("#btn-trend-csv");
+  if (csvBtn) csvBtn.addEventListener("click", async () => {
+    try {
+      const hist = await invoke("get_quota_history");
+      // 轉 CSV: ts_iso, provider, pct
+      const rows = [["timestamp", "datetime_local", "provider", "pct_remaining"]];
+      for (const [name, series] of Object.entries(hist)) {
+        for (const [ts, pct] of series) {
+          rows.push([ts, new Date(ts * 1000).toISOString(), name, pct]);
+        }
+      }
+      rows.sort((a, b) => a === rows[0] ? -1 : a[0] - b[0]);
+      const csv = rows.map(r => r.join(",")).join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `lp-quota-history-${new Date().toISOString().slice(0,10)}.csv`;
+      a.click();
+    } catch (e) { alert("CSV 匯出失敗: " + e); }
+  });
+}
+
+function renderDashboardGrid(gridId, dashboardBots, sessions) {
+  const grid = document.getElementById(gridId);
+  if (!grid) return;
+  const latestByProvider = {};
+
+  grid.innerHTML = dashboardBots.map(pid => {
+    const p = appConfig.providers[pid];
+    if (!p) return "";
+    const related = sessions.filter(s => s.provider === pid);
+    const active = related.filter(s => s.is_active).length;
+    const hasAny = related.length > 0;
+    // 以 is_active 優先、其次 last_event_secs_ago 最小（最近才有事件）排最前
+    const latest = related.slice().sort((a, b) => {
+      if (a.is_active !== b.is_active) return a.is_active ? -1 : 1;
+      return (a.last_event_secs_ago ?? 9999) - (b.last_event_secs_ago ?? 9999);
+    })[0];
+    latestByProvider[pid] = latest || null;
+
+    let stateLabel, stateCls;
+    if (active > 0) {
+      stateLabel = `${active} 執行中`;
+      stateCls = "active";
+    } else if (hasAny) {
+      stateLabel = "閒置";
+      stateCls = "idle";
+    } else {
+      stateLabel = "離線";
+      stateCls = "offline";
+    }
+
+    const lastActivity = latest
+      ? formatRelativeTime(latest.last_event_secs_ago ?? 0)
+      : "—";
+
+    const toolChip = latest && latest.tool_calls && latest.tool_calls.length > 0
+      ? `<span class="bot-card-tool">🔧 ${esc(latest.tool_calls[latest.tool_calls.length - 1].title || "?")}</span>`
+      : "";
+    const thinkingDot = latest && latest.thinking
+      ? `<span class="bot-card-thinking-dot"></span>`
+      : "";
+    const tokens = latest && (latest.tokens_input > 0 || latest.tokens_output > 0)
+      ? `<span class="bot-card-tokens">${formatTokens(latest.tokens_input)}·${formatTokens(latest.tokens_output)} tok</span>`
+      : "";
+
+    const cardCls = hasAny ? "bot-card" : "bot-card bot-card-empty";
+    return `<div class="${cardCls}" data-pid="${pid}">
+      <div class="bot-card-header">
+        ${providerIconHtml(pid, 16)}
+        <span class="bot-card-name">${esc(p.name)}</span>
+        <span class="bot-card-state ${stateCls}">${stateLabel}${thinkingDot}</span>
+      </div>
+      <div class="bot-card-row">
+        <span class="bot-card-meta">${related.length} session${related.length === 1 ? "" : "s"}</span>
+        <span class="bot-card-meta bot-card-time">${lastActivity}</span>
+      </div>
+      ${toolChip || tokens ? `<div class="bot-card-row">${toolChip}${tokens}</div>` : ""}
+      <canvas class="bot-card-spark" id="bot-card-spark-${pid}" width="120" height="20"></canvas>
+      <div class="bot-card-quota" id="bot-card-quota-${pid}">—</div>
+    </div>`;
+  }).filter(Boolean).join("");
+
+  // 點 bot card → 過濾 session 到該 provider
+  grid.querySelectorAll(".bot-card").forEach(card => {
+    card.addEventListener("click", () => {
+      const pid = card.dataset.pid;
+      sessionFilter = pid;
+      if (lastState) renderSessions(lastState);
+      showView("expanded");
+    });
+  });
+
+  // Sparkline draw（近 60 token_samples）
+  for (const pid of dashboardBots) {
+    const latest = latestByProvider[pid];
+    drawSparkline(`bot-card-spark-${pid}`, latest?.token_samples || []);
+  }
+
+  // Bot card quota 顯示：runtime totals + **按 bot backend 過濾後**的 snapshot runner
+  const totals = lastState?.provider_totals || {};
+  const snapshots = window.__lastQuotaSnapshots || {};
+  for (const pid of dashboardBots) {
+    const el = document.getElementById(`bot-card-quota-${pid}`);
+    if (!el) continue;
+    const t = totals[pid];
+    const snap = snapshots[pid];
+    const chips = [];
+    if (t && (t.tokens_input > 0 || t.tokens_output > 0 || t.session_count > 0)) {
+      chips.push(`<span class="quota-chip" title="累計 input/output tokens">${formatTokens(t.tokens_input)}·${formatTokens(t.tokens_output)} tok</span>`);
+      chips.push(`<span class="quota-chip" title="session 次數">${t.session_count}s</span>`);
+      if (t.failure_count > 0) chips.push(`<span class="quota-chip err" title="失敗次數">${t.failure_count}❌</span>`);
+    }
+    // 只顯示跟這個 bot backend 相關的 runner（CICX→Claude、GITX→Copilot、GIMINIX→Gemini、CODEX→Codex）
+    const relevantRunners = snap ? filterRunnersForBot(pid, snap.runners) : [];
+    for (const r of relevantRunners) {
+      let cls = r.ok === false ? "quota-runner err" : "quota-runner";
+      const pct = runnerPct(r);
+      if (pct !== null) {
+        if (pct < 10) cls += " crit";
+        else if (pct < 20) cls += " warn";
+      }
+      const ring = pct !== null ? `<span class="percent-value">${pct}</span>` : "";
+      const style = pct !== null ? ` style="--pct:${pct}"` : "";
+      // 保留完整多行 text（markdown **** 和 ` 簡單 strip），用 pre-wrap 呈現
+      const text = (r.text || "").replace(/\*\*/g, "").replace(/`/g, "");
+      chips.push(`<div class="${cls}"${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}</span><span class="quota-runner-text">${esc(text)}</span></div>`);
+    }
+    el.innerHTML = chips.length > 0 ? chips.join("") : "—";
+  }
+}
+
+// ─── Events log view ───
+let eventsFilter = "all"; // all | cicx | gitx | giminix | codex_bot | claude | codex | copilot | gemini
+let eventsRefreshTimer = null;
+
+const EVENT_CLASS = {
+  SessionStart: "event-start",
+  SessionEnd: "event-end",
+  Stop: "event-stop",
+  UserPromptSubmit: "event-prompt",
+  PreToolUse: "event-tool",
+  PostToolUse: "event-tool-done",
+  PostToolUseFailure: "event-tool-fail",
+  PermissionRequest: "event-permission",
+  Notification: "event-notify",
+  ThinkingDelta: "event-thinking",
+  TokenUpdate: "event-token",
+};
+
+// provider id → 顯示 label（OpenAB bot 大寫，本機 CLI 小寫）
+const PROVIDER_LABEL = {
+  all: "全部",
+  cicx: "CICX",
+  gitx: "GITX",
+  giminix: "GIMINIX",
+  codex_bot: "CODEX",
+  openx: "OPENX",
+  claude: "claude",
+  codex: "codex",
+  copilot: "copilot",
+  gemini: "gemini",
+};
+
+async function renderEventsLog() {
+  if (eventsRenderInFlight) {
+    eventsRenderQueued = true;
+    return;
+  }
+  eventsRenderInFlight = true;
+  const list = $("events-list");
+  if (!list) {
+    eventsRenderInFlight = false;
+    return;
+  }
+  let events = [];
+  try {
+    try { events = await invoke("get_recent_events"); } catch (e) {}
+
+  // Header with filter tabs + count
+  const header = $("events-filter");
+  if (header) {
+    // OpenAB bot 永遠顯示（即使 count=0，讓用戶知道 bot 存在但尚無事件）；
+    // 本機 CLI 只在有事件時顯示，避免 tab 列過長。
+    // 「errors」專 tab 匯集所有 provider 的 PostToolUseFailure
+    const openabBots = ["cicx", "gitx", "giminix", "codex_bot", "openx"];
+    const localClis = ["claude", "codex", "copilot", "gemini"];
+    const counts = {};
+    for (const e of events) counts[e.provider] = (counts[e.provider] || 0) + 1;
+    counts.all = events.length;
+    counts.errors = events.filter(e => e.event_name === "PostToolUseFailure").length;
+
+    const ordered = ["all", "errors", ...openabBots, ...localClis];
+    header.innerHTML = ordered.map(p => {
+      const n = counts[p] || 0;
+      if (localClis.includes(p) && n === 0) return "";
+      if (p === "errors" && n === 0) return "";
+      const label = p === "errors" ? "❌ 失敗" : (PROVIDER_LABEL[p] || p);
+      const active = p === eventsFilter ? "active" : "";
+      const countBadge = n > 0 ? ` ${n}` : "";
+      const cls = p === "errors" ? "events-tab events-tab-errors" : "events-tab";
+      return `<button class="${cls} ${active}" data-filter="${p}">${label}${countBadge}</button>`;
+    }).filter(Boolean).join("");
+    header.querySelectorAll(".events-tab").forEach(btn => {
+      btn.addEventListener("click", () => {
+        eventsFilter = btn.dataset.filter;
+        renderEventsLog();
+      });
+    });
+  }
+
+  const filtered = eventsFilter === "all"
+    ? events
+    : eventsFilter === "errors"
+      ? events.filter(e => e.event_name === "PostToolUseFailure")
+      : events.filter(e => e.provider === eventsFilter);
+
+    if (!filtered.length) {
+      list.innerHTML = `<div class="event-empty">（${eventsFilter === "all" ? "尚未收到任何 hook event" : `${eventsFilter} 尚無事件`}）</div>`;
+      return;
+    }
+    // 最新的排上面；provider 欄改顯示 LABEL（CODEX 比 codex_bot 好讀）
+    const rows = filtered.slice().reverse().map(e => {
+      const t = new Date(e.timestamp);
+      const hh = String(t.getHours()).padStart(2, "0");
+      const mm = String(t.getMinutes()).padStart(2, "0");
+      const ss = String(t.getSeconds()).padStart(2, "0");
+      const tool = e.tool_name ? ` · ${esc(e.tool_name)}` : "";
+      const cls = EVENT_CLASS[e.event_name] || "event-other";
+      const providerLabel = PROVIDER_LABEL[e.provider] || e.provider;
+      return `<div class="event-row">
+      <span class="event-time">${hh}:${mm}:${ss}</span>
+      <span class="event-provider" title="${esc(e.session_id)} (${esc(e.provider)})">${esc(providerLabel)}</span>
+      <span class="event-detail ${cls}">${esc(e.event_name)}${tool}</span>
+    </div>`;
+    }).join("");
+    list.innerHTML = rows;
+    // 自動捲到頂（最新）
+    list.scrollTop = 0;
+  } finally {
+    eventsRenderInFlight = false;
+    if (eventsRenderQueued) {
+      eventsRenderQueued = false;
+      renderEventsLog();
+    }
+  }
+}
+
+function startEventsAutoRefresh() {
+  if (eventsRefreshTimer) return;
+  eventsRefreshTimer = setInterval(() => {
+    if (currentView === "events") renderEventsLog();
+  }, 2000);
+}
+
+function stopEventsAutoRefresh() {
+  if (!eventsRefreshTimer) return;
+  clearInterval(eventsRefreshTimer);
+  eventsRefreshTimer = null;
+}
+
+// ─── /usage quota (雙資料源) ───
+async function refreshQuotas() {
+  if (refreshQuotasInFlight) {
+    refreshQuotasQueued = true;
+    return;
+  }
+  refreshQuotasInFlight = true;
+  // 雙資料源：OpenAB snapshot 檔（加分） + runtime provider_totals（即時累計，必備）
+  try {
+    let snapshots = {};
+    try { snapshots = await invoke("read_usage_snapshots"); } catch (e) {}
+    window.__lastQuotaSnapshots = snapshots;
+    // snapshot 更新時同步刷新 capsule quota 提示
+    updateCapsuleQuota();
+
+    const totals = lastState?.provider_totals || {};
+    const bar = $("quota-bar");
+    if (!bar) return;
+
+    // 每個 bot 的本地 totals row（活動/失敗），snapshot runner 改到底下全域區去重顯示
+    const rows = PROVIDER_ORDER.map(pid => {
+      const t = totals[pid];
+      if (!t || (t.tokens_input === 0 && t.tokens_output === 0 && t.session_count === 0)) return "";
+      const badges = [
+        `<span class="quota-badge" title="累計輸入 token">⬇ ${formatTokens(t.tokens_input)}</span>`,
+        `<span class="quota-badge" title="累計輸出 token">⬆ ${formatTokens(t.tokens_output)}</span>`,
+        `<span class="quota-badge" title="session 次數">${t.session_count} sess</span>`,
+        ...(t.failure_count > 0 ? [`<span class="quota-badge err" title="失敗次數">${t.failure_count} ❌</span>`] : []),
+      ].join("");
+      const nameShort = appConfig.providers[pid]?.name || pid;
+      return `<div class="quota-row">
+      ${providerIconHtml(pid, 14)}
+      <span class="quota-row-bot">${esc(nameShort)}</span>
+      <div class="quota-badges">${badges}</div>
+    </div>`;
+    }).filter(Boolean).join("");
+
+    // 全域額度區——**LobsterPulse 自跑的 local runner 優先**，若無才用 OpenAB snapshot
+    const localSnap = snapshots.__local__;
+    const representativeSnap = localSnap || snapshots.cicx || snapshots.gitx || snapshots.giminix || snapshots.codex_bot;
+    const globalRunners = representativeSnap?.runners || [];
+    const sectionTitle = localSnap ? "💻 本機額度" : "☁️ OpenAB 額度";
+    const globalRow = globalRunners.length > 0
+      ? `<div class="quota-row-global">
+        <div class="quota-section-title">${sectionTitle}</div>
+        ${globalRunners.map(r => {
+          let cls = r.ok === false ? "quota-runner err" : "quota-runner";
+          const pct = runnerPct(r);
+          if (pct !== null) {
+            if (pct < 10) cls += " crit";
+            else if (pct < 20) cls += " warn";
+          }
+          const ring = pct !== null ? `<span class="percent-value">${pct}</span>` : "";
+          const style = pct !== null ? ` style="--pct:${pct}"` : "";
+          const text = (r.text || "").replace(/\*\*/g, "").replace(/`/g, "");
+          return `<div class="${cls}" data-provider="${esc(r.name || "")}"${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}</span><span class="quota-runner-text">${esc(text)}</span></div>`;
+        }).join("")}
+      </div>`
+      : "";
+
+    const finalRows = rows + globalRow;
+
+    const wrap = document.getElementById("quota-bar-wrap");
+    if (wrap) wrap.classList.remove("hidden"); // 永遠顯示 wrap，沒資料時給 hint
+    bar.innerHTML = finalRows || `<div class="quota-empty">暫無 quota 資料：等 OpenAB 寫 <code>~/.lobsterpulse/usage-*.json</code> 或 session 送 TokenUpdate event</div>`;
+    if (currentView === "dashboard" && lastState) {
+      renderDashboard(lastState);
+    }
+    if (currentView === "expanded") fitWindow();
+  } finally {
+    refreshQuotasInFlight = false;
+    if (refreshQuotasQueued) {
+      refreshQuotasQueued = false;
+      refreshQuotas();
+    }
+  }
 }
 
 // ─── Providers in settings ───
-const PROVIDER_ORDER = ["claude", "codex", "copilot", "gemini"];
+// OpenAB bot 優先顯示，本機 CLI 接在後面。codex_bot=OpenAB CODEX，codex=本機 CLI（獨立 id）。
+const PROVIDER_ORDER = ["cicx", "gitx", "giminix", "codex_bot", "openx", "claude", "codex", "copilot", "gemini"];
 
 async function renderProviders() {
   const detected = await invoke("detect_installed_providers");
@@ -259,21 +1524,22 @@ async function renderProviders() {
 
   list.innerHTML = entries.map(([id, p]) => {
     const found = detected[id] || false;
-    const canEnable = !!p.settings_path;
+    // settings_path=None 在 OpenAB 模式下是「由 OpenAB 推送事件」而非「不支援」。
+    const isOpenAbBot = !p.settings_path;
     const checked = p.enabled ? "checked" : "";
-    const statusText = !canEnable ? "尚未支援"
-                     : found ? "已偵測"
-                     : "";
-    const statusClass = !canEnable ? "provider-pending"
-                      : found ? "provider-found"
-                      : "";
+    const statusText = isOpenAbBot
+      ? (found ? "OpenAB 驅動" : "尚未偵測到 OpenAB")
+      : (found ? "已偵測" : "");
+    const statusClass = isOpenAbBot
+      ? (found ? "provider-found" : "provider-pending")
+      : (found ? "provider-found" : "");
 
-    return `<div class="provider-item ${!canEnable ? 'disabled' : ''}">
-      <input type="checkbox" class="provider-check" data-provider="${id}" ${checked} ${!canEnable ? 'disabled' : ''}>
+    return `<div class="provider-item">
+      <input type="checkbox" class="provider-check" data-provider="${id}" ${checked}>
       ${providerIconHtml(id, 18)}
       <span class="provider-name">${esc(p.name)}</span>
       ${statusText ? `<span class="${statusClass}">${statusText}</span>` : ""}
-      ${canEnable ? `<button class="provider-open" data-provider="${id}" title="開啟 ${esc(p.name)} 設定檔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
+      ${!isOpenAbBot ? `<button class="provider-open" data-provider="${id}" title="開啟 ${esc(p.name)} 設定檔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
     </div>`;
   }).join("");
 
@@ -281,14 +1547,22 @@ async function renderProviders() {
   list.querySelectorAll(".provider-check").forEach(cb => {
     cb.addEventListener("change", async () => {
       const pid = cb.dataset.provider;
-      if (cb.checked) {
+      const p = appConfig.providers[pid];
+      const isOpenAbBot = p && !p.settings_path;
+      if (isOpenAbBot) {
+        // OpenAB 模式：只切 enabled 旗標，不動 CLI 原生 hook
+        appConfig.providers[pid].enabled = cb.checked;
+        appConfig.setup_done = true;
+        await saveConfig();
+      } else if (cb.checked) {
         try { await invoke("install_provider_hooks", { providerId: pid }); } catch (e) {}
+        appConfig = await invoke("get_config");
+        appConfig.setup_done = true; saveConfig();
       } else {
-        // Remove hooks from CLI's settings file too
         try { await invoke("remove_provider_hooks", { providerId: pid }); } catch (e) {}
+        appConfig = await invoke("get_config");
+        appConfig.setup_done = true; saveConfig();
       }
-      appConfig = await invoke("get_config");
-      appConfig.setup_done = true; saveConfig();
     });
   });
 
@@ -439,6 +1713,11 @@ let lastStructureJson = ""; // tracks session add/remove/state changes (excludes
 let lastState = null;
 
 async function refreshState() {
+  if (refreshStateInFlight) {
+    refreshStateQueued = true;
+    return;
+  }
+  refreshStateInFlight = true;
   try {
     const st = await invoke("get_state");
     lastState = st;
@@ -447,7 +1726,12 @@ async function refreshState() {
     const activeId = st.active_session?.id || "";
     const structureKey = JSON.stringify({
       active: activeId,
-      sessions: st.sessions.map(s => s.id + s.state + s.provider + (s.last_prompt || "") + (s.cwd || ""))
+      sessions: st.sessions.map(s =>
+        s.id + s.state + s.provider + (s.last_prompt || "") + (s.cwd || "") +
+        (s.thinking ? "T" : "") +
+        (s.tool_calls || []).map(t => t.id + t.status).join("|") +
+        "|" + (s.tokens_input || 0) + ":" + (s.tokens_output || 0)
+      )
     });
 
     if (structureKey !== lastStructureJson) {
@@ -455,13 +1739,25 @@ async function refreshState() {
       lastStructureJson = structureKey;
       renderCapsule(st);
       renderSessions(st);
-      if (currentView === "expanded") fitWindow();
+      if (currentView === "dashboard") renderDashboard(st);
+      if (currentView === "expanded" || currentView === "dashboard" || currentView === "events") fitWindow();
+      maybeSendTelegramLongTask(st.sessions || []);
     } else {
       // Only timers changed — update in place
       renderCapsule(st);
       updateTimers(st);
+      if (currentView === "dashboard") {
+        renderDashboard(st);
+      }
     }
-  } catch (e) {}
+  } catch (e) {
+  } finally {
+    refreshStateInFlight = false;
+    if (refreshStateQueued) {
+      refreshStateQueued = false;
+      refreshState();
+    }
+  }
 }
 
 function updateTimers(st) {
@@ -475,16 +1771,47 @@ function updateTimers(st) {
 }
 
 function renderCapsule(st) {
-  const s = st.active_session;
+  let s = st.active_session;
 
-  // Capsule icons: show active provider icons
-  const providers = st.active_providers.length > 0 ? st.active_providers : (s ? [s.provider] : ["claude"]);
-  $("capsule-icons").innerHTML = providers.map(p => providerIconHtml(p, 16)).join('<span class="icon-sep">|</span>');
+  // #10 Multi-provider tab：若有 manual override 且該 provider 真的有 active session，切過去
+  if (manualActiveProvider) {
+    const override = st.sessions.find(x => x.provider === manualActiveProvider && x.is_active);
+    if (override) s = override;
+    else manualActiveProvider = null;  // provider 退場 → 還原 auto
+  }
+  window.__lastSt = st;  // 給 click handler 用
+
+  // Capsule icons: show active provider icons + 標記 current active (manual or auto)
+  const providers = st.active_providers.length > 0 ? st.active_providers : (s ? [s.provider] : ["cicx"]);
+  const activeProvider = s?.provider;
+  $("capsule-icons").innerHTML = providers.map(p => {
+    const iconHtml = providerIconHtml(p, 16);
+    const cls = p === activeProvider ? 'provider-icon-slot active' : 'provider-icon-slot';
+    return `<span class="${cls}" data-provider-slot="${p}">${iconHtml}</span>`;
+  }).join('');
+
+  // 多 active provider 時啟用漸變底色
+  $("capsule").classList.toggle("multi-active", providers.length > 1);
+
+  // 近 10 分鐘失敗計數 → 紅點
+  checkRecentFailures();
 
   if (s) {
     $("capsule-project").textContent = s.project_name;
-    const stMap = { working: "執行中...", waiting_for_user: "等待處理", stale: "過久未更新" };
-    $("capsule-status").textContent = stMap[s.state] || "閒置";
+    // 細粒度狀態優先：思考中 > 工具中 > 預設 working
+    let statusText;
+    if (s.state === "working" && s.thinking) {
+      statusText = "思考中...";
+    } else if (s.state === "working" && s.tool_calls && s.tool_calls.length > 0) {
+      const lastRunning = [...s.tool_calls].reverse().find(t => t.status === "running");
+      statusText = lastRunning
+        ? `工具: ${lastRunning.title || "tool"}`
+        : "執行中...";
+    } else {
+      const stMap = { working: "執行中...", waiting_for_user: "等待處理", stale: "閒置過久" };
+      statusText = stMap[s.state] || "閒置";
+    }
+    $("capsule-status").textContent = statusText;
     const stClass = ({ working: "working", waiting_for_user: "waiting_for_user", stale: "stale" })[s.state] || "idle";
     $("capsule-status").className = "capsule-status " + stClass;
     $("capsule-time").textContent = s.is_active ? s.formatted_time : "";
@@ -506,38 +1833,143 @@ function renderCapsule(st) {
     h += `<span class="count-total">${st.session_count}</span>`;
     $("capsule-count").innerHTML = h;
   } else $("capsule-count").classList.add("hidden");
+
+  // 顶层设计：capsule 顯示最緊 provider 的剩餘 %（snapshots.__local__ 由 refreshQuotas 填）
+  updateCapsuleQuota();
+}
+
+// 掃所有 local runner 的 raw 欄位找「最緊」配額（<100 的最小值），顯示在 capsule
+function updateCapsuleQuota() {
+  const el = $("capsule-quota");
+  if (!el) return;
+  const snap = window.__lastQuotaSnapshots?.__local__;
+  const runners = snap?.runners || [];
+  let tightest = null; // {name, pct, icon}
+  const ICONS = { claude: "⏱", codex: "🤖", copilot: "⚡", gemini: "💎" };
+  for (const r of runners) {
+    if (!r.ok || !r.raw) continue;
+    const raw = r.raw;
+    // 可能的 %-style 欄位（按 provider 差異）
+    const candidates = [
+      raw.session_5h_remaining, raw.week_7d_remaining,
+      raw.h5_remaining, raw.wk_remaining,
+      raw.remaining_pct,
+    ].filter(v => typeof v === "number" && v >= 0 && v <= 100);
+    if (candidates.length === 0) continue;
+    const min = Math.min(...candidates);
+    if (tightest === null || min < tightest.pct) {
+      tightest = { name: r.name, pct: min, icon: ICONS[r.name] || "·" };
+    }
+  }
+  if (tightest) {
+    el.classList.remove("hidden");
+    el.textContent = `${tightest.icon} ${Math.round(tightest.pct)}%`;
+    el.classList.toggle("warn", tightest.pct < 20);
+    el.classList.toggle("crit", tightest.pct < 10);
+    el.dataset.provider = tightest.name;
+  } else {
+    el.classList.add("hidden");
+    delete el.dataset.provider;
+  }
+}
+
+let capsuleInteractionsBound = false;
+
+// Capsule-quota 點擊跳展開面板 + scroll 到該 provider row
+function bindCapsuleInteractions() {
+  if (capsuleInteractionsBound) return;
+  capsuleInteractionsBound = true;
+  // #10 Capsule icon 點擊切換 active provider（multi-provider 並行時）
+  const icons = document.getElementById("capsule-icons");
+  if (icons) {
+    icons.addEventListener("click", (e) => {
+      const slot = e.target.closest("[data-provider-slot]");
+      if (!slot) return;
+      e.stopPropagation();
+      manualActiveProvider = slot.dataset.providerSlot;
+      const st = window.__lastSt;
+      if (st) renderCapsule(st);
+    });
+  }
+
+  const cq = document.getElementById("capsule-quota");
+  if (!cq) return;
+  cq.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const prov = cq.dataset.provider;
+    if (!prov) return;
+    showView("expanded");
+    // 等 fitWindow 完成再 scroll
+    setTimeout(() => {
+      const row = document.querySelector(`.quota-runner[data-provider="${prov}"]`);
+      if (row) {
+        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        row.classList.add("flash");
+        setTimeout(() => row.classList.remove("flash"), 1400);
+      }
+    }, 120);
+  });
 }
 
 function renderSessions(st) {
   const aid = st.active_session?.id;
-  $("session-list").innerHTML = st.sessions.map(s => {
+  // Filter bar: 若 sessionFilter 啟用，顯示 "篩選中: CICX ✕"
+  const fbar = $("filter-bar");
+  if (sessionFilter) {
+    const label = PROVIDER_LABEL[sessionFilter] || sessionFilter;
+    fbar.classList.remove("hidden");
+    fbar.innerHTML = `<span class="filter-badge">篩選中：${esc(label)}</span><button id="filter-clear" class="icon-btn" title="清除篩選（ESC）">✕</button>`;
+    fbar.querySelector("#filter-clear").addEventListener("click", () => {
+      sessionFilter = null;
+      renderSessions(st);
+      fitWindow();
+    });
+  } else {
+    fbar.classList.add("hidden");
+    fbar.innerHTML = "";
+  }
+
+  const visible = sessionFilter
+    ? st.sessions.filter(s => s.provider === sessionFilter)
+    : st.sessions;
+
+  $("session-list").innerHTML = visible.map(s => {
     const sel = s.id === aid ? " selected" : "";
     const sc = ({ working: "working", waiting_for_user: "waiting_for_user", stale: "stale" })[s.state] || "idle";
-    const sl = ({ working: "執行中", waiting_for_user: "等待中", stale: "過舊" })[s.state] || "";
-    const cwdShort = s.cwd ? s.cwd.replace(/^\/home\/[^/]+/, "~") : "";
-    return `<div class="session-row${sel}" data-id="${s.id}">
-      <div class="session-provider-icon">${providerIconHtml(s.provider, 16)}</div>
-      <div class="session-info">
-        <div class="session-header">
-          <span class="session-name">${esc(s.project_name)}</span>
-          <span class="status-dot ${sc}"></span>${sl ? `<span class="session-state-label ${sc}">${sl}</span>` : ""}
-        </div>
+    const sl = ({ working: "執行中", waiting_for_user: "等待中", stale: "閒置過久" })[s.state] || "";
+    const cwdShort = shortenCwd(s.cwd);
+    const meta = buildSessionMetaHtml(s);
+    // 預設 compact（只顯示 header）；expanded set 記住哪些 session 被展開過
+    const expanded = sessionExpanded.has(s.id) ? " expanded" : "";
+    const hasDetails = !!(cwdShort || s.last_prompt || meta);
+    return `<div class="session-row${sel}${expanded}" data-id="${s.id}">
+      <div class="session-row-head">
+        <div class="session-provider-icon">${providerIconHtml(s.provider, 14)}</div>
+        <span class="session-name">${esc(s.project_name)}</span>
+        <span class="status-dot ${sc}"></span>${sl ? `<span class="session-state-label ${sc}">${sl}</span>` : ""}
+        <span class="session-row-spacer"></span>
+        ${s.is_active ? `<span class="session-time">${s.formatted_time}</span>` : ""}
+        ${hasDetails ? `<span class="session-toggle">${expanded ? "▾" : "▸"}</span>` : ""}
+        <button class="session-remove" data-rid="${s.id}" title="移除">&times;</button>
+      </div>
+      ${hasDetails ? `<div class="session-details">
         ${cwdShort ? `<div class="session-cwd">${esc(cwdShort)}</div>` : ""}
         ${s.last_prompt ? `<div class="session-prompt">${esc(s.last_prompt)}</div>` : ""}
-      </div>
-      ${s.is_active ? `<span class="session-time">${s.formatted_time}</span>` : ""}
-      <button class="session-remove" data-rid="${s.id}" title="移除">&times;</button>
+        ${meta ? `<div class="session-meta">${meta}</div>` : ""}
+      </div>` : ""}
     </div>`;
   }).join("");
 
   $("session-list").querySelectorAll(".session-row").forEach(r => {
-    // Show X on row hover
     r.addEventListener("mouseenter", () => r.classList.add("hovered"));
     r.addEventListener("mouseleave", () => r.classList.remove("hovered"));
-    // Click row to focus window
+    // Click row head → toggle compact/expanded + select
     r.addEventListener("click", (e) => {
       if (e.target.closest(".session-remove")) return;
-      invoke("select_session", { id: r.dataset.id });
+      const id = r.dataset.id;
+      if (sessionExpanded.has(id)) sessionExpanded.delete(id);
+      else sessionExpanded.add(id);
+      invoke("select_session", { id });
       refreshState();
     });
   });
@@ -553,10 +1985,63 @@ function renderSessions(st) {
   });
 }
 
+// ─── Session meta (tools / thinking / tokens) ───
+const TOOL_STATUS_ICON = {
+  running: "⏳",
+  completed: "✓",
+  failed: "✗",
+};
+
+// 跨平台 home 路徑縮短：Linux / Mac `/home/user`, Windows `C:\Users\user` / MSYS `/c/Users/user`
+function shortenCwd(cwd) {
+  if (!cwd) return "";
+  return cwd
+    .replace(/^\/home\/[^/]+/, "~")
+    .replace(/^\/Users\/[^/]+/, "~")
+    .replace(/^[A-Z]:\\Users\\[^\\]+/i, "~")
+    .replace(/^\/[a-z]\/[Uu]sers\/[^/]+/, "~");
+}
+
+function formatTokens(n) {
+  if (!n || n <= 0) return "";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+  return String(n);
+}
+
+function buildSessionMetaHtml(s) {
+  const parts = [];
+
+  if (s.thinking) {
+    parts.push(`<span class="meta-thinking"><span class="meta-thinking-dot"></span>思考中</span>`);
+  }
+
+  if (Array.isArray(s.tool_calls) && s.tool_calls.length > 0) {
+    const chips = s.tool_calls.slice(-3).map(tc => {
+      const icon = TOOL_STATUS_ICON[tc.status] || "·";
+      const cls = `meta-tool meta-tool-${tc.status || "running"}`;
+      const title = tc.title || tc.id || "tool";
+      return `<span class="${cls}" title="${esc(tc.status || "")}">${esc(title)} ${icon}</span>`;
+    }).join("");
+    parts.push(`<span class="meta-tools">${chips}</span>`);
+  }
+
+  const ti = s.tokens_input || 0;
+  const to = s.tokens_output || 0;
+  if (ti > 0 || to > 0) {
+    parts.push(`<span class="meta-tokens" title="in / out tokens">${formatTokens(ti)} · ${formatTokens(to)} tok</span>`);
+  }
+
+  return parts.join("");
+}
+
 // ─── Apply ───
 function applyAccentColor(n) {
-  document.documentElement.style.setProperty("--accent", COLORS[n] || COLORS.purple);
-  document.querySelectorAll(".color-dot").forEach(d => d.classList.toggle("active", d.dataset.color === n));
+  // 自訂 hex 優先於預設 5 色
+  const customHex = appConfig?.appearance?.accent_custom_hex || "";
+  const resolved = /^#[0-9a-fA-F]{6}$/.test(customHex) ? customHex : (COLORS[n] || COLORS.purple);
+  document.documentElement.style.setProperty("--accent", resolved);
+  document.querySelectorAll(".color-dot").forEach(d => d.classList.toggle("active", d.dataset.color === n && !customHex));
 }
 function applyTextSize(s) {
   document.documentElement.style.setProperty("--scale", SCALES[s] || 1);
@@ -565,6 +2050,66 @@ function applyTextSize(s) {
 
 function applyTheme(t) {
   document.documentElement.setAttribute("data-theme", t);
+}
+
+function applyFontFamily(ff) {
+  document.documentElement.style.setProperty("--font-family-custom", ff || "");
+  document.body.style.fontFamily = ff || "";
+}
+
+function applyBgOpacity(pct) {
+  const v = Math.max(30, Math.min(100, parseInt(pct, 10) || 100));
+  document.documentElement.style.setProperty("--bg-opacity", (v / 100).toFixed(2));
+}
+
+// 背景照片/影片：根據 type 切換 img / video / hidden
+// 本機路徑走 Rust get_background_data_url (base64 data URL)；網路 URL 直接用
+async function resolveBgSrc(raw) {
+  if (!raw) return "";
+  const s = raw.trim();
+  if (/^(https?:|data:|blob:)/.test(s)) return s;
+  try {
+    return await invoke("get_background_data_url", { path: s });
+  } catch (e) {
+    console.error("bg data url failed:", e);
+    return "";
+  }
+}
+// 背景：圖片走 CSS var `--bg-image-url`（styles.css 的 body.has-bg::before 吃這個）
+// 影片走 <video>。統一到單一路徑，移除舊 #lp-bg-div 避免 2 套機制打架。
+async function applyBackground(type, path, blur, imageOpacity) {
+  const bgImg = document.getElementById("bg-fullscreen");
+  const bgVid = document.getElementById("bg-fullscreen-video");
+  // 務實：用半透 overlay 達到視覺背景效果（Tauri WebView2 底層 z-index:-1 被透明處理吃掉）
+  // image_opacity 100 = 很透(0.25)，看 UI；50 = 中等(0.5)；越小越明顯圖 = opacity 反向映射
+  const userPct = parseInt(imageOpacity, 10) || 60;
+  const alpha = (1 - userPct / 100 * 0.6).toFixed(2);  // userPct=100→0.4, 60→0.64, 10→0.94
+  const blurPx = (parseInt(blur, 10) || 0) + "px";
+  const clear = () => {
+    document.body.classList.remove("has-bg");
+    if (bgImg) { bgImg.style.display = "none"; bgImg.src = ""; }
+    if (bgVid) { bgVid.style.display = "none"; try { bgVid.pause(); } catch {} bgVid.removeAttribute("src"); }
+  };
+  if (!type || type === "none" || !path) { clear(); return; }
+  const src = await resolveBgSrc(path);
+  if (!src) { clear(); return; }
+  document.body.classList.add("has-bg");
+  // 實際 opacity = userPct/100 的 0.3-0.5 倍 — 太不透明 UI 看不清
+  const visAlpha = (userPct / 100 * 0.4).toFixed(2);
+  if (type === "image" && bgImg) {
+    bgImg.src = src;
+    bgImg.style.display = "block";
+    bgImg.style.opacity = visAlpha;
+    bgImg.style.filter = "blur(" + blurPx + ")";
+    if (bgVid) { bgVid.style.display = "none"; try { bgVid.pause(); } catch {} bgVid.removeAttribute("src"); }
+  } else if (type === "video" && bgVid) {
+    if (bgVid.getAttribute("src") !== src) { bgVid.src = src; bgVid.load(); }
+    try { bgVid.play(); } catch {}
+    bgVid.style.display = "block";
+    bgVid.style.opacity = visAlpha;
+    bgVid.style.filter = "blur(" + blurPx + ")";
+    if (bgImg) { bgImg.style.display = "none"; bgImg.src = ""; }
+  }
 }
 
 // ─── Sounds ───
@@ -583,5 +2128,12 @@ async function playProviderSound(provider, kind = "completion") {
 
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
-else init();
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    bindCapsuleInteractions();
+    init();
+  });
+} else {
+  bindCapsuleInteractions();
+  init();
+}

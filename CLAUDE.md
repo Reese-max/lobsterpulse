@@ -1,4 +1,74 @@
-# AgentPulse — project context for Claude Code
+# LobsterPulse 龍蝦監控 — project context for Claude Code
+
+> **本專案 = AgentPulse fork + OpenAB 整合**。底部是 AgentPulse 原始文件供架構參考；頂部這一段是 LobsterPulse v5.1 實際差異，優先於下面。
+
+## LobsterPulse 差異總覽（v5.1）
+
+**本質**：桌面膠囊指示器，同時監控**兩條路徑**——
+1. **本機 CLI**（直接 hook）：`claude` / `codex` / `copilot` / `gemini`，CLI 呼叫 `lobster-pulse-hook.exe` sidecar
+2. **OpenAB bot**（push 事件）：`cicx` / `gitx` / `giminix` / `codex_bot` / `openx`，OpenAB process 直接 HTTP POST `/hook/{bot_id}`
+
+共 9 provider（🤖 OpenAB 5 + 💻 本機 4）。
+
+## 關鍵端點
+
+| Endpoint | Port | 用途 |
+|---|---|---|
+| `POST /hook/{provider}` | 19280-19289 | Hook server 收 event |
+| `GET /metrics` | `port+100`（預設 19380） | Prometheus exporter（`lobsterpulse_sessions_total`、`_provider_sessions{provider="..."}`、`_tokens_input|output`）|
+| `~/.lobsterpulse/port` | — | 主 port 檔，sidecar 讀這個 |
+| `~/.lobsterpulse/usage-{bot}.json` | — | OpenAB 寫的 quota snapshot（6 個：cicx/gitx/giminix/codex_bot/openx + legacy bot）|
+
+## 召喚入口（5 條）
+
+1. Tray icon 左鍵單擊 → toggle show/hide（Windows 慣例）
+2. `Ctrl+Shift+L` 全域快捷鍵 → toggle
+3. `Ctrl+Shift+D` → 直接開 Bot 總覽 view
+4. `Ctrl+Shift+E` → 直接開事件診斷 view
+5. Tray 右鍵 → 9 項 menu
+
+## Build SOP（重要）
+
+**必須** `cargo tauri build --no-bundle`，不可純 `cargo build --release`（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。前置 `cargo install tauri-cli --locked`。
+
+釋放 exe lock：`python -c "import os; os.replace('exe-path', 'exe-path.bak')"`（cmd.exe del 在 MSYS2 下無效）。
+
+## Plugin 清單（Cargo.toml 實際）
+
+- `tauri-plugin-autostart` — Windows Task Scheduler AtLogon
+- `tauri-plugin-notification` — Windows toast
+- `tauri-plugin-single-instance` — 防雙啟動
+- `tauri-plugin-global-shortcut` — Ctrl+Shift+L/D/E
+- `tauri-plugin-log` — dev 模式 log
+
+## 5 個視圖
+
+1. **膠囊**（常駐 300×46）：active provider icons + project_name + state + time + count + 失敗紅點（近 10 min PostToolUseFailure 數）
+2. **展開面板**：filter-bar / session list (compact/展開) / chat-bar (claude_chat_quick) / quota bar (runtime totals + OpenAB snapshot 去重)
+3. **Bot 總覽**：☁️ OpenAB Bot 5 卡 + 💻 本機 CLI 4 卡（每卡 quota 按 `BOT_RUNNER_KEYWORDS` 過濾只顯示自己 backend）
+4. **事件診斷**：11 filter tabs（全部/❌失敗/5 OpenAB/4 本機動態隱藏）+ 2s auto-refresh
+5. **設定**：助手 / 音效 / 外觀 三 tab
+
+## 關鍵設計決策
+
+- **Session 狀態本地累計**：`SessionManager.provider_totals` 在 handle_event 裡累加（TokenUpdate 取 max、SessionStart/PostToolUseFailure 各 ++）。Quota 不依賴外部 snapshot。
+- **OPENX legacy alias**：OpenAB `BackendType::Other` 寫 `usage-bot.json`，hook_server 的 `parse_provider("bot") → "openx"` 自動 rewrite。
+- **Metrics server 獨立 runtime**：`std::thread::spawn` + `tokio::runtime::Runtime::new()`，**不能** tokio::spawn（setup rt 已 `std::mem::forget`）。
+- **Forward migration 強制刷新 name**：`load_config` 用 `.and_modify(|ex| ex.name = default.name)` 覆寫 name 但保留 enabled/settings_path。
+- **Tray 左鍵 toggle**：`show_menu_on_left_click(false) + on_tray_icon_event` 接 `MouseButton::Left + ButtonState::Up`；叫回來時自動置中避膠囊跑出螢幕。
+
+## 典型問題與 SOP
+
+- **找不到 tray icon**：Win11 摺進「^」→ `ms-settings:taskbar` → 釘出來
+- **設定頁兩個同名**：tray registry 殭屍 → 清 `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\TrayNotify\IconStreams` + restart explorer
+- **webview 白屏**：用 `cargo tauri build --no-bundle`，不要純 `cargo build --release`
+- **Rebuild exe lock**：python os.replace rename .bak 再 build
+
+---
+
+# AgentPulse upstream（以下為原始 fork 文件，僅供架構參考）
+
+> ⚠️ **READER NOTE**：下方為 fork 自 AgentPulse 的原始 CLAUDE.md，保留做架構參考用。**以頂部 LobsterPulse v5.1 章節為準**，下方凡與頂部衝突（例如 config 路徑 `~/.config/agentpulse/` vs LobsterPulse 的 `AppData\Roaming\lobsterpulse\`、port file `~/.agentpulse/port` vs `~/.lobsterpulse/port`、provider 數量、migration 流程、integration 結構等），一律**以頂部為準**。下方文字**不保證同步**，僅說明 Tauri/Rust/hook 基礎架構設計脈絡。
 
 Dynamic Island-style floating status indicator for AI coding CLIs (Claude Code,
 Gemini CLI, Codex CLI, GitHub Copilot CLI). Tauri v2 cross-platform fork of the

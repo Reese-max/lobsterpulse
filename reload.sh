@@ -9,13 +9,13 @@ set -e
 cd "$(dirname "$0")"
 
 echo "→ Killing running instance..."
-pkill -9 -x agent-pulse 2>/dev/null || true
+pkill -9 -x lobster-pulse 2>/dev/null || true
 sleep 1
 
-if [ -f "src-tauri/target/release/agent-pulse" ]; then
-  BIN="src-tauri/target/release/agent-pulse"
-elif [ -f "src-tauri/target/debug/agent-pulse" ]; then
-  BIN="src-tauri/target/debug/agent-pulse"
+if [ -f "src-tauri/target/release/lobster-pulse" ]; then
+  BIN="src-tauri/target/release/lobster-pulse"
+elif [ -f "src-tauri/target/debug/lobster-pulse" ]; then
+  BIN="src-tauri/target/debug/lobster-pulse"
 else
   echo "Error: no binary found. Run ./dev.sh first."
   exit 1

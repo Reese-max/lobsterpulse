@@ -69,11 +69,11 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v6
         with:
-          name: agent-pulse-${{ matrix.name }}
+          name: lobster-pulse-${{ matrix.name }}
           path: |
-            src-tauri/target/release/agent-pulse
-            src-tauri/target/release/agent-pulse.exe
-            src-tauri/target/release/agent-pulse-hook
-            src-tauri/target/release/agent-pulse-hook.exe
+            src-tauri/target/release/lobster-pulse
+            src-tauri/target/release/lobster-pulse.exe
+            src-tauri/target/release/lobster-pulse-hook
+            src-tauri/target/release/lobster-pulse-hook.exe
           if-no-files-found: ignore
           retention-days: 7

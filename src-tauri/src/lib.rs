@@ -1016,6 +1016,10 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
     // 從模組級 `discord::health_snapshot()` 拿 snapshot,避免 render 端持鎖跨越整個
     // string 構造（snapshot 是 `DiscordHealth` 是 `Copy`,複製成本 = 4 個 u64 + 1 個 enum）。
     let discord_health = discord::health_snapshot();
+    // K15 落地：讀 hook_server process-level parse failure counter。
+    // 對齊 K14 discord_health 模式：原子 snapshot（AtomicU64 load），
+    // render 端不持任何鎖跨越 string 構造。
+    let hook_parse_failures = hook_server::hook_parse_failures();
     render_prometheus_body(
         &state.sessions,
         state.session_count as u64,
@@ -1023,6 +1027,7 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
         &state.provider_totals,
         &quota_snapshot_ages,
         &discord_health,
+        hook_parse_failures,
         now,
     )
 }
@@ -1135,6 +1140,14 @@ fn collect_quota_snapshot_mtimes(
 ///   token 會從 global metric 蒸發、Prometheus 端會看到 counter 倒退
 /// - `lobsterpulse_provider_tokens_input{provider="..."}` / `_output`：per-provider 細顆度，
 ///   來源同 `ProviderTotals`，可看各 backend 自己的 quota 消耗配比
+// `render_prometheus_body` 累積 8 個正交輸入（sessions / counts / provider_totals /
+// quota_snapshot_ages / discord_health / hook_parse_failures / now），每個都是
+// 來自不同 process-level state 的純 snapshot。把它們打包成 struct 沒比較乾淨
+// —— render 端是純函式,沒有 mut / no allocation 切換,純粹 string 構造。
+// 對齊 R26/R27 政策：cross-cutting snapshot 整合留給 M1 輪(K15 candidate:
+// `MetricsSnapshot` struct 餵前端,render 端也順手用同個 struct),不在本輪
+// 重構。
+#[allow(clippy::too_many_arguments)]
 fn render_prometheus_body(
     sessions: &[session::SessionInfo],
     session_count: u64,
@@ -1142,6 +1155,7 @@ fn render_prometheus_body(
     provider_totals: &std::collections::HashMap<String, session::ProviderTotals>,
     quota_snapshot_ages: &std::collections::HashMap<String, i64>,
     discord_health: &discord::DiscordHealth,
+    hook_parse_failures: u64,
     now: DateTime<Utc>,
 ) -> String {
     let mut provider_counts: std::collections::HashMap<String, usize> =
@@ -1402,6 +1416,17 @@ fn render_prometheus_body(
     out.push_str(&format!(
         "lobsterpulse_discord_last_event_unix {}\n",
         discord_health.last_event_unix
+    ));
+    // K15 落地：hook_server 收到的 body 無法 parse 成 RawHookEvent 的 lifetime 累計。
+    // 對齊 K14 discord_send_failures_total 模式：counter + rate() = throughput。
+    // 跟 R6 surfacing 模式一致：原本只有 log::warn，operator 沒辦法 query aggregate
+    // 統計「某段時間內 hook 進來多少壞 body」。本 metric 暴露後，Prometheus 端
+    // `rate(lobsterpulse_hook_parse_failures_total[5m]) > 0` 即可 alert
+    // 「最近 5 分鐘 hook 收到無法 parse 的 body」→ 通常代表 CLI 升版改了 schema
+    // 或 network 中有人在注入垃圾。值 = 0 是健康（啟動後還沒收過壞 body）。
+    out.push_str("# HELP lobsterpulse_hook_parse_failures_total Lifetime count of HTTP bodies hook_server failed to parse as RawHookEvent JSON (counter; rate() for throughput)\n# TYPE lobsterpulse_hook_parse_failures_total counter\n");
+    out.push_str(&format!(
+        "lobsterpulse_hook_parse_failures_total {hook_parse_failures}\n"
     ));
     out
 }
@@ -2439,6 +2464,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2476,6 +2502,7 @@ mod render_prometheus_tests {
             &totals_map(vec![totals("claude", 100, 50)]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2498,6 +2525,7 @@ mod render_prometheus_tests {
             &totals_map(vec![totals("codex", 200, 80)]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2522,6 +2550,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2562,6 +2591,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2583,6 +2613,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2622,6 +2653,7 @@ mod render_prometheus_tests {
             &totals_map(vec![totals("claude", 9999, 4444), totals("cicx", 1, 1)]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2643,6 +2675,7 @@ mod render_prometheus_tests {
             &totals_map(vec![totals("claude", 1, 1)]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2709,6 +2742,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2750,6 +2784,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         ); // 0 個 live session
 
@@ -2770,6 +2805,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2793,6 +2829,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -2817,6 +2854,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         ); // 0 個 live session
 
@@ -2840,6 +2878,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -2883,6 +2922,7 @@ mod render_prometheus_tests {
             )]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -2901,6 +2941,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2926,6 +2967,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         ); // 0 個 live session
 
@@ -2948,6 +2990,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -2985,6 +3028,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3013,6 +3057,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3047,6 +3092,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -3078,6 +3124,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         ); // 0 個 live session
 
@@ -3109,6 +3156,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3210,6 +3258,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3233,6 +3282,7 @@ mod render_prometheus_tests {
                 ("openx".to_string(), 600),
             ]),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3261,6 +3311,7 @@ mod render_prometheus_tests {
                 ("__local__".to_string(), 5),
             ]),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3293,6 +3344,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &quota_age_map(vec![("cicx".to_string(), 0)]), // 只有 cicx
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3423,6 +3475,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3451,6 +3504,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -3474,6 +3528,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -3499,6 +3554,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -3537,6 +3593,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -3585,6 +3642,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         ); // 0 個 live session
 
@@ -3610,6 +3668,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             now,
         );
 
@@ -3759,6 +3818,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3780,6 +3840,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3810,6 +3871,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3837,6 +3899,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3866,6 +3929,7 @@ mod render_prometheus_tests {
             &totals_map(vec![totals_with_events("claude", 42)]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3897,6 +3961,7 @@ mod render_prometheus_tests {
             &totals_map(vec![totals_with_events("claude", u64::MAX)]),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3922,6 +3987,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
+            0,
             Utc::now(),
         );
 
@@ -3952,8 +4018,16 @@ mod render_prometheus_tests {
             last_event_unix: 1_700_000_000,
         };
 
-        let body =
-            render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), &h, Utc::now());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &h,
+            0,
+            Utc::now(),
+        );
 
         // 3 個 counter 都 emit 正確數值
         assert!(body.contains("lobsterpulse_discord_send_failures_total{class=\"4xx\"} 3\n"));
@@ -3979,6 +4053,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &h_4xx,
+            0,
             Utc::now(),
         );
         assert!(
@@ -3997,6 +4072,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             &h_5xx,
+            0,
             Utc::now(),
         );
         assert!(

@@ -465,7 +465,11 @@ mod read_events_since_tests {
         let (events, new_offset) =
             read_events_since(&path, line1_end).expect("mixed 應回 Ok 不報錯");
         assert_eq!(events.len(), 1, "壞行 skip 後 1 個合法 event 應保留");
-        assert_eq!(events[0]["q"], serde_json::json!(2), "q=2 應為 chunk 唯一合法 event");
+        assert_eq!(
+            events[0]["q"],
+            serde_json::json!(2),
+            "q=2 應為 chunk 唯一合法 event"
+        );
         assert_eq!(
             new_offset,
             body.len() as u64,

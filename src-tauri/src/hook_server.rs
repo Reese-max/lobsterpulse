@@ -1,9 +1,28 @@
 use crate::hook_event::HookEvent;
 use log::{error, info, warn};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+
+/// K15 落地：lifetime counter of JSON parse failures inside `process_body`。
+///
+/// 對齊 K14 (DiscordHealth) 模式：process-level state，render 端 `Ordering::Relaxed`
+/// 讀 snapshot 即可。AtomicU64 比 Mutex<HashMap> 輕太多 —— 這裡只需累計「parse 失敗
+/// 次數」單一整數，無需 enum / last_class / 分類。
+///
+/// 統計語意：每收到一個 body，`process_body` 內 `serde_json::from_slice` 失敗
+/// → counter++。counter 是 lifetime aggregate（process 重啟歸零），operator 用
+/// Prometheus `rate(lobsterpulse_hook_parse_failures_total[5m])` 算 throughput
+/// 即可看到「這條路最近在丟事件」—— 比 grep log 友善很多。
+static HOOK_PARSE_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// 讀 snapshot 給 Prometheus render 用。Atomic load = 無鎖、輕量、跨 thread 安全。
+/// 對齊 `discord::health_snapshot()` 模式：未 init 也安全（default = 0）。
+pub fn hook_parse_failures() -> u64 {
+    HOOK_PARSE_FAILURES.load(Ordering::Relaxed)
+}
 
 pub struct HookServer {
     port: u16,
@@ -114,7 +133,14 @@ async fn handle_client(
 fn process_body(body: &[u8], provider: &str) -> Result<HookEvent, ()> {
     let raw: crate::hook_event::RawHookEvent = match serde_json::from_slice(body) {
         Ok(r) => r,
-        Err(_) => return Err(()),
+        Err(_) => {
+            // K15 落地：lifetime counter++，對齊 R6 surfacing 模式 —— 原本只有
+            // log::warn，operator 沒辦法 query aggregate。Prometheus 端用
+            // `rate(lobsterpulse_hook_parse_failures_total[5m])` 即可看到
+            // 「最近這條路在丟事件」的 throughput。
+            HOOK_PARSE_FAILURES.fetch_add(1, Ordering::Relaxed);
+            return Err(());
+        }
     };
     let mut event = raw.normalize(provider);
     normalize_event_name(&mut event);
@@ -252,6 +278,48 @@ mod tests {
     fn process_body_returns_err_on_invalid_json() {
         let body = b"not json { broken";
         assert!(process_body(body, "claude").is_err());
+    }
+
+    // ─── K15 落地：process_body 內 JSON parse 失敗 → lifetime counter++ ───
+    // 測試策略：snapshot 模式（讀 before / 觸發 / 讀 after，檢 local delta），
+    // 對其他平行 test 安全 —— atomic fetch_add 不會掉 increment，只要我們只看
+    // 自己這條呼叫的 local delta，別人的 increment 算背景噪音。
+    #[test]
+    fn hook_parse_failures_counter_increments_on_invalid_json() {
+        let before = super::hook_parse_failures();
+        // 故意觸發 parse 失敗：braces 不對、不是 JSON
+        let _ = process_body(b"not json { broken", "claude");
+        let after = super::hook_parse_failures();
+        assert!(
+            after > before,
+            "process_body 收到壞 JSON 應讓 lifetime counter +1，before={before} after={after}"
+        );
+    }
+
+    #[test]
+    fn hook_parse_failures_counter_does_not_increment_on_valid_json() {
+        let before = super::hook_parse_failures();
+        // 合法 JSON 應走 Ok 分支，counter 不變
+        let event = process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
+            .expect("valid json should parse");
+        let after = super::hook_parse_failures();
+        assert_eq!(after, before, "valid JSON 不該讓 counter 增加");
+        assert_eq!(event.hook_event_name, "Stop");
+    }
+
+    #[test]
+    fn hook_parse_failures_counter_accumulates_across_failures() {
+        let before = super::hook_parse_failures();
+        // 連續 3 次壞 JSON 應讓 counter +3（不嚴格等於 3 因為平行 test 噪音，
+        // 只驗證 >= 3）
+        for i in 0..3 {
+            let _ = process_body(format!("garbage payload #{i}").as_bytes(), "claude");
+        }
+        let after = super::hook_parse_failures();
+        assert!(
+            after >= before + 3, // clippy::int_plus_one 不觸發 (>= 3 不是 +1)
+            "3 次壞 JSON 應讓 counter 至少 +3，before={before} after={after}"
+        );
     }
 
     #[test]

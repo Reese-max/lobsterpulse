@@ -982,3 +982,61 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - per-provider **session failure counter** 細顆度（`lobsterpulse_provider_failure_count{provider="..."}`）：資料在 `ProviderTotals.failure_count`、已是 lifetime aggregate，可作為下一輪 K7 候選（與 K6 同 pattern）
 - 把 lifetime token counter bug 的 fix 套到 discord `poll_discord_commands` 的 silent-fail 路徑：無關 metric 範圍、不順手
 - `.arch-fitness.json` / `.supervisor-report.json` 加 .gitignore：是 H0、24h chore_ratio 紅線仍生效
+
+### [2026-06-01] Round 18 — K7 per-provider failure counter 落地
+**類型**: M1（K7 metrics 細顆度；延續 R16-R17 metrics exporter 紅利）
+**KPI**: K7-per-provider-failure-counter
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `lobsterpulse_provider_failure_count{provider="..."}` metric | 無 | 有（9 provider × counter） | ✓ |
+| render_prometheus_body 函式簽名 | `(sessions, count, active, &ProviderTotals map)` | 同上（沿用 K6 簽名，無新參數） | — |
+| Lib unit tests | 59 pass | 61 pass | +2 |
+| cargo clippy --lib --tests -- -D warnings | 0 warning | 0 warning | — |
+| cargo fmt --check | 過 | 過 | — |
+| bash test/smoke-test.sh quick | PASS | PASS | — |
+| 24h chore_ratio (rolling) | 41% (16/39) | 41% (16/40，本輪 M1 不計入 chore) | 持平 |
+
+**為什麼**:
+- R17 log 明列 K7 為「下一輪 K-tag 候選（與 K6 同 pattern）」，接棒順理成章
+- ProviderTotals.failure_count 早已是 lifetime aggregate（session.rs:322、bump_provider_totals:352 `PostToolUseFailure` 時 `+= 1`）— 跟 K6 一樣「資料在、metrics 沒接」，純 surgical 接線
+- 24h chore_ratio 41% 仍超 30% 警戒線 → 本輪**強制** M1、不碰 H0（包含 supervisor 提醒的 .gitignore）
+
+**搜尋**:
+- 沒做 WebSearch（純沿 K6 pattern 同一檔同一函式接線，無新領域）
+- 對照 K6 lifetime-vs-live regression guard 概念：本輪新測試 `failure_counter_uses_lifetime_aggregate_not_live_sessions` 復用同 pattern，確保未來若有人改寫成讀 live session 會立即被測試擋下
+
+**做了什麼**:
+- `render_prometheus_body` 多一個 `provider_fail: HashMap<String, u64>` 從 `ProviderTotals.failure_count` 累計
+- 多一個 alphabetical sort：`provider_fail_sorted`
+- 輸出新 metric 段：
+  ```
+  # HELP lobsterpulse_provider_failure_count Lifetime tool/post failure count per provider
+  # TYPE lobsterpulse_provider_failure_count counter
+  lobsterpulse_provider_failure_count{provider="cicx"} N
+  ...
+  ```
+- 新測試 helper `totals_with_failures(p, in_, out, fail)` 封裝 ProviderTotals fixture
+- 新增 2 個 unit test：
+  1. `per_provider_failure_counter_alphabetical_and_per_provider` — 3 provider 失敗數不同，alphabetical 排序驗證
+  2. `failure_counter_uses_lifetime_aggregate_not_live_sessions` — 0 live session 但 ProviderTotals 有累計，驗證 metric 仍正確反映 lifetime
+- 既有 `empty_state` 測試新增 1 行 `!body.contains("lobsterpulse_provider_failure_count{")` 守門
+- 既有 `output_includes_help_and_type_headers_for_every_metric` 新增 2 行 required header（HELP + TYPE）
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 61/61 pass（59 既有 + 2 新 K7；0 regression）
+- `bash test/smoke-test.sh quick` PASS
+
+**結果**: PASS（K7 落地 + 0 lint warning + 0 regression + commit `0fa3210`）
+
+**KPI-impact: K7 per-provider failure counter 從 0 → 1 metric + +2 tests pass**
+
+**不做的範圍**（給後續輪次）:
+- HTTP-level e2e 測試 spawn metrics server thread：test 慢且 flaky 風險高、port 衝突要管理，K6/K7 都已說明
+- `lobsterpulse_session_idle_age_seconds` SLO signal：`AppState` 沒暴露該欄，要先動 session.rs
+- 把 K6/K7 lifetime-vs-live pattern 套到 discord `poll_discord_commands` 的 silent-fail 路徑：無關 metric 範圍
+- `.arch-fitness.json` / `.supervisor-report.json` 加 .gitignore：H0、24h chore_ratio 41% 紅線仍生效，下輪再議
+- per-provider **session_count** 細顆度（`lobsterpulse_provider_session_count{provider="..."}` lifetime）：資料在 `ProviderTotals.session_count`、已是 lifetime aggregate，可作為下一輪 K8 候選（K6/K7/K8 同 pattern 完成 lifetime 三件套）

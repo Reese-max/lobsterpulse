@@ -1052,7 +1052,17 @@ pub fn poll_discord_commands(
     };
     let msgs = match discord::list_messages(token, channel, 10, after_opt) {
         Ok(m) => m,
-        Err(_) => return,
+        Err(e) => {
+            // R6 修了 14 處 Discord transport silent fail，但本呼叫是唯一漏網之魚
+            // (其他 21 處 Discord call 都已 `if let Err(e) => log::warn!` 對齊)。
+            // 對齊 R6/R8 surface pattern：list_messages 失敗要 log ctx 讓 operator
+            // 知道「!lp 指令 polling 整輪為何停了」而非全 tick silent 沒線索。
+            log::warn!(
+                "{}",
+                discord_err_msg("poll_discord_commands list_messages", &e)
+            );
+            return;
+        }
     };
     // 訊息預設時間由新到舊 — 我們反過來處理（舊的先），確保 last_cmd_msg_id 最後 = 最新
     let mut new_last_id: Option<String> = None;
@@ -1382,6 +1392,26 @@ mod tests {
         assert_eq!(
             discord_err_msg("session_idle 確認", "timeout"),
             "[auto_rules] discord session_idle 確認 failed: timeout"
+        );
+    }
+
+    /// R11 regression：`poll_discord_commands` 內的 `discord::list_messages` 是 R6 漏網的
+    /// 最後一條 Discord transport silent fail（其他 21 處都已對齊 R6 pattern）。
+    /// 鎖定 ctx 字串穩定，讓 log filter 可一條 query 抓出「!lp 指令 polling 整輪停了」的根因。
+    #[test]
+    fn poll_discord_commands_list_messages_error_uses_unified_prefix() {
+        // ctx 必須是 `poll_discord_commands list_messages`（精確指出 call site）
+        let msg = discord_err_msg(
+            "poll_discord_commands list_messages",
+            "curl exit 7: Failed to connect",
+        );
+        assert!(
+            msg.contains("poll_discord_commands list_messages"),
+            "ctx 必須指到 poll_discord_commands 的 list_messages 呼叫點：{msg}"
+        );
+        assert!(
+            msg.starts_with("[auto_rules] discord ") && msg.contains(" failed: "),
+            "必須走 R6 統一 prefix 讓 log filter 一條 query 抓全部 Discord 失敗：{msg}"
         );
     }
 

@@ -1035,11 +1035,16 @@ fn render_prometheus_body(
     let mut tot_out: u64 = 0;
     let mut provider_in: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
     let mut provider_out: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    // K7 落地：per-provider 失敗計數同樣走 ProviderTotals（lifetime aggregate），
+    // 不讀 live SessionInfo —— 失敗事件已結束、session 早已被 stale 回收後仍保留累計。
+    let mut provider_fail: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     for (p, t) in provider_totals {
         tot_in = tot_in.saturating_add(t.tokens_input);
         tot_out = tot_out.saturating_add(t.tokens_output);
         provider_in.insert(p.clone(), t.tokens_input);
         provider_out.insert(p.clone(), t.tokens_output);
+        provider_fail.insert(p.clone(), t.failure_count);
     }
 
     let mut provider_counts_sorted: Vec<_> = provider_counts.iter().collect();
@@ -1050,6 +1055,8 @@ fn render_prometheus_body(
     provider_in_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_out_sorted: Vec<_> = provider_out.iter().collect();
     provider_out_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_fail_sorted: Vec<_> = provider_fail.iter().collect();
+    provider_fail_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
@@ -1082,6 +1089,16 @@ fn render_prometheus_body(
     for (p, n) in &provider_out_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_tokens_output{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    // K7 落地：per-provider 失敗計數（lifetime aggregate）。
+    // `failure_count` 來源是 `ProviderTotals`，由 `bump_provider_totals` 在
+    // `PostToolUseFailure` 事件時 `+= 1` 累加；不依賴 live session（失敗事件
+    // 之後 session 仍會轉 idle/移除，但累計保留在 ProviderTotals 不蒸發）。
+    out.push_str("# HELP lobsterpulse_provider_failure_count Lifetime tool/post failure count per provider\n# TYPE lobsterpulse_provider_failure_count counter\n");
+    for (p, n) in &provider_fail_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_failure_count{{provider=\"{p}\"}} {n}\n"
         ));
     }
     out
@@ -1909,6 +1926,25 @@ mod render_prometheus_tests {
         entries.into_iter().collect()
     }
 
+    /// K7 測試用：為 test 製造 ProviderTotals fixture（token + failure_count 一起填）。
+    fn totals_with_failures(
+        provider: &str,
+        in_: u64,
+        out: u64,
+        fail: u64,
+    ) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: in_,
+                tokens_output: out,
+                session_count: 1,
+                failure_count: fail,
+                since: None,
+            },
+        )
+    }
+
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
         let body = render_prometheus_body(&[], 0, 0, &HashMap::new());
@@ -1923,6 +1959,8 @@ mod render_prometheus_tests {
         // 沒 provider → 新增的 per-provider token 段也只有 HELP/TYPE、沒有 sample
         assert!(!body.contains("lobsterpulse_provider_tokens_input{"));
         assert!(!body.contains("lobsterpulse_provider_tokens_output{"));
+        // K7 落地：per-provider 失敗計數段同樣：空 map → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_failure_count{"));
     }
 
     #[test]
@@ -2093,6 +2131,9 @@ mod render_prometheus_tests {
             "# TYPE lobsterpulse_provider_tokens_input counter",
             "# HELP lobsterpulse_provider_tokens_output",
             "# TYPE lobsterpulse_provider_tokens_output counter",
+            // K7 新增：per-provider failure counter
+            "# HELP lobsterpulse_provider_failure_count",
+            "# TYPE lobsterpulse_provider_failure_count counter",
         ];
         for h in required_headers {
             assert!(
@@ -2100,5 +2141,64 @@ mod render_prometheus_tests {
                 "missing required header: {h}\n--- body ---\n{body}"
             );
         }
+    }
+
+    #[test]
+    fn per_provider_failure_counter_alphabetical_and_per_provider() {
+        // K7 主軸：per-provider failure 細顆度。3 個 provider、不同 failure 數、
+        // alphabetical 排序驗證。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_failures("openx", 0, 0, 7), // 故意非字母序
+                totals_with_failures("cicx", 0, 0, 3),
+                totals_with_failures("gemini", 0, 0, 12),
+            ]),
+        );
+
+        // 每個 provider 都應該有對應的 failure sample line
+        assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"cicx\"} 3\n"));
+        assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"gemini\"} 12\n"));
+        assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"openx\"} 7\n"));
+
+        // 排序驗證：cicx < gemini < openx
+        let cicx_idx = body
+            .find("lobsterpulse_provider_failure_count{provider=\"cicx\"} 3\n")
+            .expect("cicx failure line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_failure_count{provider=\"gemini\"} 12\n")
+            .expect("gemini failure line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_failure_count{provider=\"openx\"} 7\n")
+            .expect("openx failure line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider failure count 必須 alphabetical 排序"
+        );
+    }
+
+    #[test]
+    fn failure_counter_uses_lifetime_aggregate_not_live_sessions() {
+        // K7 同 K6 的 lifetime-vs-live 核心 regression guard：
+        // 失敗事件後 session 早已 idle / 被 stale 回收（live sessions 為空），
+        // 但 ProviderTotals 仍保留累計 → metric 仍正確反映歷史失敗總數。
+        // 這也避免 Prometheus counter 倒退（alert 誤觸發）。
+        let body = render_prometheus_body(
+            &[], // 0 個 live session
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_failures("claude", 0, 0, 0), // 沒失敗
+                totals_with_failures("codex", 0, 0, 5),  // 5 次失敗
+                totals_with_failures("cicx", 0, 0, 2),   // 2 次失敗
+            ]),
+        );
+
+        // 即使 live sessions = []，failure metric 仍要反映出 ProviderTotals 累計
+        assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"claude\"} 0\n"));
+        assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"codex\"} 5\n"));
+        assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"cicx\"} 2\n"));
     }
 }

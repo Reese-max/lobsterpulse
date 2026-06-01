@@ -322,6 +322,10 @@ pub struct ProviderTotals {
     pub failure_count: u64,
     /// 累計起始時間（第一次 event 進來）——給 UI 顯示「自何時累計」
     pub since: Option<DateTime<Utc>>,
+    /// 最近一次 event 時間戳（任何 event 都會更新，不只在 TokenUpdate / Failure）——
+    /// 給 `/metrics` 端計算 per-provider `idle_seconds` gauge 用。
+    /// `None` 表示該 provider 還沒收過 event。
+    pub last_event_at: Option<DateTime<Utc>>,
 }
 
 pub struct SessionManager {
@@ -348,6 +352,10 @@ impl SessionManager {
         if entry.since.is_none() {
             entry.since = Some(Utc::now());
         }
+        // K8 落地：每個 event 都更新 last_event_at（不限 TokenUpdate / Failure），
+        // 給 metrics 端計算 per-provider idle_seconds。lifetime aggregate 保留——
+        // session 移除後 ProviderTotals 仍有值，不會蒸發。
+        entry.last_event_at = Some(Utc::now());
         match event.hook_event_name.as_str() {
             "PostToolUseFailure" => entry.failure_count += 1,
             "TokenUpdate" => {

@@ -8,6 +8,7 @@ mod openab_bridge;
 mod quota_history;
 mod session;
 
+use chrono::{DateTime, Utc};
 use config::{detect_providers, load_config, save_config, AppConfig};
 use hook_server::HookServer;
 use log::info;
@@ -990,11 +991,14 @@ struct ServerPort(u16);
 fn render_prometheus(handle: &tauri::AppHandle) -> String {
     let mgr = handle.state::<AppSessionManager>();
     let state = mgr.0.lock().unwrap().get_state();
+    // K8 落地：傳入 `now` 給 pure fn 計算 per-provider idle_seconds，
+    // 把時鐘從 pure fn 隔離出來、unit test 注入固定時間驗證 idle 數學。
     render_prometheus_body(
         &state.sessions,
         state.session_count as u64,
         state.active_count as u64,
         &state.provider_totals,
+        Utc::now(),
     )
 }
 
@@ -1018,6 +1022,7 @@ fn render_prometheus_body(
     session_count: u64,
     active_count: u64,
     provider_totals: &std::collections::HashMap<String, session::ProviderTotals>,
+    now: DateTime<Utc>,
 ) -> String {
     let mut provider_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
@@ -1039,12 +1044,22 @@ fn render_prometheus_body(
     // 不讀 live SessionInfo —— 失敗事件已結束、session 早已被 stale 回收後仍保留累計。
     let mut provider_fail: std::collections::HashMap<String, u64> =
         std::collections::HashMap::new();
+    // K8 落地：per-provider idle_seconds = `now - last_event_at`。
+    // 只在 `last_event_at` 存在時輸出 sample line（`None` 表示該 provider 還沒收過 event）。
+    // 算 idle 用 saturating 轉 i64，理論 last_event_at 永遠 ≤ now（bump_provider_totals 寫
+    // 進去時一定 ≤ render 端讀到時的 wall clock），但保留 saturating 防時鐘回撥 / 序列化。
+    let mut provider_idle: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
     for (p, t) in provider_totals {
         tot_in = tot_in.saturating_add(t.tokens_input);
         tot_out = tot_out.saturating_add(t.tokens_output);
         provider_in.insert(p.clone(), t.tokens_input);
         provider_out.insert(p.clone(), t.tokens_output);
         provider_fail.insert(p.clone(), t.failure_count);
+        if let Some(last) = t.last_event_at {
+            let elapsed = now.signed_duration_since(last).num_seconds().max(0);
+            provider_idle.insert(p.clone(), elapsed);
+        }
     }
 
     let mut provider_counts_sorted: Vec<_> = provider_counts.iter().collect();
@@ -1057,6 +1072,8 @@ fn render_prometheus_body(
     provider_out_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_fail_sorted: Vec<_> = provider_fail.iter().collect();
     provider_fail_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_idle_sorted: Vec<_> = provider_idle.iter().collect();
+    provider_idle_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
@@ -1099,6 +1116,15 @@ fn render_prometheus_body(
     for (p, n) in &provider_fail_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_failure_count{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    // K8 落地：per-provider idle_seconds gauge —— 距上次 event 多少秒。
+    // `last_event_at` 為 None 的 provider（從未收過 event）不輸出 sample line，
+    // 避免 Prometheus 端把缺失當作「0 秒 idle」誤判「剛剛才動」。
+    out.push_str("# HELP lobsterpulse_provider_idle_seconds Seconds since last event per provider (lifetime aggregate)\n# TYPE lobsterpulse_provider_idle_seconds gauge\n");
+    for (p, n) in &provider_idle_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_idle_seconds{{provider=\"{p}\"}} {n}\n"
         ));
     }
     out
@@ -1909,6 +1935,8 @@ mod render_prometheus_tests {
     }
 
     /// 為 test 製造 ProviderTotals fixture（填 render_prometheus_body 讀的 token 欄位）。
+    /// K8 落地：預設 `last_event_at = Some(now)`，避免既有測試被 K8 新 metric 干擾
+    /// （讓 render 端計算 idle = now - now = 0，行為退化成「剛剛有動」）。
     fn totals(provider: &str, in_: u64, out: u64) -> (String, ProviderTotals) {
         (
             provider.to_string(),
@@ -1918,6 +1946,7 @@ mod render_prometheus_tests {
                 session_count: 1,
                 failure_count: 0,
                 since: None,
+                last_event_at: Some(Utc::now()),
             },
         )
     }
@@ -1941,13 +1970,52 @@ mod render_prometheus_tests {
                 session_count: 1,
                 failure_count: fail,
                 since: None,
+                last_event_at: Some(Utc::now()),
+            },
+        )
+    }
+
+    /// K8 測試用：為 test 製造 ProviderTotals fixture，固定 `last_event_at` 時間戳，
+    /// 配合 `now` 參數驗證 idle 數學（`now - last_event_at` = 預期秒數）。
+    /// `last_at` 直接設值；測試呼叫處用 `Utc::now() - Duration::seconds(N)` 表達「N 秒前」。
+    fn totals_at(
+        provider: &str,
+        in_: u64,
+        out_: u64,
+        fail: u64,
+        last_at: DateTime<Utc>,
+    ) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: in_,
+                tokens_output: out_,
+                session_count: 1,
+                failure_count: fail,
+                since: None,
+                last_event_at: Some(last_at),
+            },
+        )
+    }
+
+    /// K8 測試用：ProviderTotals 但 `last_event_at = None`（從未收過 event）。
+    fn totals_no_event(provider: &str) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                since: None,
+                last_event_at: None,
             },
         )
     }
 
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
-        let body = render_prometheus_body(&[], 0, 0, &HashMap::new());
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
 
         assert!(body.contains("lobsterpulse_sessions_total 0\n"));
         assert!(body.contains("lobsterpulse_sessions_active 0\n"));
@@ -1971,6 +2039,7 @@ mod render_prometheus_tests {
             1,
             0,
             &totals_map(vec![totals("claude", 100, 50)]),
+            Utc::now(),
         );
 
         assert!(body.contains("lobsterpulse_sessions_total 1\n"));
@@ -1985,8 +2054,13 @@ mod render_prometheus_tests {
     #[test]
     fn single_active_session_reported_in_both_provider_lines() {
         let sessions = vec![info("codex", true, 200, 80)];
-        let body =
-            render_prometheus_body(&sessions, 1, 1, &totals_map(vec![totals("codex", 200, 80)]));
+        let body = render_prometheus_body(
+            &sessions,
+            1,
+            1,
+            &totals_map(vec![totals("codex", 200, 80)]),
+            Utc::now(),
+        );
 
         assert!(body.contains("lobsterpulse_sessions_active 1\n"));
         assert!(body.contains("lobsterpulse_provider_sessions{provider=\"codex\"} 1\n"));
@@ -2002,7 +2076,7 @@ mod render_prometheus_tests {
             info("gemini", false, 0, 0),
             info("cicx", true, 0, 0), // 同 provider 重複 → count=2
         ];
-        let body = render_prometheus_body(&sessions, 4, 2, &HashMap::new());
+        let body = render_prometheus_body(&sessions, 4, 2, &HashMap::new(), Utc::now());
 
         // 排序後順序應為 cicx / gemini / openx
         let cicx_sessions_idx = body
@@ -2039,6 +2113,7 @@ mod render_prometheus_tests {
                 totals("codex", 2000, 1000),
                 totals("cicx", 500, 250),
             ]),
+            Utc::now(),
         );
 
         assert!(body.contains("lobsterpulse_tokens_input 3500\n"));
@@ -2057,6 +2132,7 @@ mod render_prometheus_tests {
                 totals("cicx", 200, 100),
                 totals("gemini", 300, 150),
             ]),
+            Utc::now(),
         );
 
         // 每個 provider 都應該有 input + output 兩條 sample line
@@ -2093,6 +2169,7 @@ mod render_prometheus_tests {
             0,
             0,
             &totals_map(vec![totals("claude", 9999, 4444), totals("cicx", 1, 1)]),
+            Utc::now(),
         );
 
         assert!(body.contains("lobsterpulse_tokens_input 10000\n"));
@@ -2111,6 +2188,7 @@ mod render_prometheus_tests {
             1,
             1,
             &totals_map(vec![totals("claude", 1, 1)]),
+            Utc::now(),
         );
 
         let required_headers = [
@@ -2134,6 +2212,9 @@ mod render_prometheus_tests {
             // K7 新增：per-provider failure counter
             "# HELP lobsterpulse_provider_failure_count",
             "# TYPE lobsterpulse_provider_failure_count counter",
+            // K8 新增：per-provider idle gauge
+            "# HELP lobsterpulse_provider_idle_seconds",
+            "# TYPE lobsterpulse_provider_idle_seconds gauge",
         ];
         for h in required_headers {
             assert!(
@@ -2156,6 +2237,7 @@ mod render_prometheus_tests {
                 totals_with_failures("cicx", 0, 0, 3),
                 totals_with_failures("gemini", 0, 0, 12),
             ]),
+            Utc::now(),
         );
 
         // 每個 provider 都應該有對應的 failure sample line
@@ -2194,11 +2276,127 @@ mod render_prometheus_tests {
                 totals_with_failures("codex", 0, 0, 5),  // 5 次失敗
                 totals_with_failures("cicx", 0, 0, 2),   // 2 次失敗
             ]),
+            Utc::now(),
         );
 
         // 即使 live sessions = []，failure metric 仍要反映出 ProviderTotals 累計
         assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"claude\"} 0\n"));
         assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"codex\"} 5\n"));
         assert!(body.contains("lobsterpulse_provider_failure_count{provider=\"cicx\"} 2\n"));
+    }
+
+    #[test]
+    fn idle_seconds_empty_state_emits_header_only() {
+        // 沒有任何 provider → idle 段只有 HELP/TYPE、沒有 sample line。
+        // 對齊 K6/K7「empty state 不假裝 0 秒 idle」語意。
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), Utc::now());
+
+        assert!(body.contains("# HELP lobsterpulse_provider_idle_seconds"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_idle_seconds gauge"));
+        assert!(!body.contains("lobsterpulse_provider_idle_seconds{"));
+    }
+
+    #[test]
+    fn idle_seconds_skips_providers_with_no_event_yet() {
+        // K8 語意：provider 從未收過 event（`last_event_at = None`）→ 不輸出 sample。
+        // 避免 Prometheus 端把缺失當 0 秒 idle 誤判「剛剛才動」。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_at("claude", 0, 0, 0, now - chrono::Duration::seconds(120)),
+                totals_no_event("cicx"), // 從未收過 event
+            ]),
+            now,
+        );
+
+        // claude 收過 event → 有 sample
+        assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"claude\"} 120\n"));
+        // cicx 從未收過 event → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_idle_seconds{provider=\"cicx\"}"));
+    }
+
+    #[test]
+    fn idle_seconds_uses_lifetime_aggregate_not_live_sessions() {
+        // K8 同 K6/K7 的 lifetime-vs-live 核心 regression guard：
+        // 0 個 live session，但 ProviderTotals 仍有 last_event_at → metric 正確反映。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[], // 0 個 live session
+            0,
+            0,
+            &totals_map(vec![
+                totals_at("claude", 0, 0, 0, now - chrono::Duration::seconds(60)),
+                totals_at("cicx", 0, 0, 0, now - chrono::Duration::seconds(30)),
+            ]),
+            now,
+        );
+
+        // 與 K6/K7 一致：lifetime aggregate 讓 session 移除 / stale 回收後仍能看 idle
+        assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"claude\"} 60\n"));
+        assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"cicx\"} 30\n"));
+    }
+
+    #[test]
+    fn idle_seconds_alphabetical_and_deterministic() {
+        // 3 個 provider、不同 idle 數、故意非字母序輸入 → 驗 alphabetical 排序。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_at("openx", 0, 0, 0, now - chrono::Duration::seconds(900)),
+                totals_at("cicx", 0, 0, 0, now - chrono::Duration::seconds(60)),
+                totals_at("gemini", 0, 0, 0, now - chrono::Duration::seconds(3600)),
+            ]),
+            now,
+        );
+
+        // 每個 provider 都應該有對應 sample line
+        assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"cicx\"} 60\n"));
+        assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"gemini\"} 3600\n"));
+        assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"openx\"} 900\n"));
+
+        // 排序驗證：cicx < gemini < openx
+        let cicx_idx = body
+            .find("lobsterpulse_provider_idle_seconds{provider=\"cicx\"} 60\n")
+            .expect("cicx idle line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_idle_seconds{provider=\"gemini\"} 3600\n")
+            .expect("gemini idle line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_idle_seconds{provider=\"openx\"} 900\n")
+            .expect("openx idle line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider idle_seconds 必須 alphabetical 排序"
+        );
+    }
+
+    #[test]
+    fn idle_seconds_clamps_negative_to_zero() {
+        // 時鐘回撥 / 序列化時間差 edge case：理論 `last_event_at` ≤ now，
+        // 但 saturating 守門員 + `.max(0)` 保證 gauge 永遠 ≥ 0。
+        // 製造 last_event_at 在「未來」1 秒的情境，驗證 clamp。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![totals_at(
+                "claude",
+                0,
+                0,
+                0,
+                now + chrono::Duration::seconds(1), // 故意未來 1 秒
+            )]),
+            now,
+        );
+
+        // clamp 為 0 而非 -1
+        assert!(body.contains("lobsterpulse_provider_idle_seconds{provider=\"claude\"} 0\n"));
     }
 }

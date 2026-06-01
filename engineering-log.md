@@ -504,3 +504,86 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - 把 K6/K7 lifetime-vs-live pattern 套到 discord `poll_discord_commands` 的 silent-fail 路徑：無關 metric 範圍
 - `.arch-fitness.json` / `.supervisor-report.json` 加 .gitignore：H0、24h chore_ratio 41% 紅線仍生效，下輪再議
 - per-provider **session_count** 細顆度（`lobsterpulse_provider_session_count{provider="..."}` lifetime）：資料在 `ProviderTotals.session_count`、已是 lifetime aggregate，可作為下一輪 K8 候選（K6/K7/K8 同 pattern 完成 lifetime 三件套）
+
+---
+
+### [2026-06-01] Round 19 — K8 per-provider idle_seconds gauge 落地（lifetime 三件套延伸：last_event_at 派生）
+**類型**: M1（K8 metrics 細顆度；K6/K7 純接線轉 K8 「lifetime aggregate 派生維度」）
+**KPI**: K8-per-provider-idle-seconds-gauge
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `lobsterpulse_provider_idle_seconds{provider="..."}` gauge | 無 | 有（9 provider × gauge） | ✓ |
+| `ProviderTotals.last_event_at` 欄位 | 無 | `Option<DateTime<Utc>>` | +1 欄位 |
+| `render_prometheus_body` 函式簽名 | `(sessions, count, active, &ProviderTotals map)` | 同上 + `now: DateTime<Utc>` 注入 | +1 參數（純 fn 化驗證） |
+| Lib unit tests | 61 pass | 66 pass | +5 |
+| `cargo clippy --lib --tests -- -D warnings` | 0 warning | 0 warning | — |
+| `cargo fmt --check` | 過 | 過 | — |
+| `bash test/smoke-test.sh quick` | PASS | PASS | — |
+| Runtime smoke（`smoke_k8.ps1` POST event → /metrics grep） | — | `provider="claude"} 1` 真的出來 | ✓ |
+| 24h chore_ratio (rolling) | 41% | 41% (本輪 M1 不計入 chore) | 持平 |
+
+**為什麼**:
+- R18 末列 K8 候選 = per-provider `session_count` lifetime；predecessor 接手時盤點發現 idle_seconds 是更優先的派生信號：
+  - `session_count` 純接線 K6/K7 同 pattern，**沒有新設計價值**
+  - `idle_seconds` 需要新欄位 `last_event_at`（每個 event 都更新）→ 順手把 metrics exporter 純 fn 化（注入 `now` 取代 `Utc::now()` 內呼叫）→ 補 5 條 unit test 蓋 idle 數學、None 跳過、lifetime-vs-live、alphabetical、clamp negative
+  - 從 user 角度：idle_seconds 是 SLO signal（某 provider 卡住多久沒動），session_count 是純累計；idle 直接可接 alert，session_count 還要再算
+- 純 fn 化紅利：`render_prometheus_body` 原本依賴 `Utc::now()` 內呼叫 → 改成接受 `now: DateTime<Utc>` 參數，wrapper `render_prometheus` 注入 `Utc::now()`，純 fn 內 0 時鐘依賴 → test 可注入任意時間驗證 idle 數學
+- lifetime-vs-live 同 K6/K7：失敗事件已結束、session 早已被 stale 回收後 ProviderTotals 仍有 `last_event_at`，metric 仍正確反映（idle 持續增加、不會因 session 結束歸零）
+- 24h chore_ratio 41% 仍超 30% 紅線 → 本輪**強制 M1**，不碰 H0
+
+**搜尋**:
+- 沒做 WebSearch（K6/K7/K8 同 pattern 延伸，純 surgical 接線 + 純 fn 化）
+- 對照 K6 lifetime-vs-live regression guard 概念：本輪新測試 `idle_seconds_uses_lifetime_aggregate_not_live_sessions` 復用同 pattern
+
+**做了什麼**:
+- `session.rs:325` `ProviderTotals` 加 `last_event_at: Option<DateTime<Utc>>` 欄位（`None` = 該 provider 還沒收過 event）
+- `session.rs:bump_provider_totals` 內每個 event 都 `entry.last_event_at = Some(Utc::now())`（不限 TokenUpdate / Failure — 任何 event 進來都刷新）
+- `lib.rs::render_prometheus_body` signature 加 `now: DateTime<Utc>` 參數；wrapper `render_prometheus` 注入 `Utc::now()`
+- `lib.rs` import `use chrono::{DateTime, Utc};`
+- 新 metric 段輸出：
+  ```
+  # HELP lobsterpulse_provider_idle_seconds Seconds since last event per provider (lifetime aggregate)
+  # TYPE lobsterpulse_provider_idle_seconds gauge
+  lobsterpulse_provider_idle_seconds{provider="cicx"} 60
+  ...
+  ```
+- 新增 5 個 unit test：
+  1. `idle_seconds_empty_state_emits_header_only` — 0 provider，header 有、sample line 沒有
+  2. `idle_seconds_skips_providers_with_no_event_yet` — `last_event_at = None` 的 provider 不輸出 sample（避免 Prometheus 端把缺失當 0 idle 誤判「剛剛才動」）
+  3. `idle_seconds_uses_lifetime_aggregate_not_live_sessions` — 0 live session 但 ProviderTotals 有 last_event_at，metric 仍正確反映 lifetime
+  4. `idle_seconds_alphabetical_and_deterministic` — 4 providers 不同 idle 值，alphabetical 排序 + 確定性
+  5. `idle_seconds_clamps_negative_to_zero` — `last_event_at` 在「未來」1 秒時 clamp 到 0（時鐘回撥 / 序列化時間差 edge case）
+- 既有 test helper `totals(provider, in_, out)` 預設 `last_event_at: Some(Utc::now())` 避免既有 9 條測試被 K8 新 metric 干擾
+- 新 test helper `totals_with_last_event(p, in_, out, last_at)`、`totals_with_no_event(p, in_, out)` 製造 idle 數學 + None 跳過 fixture
+- 既有 `output_includes_help_and_type_headers_for_every_metric` 新增 2 行 required header（HELP + TYPE）
+
+**為什麼用 `now - last_event_at` 而不是 live session `last_event_at`**:
+- 跟 K6/K7 lifetime-vs-live 一致：session 結束或 30 min stale 回收後，live sessions map 已空，但 `ProviderTotals.last_event_at` 仍保留 → idle 持續增加、不歸零
+- user 體驗：某 provider 真的卡住 10 分鐘沒動 = idle 顯示 600；session 結束 + 新 session 開始 = idle 從 0 重新計（新的 `last_event_at` 覆蓋舊的）
+
+**為什麼 `last_event_at = None` 時不輸出 sample**:
+- Prometheus 端若看到 metric 缺失，預設視為「該 provider 沒收過 event、idle 不可知」
+- 若輸出 0，會被誤判「剛剛才動、health 好」→ 跟實際語意相反
+- 跟 K7 failure counter 對齊：`failure_count = 0` 的 provider 仍輸出 sample（0 是有意義的值）；idle 缺失是語意差異，要分開處理
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 66/66 pass（61 既有 + 5 新 K8；0 regression）
+- `bash test/smoke-test.sh quick` PASS
+- **Runtime smoke**（`smoke_k8.ps1`）：起 release exe → POST `/hook/claude` `UserPromptSubmit` → 讀 `/metrics` → grep `idle_seconds` 真的出 `lobsterpulse_provider_idle_seconds{provider="claude"} 1` ✓
+
+**結果**: PASS（K8 落地 + last_event_at 派生維度 + 純 fn 化 + 0 lint warning + 0 regression + commit `R19-pending`）
+
+**KPI-impact: K8 per-provider idle_seconds gauge 從 0 → 1 metric + lifetime 三件套 K6/K7/K8 收尾**
+
+**不做的範圍**（給後續輪次）:
+- HTTP-level e2e 測試 spawn metrics server thread：test 慢且 flaky 風險高、port 衝突要管理，K6/K7/K8 都已說明
+- 把 K6/K7/K8 lifetime-vs-live pattern 套到 discord `poll_discord_commands` 的 silent-fail 路徑：無關 metric 範圍
+- `.arch-fitness.json` / `.supervisor-report.json` 加 .gitignore：H0、24h chore_ratio 41% 紅線仍生效，下輪再議
+- per-provider **session_count** 細顆度（`lobsterpulse_provider_session_count{provider="..."}` lifetime）：R18 末列為 K8 候選；本輪 K8 改走 idle_seconds 派生維度，session_count 純接線降為 K9 候選
+- 把 `last_event_at` 順手接到 capsule UI 顯示「last activity X seconds ago」：超出 metrics 範疇、UI 改動大，下輪再議
+- 把 idle_seconds gauge 改 counter（monotonic 計數）：語意不同（gauge = 當下 idle 多少秒 / counter = 累計 idle 秒數），user 端 SLO alert 通常用 gauge
+

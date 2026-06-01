@@ -4,6 +4,58 @@
 
 ## 改善紀錄
 
+### [2026-06-01] Round 15 — auto_rules::hook_failure_burst 2 條 silent fail surface (Stop-Process + openab_restart spawn)
+**類型**: M0（user-facing observability bug：hook_failure_burst 觸發 OpenAB restart 時兩條 powershell spawn 沉默吞 error，user 端 capsule 紅點狂閃但 restart 沒跑、log 全無）
+**KPI**: K-silent-fail-surface
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| hook_failure_burst powershell spawn silent fail sites | 2 (Stop-Process + openab_restart) | 0 (if let Err + log::warn) | −2 |
+| 累積 silent-fail-surface 覆蓋（含 R6/R8/R9/R11/R12/R13/R14） | 33 sites surfaced | 35 sites surfaced | +2 |
+| cargo test --lib | 49 pass | 49 pass | — |
+| cargo clippy --lib --tests -- -D warnings | 0 warning | 0 warning | — |
+| 24h 連續 M0 推進輪數 | 8 (R6/R8/R9/R11/R12/R13/R14) | 9 | +1 |
+| 24h chore_ratio (純 M0 fix) | 0% (R7-R14 連續 fix) | 0% | — |
+
+**為什麼**:
+- R14 末 explicit defer「下一輪單獨評估」：`auto_rules.rs:631, 638` 是 user-input command 觸發的 spawn，scope 比 R13 純 tray menu click 大
+- 影響面：hook_failure_burst 是 4 條 auto rule 之一（Discord 通知/hook 失敗 burst/每日摘要/每週摘要），burst 觸發時用來救命的 OpenAB restart 機制本身失敗 = user 完全失能 + 完全無 log
+- 安全 scope 評估：`openab_restart_command` 來自 `AppConfig.openab_restart_command: String` (config.rs:38, 287 預設空字串)，但走 `Command::new("powershell.exe").args([..., openab_restart_command])` 是 args 陣列、PowerShell 收 positional arg → **無 shell injection 風險**，scope 收斂成純 silent fail observability（同 R12/R13/R14 範疇）
+- 對齊 R12/R13/R14 改法：inline `let _ =` → `if let Err(e) = ... { log::warn!(...) }`，訊息含 site (`auto_rules`) + rule (`hook_failure_burst`) + 失敗原因；restart case 額外帶 cmd 字串（user 自己設的，debug 路徑寫錯用）
+
+**搜尋**:
+- 沒做 WebSearch（同 R6/R8/R11-R14 既有 pattern 延伸、非新領域）
+- 順手對照 R14 末「不做的範圍」清單：本輪只動 `auto_rules.rs:631-640`，其他留的（`auto_rules.rs:669, 751` mark_summary_fired_if_new 內部邏輯；`auto_rules.rs:1311, 1318` save_config；`auto_rules.rs:1617` TmpDir test drop；`hook_server.rs:441` remove_port_file；`quota_history.rs:60` CSV row）仍不混入
+
+**做了什麼**:
+- `auto_rules.rs:631-640` hook_failure_burst 內 2 條 powershell spawn：
+  - 631 Stop-Process openab (hardcoded)：`let _ = ...spawn()` → `if let Err(e) = ...spawn() { log::warn!("auto_rules: hook_failure_burst openab stop spawn failed: {e}"); }`
+  - 638 openab_restart_command (user config)：同 pattern，`log::warn!("auto_rules: hook_failure_burst openab restart spawn failed (cmd={openab_restart_command}): {e}")`
+- 兩條獨立 if let Err（不 return）— 對齊 R12/R13/R14 模式：spawn 失敗不擋後續 Discord 通知（user 還是想知道 burst 觸發了）
+
+**為什麼不加 unit test**:
+- powershell spawn 是 Windows-only integration test territory（mono 假陽性、跨平台行為差異）
+- 接受：留給後續若加 e2e harness 再覆蓋；同 R12/R13/R14 取捨
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 49/49 pass（0 regression；R14 累積 49，本輪未新增 unit test）
+- `bash test/smoke-test.sh quick` PASS
+
+**結果**: PASS（M0 observability 改善落地 + 2 silent fail sites surfaced + 0 lint warning + 0 regression + commit `79f6408`）
+
+**不做的範圍**（給後續輪次）:
+- `auto_rules.rs:669, 751` `mark_summary_fired_if_new` — 是內部 HashSet<bool> insert、非 IO、不會 silent fail 高優先
+- `auto_rules.rs:1311, 1318` `save_config` — config write，R12 已歸類「save 失敗下次啟動讀不到 default 仍可運作」LOW
+- `auto_rules.rs:1617` TmpDir Drop — test helper，test 結束時清理、故意 silent
+- `hooks_configurator.rs:138` `remove_provider` — 設定移除流程，scope 涉及設定檔 IO + 9 provider 邏輯、R12 已歸類 LOW
+- `lib.rs:91, 130, 394, 401, 432, 434, 439, 441, 453, 508, 610, 615, 620, 625, 634-636, 768, 916, 953, 1141-1143, 1166, 1168-1169, 1172-1173` 等大量 — 多屬 window.set_position/show/focus、tx send、child kill 等「操作本身 best-effort、caller 已有 UX fallback」LOW 範疇
+- `hook_server.rs:109` `stream.write_all(response.as_bytes()).await` — HTTP response write，連線斷時 client 端也收不到、caller 已 log「connection closed」、LOW
+- `.arch-fitness.json` / `.supervisor-report.json` supervisor 產物 gitignore 化 — R12 末 deferred 給 H0 窗口
+
+---
+
 ### [2026-06-01] Round 14 — hook_server::write_port_file 2 條 silent fail surface (create_dir_all + write)
 **類型**: M0（user-facing observability bug：port file 是 sidecar 找 port 唯一依據、setup 失敗整個 hook 路徑走錯 port、user 端 capsule 動不了、log 全無）
 **KPI**: K-silent-fail-surface

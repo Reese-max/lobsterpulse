@@ -10,7 +10,7 @@ use crate::config::AutoActionsConfig;
 use crate::discord;
 use crate::session::SessionManager;
 use chrono::Timelike;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -34,6 +34,11 @@ pub struct AutoRuleState {
     pub last_weekly_key: String,
     /// 最後一次處理過的 command message id（避免重複執行）
     pub last_cmd_msg_id: String,
+    /// session_idle 規則專用：以「通知當下 session.last_event_time」為錨點，
+    /// 同一個 idle 週期內（同樣的 last_event_time）只 fire 一次。
+    /// 當 session 再次 active（last_event_time 推進），會自動失配 → 允許下輪 idle 再 fire。
+    /// 純 toast 模式（無 Discord 成功路徑）下，這是避免永久 spam 的唯一手段。
+    pub last_session_idle_event_ts: HashMap<String, i64>,
 }
 
 pub type SharedAutoState = Arc<Mutex<AutoRuleState>>;
@@ -81,6 +86,44 @@ fn dedup_gate(state: &mut AutoRuleState, key: &str, dedup_secs: i64) -> bool {
         }
     }
     state.last_fired.insert(key.to_string(), now);
+    true
+}
+
+/// session_idle 規則專用：判斷「此 session 在當前 idle 週期是否已被通知過」。
+///
+/// 以 `session.last_event_time` epoch_secs 作為錨點：
+/// - 同一個 idle 週期（session 沒有新事件），last_event_time 不變 → 失配已標記者 → 跳過
+/// - session 再次 active（last_event_time 推進）→ 錨點變動 → 允許新一輪 fire
+///
+/// 為避免 HashMap 無限增長（session 被移除但紀錄沒清），map 超過 `max_entries` 時
+/// 自動丟棄 64 筆最舊的（last_event_time 最小 = 最久沒被參照）。
+fn should_notify_session_idle(
+    state: &mut AutoRuleState,
+    session_id: &str,
+    last_event_ts: i64,
+    max_entries: usize,
+) -> bool {
+    // Lazy GC: 防止 session 被外部移除後殘留 entry 撐大 map
+    if state.last_session_idle_event_ts.len() > max_entries {
+        let mut entries: Vec<(String, i64)> = state
+            .last_session_idle_event_ts
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        entries.sort_by_key(|(_, v)| *v); // 舊的（最小 ts）在前
+        let to_drop: HashSet<String> = entries.into_iter().take(64).map(|(k, _)| k).collect();
+        state
+            .last_session_idle_event_ts
+            .retain(|k, _| !to_drop.contains(k));
+    }
+    if let Some(&prev) = state.last_session_idle_event_ts.get(session_id) {
+        if prev == last_event_ts {
+            return false; // 同一個 idle 週期已通知過
+        }
+    }
+    state
+        .last_session_idle_event_ts
+        .insert(session_id.to_string(), last_event_ts);
     true
 }
 
@@ -253,7 +296,6 @@ fn tick_inner(
         };
         for (sid, provider, idle_secs) in idle_sessions {
             let sid_short8 = prefix_chars(&sid, 8);
-            let key = format!("session_idle:{provider}:{sid_short8}");
             let already_pending = {
                 let s = state.lock().unwrap();
                 s.pending_confirms.iter().any(|p| p.session_id == sid)
@@ -261,9 +303,20 @@ fn tick_inner(
             if already_pending {
                 continue;
             }
+            // 用 session.last_event_time 作為「idle 週期」錨點：
+            // 純 toast 模式下若繼續用 5min dedup 窗，會在 30min 觸發後每 5min 重發
+            // 直到 session 結束（永久 spam）。改用「同 last_event_time 只 fire 一次」後，
+            // session 再次 active 之前不會再發；session 變 active 後允許下輪 idle 再 fire。
+            let last_event_ts = {
+                let m = mgr.lock().unwrap();
+                m.sessions
+                    .get(&sid)
+                    .map(|s| s.last_event_time.timestamp())
+                    .unwrap_or(0)
+            };
             let fire = {
                 let mut s = state.lock().unwrap();
-                dedup_gate(&mut s, &key, cfg.dedup_window_secs)
+                should_notify_session_idle(&mut s, &sid, last_event_ts, 256)
             };
             if !fire {
                 continue;
@@ -1172,5 +1225,54 @@ mod tests {
             SummaryMarker::Daily,
             "2026-06-02"
         ));
+    }
+
+    /// Regression：純 toast 模式下，session_idle 同一個 idle 週期只 fire 一次。
+    /// 修正前用 cfg.dedup_window_secs (5min)，會在 30min 觸發後每 5min 重發直到 session 結束。
+    #[test]
+    fn session_idle_dedup_uses_idle_period_anchor() {
+        let mut state = AutoRuleState::default();
+        // 第一次：未標記 → fire
+        assert!(should_notify_session_idle(&mut state, "sess-A", 1000, 256));
+        // 第二次：同 (sid, ts) → 跳過（同一個 idle 週期，純 toast 模式 15s tick 反覆跑就會到這）
+        assert!(!should_notify_session_idle(&mut state, "sess-A", 1000, 256));
+        assert!(!should_notify_session_idle(&mut state, "sess-A", 1000, 256));
+        // 第三次：同 sid、不同 ts（session 變 active 後 last_event_time 推進）→ 允許再 fire
+        assert!(should_notify_session_idle(&mut state, "sess-A", 2000, 256));
+        // 第四次：又變 idle（ts 又不動）→ 同週期內不再 fire
+        assert!(!should_notify_session_idle(&mut state, "sess-A", 2000, 256));
+    }
+
+    /// 不同 session 互不影響
+    #[test]
+    fn session_idle_dedup_per_session() {
+        let mut state = AutoRuleState::default();
+        assert!(should_notify_session_idle(&mut state, "sess-A", 1000, 256));
+        assert!(should_notify_session_idle(&mut state, "sess-B", 1000, 256)); // 不同 sid 各自獨立
+        assert!(!should_notify_session_idle(&mut state, "sess-A", 1000, 256));
+        assert!(!should_notify_session_idle(&mut state, "sess-B", 1000, 256));
+    }
+
+    /// map 超過 max_entries 時 lazy GC：丟最舊 64 筆，避免 session 被外部移除後殘留撐大
+    #[test]
+    fn session_idle_dedup_lazy_gc() {
+        let mut state = AutoRuleState::default();
+        // 塞 300 筆不同 sid，ts 遞增
+        for i in 0..300 {
+            assert!(should_notify_session_idle(
+                &mut state,
+                &format!("s-{i}"),
+                1000 + i as i64,
+                256
+            ));
+        }
+        // 觸發 GC 條件：> 256
+        // 插入第 257 筆就會 GC，但這次 insert 之前 len 已經 300
+        // 先驗證目前 map 大小
+        assert!(state.last_session_idle_event_ts.len() <= 300);
+        // 再插一筆，觸發 GC
+        assert!(should_notify_session_idle(&mut state, "trigger", 9999, 256));
+        // GC 後 map 應該 < 300
+        assert!(state.last_session_idle_event_ts.len() < 300);
     }
 }

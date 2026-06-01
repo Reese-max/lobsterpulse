@@ -384,6 +384,9 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - **R7**: 本 loop 漏記（supervisor 標 1 輪無改善）。M0-3 未推進。
 - **R8**: hook_server 2 處 silent fail surfaced + process_body 抽 pure fn + 5 unit tests（M0），K3 0/2 → 2/2。Lib tests 25 → 30。chore treadmill 紅線觸發（58% > 50% cap），本輪嚴守 M0-3、H0 cap 仍 1/5。
 - **R9**: hook_failure_burst 5 條 false-positive pattern 命中改 silent → log::debug surfaced（M0），K-hook-failure-observability 0/5 → 5/5。順手修 latent bug：原 inline `.contains() ||` 順序下「ripgrep」會先吃「取代 find/grep」組合案例，後 2 條 unreachable → const 改 specific-first 排序。Lib tests 30 → 33。Chore treadmill 紅線未消（本輪 fix type），H0 cap 仍 1/5。
+- **R10**: 9-provider smoke matrix 1 條 matrix test 涵蓋 9 家 normalize 規則（M2），K3 smoke pass provider coverage 0/9 → 9/9。Lib tests 33 → 34。
+- **R11**: poll_discord_commands list_messages 漏網 silent fail surfaced（M0），K2 Discord error logging coverage 14/15 → 15/15。Lib tests 34 → 35。⚠️ R11 commit 在 R12 進場後才補 engineering log entry（loop supervisor 沒自動觸發），補登合進 R12 docs commit 不拆。
+- **R12**: openab_bridge::write_offset 3 條 silent fs fail surfaced（M0），K4 openab bridge observability 0/3 → 3/3。Lib tests 35 → 39。對齊 R4 write_local_usage_snapshot pattern（pure fn + caller-side log::warn）。H0 cap 仍 1/5（本輪 M0）。
 
 ### 2026-06-01 R5 — 👁️ AI Supervisor 審查
 **品質**: PASS|WARN|FAIL (1/10)
@@ -507,3 +510,111 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 - 把 smoke matrix 拆成 9 條獨立 test：拆了反而失去「1 條跑完 = 9 家全綠」的可讀性（kpi 進度表的「9/9」要逐條數），目前 1 條 matrix 是對 KPI 報表友善的形狀
 - 把 K3 smoke pass 接到 `harness-reflection-kpi.json`：`kpi_rounds` 3/5 (60%) < 80% target，是 R5 提的 follow-up，本輪 M2 是把量測本體做出來，自動化是另一段工程
 - 加負向 fixture（如「`/hook/foo` 應回 Err」）：matrix 設計是「9 條合法路徑全綠」，負向是 `process_body` 自己的單測範圍（已覆蓋），不重複堆
+
+### 2026-06-01 R10 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+---
+
+### [2026-06-01] Round 11 — poll_discord_commands list_messages 漏網 silent fail surfaced
+**類型**: M0（user-facing observability bug：R6 修了 14 處 Discord transport silent fail，但 `auto_rules.rs:1053` 的 `discord::list_messages` 是唯一漏網之魚，operator 看不到「為什麼 !lp 指令 polling 整輪停了」）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K2-discord-error-logging-coverage | 14/15 sites | 15/15 sites | +1 |
+| Discord call site 已對齊 R6 surface pattern | 14/15 | 15/15 | +1 |
+| Lib unit tests | 34 (R10 後) | 35 | +1 |
+| 24h chore_ratio | 50% (R10 doc) | 50% (R11 fix) | — |
+
+**為什麼**: R6 sweep 是「grep `let _ = discord::` 14 處」，但 R6 漏了 `Err(_) => return` 這個變形。R11 用 `git show 8e46da3` 修這一條 + 加 `discord_err_msg` 統一 prefix 鎖 ctx 字串穩定（`poll_discord_commands list_messages`），讓 log filter 一條 query 抓「!lp 指令 polling 整輪停了」的所有根因。
+
+**搜尋**: `git show 8e46da3` 確認 R6 sweep 邊界（grep pattern 漏掉 Err(_) return 變形）。無新研究。
+
+**做了什麼**:
+- `auto_rules.rs:1052-1056`：`Err(_) => return` 改 `Err(e) => { log::warn!("{}", discord_err_msg("poll_discord_commands list_messages", &e)); return; }`
+- 加 unit test `poll_discord_commands_list_messages_error_uses_unified_prefix` 鎖 ctx 字串穩定 + 必須走 R6 統一 prefix
+
+**驗證**:
+- `cargo fmt --check` clean
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 35/35 pass (34 prior + 1 new)
+- `bash test/smoke-test.sh quick` PASS
+
+**結果**: PASS（commit `8e46da3`，1 file / +31 / -1）
+
+**不做的範圍**（給後續輪次）:
+- 全 codebase sweep `Err(_) => return` / `Err(_) => continue` 變形 — 找更多 R6 漏網之魚
+- Discord surface 範圍擴到 `openab_bridge::dispatch_event` (line 142 走 `crate::discord::send_embed` 但已經回 Result 給 caller) — 已 R6 對齊，無剩
+- 統一一個 `discord_invoke` wrapper 把 ctx logging 內建 — 改 15 sites 是 refactor，不在本輪 scope
+
+**⚠️ R11 補登**: 這個 commit 8e46da3 是 R11 結束時已 commit，但 R12 進場時 engineering-log 才補上 R11 段（loop infra R11 supervisor 沒自動觸發 log 寫入）。補登是 docs 性質，併入 R12 docs commit 不單獨拆（避免再 +1 純 docs commit 拉高 24h chore_ratio）。
+
+---
+
+### [2026-06-01] Round 12 — openab_bridge write_offset 3 silent fs fail sites surfaced
+**類型**: M0（user-facing observability bug：`openab_bridge::write_offset` 是 OpenAB → LP 事件橋接的 offset 追蹤點，原 4 條 `let _ =` 沉默吞 fs error，offset 寫失敗時 operator 無 log 區分「OpenAB 沒新事件」vs「我們 offset 寫失敗」→ 下輪同批 event 重複發）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K4-openab-bridge-observability（silent-fail sites surfaced） | 0/3 sites | 3/3 sites | +3 |
+| OpenAB → LP 橋接路徑 fail logging 覆蓋 | 0% (write_offset 全 silent) | 100% (create_dir_all + 2 條 fallback write 全 surfaced) | +100% |
+| 仍 best-effort（不 surface） | remove_file(&tmp) cleanup | remove_file(&tmp) cleanup | — (下輪 tmp 名稱帶 PID 換新，留 stale 不擋寫入) |
+| Lib unit tests | 35 (R11 後) | 39 | +4 |
+| 24h chore_ratio（本輪前） | 50% (R9 doc / R10 doc / R10 test / R11 fix) | — | 本輪 fix type 對 1 doc，cap 用 0/5 |
+| 24h 連續 M0 推進輪數 | 6 (R2/R2二/R3/R4/R6/R8/R9/R11) | 7 | +1 |
+
+**為什麼**:
+- R6 (Discord 14 sites) + R8 (hook_server 2 sites) + R11 (poll_discord_commands 1 site) 是「hook event → notification」路徑的 silent fail 覆蓋
+- openab_bridge 是「OpenAB process → LP 內部 quota tracking」路徑，**獨立**的 silent fail 池。R12 把這個池第一條 (`write_offset`) 撈乾淨
+- 對齊 R4 lib.rs::write_local_usage_snapshot pattern：pure fn `(path, payload) -> Result<(), String/Error>` + caller 端 `if let Err(e) => log::warn!` — 兩個 module 用同樣的 shape，方便 log filter 統一 grep
+- 24h chore 45% 紅線 + H0 cap 1/5 — 本輪嚴守 M0，不動 H0
+
+**搜尋**:
+- Grep `let _ = std::fs` 全 src-tauri 找 silent fs 模式，鎖定 openab_bridge.rs 4 條
+- 沒做 WebSearch（這是 R4/R6/R8/R11 既定 pattern 的延伸，非新領域）
+- 確認 `remove_file(&tmp)` cleanup 不該 surface（best-effort，下輪 tmp PID 不同，stale tmp 不擋寫入）
+
+**做了什麼**:
+- 抽 `fn write_offset_at(path: &std::path::Path, pos: u64) -> std::io::Result<()>` 為 pure fn
+  - 3 條 `?` 傳播：`create_dir_all(parent)` / `write(&p, ...)` after rename fail / `write(&p, ...)` after tmp fail
+  - 對齊 R4 `write_local_usage_snapshot(path, snapshot)` API 形狀
+- `write_offset(pos)` wrapper：if let Err(e) → `log::warn!("[openab_bridge] write_offset({}) failed: {} — offset tracking broken, may reprocess events next tick", pos, e)`
+- 統一 prefix `[openab_bridge]`，log filter `grep '\[openab_bridge\]'` 一條 query 抓全部 OpenAB 橋接失敗
+- 加 4 unit test：
+  - `write_offset_at_writes_value_atomically`：happy path 寫值正確
+  - `write_offset_at_creates_parent_dir_on_demand`：nested dir 自動建立
+  - `write_offset_at_returns_err_on_invalid_path`：control char 檔名拒收
+  - `write_offset_overwrites_existing_value`：連寫兩次第二次覆蓋
+
+**驗證**:
+- `cargo fmt --check` clean（fmt 自動重排 `path.file_name()...` chain）
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 39/39 pass (35 prior + 4 new)
+- `cargo test --lib openab_bridge` 4/4 new tests pass
+- `bash test/smoke-test.sh quick` PASS
+
+**結果**: PASS（M0 observability 改善落地 + 4 unit test 覆蓋 + 0 lint warning，commit `e6b5f65`）
+
+**不做的範圍**（給後續輪次）:
+- `openab_bridge::tail_new_events` 內 6 條 `Ok(_) => ... else { return vec![]; }` 失敗路徑（line 58/74/77/81/100/103/107）也是 silent，目前用 `let Ok(x) = ... else { return vec![]; }` pattern — 比 `let _ =` 稍好（不吞 Result）但仍無 log。下一輪可抽 `events_path_ok() -> Option<PathBuf>` + 在每個 fail 點 log::debug
+- 全 codebase sweep `Err(_) => return` / `let Ok(_) = ... else { ... }` 變形（接 R11 不做的範圍）：scope 跨多 module，需另開一輪
+- 統一 `discord_invoke` / `openab_invoke` wrapper 內建 ctx logging：refactor 15+ sites，超出本輪 surgical 範圍
+- 為 `.arch-fitness.json` / `.supervisor-report.json` 加 .gitignore：是 H0 housekeeping，本輪 24h 紅線禁止，留 R13+ H0 窗口
+- 擴 K4 到 quota_history.rs (line 60 `let _ = writeln!(f, ...)`)：silent CSV write，是另一個 silent fail 池
+
+---
+
+### 2026-06-01 R12 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令

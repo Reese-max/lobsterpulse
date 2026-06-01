@@ -898,3 +898,74 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 
 **綜合**: 1/10
 **指令**: 已注入修正指令
+
+### 2026-06-01 R23 — K11 per-provider quota_snapshot_age gauge 落地
+**類型**: M1（推進 K6-K10 觀測性系列）
+**KPI**: K11 quota snapshot age gauge 從 0 → 6 provider 監控點
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K11 quota snapshot age | 無 metric | 6 provider 監控點 | 落地 |
+| K6-K10 series | 5 metric | 6 metric | +1 |
+| unit test count | 80 | 91 | +11 |
+| silent fail sites (R23 內) | 0 | 0 | 持平 |
+| cargo clippy warning | 0 | 0 | 持平 |
+
+**為什麼**:
+- R22 末列為下輪 M1 候選，prior session 留的 K11 scaffold 缺 pure fn 測試（K8/K9/K10 每個都帶 3-5 條純函式測試 + 端對端測試，K11 卻只把新 metric 塞進既有 6 條 test 簽名改寫 + 1 條 empty-state assertion）
+- 「runner 死了 vs quota 用完」對 user 來說無法區分 → K11 直接量化「snapshot 多久沒更新」→ Prometheus 可設 `quota_snapshot_age_seconds > 600` 觸發 alert
+- 純推進既有方向，scope 控制 = K11 完整 closure（pure math + 端對端 + fs 邊界三件套）
+
+**搜尋**: 沿用 codebase 既有 Prometheus exporter pattern（K6/K7/K8/K9/K10），無新外部依賴；不引入 `tempfile` crate（沿 R12/R22 config.rs inline TmpDir struct 13 行就夠）
+
+**做了什麼**:
+- `compute_quota_snapshot_age_seconds` 純函式 3 條 unit test：
+  - mtime None → None（對齊 K8/K10 跳過策略）
+  - mtime 過去 60s → Some(60)（主軸算法）
+  - mtime 未來 → Some(0)（saturating，clock skew 安全網）
+- `render_prometheus_body` K11 段 4 條端對端測試：
+  - empty state 不假裝 0（防止「absent 假裝 age=0」誤判「runner 健康」）
+  - 3 provider emit sample line
+  - alphabetical 排序（含 `__local__` 排最前，因為 `_` < `a` 在 ASCII）
+  - age=0 vs absent 區分（0 是「剛剛還在」、absent 是「從沒看到」）
+- `collect_quota_snapshot_mtimes` fs helper 4 條測試：
+  - home=None → 6 個 key 全 None（不 crash）
+  - 部分檔案存在 → 有寫的 2 個 key 有 mtime、其他 None
+  - openx 缺 + usage-bot.json 在 → legacy fallback 拿到 mtime
+  - openx 在 + usage-bot.json 也寫了 → 走 primary，50ms sleep 確保 mtime 差異
+- `QuotaSnapshotTmpDir` struct（沿 R12 config.rs pattern：pid 後綴命名 + Drop 自動清）
+- 4 條 fs test 對齊 production shape：寫到 `<tmp>/.lobsterpulse/` 下（helper 內部 `home.join(".lobsterpulse")`）
+
+**為什麼不引進 `tempfile` crate**:
+- YAGNI：1 個 inline struct 13 行就夠 4 條 fs test
+- 既有 codebase 沒用 `tempfile`（grep 0 hit）
+- 對齊 R12 `write_offset_at_tests` + R22 `save_config_at_tests` 的 inline pattern
+
+**為什麼 fs test 寫到 `<tmp>/.lobsterpulse/`**:
+- helper 簽名是 production shape（`home: &Option<PathBuf>` = 真實 `dirs::home_dir()`）
+- helper 內部 `home.as_ref().map(|h| h.join(".lobsterpulse"))` 組資料目錄
+- 測試要模擬 production → 把檔案放在 `<tmp>/.lobsterpulse/` 才對齊
+- 第一次跑 fs test 3 條全 fail 立刻抓出來這點（路徑偏差 bug 在 R23 被關掉，避免後續有人 copy paste 同樣 pattern 卻踩坑）
+
+**為什麼 `skips_legacy_when_openx_exists` 加 50ms sleep**:
+- 同一個 thread 連續 `std::fs::write` 兩次，在 Windows NTFS 上 mtime 精度可能都到秒級 → 兩個 mtime 可能相同 → `assert_ne!` flaky
+- 50ms 間隔保證跨任何 fs 精度都不同 → 鎖定「helper 不會回 legacy mtime」這個語意
+- 不靠 sleep 鎖主要斷言（`assert_eq!(*actual, openx_mtime)` 仍精確），只用在 secondary 反向斷言
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 91/91 pass（80 prior + 11 K11 new）
+- `bash test/smoke-test.sh quick` PASS（cargo check 綠）
+
+**結果**: PASS（K11 三件套 closure + 0 regression + 0 lint warning + scaffold→fully-tested）
+
+**KPI-impact: K11-quota-snapshot-observability 6 provider 監控點落地；unit test 80 → 91 (+11)**
+
+**不做的範圍**（給後續輪次）:
+- K10 since_timestamp 接到 Discord Bot 通知（idle 比例 > 80% 觸發「該 provider 半年沒新事件」提醒）：R22/R23 兩輪都列為下輪 M1 候選沒動，可能 R24 該做了
+- 把 K11 age gauge 接到 Discord Bot：同樣列下輪 M1 候選
+- K10 / K11 → 額外 derive metric（uptime / data-freshness 混合 score）：scope 大，需另開 M1 輪
+- 全 codebase sweep 剩餘 33 條 silent fail sites（`openab_bridge::tail_new_events` 6 條 `Ok(_) => ... else { return vec![]; }` + 其他 system-initiated 點）：R22 末已列、scope 仍大
+- 把 K6-K11 整合成 single `MetricsSnapshot` struct 餵前端：範圍跨前後端，本輪 M1 surgical 不動

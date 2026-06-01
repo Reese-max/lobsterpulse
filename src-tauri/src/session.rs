@@ -320,6 +320,12 @@ pub struct ProviderTotals {
     pub tokens_output: u64,
     pub session_count: u64,
     pub failure_count: u64,
+    /// K13 落地：累計收到的 event 數（不論 event 類型：SessionStart / PostToolUse /
+    /// PostToolUseFailure / Stop / Notification / TokenUpdate / ... 全部 +1）。
+    /// 給 `/metrics` 端算 `lobsterpulse_provider_events_total` counter 用，operator 可算
+    /// `rate(events_total[5m])` = 每分鐘 ingest 吞吐量，補 K7 failure / K9 session 沒覆蓋的
+    /// 「整體事件流量」信號（純 counter，lifetime aggregate 不蒸發）。
+    pub events_total: u64,
     /// 累計起始時間（第一次 event 進來）——給 UI 顯示「自何時累計」
     pub since: Option<DateTime<Utc>>,
     /// 最近一次 event 時間戳（任何 event 都會更新，不只在 TokenUpdate / Failure）——
@@ -356,6 +362,10 @@ impl SessionManager {
         // 給 metrics 端計算 per-provider idle_seconds。lifetime aggregate 保留——
         // session 移除後 ProviderTotals 仍有值，不會蒸發。
         entry.last_event_at = Some(Utc::now());
+        // K13 落地：每個 event 都 +1，給 metrics 端算 per-provider events_total
+        // counter —— `rate(events_total[5m])` = 該 provider 事件 throughput。
+        // lifetime aggregate 對齊 K6/K7/K9：session 結束 + 30 min stale 回收後仍保留。
+        entry.events_total = entry.events_total.saturating_add(1);
         match event.hook_event_name.as_str() {
             "PostToolUseFailure" => entry.failure_count += 1,
             "TokenUpdate" => {
@@ -643,6 +653,50 @@ mod tests {
             m.provider_totals.get("codex").map(|t| t.session_count),
             Some(1),
             "codex 累計應為 1"
+        );
+    }
+
+    #[test]
+    fn events_total_lifetime_aggregate_increments_per_event_of_any_type() {
+        // K13 整合測試：bump_provider_totals 對每個 event 都 +1（不限 SessionStart /
+        // PostToolUseFailure / TokenUpdate）。累計路徑：
+        // - 3 種 event 各送 2 次 → 累計 6
+        // - session 結束（SessionEnd）也算 event → 累計 7
+        // - 不同 provider 獨立累計
+        // 對齊 K6/K7/K9 lifetime aggregate：session 結束 + 30 min stale 回收後
+        // live session 為空，但 ProviderTotals.events_total 仍保留 → metric 不會倒退。
+        let mut m = SessionManager::new();
+
+        // session 1 cicx：SessionStart + UserPromptSubmit + PreToolUse + PostToolUse +
+        // PostToolUseFailure + TokenUpdate + SessionEnd = 7 events
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionStart"));
+        let _ = m.handle_event(&ev("cicx", "s1", "UserPromptSubmit"));
+        let _ = m.handle_event(&ev("cicx", "s1", "PreToolUse"));
+        let _ = m.handle_event(&ev("cicx", "s1", "PostToolUse"));
+        let _ = m.handle_event(&ev("cicx", "s1", "PostToolUseFailure"));
+        let _ = m.handle_event(&ev("cicx", "s1", "TokenUpdate"));
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionEnd"));
+        assert_eq!(
+            m.provider_totals.get("cicx").map(|t| t.events_total),
+            Some(7),
+            "cicx 累計 7 個 event（包含 SessionEnd）"
+        );
+
+        // 同一 session 再送 2 個 event → 累計 +2
+        // 等等：SessionEnd 已移除 session，再送會被當作新 session
+        // 改送同 session 內的 event 在 SessionEnd 之前更單純 —— 上面 7 個已涵蓋
+        // 這裡驗：不同 provider 獨立累計
+        let _ = m.handle_event(&ev("claude", "c1", "SessionStart"));
+        let _ = m.handle_event(&ev("claude", "c1", "PostToolUse"));
+        assert_eq!(
+            m.provider_totals.get("cicx").map(|t| t.events_total),
+            Some(7),
+            "cicx 累計不該被 claude 影響"
+        );
+        assert_eq!(
+            m.provider_totals.get("claude").map(|t| t.events_total),
+            Some(2),
+            "claude 累計應為 2"
         );
     }
 

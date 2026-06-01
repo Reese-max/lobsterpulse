@@ -1185,6 +1185,15 @@ fn render_prometheus_body(
     // 用」提醒（已存在的 K10 / K11 數據 compose 一次即可得，無需新增任何資料源）。
     let mut provider_idle_ratio: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
+    // K13 落地：per-provider lifetime event 計數（counter）—— 該 provider 累計
+    // 收過幾個 event。`ProviderTotals.events_total` 在 `bump_provider_totals` 內對
+    // 任何 event 類型（SessionStart / PostToolUse / PostToolUseFailure / Stop /
+    // Notification / TokenUpdate / ...）都 `+= 1`。對齊 K6/K7/K9 lifetime
+    // aggregate：session 結束 / 30 min stale 回收後仍保留 → Prometheus 不會誤判
+    // counter 倒退。operator 端 `rate(events_total[5m])` = 該 provider ingest
+    // 吞吐量，補 K7 failure / K9 session 沒覆蓋的「整體事件流量」信號。
+    let mut provider_events_total: std::collections::HashMap<String, u64> =
+        std::collections::HashMap::new();
     for (p, t) in provider_totals {
         tot_in = tot_in.saturating_add(t.tokens_input);
         tot_out = tot_out.saturating_add(t.tokens_output);
@@ -1202,6 +1211,7 @@ fn render_prometheus_body(
         if let Some(ratio) = compute_provider_idle_ratio(now, t.last_event_at, t.since) {
             provider_idle_ratio.insert(p.clone(), ratio);
         }
+        provider_events_total.insert(p.clone(), t.events_total);
     }
 
     let mut provider_counts_sorted: Vec<_> = provider_counts.iter().collect();
@@ -1222,6 +1232,8 @@ fn render_prometheus_body(
     provider_since_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_idle_ratio_sorted: Vec<_> = provider_idle_ratio.iter().collect();
     provider_idle_ratio_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_events_total_sorted: Vec<_> = provider_events_total.iter().collect();
+    provider_events_total_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
@@ -1328,6 +1340,16 @@ fn render_prometheus_body(
     for (p, ratio) in &provider_idle_ratio_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_idle_ratio{{provider=\"{p}\"}} {ratio:.4}\n"
+        ));
+    }
+    // K13 落地：per-provider lifetime event counter。`events_total` 來自
+    // `ProviderTotals`（lifetime aggregate），對齊 K6/K7/K9 不蒸發語意。
+    // `bump_provider_totals` 對所有 event 類型（不限 PostToolUseFailure / TokenUpdate）
+    // 都 +1 → 此 metric 反映「該 provider 累計收過多少 event」、不細分 type。
+    out.push_str("# HELP lobsterpulse_provider_events_total Lifetime total event count per provider (every event type increments)\n# TYPE lobsterpulse_provider_events_total counter\n");
+    for (p, n) in &provider_events_total_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_events_total{{provider=\"{p}\"}} {n}\n"
         ));
     }
     out
@@ -2150,6 +2172,7 @@ mod render_prometheus_tests {
                 tokens_output: out,
                 session_count: 1,
                 failure_count: 0,
+                events_total: 0,
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2174,6 +2197,7 @@ mod render_prometheus_tests {
                 tokens_output: out,
                 session_count: 1,
                 failure_count: fail,
+                events_total: 0,
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2197,6 +2221,7 @@ mod render_prometheus_tests {
                 tokens_output: out_,
                 session_count: 1,
                 failure_count: fail,
+                events_total: 0,
                 since: None,
                 last_event_at: Some(last_at),
             },
@@ -2212,6 +2237,7 @@ mod render_prometheus_tests {
                 tokens_output: 0,
                 session_count: 0,
                 failure_count: 0,
+                events_total: 0,
                 since: None,
                 last_event_at: None,
             },
@@ -2228,6 +2254,7 @@ mod render_prometheus_tests {
                 tokens_output: 0,
                 session_count,
                 failure_count: 0,
+                events_total: 0,
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2245,6 +2272,7 @@ mod render_prometheus_tests {
                 tokens_output: 0,
                 session_count: 0,
                 failure_count: 0,
+                events_total: 0,
                 since: Some(since),
                 last_event_at: Some(since),
             },
@@ -2261,6 +2289,7 @@ mod render_prometheus_tests {
                 tokens_output: 0,
                 session_count: 0,
                 failure_count: 0,
+                events_total: 0,
                 since: None,
                 last_event_at: Some(Utc::now()),
             },
@@ -2283,6 +2312,7 @@ mod render_prometheus_tests {
                 tokens_output: 0,
                 session_count: 0,
                 failure_count: 0,
+                events_total: 0,
                 since: Some(since),
                 last_event_at: Some(last_event_at),
             },
@@ -2302,6 +2332,7 @@ mod render_prometheus_tests {
                 tokens_output: 0,
                 session_count: 0,
                 failure_count: 0,
+                events_total: 0,
                 since: Some(since),
                 last_event_at: None,
             },
@@ -2318,8 +2349,26 @@ mod render_prometheus_tests {
                 tokens_output: 0,
                 session_count: 0,
                 failure_count: 0,
+                events_total: 0,
                 since: Some(now),
                 last_event_at: Some(now),
+            },
+        )
+    }
+
+    /// K13 測試用：為 test 製造 ProviderTotals fixture，指定 `events_total`（lifetime
+    /// 累計收到幾個 event）。其他欄位留 0 / 預設值，避免干擾其他 metric 段。
+    fn totals_with_events(provider: &str, events: u64) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                events_total: events,
+                since: None,
+                last_event_at: Some(Utc::now()),
             },
         )
     }
@@ -2342,6 +2391,8 @@ mod render_prometheus_tests {
         assert!(!body.contains("lobsterpulse_provider_failure_count{"));
         // K9 落地：per-provider lifetime session count 段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_session_count{"));
+        // K13 落地：per-provider lifetime event counter 段同樣：空 map → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_events_total{"));
         // K10 落地：per-provider since_timestamp 段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_since_timestamp{"));
         // K11 落地：per-provider quota_snapshot_age 段同樣：空 map → 沒 sample line
@@ -2559,6 +2610,9 @@ mod render_prometheus_tests {
             // K12 新增：per-provider idle ratio gauge（K8 / K10 派生）
             "# HELP lobsterpulse_provider_idle_ratio",
             "# TYPE lobsterpulse_provider_idle_ratio gauge",
+            // K13 新增：per-provider lifetime event counter（任何 event 都 +1）
+            "# HELP lobsterpulse_provider_events_total",
+            "# TYPE lobsterpulse_provider_events_total counter",
         ];
         for h in required_headers {
             assert!(
@@ -3557,5 +3611,155 @@ mod render_prometheus_tests {
         );
         // 50ms 間隔保證 mtime 差異，鎖定 helper 不會回 legacy 的 mtime。
         assert_ne!(*actual, legacy_mtime, "不應回 legacy mtime");
+    }
+
+    // ===== K13 per-provider events_total counter =====
+
+    #[test]
+    fn events_total_empty_state_emits_header_only() {
+        // 0 provider → header 有、sample line 沒有。對齊 K7 failure_count / K9
+        // session_count 既有 empty-state 契約。
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+
+        assert!(body.contains("# HELP lobsterpulse_provider_events_total"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_events_total counter"));
+        assert!(!body.contains("lobsterpulse_provider_events_total{"));
+    }
+
+    #[test]
+    fn events_total_emits_sample_line_per_provider() {
+        // 主軸：每個 provider 都 emit 一行 sample，數字 = ProviderTotals.events_total。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_events("claude", 42),
+                totals_with_events("cicx", 7),
+            ]),
+            &HashMap::new(),
+            Utc::now(),
+        );
+
+        assert!(
+            body.contains("lobsterpulse_provider_events_total{provider=\"cicx\"} 7\n"),
+            "cicx 應 emit 7\ngot:\n{body}"
+        );
+        assert!(
+            body.contains("lobsterpulse_provider_events_total{provider=\"claude\"} 42\n"),
+            "claude 應 emit 42\ngot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn events_total_uses_lifetime_aggregate_not_live_sessions() {
+        // 對齊 K6/K7/K9 lifetime-vs-live 核心 regression guard：session 結束 + 30 min
+        // stale 回收後 live sessions 為空，但 ProviderTotals.events_total 仍保留 → metric
+        // 仍正確反映 historical event 總量。這條避免 Prometheus counter 倒退（alert
+        // 誤觸發「服務沒收到 event 了」），跟 K7 failure_count / K9 session_count 同 pattern。
+        let body = render_prometheus_body(
+            &[], // 0 live session
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_events("claude", 100), // 已結束
+                totals_with_events("cicx", 25),
+                totals_with_events("gemini", 0), // 從未收過 event
+            ]),
+            &HashMap::new(),
+            Utc::now(),
+        );
+
+        // 0 個 live session（sessions=[]）但 ProviderTotals.events_total > 0 → metric 仍顯示
+        assert!(body.contains("lobsterpulse_provider_events_total{provider=\"claude\"} 100\n"));
+        assert!(body.contains("lobsterpulse_provider_events_total{provider=\"cicx\"} 25\n"));
+        // events_total = 0 仍要 emit（0 是有意義的值「累計 0 個 event」），跟 K7 failure_count
+        // 對齊（不要因 0 跳過 → 否則 Prometheus 端會誤判該 provider 從未存在）
+        assert!(body.contains("lobsterpulse_provider_events_total{provider=\"gemini\"} 0\n"));
+    }
+
+    #[test]
+    fn events_total_alphabetical_and_deterministic() {
+        // 排序：故意非字母序插入 (openx, cicx, gemini) → 輸出 cicx, gemini, openx。
+        // 這條是 Prometheus scraper diff 穩定的 regression guard —— 若有人改用
+        // HashMap 自然順序，每次 render 順序可能變，Prometheus diff 會跳動。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_events("openx", 3),
+                totals_with_events("cicx", 1),
+                totals_with_events("gemini", 2),
+            ]),
+            &HashMap::new(),
+            Utc::now(),
+        );
+
+        let cicx_idx = body
+            .find("lobsterpulse_provider_events_total{provider=\"cicx\"}")
+            .expect("cicx line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_events_total{provider=\"gemini\"}")
+            .expect("gemini line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_events_total{provider=\"openx\"}")
+            .expect("openx line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "events_total 必須 alphabetical 排序（cicx < gemini < openx）"
+        );
+    }
+
+    #[test]
+    fn events_total_emits_integer_not_float() {
+        // 鎖住 type 契約：counter 應該是 u64 整數（不是 f64 浮點）。若有人手滑改成
+        // `f64`，Prometheus 端會看到 0.0 / 42.0 之類，混淆 counter / gauge 語意。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![totals_with_events("claude", 42)]),
+            &HashMap::new(),
+            Utc::now(),
+        );
+
+        // 必須是 " 42\n"（整數）—— 不是 " 42.0" 或 " 42.0000"
+        assert!(body.contains("lobsterpulse_provider_events_total{provider=\"claude\"} 42\n"));
+        // 反向：不能出現 ".0" / ".0000" 這類小數格式
+        let line_start = body
+            .find("lobsterpulse_provider_events_total{provider=\"claude\"}")
+            .expect("claude line");
+        let line_end = body[line_start..]
+            .find('\n')
+            .map(|i| line_start + i)
+            .expect("line end");
+        let line = &body[line_start..line_end];
+        assert!(
+            !line.contains(".0") && !line.contains(".0000"),
+            "counter 應為整數格式、不該有小數：{line}"
+        );
+    }
+
+    #[test]
+    fn events_total_saturates_on_overflow_does_not_panic() {
+        // 邊界：events_total 給超大值（u64::MAX）→ 不 panic、emit u64::MAX 整數。
+        // 對齊 K6/K7 saturating_add 語意（雖然這裡直接賦值沒算術，但保險）。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![totals_with_events("claude", u64::MAX)]),
+            &HashMap::new(),
+            Utc::now(),
+        );
+
+        // u64::MAX = 18446744073709551615
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_events_total{provider=\"claude\"} 18446744073709551615\n"
+            ),
+            "u64::MAX 應原樣 emit 整數，不 panic 不截斷"
+        );
     }
 }

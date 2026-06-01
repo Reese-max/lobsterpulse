@@ -545,3 +545,78 @@
 - 全 codebase sweep 剩餘 silent fail sites（同 R24 候選）
 - K12 idle_ratio 接到 Discord Bot alert（K12 signal 已就緒,R24 候選）
 - engineering-log.md 506 行超 500 cap → 下輪 H0 rotate（本輪 chore_ratio 禁 H0）
+
+---
+
+### [2026-06-01] R26 — K13 per-provider lifetime event counter 落地
+**類型**: M1（operator 端 metrics 擴展：K13 lifetime event counter,K6/KK7/K9 lifetime aggregate 系列收尾,補 K7 failure / K9 session 沒覆蓋的「整體事件流量」信號）
+**KPI**: K13-events-throughput-counter（落地:7 個 test 全綠,115/115 pass,0 false positive）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K13 events_total metric | 無 | 有（9 provider × counter） | ✓ |
+| K13 unit tests | 0 | 6 | +6 |
+| K13 integration tests | 0 | 1 | +1 |
+| Lib unit tests | 108 (R25 baseline) | 115 | +7 |
+| Prometheus metrics counter 數 | 2 (K6 tokens aggregate + K9 session_count) | 3 (含 K13) | +1 |
+| lifetime-vs-live coverage | K6/K7/K9 | K6/K7/K9/K13 | +1 |
+
+**為什麼**:
+- K7 `failure_count` 是 PostToolUseFailure 子集,K9 `session_count` 是 SessionStart 累計子集 —— 兩者都只看特定 event type。operator 要的是**全口徑**事件吞吐量（`rate(events_total[5m])` = 每分鐘 ingest 多少 event 進來,跨類型 sum）。
+- 用途 1: alert 設定「某 provider 5 分鐘內 ingest 0 個 event」→ 監控 OpenAB bot 死了 / 本機 CLI 進程卡住（K8 idle_seconds 也覆蓋同樣用途,但 K13 是 counter 類型 = monotonic 累計,K8 是 gauge = 當下 idle 秒數,角度互補）
+- 用途 2: 跟 K6 tokens / K7 failure / K9 session 拼出「每 1K 個 event 多少 failure」這類 ratio,補 observability 維度
+- 對齊 K6/K7/K9 lifetime aggregate 語意：session 結束 + 30 min stale 回收後 live session 為空,但 `ProviderTotals.events_total` 仍保留 → metric 不會倒退,Prometheus counter 不會誤觸發「服務沒收到 event」alert
+- 24h chore_ratio 0%（rolling 41% 紅線僅歷史值,當前 24h 0 commit）→ 本輪 M1 順
+
+**搜尋**:
+- 沒做 WebSearch（沿用 K6/K7/K9 lifetime aggregate pattern,saturating_add 防 overflow,alphabetical 排序給 Prometheus scraper diff 穩定）
+- 對照 K9 session_count commit `033dc1e` 同 template 設計
+
+**做了什麼**:
+- `session.rs:323` `ProviderTotals` 加 `events_total: u64` 欄位（lifetime 累計收到幾個 event,所有 event type 都 +1）
+- `session.rs:bump_provider_totals` 在 `last_event_at` 更新後立刻 `entry.events_total = entry.events_total.saturating_add(1);`（不限 SessionStart / PostToolUseFailure / TokenUpdate,任何 event 進來都 +1）
+- `lib.rs:1186` 新增 `provider_events_total: HashMap<String, u64>` + alphabetical 排序 + render Prometheus counter 段:
+  ```
+  # HELP lobsterpulse_provider_events_total Lifetime total event count per provider (every event type increments)
+  # TYPE lobsterpulse_provider_events_total counter
+  lobsterpulse_provider_events_total{provider="cicx"} 7
+  ...
+  ```
+- 1 個 integration test (session.rs)：
+  - `events_total_lifetime_aggregate_increments_per_event_of_any_type`：7 種 event (SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / PostToolUseFailure / TokenUpdate / SessionEnd) 累計 + 跨 provider 獨立計數
+- 6 個 unit test (lib.rs)：
+  1. `events_total_empty_state_emits_header_only` — 0 provider,header 有 / sample line 沒有
+  2. `events_total_emits_sample_line_per_provider` — 主軸:每 provider 一行 sample,數字 = ProviderTotals.events_total
+  3. `events_total_uses_lifetime_aggregate_not_live_sessions` — 0 live session 但 ProviderTotals.events_total > 0,metric 仍正確（K6/K7/K9 核心 regression guard pattern）
+  4. `events_total_alphabetical_and_deterministic` — 故意非字母序插入 (openx, cicx, gemini) → 輸出 cicx, gemini, openx（Prometheus scraper diff 穩定 guard）
+  5. `events_total_emits_integer_not_float` — 鎖住 ` 42\n` 整數格式（不是 ` 42.0`）避免混淆 counter / gauge 語意
+  6. `events_total_saturates_on_overflow_does_not_panic` — u64::MAX 邊界 emit `18446744073709551615` 整數,不 panic 不截斷
+- 既有 test helper `totals(...)` 系列 6 處 fixture 補 `events_total: 0` 欄位（Rust struct 新 field 編譯強迫）
+- 新 test helper `totals_with_events(provider, events)` 製造 K13 fixture
+
+**為什麼 counter 類型不用 gauge**:
+- counter 語意 = 累計 monotonic 遞增;`rate(events_total[5m])` 是 Prometheus 標準算 throughput 公式
+- gauge 適合「當下 idle 多少秒」這類 SLO 角度（K8 / K12 都用 gauge）
+- K9 session_count 已用 counter,本輪 K13 對齊
+
+**為什麼 `events_total = 0` 仍 emit sample line**:
+- 跟 K7 failure_count / K9 session_count 對齊:0 是有意義的值（累計 0 個 event）→ 輸出 0,Prometheus 端明確知道「該 provider 存在但還沒收過 event」
+- 若跳過 0,Prometheus 會誤判「該 provider 從未存在 / metric 還沒 register」
+- 對比 K8 idle_seconds `last_event_at = None` 跳過:那邊缺失是「idle 不可知」語意,要分開處理
+
+**驗證**:
+- `cargo fmt --check` 過（修了 2 處斷行 + 1 處註解對齊,K13 WIP 作者原本沒跑 fmt）
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib --no-fail-fast` **115 passed; 0 failed; 0 ignored**（R25 baseline 108 + K13 7 = 115,0 regression）
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked supervisor 檔,符合 R13 防護）
+
+**結果**: PASS（K13 落地 + lifetime aggregate 系列 K6/K7/K9/K13 收尾 + 0 lint warning + 0 regression）
+
+**KPI-impact: K13 per-provider events_total counter 從 0 → 1 metric + lifetime 四件套 K6/K7/K9/K13 收尾**
+
+**不做的範圍**（給後續輪次）:
+- K14 candidate: Discord health gauge（解析 curl `-f` 失敗時 status code,4xx/5xx 分類,給 `lobsterpulse_discord_health` gauge + `lobsterpulse_discord_send_failures_total{class="4xx"|"5xx"}` counter）—— 對齊 R2/R25 Discord 401 silent-surfacing 主題,本輪 M1 順 surgical 不開
+- K12 idle_ratio 接到 Discord Bot alert（K12 signal 已就緒,R24 候選）
+- 全 codebase sweep 剩餘 silent fail sites（`openab_bridge::tail_new_events` 等,R24 候選）
+- K6/K7/K9/K13 lifetime-vs-live → 整合 single `MetricsSnapshot` struct 餵前端:範圍跨前後端,另開 M1 輪

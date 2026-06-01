@@ -86,6 +86,17 @@ pub(crate) fn discord_err_msg(ctx: &str, err: &str) -> String {
     format!("[auto_rules] discord {ctx} failed: {err}")
 }
 
+/// 統一格式化 `!lp pause` / `!lp resume` save_config 失敗的 log 字串。
+/// 修前 2 處 `let _ = crate::config::save_config(&c)` 直接吞 error，使用者主動改設定時
+/// （磁碟滿 / 權限拒絕 / path 鎖住）UI 顯示「成功」但下次啟動 revert，operator 無 log 可查。
+/// 對齊 R6 `discord_err_msg`：集中 prefix + ctx，便於 log filter / unit test 鎖定。
+pub(crate) fn config_persist_warn_msg(action: &str, err: &str) -> String {
+    format!(
+        "[auto_rules] !lp {action}: save_config failed: {err} — \
+         setting will revert on next launch"
+    )
+}
+
 // ─── Rule 3 hook_failure_burst 誤報過濾 ───
 // 修前 5 條 hardcoded 子字串直接 inline 在 tick_inner，命中即 silent continue：
 // 真實 hook 失敗若撞到這 5 個子字串會被一起吃掉，operator 沒 log 可查「為什麼某次
@@ -1393,15 +1404,30 @@ fn handle_command(
         "pause" => {
             let mut c = config.lock().unwrap();
             c.appearance.auto_actions.master_enabled = false;
-            let _ = crate::config::save_config(&c);
-            "自動化 **暫停**（`!lp resume` 恢復）".into()
+            match crate::config::save_config(&c) {
+                Ok(()) => "自動化 **暫停**（`!lp resume` 恢復）".into(),
+                Err(e) => {
+                    // R23 surface：使用者主動改 setting 失敗時（磁碟滿 / 權限 / path 鎖住），
+                    // 原本 `let _ =` 沉默吞 → UI 顯示「暫停成功」、實際下次啟動 revert。
+                    // 改 surfaced via log::warn + Discord 回應帶 ⚠️ 提示，讓 user 立即知道「未持久化」。
+                    log::warn!("{}", config_persist_warn_msg("pause", &e));
+                    format!(
+                        "⚠️ 自動化 **暫停**（磁碟寫入失敗：{e}，重啟後會 revert，請查 `~/.lobsterpulse/config.json` 權限）"
+                    )
+                }
+            }
         }
 
         "resume" => {
             let mut c = config.lock().unwrap();
             c.appearance.auto_actions.master_enabled = true;
-            let _ = crate::config::save_config(&c);
-            "自動化 **恢復**".into()
+            match crate::config::save_config(&c) {
+                Ok(()) => "自動化 **恢復**".into(),
+                Err(e) => {
+                    log::warn!("{}", config_persist_warn_msg("resume", &e));
+                    format!("⚠️ 自動化 **恢復**（磁碟寫入失敗：{e}，重啟後會 revert）")
+                }
+            }
         }
 
         "trend" => {
@@ -1477,6 +1503,24 @@ mod tests {
         assert_eq!(
             discord_err_msg("session_idle 確認", "timeout"),
             "[auto_rules] discord session_idle 確認 failed: timeout"
+        );
+    }
+
+    /// R23 regression：2 處 `let _ = crate::config::save_config(&c)` 改成 `match ... { Err => log::warn!(...) }`。
+    /// `!lp pause` / `!lp resume` 失敗時（磁碟滿 / 權限 / path 鎖住）原本 silent 吞，使用者
+    /// 主動改設定 UI 顯示「成功」但下次啟動 revert。集中 prefix `[auto_rules] !lp <action>:`
+    /// 與 R6 `[auto_rules] discord <ctx>` 對齊，log filter 可一條 query 抓出所有 auto-config
+    /// 持久化失敗。
+    #[test]
+    fn config_persist_warn_msg_unifies_prefix() {
+        assert_eq!(
+            config_persist_warn_msg("pause", "Permission denied (os error 5)"),
+            "[auto_rules] !lp pause: save_config failed: Permission denied (os error 5) — setting will revert on next launch"
+        );
+        // 中文 / 特殊字元 error 也應原樣保留
+        assert_eq!(
+            config_persist_warn_msg("resume", "磁碟空間不足"),
+            "[auto_rules] !lp resume: save_config failed: 磁碟空間不足 — setting will revert on next launch"
         );
     }
 

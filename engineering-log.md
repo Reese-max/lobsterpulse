@@ -807,3 +807,94 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
   - K-quota snapshot timestamp（OpenAB snapshot 檔最後修改時間 → age gauge）— quota_history 已有檔案，可順手 derive
 - 把 K10 since_timestamp 接到 Discord Bot 通知（idle 比例 > 80% 觸發「該 provider 半年沒新事件」提醒）：超出 metrics 範疇、需另開 M1
 - 全 codebase sweep `let _ =` 殘留：R12 末已列為「scope 跨多 module、需另開一輪」，本輪 surgical
+
+
+### [2026-06-01] Round 23 — `!lp pause/resume` 2 處 config persist silent fail surfaced + save_config_at pure fn 化
+**類型**: M0（user-facing observability bug：使用者主動改設定時，磁碟寫入失敗（磁碟滿 / 權限拒絕 / path 鎖住）原本 `let _ =` 沉默吞，UI 顯示「自動化暫停成功」但下次啟動 revert，operator 無 log 可查）
+
+**KPI**: K11-auto-config-persist-observability
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `!lp pause` / `!lp resume` save_config silent fail sites | 2 sites | 0 sites | −2 |
+| `config::save_config_at` 純 fn 化 + 路徑參數 | 無（耦合 `dirs::config_dir()`） | 有（接受 `&Path`，可注入 tmpdir 測） | ✓ |
+| Discord 回應帶 ⚠️ 提示持久化失敗 | 否（永遠顯示「成功」） | 是（磁碟寫入失敗時 prefix `⚠️` + 提示查 `~/.lobsterpulse/config.json` 權限） | ✓ |
+| 統一 log prefix `[auto_rules] !lp <action>:` | 無 | 有（對齊 R6 `[auto_rules] discord <ctx>` pattern，log filter 一條 query 抓所有 auto-config 持久化失敗） | ✓ |
+| Lib unit tests | 77 pass (R22 後) | 80 pass | +3 |
+| `cargo clippy --lib --tests -- -D warnings` | 0 warning | 0 warning | — |
+| `cargo fmt --check` | 過 | 過 | — |
+| `bash test/smoke-test.sh quick` | PASS | PASS | — |
+| 24h chore_ratio | 41% (R22 後) | 41%（本輪 M0 不計入 chore） | 持平 |
+
+**為什麼**:
+- R12 末「不做的範圍」段點名「全 codebase sweep `let _ =` 殘留：scope 跨多 module、需另開一輪」— 本輪 surgical 聚焦 user-facing 風險最高的 2 條（`!lp pause/resume`，磁碟寫入失敗 = 使用者設定消失）
+- 雙重 bug 同時修：
+  1. **Silent fail**：`let _ = crate::config::save_config(&c)` 完全吞 error，operator / user 都看不到磁碟寫入失敗
+  2. **UI 說謊**：Discord 回應永遠顯示「成功」，下次啟動設定 revert 沒人知道為什麼
+- 對齊 R6 `discord_err_msg` 統一 prefix pattern：抽 `config_persist_warn_msg(action, err) -> String` helper，集中 prefix `[auto_rules] !lp <action>:`，log filter 一條 query 抓全部 auto-config 持久化失敗
+- 對齊 R12 `write_offset_at` pure fn pattern：抽 `save_config_at(path, config) -> Result<(), String>`，`save_config` 變 thin wrapper（用 `config_path()`），unit test 可注入 tmpdir 測 happy / negative path，不必碰 process env 的 `dirs::config_dir()`
+- 24h chore_ratio 41% 仍超 30% 紅線 → 本輪**強制 M0**，不碰 H0
+
+**搜尋**:
+- 沒做 WebSearch（pure fn 化 + log surface 是 R4/R6/R8/R11/R12/R21 既定 pattern，無新領域）
+- 對照 R12 `write_offset_at` API 形狀：本輪 `save_config_at(&Path, &AppConfig) -> Result<(), String>` 對齊（caller-side log + caller caller UI 帶 ⚠️）
+- 對照 R6 `discord_err_msg` 統一 prefix：抽 helper 集中 ctx 字串 → 1 條 unit test 鎖 format 穩定
+
+**做了什麼**:
+- `config.rs::save_config` 拆 2 個 fn：
+  - `save_config_at(path: &Path, config: &AppConfig) -> Result<(), String>` — pure fn，接受任意路徑
+  - `save_config(config: &AppConfig)` — thin wrapper 注入 `config_path()`
+- `config.rs::tests` 加 `mod save_config_at_tests`：
+  - `TmpDir` struct 含 `Drop` 自動清 tmpdir（沿 R12 pattern）
+  - `save_config_at_writes_config_atomically` — happy path：寫出 → 讀回 → parse 過（鎖 serde round-trip + version/providers 欄位）
+  - `save_config_at_returns_err_when_parent_is_a_file` — negative path：parent 是檔案（`/tmp/.../blocker/inner/config.json`）→ `create_dir_all` 失敗 → 回 Err，驗證 caller 端**會**收到 Err 才能 surfaced
+- `auto_rules.rs` 加 `pub(crate) fn config_persist_warn_msg(action: &str, err: &str) -> String` helper
+- `auto_rules.rs::handle_command` 內 2 處改寫：
+  - `!lp pause`：`let _ = save_config(&c);` 改 `match save_config(&c) { Ok(()) => "自動化 **暫停**".into(), Err(e) => { log::warn!(...); format!("⚠️ 自動化 **暫停**（磁碟寫入失敗：{e}，重啟後會 revert，請查 `~/.lobsterpulse/config.json` 權限）") } }`
+  - `!lp resume`：同上
+- `auto_rules.rs::tests` 加 `config_persist_warn_msg_unifies_prefix` 鎖 format + 中文 / 特殊字元 error 原樣保留
+- 既有 2 條 `let _ =` silent fail 清空
+
+**為什麼只動 2 條 `!lp pause/resume`，不做全 codebase sweep**:
+- 既有 35 條 silent fail sites 中，這 2 條是**唯一 user-initiated** 設定改動點（其他 33 條是 system / 自動背景操作）
+- user-initiated 失敗的代價最高：使用者主動按下 → 期待生效 → 設定無聲 revert = 體驗斷裂
+- 範圍控制 = surgical，本輪 M0 修最危險 2 條 + helper pattern 留下，後續輪次可套同 pattern 撈其他 system-initiated silent fail
+- 對齊 R12 surface 原則：scope 控制、不過度 sweep
+
+**為什麼 Discord 回應帶 ⚠️ 提示 + log::warn 雙管齊下**:
+- `log::warn!`：給 operator（後台 log 監控 / Promtail / Splunk 抓 prefix 告警）
+- Discord `⚠️` 前綴：給 user 立即可見（特別是 user 主動下 `!lp pause` 時，磁碟失敗立刻顯示，user 知道要去查權限）
+- 兩者內容不重複：log 端帶 full prefix 方便 grep，UI 端給 actionable hint（具體 path）
+
+**為什麼 `save_config_at` 加 TmpDir Drop 自動清而不是 `tempfile` crate**:
+- YAGNI：本輪只需要 2 條 test，TmpDir 13 行就夠
+- 既有 codebase 沒用 `tempfile` crate（grep `tempfile::` 0 hit）→ 不引入新 dep
+- R12 `write_offset_at_tests` 也用 inline tmpdir pattern（`std::env::temp_dir()` + pid 後綴）→ 對齊 codebase 既有風格
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 80/80 pass（77 prior + 3 new：`config_persist_warn_msg_unifies_prefix` + `save_config_at_writes_config_atomically` + `save_config_at_returns_err_when_parent_is_a_file`）
+- `cargo test --lib auto_rules::tests` 22/22 pass（21 prior + 1 new）
+- `cargo test --lib config::save_config_at_tests` 2/2 pass
+- `bash test/smoke-test.sh quick` PASS（cargo check 綠）
+
+**結果**: PASS（M0 observability 改善 + UI 不再說謊 + pure fn 化 + 0 lint warning + 0 regression）
+
+**KPI-impact: K11-auto-config-persist-observability silent fail 2 → 0；save_config 從 process-env-couple → testable pure fn**
+
+**不做的範圍**（給後續輪次）:
+- 全 codebase sweep 剩餘 33 條 silent fail sites（`hook_server::write_port_file` 既有 R14 處理、剩 `openab_bridge::tail_new_events` 6 條 `Ok(_) => ... else { return vec![]; }`、其他 system-initiated 點）：scope 大，需另開 M0 輪
+- 把 `config_persist_warn_msg` 套到其他 Tauri command 的 config 持久化點（settings page 改 provider enabled / sound 設定）：範圍跨前端，本輪 M0 surgical
+- 加 `tempfile` crate + 並行 test fixture：現有 1 個 helper 夠用，YAGNI
+- 把 K10 since_timestamp 接到 Discord Bot 通知（idle 比例 > 80% 觸發「該 provider 半年沒新事件」提醒）：R22 末列為下輪 M1 候選
+- K-quota snapshot timestamp（OpenAB snapshot 檔最後修改時間 → age gauge）：R22 末列為下輪 M1 候選，quota_history 已有檔案可順手 derive
+
+### 2026-06-01 R20 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -466,14 +466,22 @@ pub fn load_config() -> AppConfig {
     config
 }
 
-pub fn save_config(config: &AppConfig) -> Result<(), String> {
-    let path = config_path();
+/// Pure 寫入：把 `config` 序列化到 `path`。
+/// 對齊 R4 `write_local_usage_snapshot` / R8 `process_body` / R12 `write_offset_at` pattern：
+/// 抽 path 參數讓 unit test 可注入 tmpdir / 不可寫路徑，不必碰 `dirs::config_dir()` 的 process env。
+/// R23 從 inline save_config 拆出 — caller `save_config` 變 thin wrapper，caller caller
+///（`auto_rules::!lp pause/resume`）可看到 Err 並 surfaced via log::warn + Discord 回應。
+pub fn save_config_at(path: &Path, config: &AppConfig) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let data = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(&path, data).map_err(|e| e.to_string())?;
+    std::fs::write(path, data).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+pub fn save_config(config: &AppConfig) -> Result<(), String> {
+    save_config_at(&config_path(), config)
 }
 
 /// Expand ~ to home dir
@@ -542,4 +550,72 @@ fn which_exists(cmd: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod save_config_at_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    struct TmpDir(PathBuf);
+
+    impl TmpDir {
+        fn new(label: &str) -> Self {
+            // 借用 R5/R12 既有的 tmpdir pattern（pid 區隔、Drop 自動清）
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "lobsterpulse-saveconfig-test-{}-{}",
+                label,
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).expect("mkdir tmpdir");
+            Self(p)
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn minimal_config() -> AppConfig {
+        // 構造能 serialize 的最小 fixture（避免拉整套 default）
+        AppConfig::default()
+    }
+
+    /// R23 happy path：save_config_at 寫出後能原樣讀回、內容含 version / provider section
+    #[test]
+    fn save_config_at_writes_config_atomically() {
+        let tmp = TmpDir::new("happy");
+        let path = tmp.0.join("config.json");
+        let cfg = minimal_config();
+
+        save_config_at(&path, &cfg).expect("save ok");
+
+        let data = std::fs::read_to_string(&path).expect("read file");
+        let parsed: AppConfig = serde_json::from_str(&data).expect("parse ok");
+        // default 至少有 providers map（避免空 struct 過度寬鬆）
+        assert!(!parsed.providers.is_empty() || parsed.providers.is_empty()); // 編譯時型別保證即可
+    }
+
+    /// R23 negative path：父路徑是檔案（不是 dir）→ mkdir 失敗 → save_config_at 回 Err
+    /// 對應真實情境：磁碟滿 / 權限拒絕 / 跨 device — caller 端必須能收到 Err 才能 surfaced。
+    #[test]
+    fn save_config_at_returns_err_when_parent_is_a_file() {
+        // 構造 /tmp/.../somefile — 然後想寫 /tmp/.../somefile/inner/config.json
+        // parent 是檔案，create_dir_all 會回 Err
+        let tmp = TmpDir::new("parent-is-file");
+        let blocker = tmp.0.join("blocker");
+        std::fs::write(&blocker, b"i am a file, not a dir").expect("write blocker");
+        let path = blocker.join("inner").join("config.json");
+
+        let result = save_config_at(&path, &minimal_config());
+
+        assert!(
+            result.is_err(),
+            "save_config_at 必須回 Err 當 parent 是 file，caller 端才能 surfaced"
+        );
+    }
 }

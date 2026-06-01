@@ -1032,6 +1032,36 @@ fn compute_quota_snapshot_age_seconds(
     Some(elapsed.max(0))
 }
 
+/// K12 配套 helper：把「`now - last_event_at`」idle 跟「`now - since`」lifetime
+/// 兩個 chrono 差值相除，得出「該 provider lifetime 中有多大比例是 idle 的」。
+/// 抽出理由（對齊 K11 `compute_quota_snapshot_age_seconds`）：
+///   - body 仍保持 pure（不直接 chrono 計算），filesystem / clock 注入只發生在
+///     `render_prometheus_body` 的 `now` 參數（呼叫端 `Utc::now()`）
+///   - 兩個時間任一缺失 → `None`，對齊 K8 `last_event_at = None` + K10
+///     `since = None` 跳過策略：缺失值不該被當 0
+///   - lifetime ≤ 0（`since == now` / 時鐘回撥導致 `since > now`）→ `None`：
+///     分母為 0 在浮點是 NaN、Prometheus 端會被視為 anomaly；寧可缺 sample
+///     也不要 NaN 誤判
+///   - idle 超出 lifetime（理論不會發生：since 為 first-seen、last_event_at
+///     必 ≥ since；純函式防呆）→ clamp 到 1.0
+///   - idle 為負（`last_event_at > now`，序列化時差）→ saturate 0 → 0.0
+///   - idle = 0（剛剛收過 event）→ 0.0 = 100% 健康；不丟掉這條信號
+fn compute_provider_idle_ratio(
+    now: DateTime<Utc>,
+    last_event_at: Option<DateTime<Utc>>,
+    since: Option<DateTime<Utc>>,
+) -> Option<f64> {
+    let last = last_event_at?;
+    let first = since?;
+    let idle = now.signed_duration_since(last).num_seconds().max(0);
+    let lifetime = now.signed_duration_since(first).num_seconds();
+    if lifetime <= 0 {
+        return None;
+    }
+    let ratio = (idle as f64) / (lifetime as f64);
+    Some(ratio.clamp(0.0, 1.0))
+}
+
 /// K11 配套 helper：讀 `~/.lobsterpulse/usage-{bot}.json` + `usage-local.json` 的
 /// mtime，回 `provider_name → mtime`。檔案不存在或無法 stat 都回 `None`（不是 Err）：
 /// 對齊 `read_usage_snapshots`（line 314）的「fs 失敗不報錯、視為沒資料」語意，
@@ -1146,6 +1176,15 @@ fn render_prometheus_body(
     // 跳過策略一致，避免 Prometheus 端把缺失當 0 timestamp 誤判「1970-01-01」。
     let mut provider_since: std::collections::HashMap<String, i64> =
         std::collections::HashMap::new();
+    // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
+    // 兩個 `DateTime<Utc>` 任一缺失（K8 跳過策略 / K10 跳過策略）→ 不放進 map。
+    // 派生自 K8 `last_event_at` + K10 `since`：lifetime 是「該 provider 何時第一次被
+    // 監控到到現在」的長度，idle 是「最後一次事件到現在」的長度 —— ratio 0 = 剛剛
+    // 在動（健康），ratio 1 = lifetime 全程沒動（runner 死了 / 半年沒人用）。對
+    // operator 是單一健康度信號，alert rule 可設 `> 0.8` 觸發「該 provider 半年沒人
+    // 用」提醒（已存在的 K10 / K11 數據 compose 一次即可得，無需新增任何資料源）。
+    let mut provider_idle_ratio: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
     for (p, t) in provider_totals {
         tot_in = tot_in.saturating_add(t.tokens_input);
         tot_out = tot_out.saturating_add(t.tokens_output);
@@ -1159,6 +1198,9 @@ fn render_prometheus_body(
         }
         if let Some(since) = t.since {
             provider_since.insert(p.clone(), since.timestamp());
+        }
+        if let Some(ratio) = compute_provider_idle_ratio(now, t.last_event_at, t.since) {
+            provider_idle_ratio.insert(p.clone(), ratio);
         }
     }
 
@@ -1178,6 +1220,8 @@ fn render_prometheus_body(
     provider_session_count_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_since_sorted: Vec<_> = provider_since.iter().collect();
     provider_since_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_idle_ratio_sorted: Vec<_> = provider_idle_ratio.iter().collect();
+    provider_idle_ratio_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
@@ -1269,6 +1313,21 @@ fn render_prometheus_body(
     for (p, age) in &quota_snapshot_ages_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_quota_snapshot_age_seconds{{provider=\"{p}\"}} {age}\n"
+        ));
+    }
+    // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
+    // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
+    // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
+    // 過濾成 `None`（不會進入 map），所以這裡直接放 sample 即可。值域 0.0-1.0
+    // 浮點 gauge，4 位小數固定 precision（避免 Prometheus 端因 IEEE 754 尾數雜訊
+    // 看到 `0.6666666666666666` 之類的差異）。Prometheus alert rule 可設
+    // `lobsterpulse_provider_idle_ratio > 0.8` 觸發「該 provider 80% lifetime
+    // 都在 idle」提醒 —— 健康度信號，補充 K8 絕對秒數（容易因 provider age 短
+    // 而誤觸）與 K10 絕對時間（不會主動告訴 operator 該怎麼判斷）。
+    out.push_str("# HELP lobsterpulse_provider_idle_ratio Fraction of provider lifetime spent idle (0=fresh, 1=never seen activity); composite of K8 idle_seconds / K10 lifetime_seconds\n# TYPE lobsterpulse_provider_idle_ratio gauge\n");
+    for (p, ratio) in &provider_idle_ratio_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_idle_ratio{{provider=\"{p}\"}} {ratio:.4}\n"
         ));
     }
     out
@@ -2208,6 +2267,63 @@ mod render_prometheus_tests {
         )
     }
 
+    /// K12 測試用：ProviderTotals 同時指定 `since`（first-seen）跟 `last_event_at`（idle 錨點），
+    /// 兩個時間獨立可調（不像 `totals_with_since` 把兩者綁同值），才能構造
+    /// 「last_event_at < since / 兩者相差比例」等 idle ratio 數學。token / failure /
+    /// session_count 留 0（K12 不讀這些欄位）。
+    fn totals_with_since_and_last_at(
+        provider: &str,
+        since: DateTime<Utc>,
+        last_event_at: DateTime<Utc>,
+    ) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                since: Some(since),
+                last_event_at: Some(last_event_at),
+            },
+        )
+    }
+
+    /// K12 測試用：ProviderTotals 但 `last_event_at = None`（從未收過 event）。
+    /// 對齊 K8 `totals_no_event` 語意：K12 缺 last_event_at → 純函式回 None → 跳過 sample。
+    fn totals_no_event_with_since(
+        provider: &str,
+        since: DateTime<Utc>,
+    ) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                since: Some(since),
+                last_event_at: None,
+            },
+        )
+    }
+
+    /// K12 測試用：ProviderTotals 把 `since` 設成跟 `now` 相同（lifetime = 0），
+    /// 驗「lifetime ≤ 0 → 跳過 sample」契約。
+    fn totals_with_since_now(provider: &str, now: DateTime<Utc>) -> (String, ProviderTotals) {
+        (
+            provider.to_string(),
+            ProviderTotals {
+                tokens_input: 0,
+                tokens_output: 0,
+                session_count: 0,
+                failure_count: 0,
+                since: Some(now),
+                last_event_at: Some(now),
+            },
+        )
+    }
+
     #[test]
     fn empty_state_emits_zero_counters_and_no_provider_lines() {
         let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
@@ -2230,6 +2346,8 @@ mod render_prometheus_tests {
         assert!(!body.contains("lobsterpulse_provider_since_timestamp{"));
         // K11 落地：per-provider quota_snapshot_age 段同樣：空 map → 沒 sample line
         assert!(!body.contains("lobsterpulse_provider_quota_snapshot_age_seconds{"));
+        // K12 落地：per-provider idle_ratio 段同樣：空 map → 沒 sample line
+        assert!(!body.contains("lobsterpulse_provider_idle_ratio{"));
     }
 
     #[test]
@@ -2438,6 +2556,9 @@ mod render_prometheus_tests {
             // K11 新增：per-provider quota snapshot age gauge
             "# HELP lobsterpulse_provider_quota_snapshot_age_seconds",
             "# TYPE lobsterpulse_provider_quota_snapshot_age_seconds gauge",
+            // K12 新增：per-provider idle ratio gauge（K8 / K10 派生）
+            "# HELP lobsterpulse_provider_idle_ratio",
+            "# TYPE lobsterpulse_provider_idle_ratio gauge",
         ];
         for h in required_headers {
             assert!(
@@ -3012,6 +3133,304 @@ mod render_prometheus_tests {
         assert!(
             !body.contains("lobsterpulse_provider_quota_snapshot_age_seconds{provider=\"openx\"}")
         );
+    }
+
+    // ===== K12 per-provider idle_ratio gauge =====
+
+    // ----- pure fn 測試：compute_provider_idle_ratio -----
+
+    #[test]
+    fn compute_idle_ratio_returns_none_when_last_event_at_is_none() {
+        // 邊界：K8 跳過策略對應。從未收過 event → 沒有 idle/lifetime 比例可言。
+        // 寧可「缺 sample」也不要「0.0 假裝沒問題」（idle=0 會被誤判「剛剛在動」）。
+        let now = Utc::now();
+        let since = now - chrono::Duration::days(30);
+        assert_eq!(compute_provider_idle_ratio(now, None, Some(since)), None);
+    }
+
+    #[test]
+    fn compute_idle_ratio_returns_none_when_since_is_none() {
+        // 邊界：K10 跳過策略對應。沒有 first-seen 錨點 → 沒有 lifetime 分母可言。
+        let now = Utc::now();
+        let last = now - chrono::Duration::seconds(60);
+        assert_eq!(compute_provider_idle_ratio(now, Some(last), None), None);
+    }
+
+    #[test]
+    fn compute_idle_ratio_returns_zero_when_event_just_happened() {
+        // 主軸（健康）：剛剛收過 event，idle ≈ 0，ratio 應為 0.0（0% idle）。
+        // 鎖定「健康 provider」基線：lifetime 內幾乎 100% 在動 = 0.0。
+        let now = Utc::now();
+        let since = now - chrono::Duration::days(30);
+        let last = now; // 剛剛
+        let ratio =
+            compute_provider_idle_ratio(now, Some(last), Some(since)).expect("ratio should exist");
+        assert!(
+            (ratio - 0.0).abs() < 1e-9,
+            "剛剛收過 event → ratio 應為 0.0，實得 {ratio}"
+        );
+    }
+
+    #[test]
+    fn compute_idle_ratio_returns_one_when_idle_equals_lifetime() {
+        // 主軸（死掉）：lifetime 內完全沒動（last_event_at == since，且 since < now）→
+        // ratio 應為 1.0（100% idle）。鎖定「runner 死了」基線。
+        let now = Utc::now();
+        let since = now - chrono::Duration::days(30);
+        let last = since; // 從 first-seen 起就沒再收到 event
+        let ratio =
+            compute_provider_idle_ratio(now, Some(last), Some(since)).expect("ratio should exist");
+        assert!(
+            (ratio - 1.0).abs() < 1e-9,
+            "idle == lifetime → ratio 應為 1.0，實得 {ratio}"
+        );
+    }
+
+    #[test]
+    fn compute_idle_ratio_handles_fractional_lifetime_correctly() {
+        // 主軸（半死半活）：lifetime 60 秒、idle 30 秒 → ratio 0.5。
+        // 鎖定「idle/lifetime」實際數學。f64 精度檢查：ratio - 0.5 應 < 1e-9。
+        let now = Utc::now();
+        let since = now - chrono::Duration::seconds(60);
+        let last = now - chrono::Duration::seconds(30);
+        let ratio =
+            compute_provider_idle_ratio(now, Some(last), Some(since)).expect("ratio should exist");
+        assert!(
+            (ratio - 0.5).abs() < 1e-9,
+            "30s idle / 60s lifetime → ratio 應為 0.5，實得 {ratio}"
+        );
+    }
+
+    #[test]
+    fn compute_idle_ratio_returns_none_when_lifetime_is_zero() {
+        // 邊界：lifetime = 0（since == now）→ 純函式必須回 None，避開分母為 0 → NaN。
+        // Prometheus 端看到 NaN 會被視為 anomaly，比「缺 sample」更糟糕。
+        let now = Utc::now();
+        let ratio = compute_provider_idle_ratio(now, Some(now), Some(now));
+        assert_eq!(ratio, None, "lifetime = 0 → 必須跳過，不可回 NaN");
+    }
+
+    #[test]
+    fn compute_idle_ratio_returns_none_when_since_is_in_future() {
+        // 邊界：since > now（時鐘回撥 / 序列化時差）→ lifetime 為負 → 純函式必須
+        // 回 None。對齊 K8 `idle_seconds_clamps_negative_to_zero` 的保守策略：
+        // 「寧可少一條 sample」也不要假數據誤導監控。
+        let now = Utc::now();
+        let future_since = now + chrono::Duration::seconds(60);
+        let last = now;
+        let ratio = compute_provider_idle_ratio(now, Some(last), Some(future_since));
+        assert_eq!(ratio, None, "since > now（lifetime 為負）→ 必須跳過");
+    }
+
+    #[test]
+    fn compute_idle_ratio_saturates_future_last_event_at_to_zero() {
+        // 邊界：last_event_at > now（序列化時差 / 剛寫入 race）→ idle 為負。
+        // 對齊 K8 `.max(0)` 守門員：saturation 0 → 0.0 而非負值 / NaN。
+        let now = Utc::now();
+        let since = now - chrono::Duration::days(30);
+        let future_last = now + chrono::Duration::seconds(1); // 故意未來 1 秒
+        let ratio = compute_provider_idle_ratio(now, Some(future_last), Some(since))
+            .expect("ratio should exist");
+        assert!(
+            (ratio - 0.0).abs() < 1e-9,
+            "future last_event_at saturate 為 0 → ratio 應為 0.0，實得 {ratio}"
+        );
+    }
+
+    // ----- render_prometheus_body 端對端：K12 段 -----
+
+    #[test]
+    fn idle_ratio_empty_state_emits_header_only() {
+        // 對齊 K6/K7/K8/K9/K10/K11「empty state 不假裝 0」語意：空 map → 沒 sample line。
+        // ratio = 0.0 語意危險（會被誤判「剛剛在動」），所以「不輸出」比「輸出 0」更安全。
+        let body = render_prometheus_body(&[], 0, 0, &HashMap::new(), &HashMap::new(), Utc::now());
+
+        assert!(body.contains("# HELP lobsterpulse_provider_idle_ratio"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_idle_ratio gauge"));
+        assert!(!body.contains("lobsterpulse_provider_idle_ratio{"));
+    }
+
+    #[test]
+    fn idle_ratio_skips_providers_with_no_event_yet() {
+        // K12 跳過策略對齊 K8：last_event_at = None → 沒 sample。
+        // 對齊 `compute_idle_ratio_returns_none_when_last_event_at_is_none` 純函式語意。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_since_and_last_at(
+                    "claude",
+                    now - chrono::Duration::days(30),
+                    now - chrono::Duration::seconds(60), // claude 有 idle 60s
+                ),
+                totals_no_event_with_since("cicx", now - chrono::Duration::days(7)),
+                // cicx 從未收過 event → 跳過
+            ]),
+            &HashMap::new(),
+            now,
+        );
+
+        // claude 有 ratio → emit sample（具體數字由算法保證，這裡只驗 format 跟存在性）
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"claude\"}"));
+        // cicx 從未收過 event → 沒 sample line（idle 分子不存在）
+        assert!(!body.contains("lobsterpulse_provider_idle_ratio{provider=\"cicx\"}"));
+    }
+
+    #[test]
+    fn idle_ratio_skips_providers_with_no_since() {
+        // K12 跳過策略對齊 K10：since = None → 沒 sample。
+        // 對齊 `compute_idle_ratio_returns_none_when_since_is_none` 純函式語意。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_no_since("cicx"), // since=None → K10 也跳過，但 K12 額外驗
+            ]),
+            &HashMap::new(),
+            now,
+        );
+
+        assert!(!body.contains("lobsterpulse_provider_idle_ratio{provider=\"cicx\"}"));
+    }
+
+    #[test]
+    fn idle_ratio_skips_providers_with_zero_lifetime() {
+        // lifetime = 0（since == now）→ 純函式回 None → 跳過 sample。
+        // 對應純函式測試 `compute_idle_ratio_returns_none_when_lifetime_is_zero`。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                totals_with_since_now("cicx", now), // lifetime = 0 → 跳過
+                totals_with_since_and_last_at(
+                    "claude",
+                    now - chrono::Duration::seconds(60),
+                    now - chrono::Duration::seconds(30), // 對照：claude 有 ratio = 0.5
+                ),
+            ]),
+            &HashMap::new(),
+            now,
+        );
+
+        // cicx lifetime=0 → 沒 sample
+        assert!(!body.contains("lobsterpulse_provider_idle_ratio{provider=\"cicx\"}"));
+        // claude 有 ratio → emit sample
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"claude\"} 0.5000"));
+    }
+
+    #[test]
+    fn idle_ratio_emits_fractional_value_with_four_decimals() {
+        // 主軸：3 個 provider 各自不同 ratio → 驗 alphabetical 排序 + 4-decimal 格式。
+        // 30s/60s = 0.5000、15s/30s = 0.5000、29s/30s = 0.9667（29/30 = 0.96666...）。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                // 故意非字母序：openx 排最後
+                totals_with_since_and_last_at(
+                    "openx",
+                    now - chrono::Duration::seconds(30),
+                    now - chrono::Duration::seconds(29), // idle 29s / lifetime 30s ≈ 0.9667
+                ),
+                totals_with_since_and_last_at(
+                    "cicx",
+                    now - chrono::Duration::seconds(60),
+                    now - chrono::Duration::seconds(30), // 30/60 = 0.5000
+                ),
+                totals_with_since_and_last_at(
+                    "gemini",
+                    now - chrono::Duration::seconds(30),
+                    now - chrono::Duration::seconds(15), // 15/30 = 0.5000
+                ),
+            ]),
+            &HashMap::new(),
+            now,
+        );
+
+        // 4-decimal 格式驗證（避免 f64 IEEE 754 尾數雜訊導致 Prometheus diff 不穩定）
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"cicx\"} 0.5000\n"));
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"gemini\"} 0.5000\n"));
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"openx\"} 0.9667\n"));
+
+        // alphabetical 排序：cicx < gemini < openx
+        let cicx_idx = body
+            .find("lobsterpulse_provider_idle_ratio{provider=\"cicx\"} 0.5000\n")
+            .expect("cicx ratio line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_idle_ratio{provider=\"gemini\"} 0.5000\n")
+            .expect("gemini ratio line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_idle_ratio{provider=\"openx\"} 0.9667\n")
+            .expect("openx ratio line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider idle_ratio 必須 alphabetical 排序"
+        );
+    }
+
+    #[test]
+    fn idle_ratio_uses_lifetime_aggregate_not_live_sessions() {
+        // K12 核心 regression guard：lifetime-vs-live。
+        // 0 個 live session（sessions=[]）但 ProviderTotals 有 since + last_event_at →
+        // metric 仍正確反映 lifetime。對齊 K6/K7/K8/K9/K10 一致語意：
+        // session 結束 + 30 min stale 回收後 live 為 0，但 lifetime ProviderTotals
+        // 仍保留 → idle ratio 仍能量化「該 provider lifetime 內的健康度」。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                // claude lifetime 60s、idle 60s → 1.0
+                totals_with_since_and_last_at(
+                    "claude",
+                    now - chrono::Duration::seconds(60),
+                    now - chrono::Duration::seconds(60),
+                ),
+                // cicx lifetime 120s、idle 0s → 0.0
+                totals_with_since_and_last_at("cicx", now - chrono::Duration::seconds(120), now),
+            ]),
+            &HashMap::new(),
+            now,
+        ); // 0 個 live session
+
+        // lifetime aggregate 確保 ratio 不被 live session 影響
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"claude\"} 1.0000\n"));
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"cicx\"} 0.0000\n"));
+    }
+
+    #[test]
+    fn idle_ratio_zero_is_distinguishable_from_absent() {
+        // 邊界：ratio = 0（剛剛在動）vs 不在 metric map（last_event_at 或 since 缺）。
+        // 兩種語意差很多：0.0 = 100% 健康；absent = 數據不完整不能算。
+        // 對齊 K11「zero vs absent」設計原則：寧可「少一條 sample」也不要「假裝 0」
+        // 誤導監控 —— K12 這點尤其重要（idle=0 會被 alert rule 直接放行）。
+        let now = Utc::now();
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals_map(vec![
+                // claude 有 ratio = 0（剛剛在動）→ 必須 emit
+                totals_with_since_and_last_at("claude", now - chrono::Duration::days(30), now),
+            ]),
+            &HashMap::new(),
+            now,
+        );
+
+        // claude 有 ratio=0 → 必須 emit sample line
+        assert!(body.contains("lobsterpulse_provider_idle_ratio{provider=\"claude\"} 0.0000\n"));
+        // 其他 provider（cicx / gemini）都不在 → 不 emit（且 not panic）
+        assert!(!body.contains("lobsterpulse_provider_idle_ratio{provider=\"cicx\"}"));
+        assert!(!body.contains("lobsterpulse_provider_idle_ratio{provider=\"gemini\"}"));
     }
 
     // ----- fs helper 測試：collect_quota_snapshot_mtimes -----

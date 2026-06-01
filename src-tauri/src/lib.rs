@@ -1326,13 +1326,26 @@ pub fn run() {
                 }
                 // 再 snap 一次（讓 LP 重啟後立刻有 history 起點）
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                let _ = quota_history::snapshot_once();
+                if let Err(e) = quota_history::snapshot_once() {
+                    // 對齊 R6/R8/R11 surface pattern：quota CSV snapshot 失敗要可觀察，
+                    // 否則歷史圖表缺資料 user 分不清「無 usage runner」vs「CSV 寫失敗」。
+                    log::warn!(
+                        "[quota_history] snapshot_once (post-runners) failed: {e} — \
+                         quota-history.csv 該輪可能缺一筆"
+                    );
+                }
             });
 
             // Quota 歷史 — 每 3600s（1 小時）snapshot usage-local.json 到 CSV
             std::thread::spawn(|| loop {
                 std::thread::sleep(std::time::Duration::from_secs(3600));
-                let _ = quota_history::snapshot_once();
+                if let Err(e) = quota_history::snapshot_once() {
+                    // 對齊 R6/R8/R11 surface pattern
+                    log::warn!(
+                        "[quota_history] snapshot_once (hourly) failed: {e} — \
+                         quota-history.csv 該輪可能缺一筆"
+                    );
+                }
             });
 
             // Auto-action 規則引擎 tick（每 15s 跑一次）
@@ -1390,7 +1403,16 @@ pub fn run() {
                     // OpenAB bridge — 讀 ~/openab/logs/cctest-events.jsonl 新事件，LP 作為 singular speaker 統一發 Discord
                     let events = openab_bridge::tail_new_events();
                     for ev in events.iter() {
-                        let _ = openab_bridge::dispatch_event(ev, &token, &channel);
+                        if let Err(e) = openab_bridge::dispatch_event(ev, &token, &channel) {
+                            // 對齊 R6/R8/R11 surface pattern：OpenAB 事件發 Discord 失敗要可觀察，
+                            // 否則 user 端 OpenAB 狀態變化沒到 Discord、且無 log 可查
+                            // （是 token 壞 / channel 錯 / event 格式不認 / Discord 4xx）。
+                            let source = ev.get("source").and_then(|x| x.as_str()).unwrap_or("?");
+                            let kind = ev.get("event").and_then(|x| x.as_str()).unwrap_or("?");
+                            log::warn!(
+                                "[openab_bridge] dispatch_event (source={source} event={kind}) failed: {e}"
+                            );
+                        }
                     }
                 }
             });

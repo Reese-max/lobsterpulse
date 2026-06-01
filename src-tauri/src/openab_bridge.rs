@@ -134,8 +134,14 @@ pub fn dispatch_event(
     discord_token: &str,
     discord_channel: &str,
 ) -> Result<String, String> {
-    let source = event.get("source").and_then(|x| x.as_str()).unwrap_or("");
-    let kind = event.get("event").and_then(|x| x.as_str()).unwrap_or("");
+    let source = event
+        .get("source")
+        .and_then(|x| x.as_str())
+        .unwrap_or("?");
+    let kind = event
+        .get("event")
+        .and_then(|x| x.as_str())
+        .unwrap_or("?");
     match (source, kind) {
         ("bots-watchdog", "state_change") => {
             let changes = event.get("changes").and_then(|x| x.as_str()).unwrap_or("?");
@@ -210,5 +216,69 @@ mod write_offset_at_tests {
         let raw = std::fs::read_to_string(&path).expect("file should exist after overwrite");
         assert_eq!(raw, "200", "第二次寫入應覆蓋而非 append");
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod dispatch_event_tests {
+    //! R12 regression：`dispatch_event` 之前只被 `lib.rs:1393` 以 `let _ =` 呼叫吞 error，
+    //! R12 改成 `if let Err(e) = ... { log::warn!(source=…, event=…, e) }` 後，
+    //! unknown source/kind 必須回 Err（這樣 caller 才會走 log 警告分支而不是 silent skip）。
+    //!
+    //! 本 module 鎖 3 條契約：
+    //! 1. known pair (bots-watchdog, state_change) 不在單元測試範圍（會觸發真 Discord HTTP call）
+    //! 2. unknown source / kind → 回 Err 且訊息含 source + kind（給 log 端 grep）
+    //! 3. missing source / kind 欄位 → 走 "?" fallback，回 Err 同樣含 fallback 標記
+
+    use super::*;
+
+    #[test]
+    fn dispatch_event_returns_err_for_unknown_source_kind() {
+        let ev = serde_json::json!({
+            "source": "totally-bogus",
+            "event": "nonsense",
+        });
+        let result = dispatch_event(&ev, "fake-token", "fake-channel");
+        assert!(
+            result.is_err(),
+            "unknown source/kind 必須回 Err 給 caller log"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("totally-bogus") && msg.contains("nonsense"),
+            "Err 訊息應含 source + kind 供 log 端 grep 定位，實際：{msg}"
+        );
+    }
+
+    #[test]
+    fn dispatch_event_falls_back_to_question_mark_for_missing_fields() {
+        // 沒有 source / event 欄位 → 用 "?" fallback → 仍走 unknown branch 回 Err
+        let ev = serde_json::json!({});
+        let result = dispatch_event(&ev, "fake-token", "fake-channel");
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("?"),
+            "missing 欄位 fallback 應為 '?'，實際：{msg}"
+        );
+    }
+
+    #[test]
+    fn dispatch_event_handles_known_kind_with_bogus_inner_shape() {
+        // source/kind 是 known pair，但 inner 缺欄位 → 走 known branch 呼叫 discord::send_embed
+        // 會因 token 假而回 Err（curl 401 格式）。本測試只驗「不會 panic 且有 Err 路徑」，
+        // 不驗 Discord API 行為。
+        let ev = serde_json::json!({
+            "source": "bots-watchdog",
+            "event": "state_change",
+            "changes": "x→y",
+            "summary": "test",
+        });
+        let result = dispatch_event(&ev, "definitely-not-a-real-token", "0");
+        // 不論 Discord 是 401 / 4xx / network fail，反正 Err 就對
+        assert!(
+            result.is_err(),
+            "fake token 應觸發 Discord 失敗、caller 可 log"
+        );
     }
 }

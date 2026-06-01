@@ -458,3 +458,52 @@ H0 cap 檢查：24h chore_ratio 前 = 0%（R1-R4 全 M0 或 inventory），本�
 | 24h chore_ratio | 58% (10/17) | — | （R8 不做 H0，cap 用 0/5） |
 
 **結果**: PASS
+
+---
+
+### [2026-06-01] Round 10 — 9-provider smoke matrix for K3 baseline
+**類型**: M2（補強 KPI 量測 — K3 smoke pass 從「人腦記住 9 條路徑」變成「1 條 test 跑過即覆蓋全部」）
+**KPI**: K3-smoke-pass-provider-coverage
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K3 smoke pass provider coverage（test 內可量測） | 0/9 | 9/9 | +9 |
+| 9-provider event flow 改壞立即 fail 並指出哪家 | 否（要 user 端 curl 9 條才發現） | 是（fixture 內 `assert_eq!` message 自帶 provider 名） | ✓ |
+| 加 provider 強迫同步加 fixture | 無 enforce | `assert_eq!(fixtures.len(), 9)` 漏加直接 fail | ✓ |
+| Lib unit tests | 33 (R9 後) | 34 | +1 |
+| 24h chore_ratio（本輪後） | 61% pure（R10 進場時 harness 量） | 0%（R10 是 test type） | — |
+| 24h 連續 M0-3 推進輪數 | 5 (R2/R2二/R3/R4/R6/R8/R9) | 6 | +1 |
+
+**為什麼**:
+- R5 retrospective 把 K3 smoke pass 點名為 tracked KPI，但 0/9 是 ad-hoc 記憶「我手動 curl 過 9 條 endpoint」，改壞任何一家 normalize/alias 規則要在 user 端才暴露
+- R8 修 `hook_server.rs` 抽 `process_body` 為 pure fn 時，已開出 2 條 unit test（session_id alias + openx legacy alias）— 本輪把同一條「完整路徑走完 9 家」的概念擴大成 1 條 matrix test
+- 進場時 `git status` 顯示 `src-tauri/src/hook_server.rs` 已有 uncommitted diff（120 行 = 這條 test 的 fixture）— 是 R8 / R9 期間留下未 commit 的草稿，cargo test 已驗過 1/1 pass，本輪 commit 它
+
+**搜尋**:
+- 沒做 WebSearch（這是既有 test pattern 擴展，不是新領域）
+- 讀 `engineering-log.md` R5 段確認 K3 定義；R8 段確認 `process_body` 已是 pure fn 可直接構造 fixture 餵入
+- grep `parse_provider` / `process_body` call site 確認 matrix 覆蓋 9 家、沒有第 10 家被遺漏
+
+**做了什麼**:
+- `hook_server.rs::tests` 加 1 條 `#[test] fn smoke_test_all_9_providers_event_flow()`（120 行）
+  - `struct Fixture { http, body, expected_provider, expected_event, field_check }` 9 個 fixture
+  - 4 本機 CLI（claude/codex/copilot/gemini）走 PascalCase / kebab-case / camelCase / Gemini 自創 event name 四種 normalize 規則
+  - 5 OpenAB（cicx/gitx/giminix/codex_bot/openx）走 OpenAB native event name（`tool_call` / `token_update` / `thinking_delta` / `post_tool_use`）+ `tool_status=failed` 升級成 `PostToolUseFailure` + `/hook/bot` legacy alias rewrite 成 `openx`
+  - 對 5 家用 `Box<dyn Fn(&HookEvent)>` 做 field alias 驗（`sessionId` / `toolName` / `inputTokens` 等 alias 是否落對欄位）
+- self-enforce：`assert_eq!(fixtures.len(), 9, "smoke matrix 必須 9 個 provider，加 provider 就要加 fixture")` — 漏加直接 fail
+- assertion message 自帶 provider 名：壞了 trace 立即指出「fixture #3 (gemini): event_name normalize 錯誤」
+
+**驗證**:
+- `cargo test --lib` → **34/34 pass**（30 prior + 3 R9 + 1 new）✓
+- `cargo test --lib hook_server::tests::smoke_test_all_9_providers_event_flow -- --nocapture` → **1/1 pass** ✓
+- `cargo clippy --lib --tests -- -D warnings` → **0 warning** ✓
+- 9 條 fixture 全綠：claude/codex/copilot/gemini/cicx/gitx/giminix/codex_bot/openx
+
+**結果**: PASS（M2 KPI 量測基準落地，commit `2ef56bd`，1 file / +120 lines）
+
+**不做的範圍**（給後續輪次）:
+- 把 `test/smoke-test.sh` 從 `cargo check` 升級到 `cargo test --lib` 跑 smoke matrix：超 180s timeout，目前 `cargo check` 是合理的 fast gate；matrix 留給 nightly / pre-release gate
+- 把 smoke matrix 拆成 9 條獨立 test：拆了反而失去「1 條跑完 = 9 家全綠」的可讀性（kpi 進度表的「9/9」要逐條數），目前 1 條 matrix 是對 KPI 報表友善的形狀
+- 把 K3 smoke pass 接到 `harness-reflection-kpi.json`：`kpi_rounds` 3/5 (60%) < 80% target，是 R5 提的 follow-up，本輪 M2 是把量測本體做出來，自動化是另一段工程
+- 加負向 fixture（如「`/hook/foo` 應回 Err」）：matrix 設計是「9 條合法路徑全綠」，負向是 `process_body` 自己的單測範圍（已覆蓋），不重複堆

@@ -49,6 +49,47 @@
 
 ---
 
+### [2026-06-01] Round 2 (二) — fork dev tooling rename 補完
+**類型**: M0（dev workflow bug）
+**KPI**: dev tooling 與 Cargo.toml binary 對齊
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| shell + CI 與 binary 名一致性 | 0/6 | 6/6 | +6 |
+| smoke-test.sh quick | PASS | PASS | — |
+| 24h chore_ratio | 0% | 0% | — |
+
+**為什麼**:
+R1 結論「LobsterPulse 端無 M0」是「無 panic / build error」層級。R2 我從 R1 觀察的 H0 候選中挑選並**重新評估嚴重性**：
+- `src-tauri/Cargo.toml` line 2: `name = "lobster-pulse"`
+- `src-tauri/src/bin/lobster-pulse-hook.rs` (sidecar 實檔)
+- 實際 build 產物（已 ls 確認）: `target/release/lobster-pulse.exe` + `lobster-pulse-hook.exe`
+
+→ 對 fork 開發者：`pkill -9 -x agent-pulse` 永遠 no-op、`[ -f target/release/agent-pulse ]` 永遠 false、`./reload.sh` 直接 `Error: no binary found`、CI artifact zip 名字錯。
+
+R1 把它歸 H0 是誤判 — 這是真實的 dev workflow break，升級為 M0。
+
+**搜尋**: 無（從 R1 結論直接推導、避免重複盤點）
+
+**做了什麼**:
+- 改 4 shell: `agent-pulse` → `lobster-pulse`（含 comments，pkill + binary path）
+- 改 2 CI: `build.yml` artifact name + 4 paths、`release.yml` comment + zip name + 4 binary refs
+- 全部改完 `agent-pulse` 在 `**/*.{sh,yml}` 0 殘留
+
+**驗證**:
+- `bash -n` 4 shell 語法 OK
+- `python yaml.safe_load` 2 workflow 解析 OK
+- `bash test/smoke-test.sh quick` 仍 PASS
+
+**結果**: PASS（commit `cb2edca`，6 files / +23 / -23）
+
+**不做的範圍**:
+- `package.json` version 0.2.2 → 0.5.4 對齊（R1 H0 #1）：純格式對齊、無功能差異
+- upstream 13 個 commits 的 backport 評估：跨 fork boundary、需單獨 round 做
+- `.gitignore` 的 `.spectra/` 線：本輪發現仍 dirty 但非我本輪改的（R1 設置 loop 時加的、commit `d6d0eb3` 沒包它）→ 維持原樣觀察，loop 可能依賴這行未提交狀態
+
+---
+
 ### [2026-06-01] Round 1 — BACKLOG ↔ Codebase 對齊盤點
 **類型**: 不適用（盤點輪，無程式碼變更）
 **KPI**: N/A（無法推進）

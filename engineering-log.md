@@ -504,3 +504,44 @@
 - K10 since_timestamp 接到 Discord Bot 通知（同 R22/R23 候選沒動）
 - K6-K11 + K12 → 整合成 single `MetricsSnapshot` struct 餵前端：範圍跨前後端、需另開 M1 輪
 - 全 codebase sweep 剩餘 silent fail sites（`openab_bridge::tail_new_events` 等 33 條）：M0 surgical、可分多輪推進
+
+### 2026-06-01 R25 — auto_rules confirm 流程 2 條 Discord send-fail silent skip 修復
+**類型**: M0（silent error surfacing,operator 看不到「user 點 ❌/✅ 但 Discord 沒收到」+ state 卡住）
+**KPI**: auto_rules confirm flow silent error sites -2
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| auto_rules confirm send silent skip sites | 2 | 0 | -2 |
+| Lib unit tests | 106 | 108 | +2 |
+| cargo clippy warning | 0 | 0 | 持平 |
+| 24h chore_ratio (rolling) | 46.7% | 46.7% | 持平 |
+
+**為什麼**:
+- R24 收尾時 cursor 留下 dirty 改動（`if let Ok(mid) = ...` → `match`）未提交，本輪接手直接收尾
+- 原 pattern bug：`session_idle` 與 `discord_kill_cmd` 兩條 confirm 路徑用 `if let Ok(mid) = discord::send_message(...)` 包住整段——當 Discord send 失敗（401 expired token、network drop、rate limit），整段（含 `pending_confirms.push` 與兩條 add_reaction）整個靜默跳過
+  - 影響 1：user 點 ❌/✅ 後 Discord 沒回應 reaction、operator 看 log 也沒線索 → 排查鏈斷
+  - 影響 2：`pending_confirms` 沒推進 → 後續 click 解析 hashmap 沒這條 sid → 點擊事件被吞、10 分鐘 timeout 邏輯不觸發 → state 漂移
+- 24h chore_ratio 46.7% > 30% 紅線 → 強制 M0,本輪不做 H0（rotate log 雖 506 行超 500 cap,但本輪禁止）
+
+**搜尋**:
+- 沒做 WebSearch（沿用 R6 統一 prefix `[auto_rules] discord ... failed: ...` + R11 兩個 silent fail 修復同 pattern）
+- 對照 R11 修復：`08aabc1` 處理 pause/resume config-persist silent fail；本輪同 pattern 推到 confirm send flow
+
+**做了什麼**:
+- `auto_rules.rs::tick_inner` `session_idle` confirm 路徑：拆 `if let Ok(mid) = ... { ... }` → `match send_message(...) { Ok(mid) => { reaction+push }, Err(e) => log::warn!(discord_err_msg(&format!("session_idle sid={} confirm send_message", ...), &e)) }`
+- `auto_rules.rs::poll_discord_commands` `discord_kill_cmd` confirm 路徑：同上 pattern,ctx 改為 `discord_kill_cmd sid={} confirm send_message`
+- 兩個新 unit test 鎖定 regression：
+  - `r25_confirm_send_message_errors_use_unified_prefix`：ctx 必須含 `confirm send_message`（區分 send fail 跟 add_reaction fail）+ 走 R6 prefix + 帶 `sid=<8char>`
+  - `r25_confirm_ctx_uses_eight_char_sid_prefix`：鎖定 `prefix_chars(sid, 8)` 語意（16→8、8→8、4→4）避免後人改長度導致 log filter regex 失效
+
+**驗證**:
+- `cargo test --lib` = 108 passed / 0 failed（2 個 R25 新 test 過、106 prior 沒 regression）
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked supervisor 檔,符合 R13 防護）
+
+**結果**: PASS（commit `d1f308b`,1 file / +150 / -45）
+
+**不做的範圍**（給後續輪次）:
+- 全 codebase sweep 剩餘 silent fail sites（同 R24 候選）
+- K12 idle_ratio 接到 Discord Bot alert（K12 signal 已就緒,R24 候選）
+- engineering-log.md 506 行超 500 cap → 下輪 H0 rotate（本輪 chore_ratio 禁 H0）

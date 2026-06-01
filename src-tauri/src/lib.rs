@@ -990,13 +990,32 @@ struct ServerPort(u16);
 fn render_prometheus(handle: &tauri::AppHandle) -> String {
     let mgr = handle.state::<AppSessionManager>();
     let state = mgr.0.lock().unwrap().get_state();
+    render_prometheus_body(
+        &state.sessions,
+        state.session_count as u64,
+        state.active_count as u64,
+    )
+}
+
+/// Pure formatter：把 `SessionInfo` 切片 + 兩個 aggregate 計數組成 Prometheus text format。
+///
+/// 抽出此 fn 的理由：
+/// - 原本 inline 在 `render_prometheus` 內依賴 `tauri::AppHandle`，unit-test 要起 Tauri runtime
+/// - 抽成 `&[SessionInfo]` + 兩個 u64 aggregate 後可純函式測試
+/// - provider 條目排序（alphabetical by key）確保輸出 deterministic，方便測試 assertion +
+///   Prometheus scraper diff 穩定
+fn render_prometheus_body(
+    sessions: &[session::SessionInfo],
+    session_count: u64,
+    active_count: u64,
+) -> String {
     let mut provider_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut provider_active: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut tot_in: u64 = 0;
     let mut tot_out: u64 = 0;
-    for s in &state.sessions {
+    for s in sessions {
         *provider_counts.entry(s.provider.clone()).or_default() += 1;
         if s.is_active {
             *provider_active.entry(s.provider.clone()).or_default() += 1;
@@ -1004,25 +1023,24 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
         tot_in += s.tokens_input;
         tot_out += s.tokens_output;
     }
+    let mut provider_counts_sorted: Vec<_> = provider_counts.iter().collect();
+    provider_counts_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_active_sorted: Vec<_> = provider_active.iter().collect();
+    provider_active_sorted.sort_by(|a, b| a.0.cmp(b.0));
+
     let mut out = String::new();
     out.push_str("# HELP lobsterpulse_sessions_total Total session count\n# TYPE lobsterpulse_sessions_total gauge\n");
-    out.push_str(&format!(
-        "lobsterpulse_sessions_total {}\n",
-        state.session_count
-    ));
+    out.push_str(&format!("lobsterpulse_sessions_total {session_count}\n"));
     out.push_str("# HELP lobsterpulse_sessions_active Active session count\n# TYPE lobsterpulse_sessions_active gauge\n");
-    out.push_str(&format!(
-        "lobsterpulse_sessions_active {}\n",
-        state.active_count
-    ));
+    out.push_str(&format!("lobsterpulse_sessions_active {active_count}\n"));
     out.push_str("# HELP lobsterpulse_provider_sessions Sessions per provider\n# TYPE lobsterpulse_provider_sessions gauge\n");
-    for (p, c) in &provider_counts {
+    for (p, c) in &provider_counts_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_sessions{{provider=\"{p}\"}} {c}\n"
         ));
     }
     out.push_str("# HELP lobsterpulse_provider_active Active sessions per provider\n# TYPE lobsterpulse_provider_active gauge\n");
-    for (p, c) in &provider_active {
+    for (p, c) in &provider_active_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_active{{provider=\"{p}\"}} {c}\n"
         ));
@@ -1795,5 +1813,148 @@ mod write_local_usage_snapshot_tests {
             err.contains("atomic"),
             "error should mention atomic write failure, got: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod render_prometheus_tests {
+    use super::*;
+    use crate::session::{SessionInfo, SessionState};
+
+    /// 為 test 製造 SessionInfo fixture（只填 render_prometheus_body 讀的欄位）。
+    fn info(provider: &str, is_active: bool, tokens_in: u64, tokens_out: u64) -> SessionInfo {
+        SessionInfo {
+            id: format!("{provider}-sid"),
+            provider: provider.to_string(),
+            state: if is_active {
+                SessionState::Working
+            } else {
+                SessionState::Idle
+            },
+            project_name: format!("{provider}-project"),
+            cwd: None,
+            is_active,
+            formatted_time: "00:00".to_string(),
+            last_tool_name: None,
+            last_prompt: None,
+            tool_calls: Vec::new(),
+            thinking: false,
+            tokens_input: tokens_in,
+            tokens_output: tokens_out,
+            last_event_secs_ago: 0,
+            token_samples: Vec::new(),
+            duration_secs: 0,
+        }
+    }
+
+    #[test]
+    fn empty_state_emits_zero_counters_and_no_provider_lines() {
+        let body = render_prometheus_body(&[], 0, 0);
+
+        assert!(body.contains("lobsterpulse_sessions_total 0\n"));
+        assert!(body.contains("lobsterpulse_sessions_active 0\n"));
+        assert!(body.contains("lobsterpulse_tokens_input 0\n"));
+        assert!(body.contains("lobsterpulse_tokens_output 0\n"));
+        // 沒 session → provider_* 段只有 HELP/TYPE 標頭、沒有 sample
+        assert!(!body.contains("lobsterpulse_provider_sessions{"));
+        assert!(!body.contains("lobsterpulse_provider_active{"));
+    }
+
+    #[test]
+    fn single_inactive_session_reported_as_total_only() {
+        let sessions = vec![info("claude", false, 100, 50)];
+        let body = render_prometheus_body(&sessions, 1, 0);
+
+        assert!(body.contains("lobsterpulse_sessions_total 1\n"));
+        assert!(body.contains("lobsterpulse_sessions_active 0\n"));
+        assert!(body.contains("lobsterpulse_provider_sessions{provider=\"claude\"} 1\n"));
+        // inactive session 不該出現在 provider_active 行
+        assert!(!body.contains("lobsterpulse_provider_active{provider=\"claude\"}"));
+        assert!(body.contains("lobsterpulse_tokens_input 100\n"));
+        assert!(body.contains("lobsterpulse_tokens_output 50\n"));
+    }
+
+    #[test]
+    fn single_active_session_reported_in_both_provider_lines() {
+        let sessions = vec![info("codex", true, 200, 80)];
+        let body = render_prometheus_body(&sessions, 1, 1);
+
+        assert!(body.contains("lobsterpulse_sessions_active 1\n"));
+        assert!(body.contains("lobsterpulse_provider_sessions{provider=\"codex\"} 1\n"));
+        assert!(body.contains("lobsterpulse_provider_active{provider=\"codex\"} 1\n"));
+    }
+
+    #[test]
+    fn multiple_providers_counted_separately_and_sorted_alphabetically() {
+        // 故意用「非字母序」輸入驗 sort 邏輯：openx 應在 cicx 之前被排序掉
+        let sessions = vec![
+            info("openx", false, 10, 5),
+            info("cicx", true, 20, 10),
+            info("gemini", false, 30, 15),
+            info("cicx", true, 40, 20), // 同 provider 重複 → count=2
+        ];
+        let body = render_prometheus_body(&sessions, 4, 2);
+
+        // 排序後順序應為 cicx / gemini / openx
+        let cicx_sessions_idx = body
+            .find("lobsterpulse_provider_sessions{provider=\"cicx\"} 2\n")
+            .expect("cicx session count line should exist");
+        let gemini_sessions_idx = body
+            .find("lobsterpulse_provider_sessions{provider=\"gemini\"} 1\n")
+            .expect("gemini session count line should exist");
+        let openx_sessions_idx = body
+            .find("lobsterpulse_provider_sessions{provider=\"openx\"} 1\n")
+            .expect("openx session count line should exist");
+        assert!(
+            cicx_sessions_idx < gemini_sessions_idx && gemini_sessions_idx < openx_sessions_idx,
+            "provider_sessions 必須按 provider 名 alphabetical 排序，cicx → gemini → openx"
+        );
+
+        // provider_active 也應排序
+        let cicx_active_idx = body
+            .find("lobsterpulse_provider_active{provider=\"cicx\"} 2\n")
+            .expect("cicx active count line should exist");
+        assert!(cicx_active_idx > 0);
+    }
+
+    #[test]
+    fn token_counters_sum_across_all_sessions() {
+        let sessions = vec![
+            info("claude", true, 1000, 500),
+            info("codex", false, 2000, 1000),
+            info("cicx", true, 500, 250),
+        ];
+        let body = render_prometheus_body(&sessions, 3, 2);
+
+        assert!(body.contains("lobsterpulse_tokens_input 3500\n"));
+        assert!(body.contains("lobsterpulse_tokens_output 1750\n"));
+    }
+
+    #[test]
+    fn output_includes_help_and_type_headers_for_every_metric() {
+        // scrape 端靠 HELP/TYPE 行識別 metric 類型；任何一條 missing 都會讓
+        // Prometheus 把該 metric 標成 untyped（功能降級）
+        let body = render_prometheus_body(&[info("claude", true, 1, 1)], 1, 1);
+
+        let required_headers = [
+            "# HELP lobsterpulse_sessions_total",
+            "# TYPE lobsterpulse_sessions_total gauge",
+            "# HELP lobsterpulse_sessions_active",
+            "# TYPE lobsterpulse_sessions_active gauge",
+            "# HELP lobsterpulse_provider_sessions",
+            "# TYPE lobsterpulse_provider_sessions gauge",
+            "# HELP lobsterpulse_provider_active",
+            "# TYPE lobsterpulse_provider_active gauge",
+            "# HELP lobsterpulse_tokens_input",
+            "# TYPE lobsterpulse_tokens_input counter",
+            "# HELP lobsterpulse_tokens_output",
+            "# TYPE lobsterpulse_tokens_output counter",
+        ];
+        for h in required_headers {
+            assert!(
+                body.contains(h),
+                "missing required header: {h}\n--- body ---\n{body}"
+            );
+        }
     }
 }

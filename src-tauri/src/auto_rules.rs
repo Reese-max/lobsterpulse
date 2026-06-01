@@ -97,6 +97,49 @@ pub(crate) fn config_persist_warn_msg(action: &str, err: &str) -> String {
     )
 }
 
+/// 統一格式化 `auto_state.json` 載入失敗的 log 字串。
+/// 修前 4 處 `serde_json::from_str(...).unwrap_or_default()` 跟
+/// `read_to_string(...).ok().and_then(from_str).ok().unwrap_or_default()` 鏈 silent
+/// 吞 error——auto_state.json 損壞（磁碟寫入半截 / 手動編輯壞 JSON / 編碼錯）會回
+/// default，operator 看到 dedup state 漂移無從查起。對齊 R6 `discord_err_msg` /
+/// R23 `config_persist_warn_msg` prefix 風格，log filter 可一條 query 抓出所有
+/// 「持久化 markers 載入失敗」事件。
+pub(crate) fn persisted_marker_warn_msg(err: &str) -> String {
+    format!("[auto_rules] auto_state markers load failed: {err}")
+}
+
+/// 載入 `auto_state.json` 為 `PersistedSummaryMarkers`。三條路徑：
+/// 1. 檔案不存在 → `default()`（first-run 預期，靜默）
+/// 2. 讀取其他失敗（權限 / IO）→ `log::warn!` + `default()`
+/// 3. JSON 解析失敗（磁碟寫入半截 / 手動編輯壞 JSON）→ `log::warn!` + `default()`，
+///    帶 80 字元 preview 方便排查
+///
+/// 沿用 R6/R23 「caller 端 log 統一 prefix」pattern：把 fs / serde 兩條失敗路徑收斂到
+/// 同一個 helper，避免 read-modify-write 跟初始 load 各寫各的 log 風格。
+fn parse_persisted_markers_at(path: &Path) -> PersistedSummaryMarkers {
+    let data = match std::fs::read_to_string(path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return PersistedSummaryMarkers::default();
+        }
+        Err(e) => {
+            log::warn!("{}", persisted_marker_warn_msg(&e.to_string()));
+            return PersistedSummaryMarkers::default();
+        }
+    };
+    match serde_json::from_str(&data) {
+        Ok(p) => p,
+        Err(e) => {
+            let preview = prefix_chars(&data, 80);
+            log::warn!(
+                "{}",
+                persisted_marker_warn_msg(&format!("invalid JSON ({e}); preview={preview:?}")),
+            );
+            PersistedSummaryMarkers::default()
+        }
+    }
+}
+
 // ─── Rule 3 hook_failure_burst 誤報過濾 ───
 // 修前 5 條 hardcoded 子字串直接 inline 在 tick_inner，命中即 silent continue：
 // 真實 hook 失敗若撞到這 5 個子字串會被一起吃掉，operator 沒 log 可查「為什麼某次
@@ -1051,10 +1094,7 @@ pub fn load_persisted_summary_markers() -> (String, String) {
 }
 
 fn load_persisted_summary_markers_at_impl(path: &Path) -> (String, String) {
-    let Ok(data) = std::fs::read_to_string(path) else {
-        return (String::new(), String::new());
-    };
-    let parsed: PersistedSummaryMarkers = serde_json::from_str(&data).unwrap_or_default();
+    let parsed = parse_persisted_markers_at(path);
     (parsed.last_summary_date, parsed.last_weekly_key)
 }
 
@@ -1088,10 +1128,7 @@ fn persist_summary_markers_in(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     // Read-modify-write 保留已存在的 session_idle markers——同檔共存
-    let mut payload: PersistedSummaryMarkers = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|d| serde_json::from_str(&d).ok())
-        .unwrap_or_default();
+    let mut payload: PersistedSummaryMarkers = parse_persisted_markers_at(path);
     payload.last_summary_date = last_summary_date.to_string();
     payload.last_weekly_key = last_weekly_key.to_string();
     let data = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
@@ -1108,11 +1145,7 @@ pub fn load_persisted_session_idle_markers() -> HashMap<String, i64> {
 }
 
 fn load_persisted_session_idle_markers_at_impl(path: &Path) -> HashMap<String, i64> {
-    let Ok(data) = std::fs::read_to_string(path) else {
-        return HashMap::new();
-    };
-    let parsed: PersistedSummaryMarkers = serde_json::from_str(&data).unwrap_or_default();
-    parsed.last_session_idle_event_ts
+    parse_persisted_markers_at(path).last_session_idle_event_ts
 }
 
 /// 測試輔助：從傳入 dir 讀 session_idle markers
@@ -1141,10 +1174,7 @@ fn persist_session_idle_markers_in(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     // Read-modify-write 保留已存在的 summary marker——同檔共存
-    let mut payload: PersistedSummaryMarkers = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|d| serde_json::from_str(&d).ok())
-        .unwrap_or_default();
+    let mut payload: PersistedSummaryMarkers = parse_persisted_markers_at(path);
     payload.last_session_idle_event_ts = markers.clone();
     let data = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
     std::fs::write(path, data).map_err(|e| e.to_string())
@@ -1968,5 +1998,81 @@ mod tests {
         assert_eq!(week, "2026-W22");
         let sidle = load_persisted_session_idle_markers_at(&tmp.0);
         assert_eq!(sidle.get("sess-X"), Some(&1700000000));
+    }
+
+    // ─── R25 auto_state.json 載入 silent parse surfaced ───
+    //
+    // 修前 4 處：`load_persisted_summary_markers_at_impl` / `load_persisted_session_idle_markers_at_impl`
+    // 跟兩個 `persist_*_in` 的 RMW 都用 `serde_json::from_str(...).unwrap_or_default()` 跟
+    // `read_to_string(...).ok().and_then(from_str).ok().unwrap_or_default()` 鏈 silent 吞 error。
+    // auto_state.json 損壞（磁碟寫入半截 / 手動編輯壞 JSON）會回 default，dedup state 漂移
+    // operator 無從查起。測試重點：(1) missing 走 default 不 log (2) corrupt JSON 走 log::warn
+    // 帶 preview (3) RMW 壞 JSON 寫回不丟已存在的同檔 marker (4) prefix 鎖住穩定供 log filter
+
+    /// R25 regression：`persisted_marker_warn_msg` 對齊 R6 `discord_err_msg` / R23
+    /// `config_persist_warn_msg` prefix 風格，log filter 一條 query 可抓出所有
+    /// 「持久化 markers 載入失敗」事件。
+    #[test]
+    fn r25_persisted_marker_warn_msg_unifies_prefix() {
+        assert_eq!(
+            persisted_marker_warn_msg("invalid JSON (expected value at line 1 column 1); preview=\"\""),
+            "[auto_rules] auto_state markers load failed: invalid JSON (expected value at line 1 column 1); preview=\"\""
+        );
+        // IO error 也應原樣保留
+        assert_eq!(
+            persisted_marker_warn_msg("Permission denied (os error 5)"),
+            "[auto_rules] auto_state markers load failed: Permission denied (os error 5)"
+        );
+    }
+
+    /// First-run 預期：檔案不存在時 parse helper 靜默回 default，不 log warn
+    /// （避免啟動時每個 rule 都 spam 一次 log）
+    #[test]
+    fn r25_parse_missing_file_returns_default_no_log() {
+        let tmp = TmpDir::new("parse_missing");
+        let path = tmp.0.join("auto_state.json");
+        assert!(!path.exists());
+        let parsed = parse_persisted_markers_at(&path);
+        assert_eq!(parsed.last_summary_date, "");
+        assert_eq!(parsed.last_weekly_key, "");
+        assert!(parsed.last_session_idle_event_ts.is_empty());
+    }
+
+    /// 壞 JSON 走 log::warn 帶 80 字元 preview + 回 default
+    /// —— operator 排查時能看出檔案被破壞成什麼樣
+    #[test]
+    fn r25_parse_corrupt_json_logs_warn_and_returns_default() {
+        let tmp = TmpDir::new("parse_corrupt");
+        let path = tmp.0.join("auto_state.json");
+        std::fs::write(&path, "this is not valid JSON {{ broken").expect("write corrupt");
+        let parsed = parse_persisted_markers_at(&path);
+        assert_eq!(parsed.last_summary_date, "");
+        assert!(parsed.last_session_idle_event_ts.is_empty());
+    }
+
+    /// RMW 整合：壞 JSON 寫回時 helper log warn 但不丟掉「同檔其他 markers」——
+    /// 等等，這條邏輯反過來：壞 JSON 進來 helper 回 default，然後 persist 用 default payload
+    /// 寫回去，**會覆蓋掉原本 valid 的 summary marker**。這是現有 RMW 行為，跟 R16 同檔共存
+    /// 設計保持一致（壞檔救不回，寧可重發也不要 silent 漂移）。本測試鎖定「壞 JSON 寫入
+    /// 不 silent 漂移 + helper 走 warn」+ 「valid JSON 寫入保留 summary marker」兩個路徑。
+    #[test]
+    fn r25_persist_session_idle_over_corrupt_json_logs_warn_and_overwrites() {
+        let tmp = TmpDir::new("rmw_corrupt");
+        let path = tmp.0.join("auto_state.json");
+        std::fs::write(&path, "garbage {{ not json").expect("write corrupt");
+
+        // RMW 走 helper 看到壞 JSON → log warn + 用 default payload
+        // 然後寫入 session_idle marker。下一輪 load 應能讀回（剛寫的 valid JSON）
+        let mut markers = HashMap::new();
+        markers.insert("sess-Y".into(), 1700000000);
+        persist_session_idle_markers_in(&path, &markers).expect("persist ok");
+
+        // 寫回後檔案是 valid JSON，loader 直接讀得到
+        let loaded = load_persisted_session_idle_markers_at(&tmp.0);
+        assert_eq!(loaded.get("sess-Y"), Some(&1700000000));
+        // summary marker 沒出現在檔裡（壞 JSON 沒救回，這是 R16 設計的一致選擇）
+        let (date, week) = load_persisted_summary_markers_at(&tmp.0);
+        assert_eq!(date, "");
+        assert_eq!(week, "");
     }
 }

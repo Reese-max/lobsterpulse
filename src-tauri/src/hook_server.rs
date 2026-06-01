@@ -274,6 +274,126 @@ mod tests {
         let event = process_body(body, "openx").expect("valid json should parse");
         assert_eq!(event.hook_event_name, "PostToolUseFailure");
     }
+
+    /// 9-provider smoke matrix：每家走完 `parse_provider` + `process_body` 完整路徑。
+    /// 任一 provider 改壞了 normalize/field-alias/event-name 規則，這條就會 fail 並指出哪家。
+    /// 這就是 K3 smoke pass 的量化基準：1/9 → 加 provider × N → 1/N。
+    #[test]
+    fn smoke_test_all_9_providers_event_flow() {
+        struct Fixture {
+            http: &'static [u8],
+            body: &'static [u8],
+            expected_provider: &'static str,
+            expected_event: &'static str,
+            field_check: Box<dyn Fn(&crate::hook_event::HookEvent)>,
+        }
+        let fixtures: Vec<Fixture> = vec![
+            // 1. claude — 本機 CLI，PascalCase 原生
+            Fixture {
+                http: b"POST /hook/claude HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"PreToolUse","session_id":"c-1","tool_name":"Read","tool_call_id":"t-1"}"#,
+                expected_provider: "claude",
+                expected_event: "PreToolUse",
+                field_check: Box::new(|e| assert_eq!(e.tool_name.as_deref(), Some("Read"), "claude: tool_name")),
+            },
+            // 2. codex — 本機 CLI，hook config 註冊 PascalCase 事件名（CLAUDE.md 寫 kebab-case 是錯的，見 hooks_configurator.rs:265+）
+            Fixture {
+                http: b"POST /hook/codex HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"PreToolUse","sessionId":"s-codex-1","toolName":"exec"}"#,
+                expected_provider: "codex",
+                expected_event: "PreToolUse",
+                field_check: Box::new(|e| assert_eq!(e.session_id, "s-codex-1", "codex: sessionId alias")),
+            },
+            // 3. copilot — 本機 CLI，camelCase 原生
+            Fixture {
+                http: b"POST /hook/copilot HTTP/1.1\r\n",
+                body: br#"{"event":"preToolUse","session":"s-cop-1","tool":"Bash"}"#,
+                expected_provider: "copilot",
+                expected_event: "PreToolUse",
+                field_check: Box::new(|e| assert_eq!(e.tool_name.as_deref(), Some("Bash"), "copilot: tool alias")),
+            },
+            // 4. gemini — 本機 CLI，PascalCase 但事件名 Gemini 自創
+            Fixture {
+                http: b"POST /hook/gemini HTTP/1.1\r\n",
+                body: br#"{"hookEventName":"BeforeTool","sessionId":"s-gem-1","toolName":"Read"}"#,
+                expected_provider: "gemini",
+                expected_event: "PreToolUse",
+                field_check: Box::new(|e| assert_eq!(e.session_id, "s-gem-1", "gemini: sessionId alias")),
+            },
+            // 5. cicx — OpenAB，OpenAB native event name "tool_call"
+            Fixture {
+                http: b"POST /hook/cicx HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"tool_call","session_id":"s-cicx-1","tool_name":"Bash","tool_call_id":"tc-1"}"#,
+                expected_provider: "cicx",
+                expected_event: "PreToolUse",
+                field_check: Box::new(|e| assert_eq!(e.tool_call_id.as_deref(), Some("tc-1"), "cicx: tool_call_id")),
+            },
+            // 6. gitx — OpenAB，token_update + 用 inputTokens/outputTokens alias
+            Fixture {
+                http: b"POST /hook/gitx HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"token_update","session_id":"s-gitx-1","inputTokens":100,"outputTokens":50}"#,
+                expected_provider: "gitx",
+                expected_event: "TokenUpdate",
+                field_check: Box::new(|e| {
+                    assert_eq!(e.tokens_input, Some(100), "gitx: inputTokens alias");
+                    assert_eq!(e.tokens_output, Some(50), "gitx: outputTokens alias");
+                }),
+            },
+            // 7. giminix — OpenAB，thinking_delta → ThinkingDelta
+            Fixture {
+                http: b"POST /hook/giminix HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"thinking_delta","session_id":"s-gim-1"}"#,
+                expected_provider: "giminix",
+                expected_event: "ThinkingDelta",
+                field_check: Box::new(|_| {}),
+            },
+            // 8. codex_bot — OpenAB，snake_case event + tool_status=failed 應升級成 Failure
+            Fixture {
+                http: b"POST /hook/codex_bot HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"post_tool_use","session_id":"s-cdb-1","tool_status":"failed"}"#,
+                expected_provider: "codex_bot",
+                expected_event: "PostToolUseFailure",
+                field_check: Box::new(|_| {}),
+            },
+            // 9. openx — OpenAB legacy alias：HTTP path 寫 /hook/bot 必須 rewrite 成 openx
+            Fixture {
+                http: b"POST /hook/bot HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"Stop","session_id":"s-openx-1"}"#,
+                expected_provider: "openx",
+                expected_event: "Stop",
+                field_check: Box::new(|e| assert_eq!(e.session_id, "s-openx-1", "openx: session_id")),
+            },
+        ];
+
+        assert_eq!(
+            fixtures.len(),
+            9,
+            "smoke matrix 必須 9 個 provider，加 provider 就要加 fixture"
+        );
+
+        for (idx, fixture) in fixtures.iter().enumerate() {
+            let provider = super::parse_provider(fixture.http);
+            assert_eq!(
+                provider.as_str(),
+                fixture.expected_provider,
+                "fixture #{idx} ({}): parse_provider 解析錯誤，得到 {provider:?}",
+                fixture.expected_provider,
+            );
+            let event = process_body(fixture.body, &provider).unwrap_or_else(|e| {
+                panic!(
+                    "fixture #{idx} ({}): process_body 失敗：{e:?}",
+                    fixture.expected_provider,
+                )
+            });
+            assert_eq!(
+                event.hook_event_name.as_str(),
+                fixture.expected_event,
+                "fixture #{idx} ({}): event_name normalize 錯誤",
+                fixture.expected_provider,
+            );
+            (fixture.field_check)(&event);
+        }
+    }
 }
 
 fn find_body_start(data: &[u8]) -> Option<usize> {

@@ -4,6 +4,64 @@
 
 ## 改善紀錄
 
+### [2026-06-01] Round 13 — tray menu 4 條 CLI spawn silent fail surface (openab_restart × 2 + open_config + restart)
+**類型**: M0（user-facing observability bug：4 條 on_menu_event closure 內 `let _ = std::process::Command::new(...).output()/spawn()` 沉默吞 error）
+**KPI**: K-silent-fail-surface
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| on_menu_event closure CLI spawn silent fail sites | 4 (openab_restart stop / start / open_config / restart) | 0 (if let Err + log::warn) | −4 |
+| 累積 silent-fail-surface 覆蓋（含 R6/R8/R9/R11/R12） | 27 sites surfaced | 31 sites surfaced | +4 |
+| cargo test --lib | 49 pass | 49 pass | — |
+| cargo clippy --lib --tests -- -D warnings | 0 warning | 0 warning | — |
+| 24h 連續 M0 推進輪數 | 6 (R6/R8/R9/R11/R12/本輪) | 7 | +1 |
+| 24h chore_ratio (純 M0 fix) | 0% (R10/R11/R12 連續 fix) | 0% | — |
+
+**為什麼**:
+- R12 末 explicit defer「下次 round 挑」：spawn-loop 內已清完，本輪換**同 handler 內但不同觸發**的 4 條 CLI process spawn（user click 觸發，非 spawn-loop 排程觸發）
+- 影響面分析 4 條 user impact：
+  - `openab_restart` stop (1641)：powershell.exe 缺失 → user 點「Restart OpenAB」→ openab 進程沒死、restart 卡住、**無 log**
+  - `openab_restart` start (1649)：自訂 restart cmd 寫錯路徑 → **無 log**
+  - `restart` self (1670)：self-exe 路徑失效（被 rename/刪）→ user 點「Restart」→ app 還在原狀、**無 log**
+  - `open_config` (1664)：MEDIUM（explorer.exe 永不缺，但 config file 被刪 → 開空目錄、無 log）
+- 3/4 HIGH + 1 MEDIUM，沿用 R6/R8/R9/R11/R12 同一論點：user-facing 操作失敗 = 必須有 log 才能 debug，否則等於「user 端完全失明」
+
+**搜尋**:
+- 沒做 WebSearch（沿用既有 pattern、無新領域）
+- 沒做新 rg 掃描 — 本輪目標從 R12 隱式 follow-up 來（on_menu_event 是 R12 grep `let _ = .*::` 對 7 個 module 時旁觀到、但當時歸為 caller 端不吞 / 非 spawn-loop 類，R12 不收；本輪單獨評估、4 條全在 closure 內、可成單一 commit）
+
+**做了什麼**:
+- `lib.rs:1638-1675` on_menu_event closure：
+  - 1641 `let _ = Command::new("powershell.exe").args([...]).output();` → `if let Err(e) = ... { log::warn!("openab_restart: stop powershell failed: {e}"); }`
+  - 1649 `let _ = Command::new("powershell.exe").args([...]).spawn();` → `if let Err(e) = ... { log::warn!("openab_restart: spawn \`{}\` failed: {e}", restart_cmd); }`
+  - 1664 `let _ = Command::new(opener).arg(path).spawn();` → `if let Err(e) = ... { log::warn!("open_config: spawn \`{}\` failed: {e}", opener); }`
+  - 1670 `let _ = Command::new(exe).spawn();` → `if let Err(e) = ... { log::warn!("restart: spawn self failed: {e}"); }`
+- log 訊息含 site name + 失敗原因 + 對應 command（user 從 log 一眼看出哪條 click 沒生效）
+
+**驗證**:
+- `cargo fmt --check` 過
+- `cargo check` 過
+- `cargo clippy --lib --tests -- -D warnings` 0 warning
+- `cargo test --lib` 49/49 pass（0 regression；R12 42→49 為 R10/R11/R12 累積加的，本輪未新增 unit test）
+- `bash test/smoke-test.sh quick` PASS
+
+**為什麼不加 unit test**:
+- on_menu_event closure 內 inline，`AppHandle` 從 Tauri runtime 來、無 plain unit-test entry
+- 加 helper function 抽出 spawn logic = abstraction for single-use，違反「surgical / minimum code」原則
+- R12 dispatch_event 加 3 個 test 是因為它是 `pub fn` 直接可 unit test；本輪 4 條全在 closure 內
+- 接受：Tauri menu handler 是 integration-test territory，留給後續若加 e2e harness 再覆蓋
+
+**結果**: PASS（M0 observability 改善落地 + 4 silent fail sites surfaced + 0 lint warning + 0 regression + commit `71fbcda`）
+
+**不做的範圍**（給後續輪次）:
+- `hook_server.rs:427-428` port file write `let _ = std::fs::write(...)` — port file 是 sidecar 找 port 的唯一依據，若失敗 sidecar 全壞，但目前無 user-facing click 路徑觸發（只在 setup 階段被呼叫）
+- `bin/lobster-pulse-hook.rs:23, 26` sidecar stdin read / HTTP post — 失敗時 sidecar 整個 process 退出、Tauri 端 log 已有「hook_server 無收到事件」可觀察
+- `quota_history.rs:60` `let _ = writeln!(f, ...)` CSV row write — failure 僅丟一筆 snapshot、無連鎖影響（趨勢圖少一點而已）
+- `auto_rules.rs:631, 638` `let _ = std::process::Command::new("powershell.exe")` — 是 context menu 點「執行 powershell script」、非 tray menu；同 pattern 但 scope 更大（可能涉及 user-input command），本輪不混入
+- `openab_bridge.rs:69, 240, 253-254, 273, 321, 331, 342, 357, 371` `let _ = std::fs::remove_file/remove_dir` — best-effort temp cleanup，下一次 open() 會 Err 暴露、caller 已 log
+
+---
+
 ### [2026-06-01] Round 12 — lib.rs spawn loop 3 條 silent fail 補 surface (quota_history × 2 + openab_bridge dispatch × 1)
 **類型**: M0（user-facing observability bug：3 條 spawn-loop 內 `let _ = 函式()` 沉默吞 error）
 **KPI**: K-silent-fail-surface

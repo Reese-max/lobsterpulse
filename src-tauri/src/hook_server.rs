@@ -28,8 +28,8 @@ static HOOK_PARSE_FAILURES: AtomicU64 = AtomicU64::new(0);
 ///   - 2xx：process_body 解析成功 + tx.send 成功 → 200 OK
 ///   - 4xx：body 找不到 / JSON parse 失敗 → 400 Bad Request
 ///   - 5xx：目前 `handle_client` 沒有 5xx 分支，永遠 0；保留欄位是為了讓 operator
-///          可直接設 `rate(...{class="5xx"}[5m]) > 0` alert，未來真的回 5xx 不用
-///          再改 schema / 改 alert rule
+///     可直接設 `rate(...{class="5xx"}[5m]) > 0` alert，未來真的回 5xx 不用
+///     再改 schema / 改 alert rule
 ///
 /// 與 K15 的差別：K15 是「payload 內部 parse 失敗」單一語意，K16 是「HTTP wire-level
 /// response 結果」分類。同一個 400 失敗會同時 ++ K15 和 K16 4xx —— K15 給「JSON 壞掉

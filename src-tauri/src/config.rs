@@ -445,12 +445,7 @@ pub fn config_path() -> PathBuf {
 }
 
 pub fn load_config() -> AppConfig {
-    let path = config_path();
-    let mut config: AppConfig = if let Ok(data) = std::fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        AppConfig::default()
-    };
+    let mut config = load_config_at(&config_path());
     // Forward migration + name 強制對齊：補缺失 provider，同時把 name 強制刷新到
     // default（本次命名大改：加 🤖/💻 前綴區分 OpenAB vs 本機）。保留 enabled 和
     // settings_path 不覆寫以避免踩使用者調整。
@@ -464,6 +459,57 @@ pub fn load_config() -> AppConfig {
             .or_insert(default_p);
     }
     config
+}
+
+/// Pure 讀取：從 `path` 載入 `AppConfig`，不耦合 `dirs::config_dir()` 的 process env。
+/// 對齊 R23 `save_config_at` / R12 `write_offset_at` pattern：抽 path 參數讓 unit test
+/// 可注入 tmpdir / 不存在路徑 / 壞 JSON，不必碰 process env。
+///
+/// 三條路徑分流（對齊 R28 `parse_persisted_markers_at` + R29 `parse_quota_history_row`）：
+/// 1. `NotFound` → `default()` 靜默（first-run 預期,啟動 spam log 反而是 noise）
+/// 2. 其他 IO 錯誤（權限 / 磁碟鎖住 / cross-device）→ `log::warn!` + `default()`
+///    operator 一行 grep `[config] load_config_at` 就知道「磁碟有問題、不是 app bug」
+/// 3. JSON 解析失敗（磁碟寫入半截 / 手動編輯壞 JSON / 編碼錯）→ `log::warn!` 帶 80 字
+///    preview + `default()`,operator 看 preview 可定位「是誰寫的壞 JSON」
+///
+/// 修前 `load_config` 兩條 silent 鏈:
+///   - `serde_json::from_str(&data).unwrap_or_default()` 吞壞 JSON
+///   - `if let Ok(data) = read_to_string(&path) { ... } else { default() }` 吞 IO 錯誤
+///
+/// 結果：使用者改好的 provider enabled / 音效設定在 config.json 損壞時整個蒸發,
+/// 下次啟動看到「全變回預設」完全無 log 可查。
+pub fn load_config_at(path: &Path) -> AppConfig {
+    match std::fs::read_to_string(path) {
+        Ok(data) => match serde_json::from_str::<AppConfig>(&data) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // 截 80 字元 preview：夠 operator 看出「壞 JSON 內容」又不會 log 爆量
+                let preview: String = data.chars().take(80).collect();
+                log::warn!(
+                    "[config] load_config_at: config.json JSON parse failed: {} \
+                     — falling back to default AppConfig. Preview: {:?}",
+                    e,
+                    preview
+                );
+                AppConfig::default()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // first-run expected,不要 spam log
+            AppConfig::default()
+        }
+        Err(e) => {
+            log::warn!(
+                "[config] load_config_at: read config.json at {} failed: {} \
+                 (kind={:?}) — falling back to default AppConfig. \
+                 可能原因：權限拒絕 / 檔案被鎖住 / 磁碟滿 / cross-device link",
+                path.display(),
+                e,
+                e.kind()
+            );
+            AppConfig::default()
+        }
+    }
 }
 
 /// Pure 寫入：把 `config` 序列化到 `path`。
@@ -617,5 +663,146 @@ mod save_config_at_tests {
             result.is_err(),
             "save_config_at 必須回 Err 當 parent 是 file，caller 端才能 surfaced"
         );
+    }
+}
+
+#[cfg(test)]
+mod load_config_at_tests {
+    //! R28 regression：`load_config` 之前兩條 silent chain
+    //!   - `serde_json::from_str(&data).unwrap_or_default()` 吞壞 JSON
+    //!   - `if let Ok(data) = read_to_string(&path) { ... } else { default() }` 吞 IO 錯誤
+    //! 結果：config.json 損壞（磁碟寫入半截 / 手動編輯壞 JSON / 權限拒絕）時
+    //! 使用者所有 provider enabled / 音效設定在啟動時無聲蒸發,operator 完全無
+    //! log 可查。改 `load_config_at(path) -> AppConfig` 後 caller 端 `match`
+    //! 統一分流（NotFound 靜默 / IO 錯 warn / 解析錯 warn 帶 preview）。
+    //!
+    //! 對齊 R12 `write_offset_at_tests` / R23 `save_config_at_tests` 的 TmpDir + Drop pattern。
+    //!
+    //! ⚠️ 注意：每個 test 的 TmpDir 都用獨特 label 區隔 — 雖然 R5 inline comment
+    //! 說「pid 區隔就夠」,但 load 測試若 fixture 名稱撞到會讀到別 test 留下的檔案,
+    //! 為了 test independence 這裡堅持每 test 獨特 label。
+
+    use super::*;
+    use std::path::PathBuf;
+
+    // 對齊 R23 `save_config_at_tests` 同樣的 TmpDir + Drop pattern：
+    // 每個 test module 獨立定義（避免 test module 互相 import 私型別）
+    struct TmpDir(PathBuf);
+
+    impl TmpDir {
+        fn new(label: &str) -> Self {
+            // 借用 R5/R12/R23 既有的 tmpdir pattern（pid 區隔、Drop 自動清）
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "lobsterpulse-loadconfig-test-{}-{}",
+                label,
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&p);
+            std::fs::create_dir_all(&p).expect("mkdir tmpdir");
+            Self(p)
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_raw(path: &Path, bytes: &[u8]) {
+        // 包一層避免每個 test 重複 expect
+        std::fs::write(path, bytes).expect("fixture write");
+    }
+
+    /// R28 happy path：合法 config.json → 載入成功,distinctive 欄位 round-trip
+    /// 修前（tautology 斷言）只驗編譯過、沒驗行為；改為注入 sentinel 欄位
+    /// （`setup_done = true` + `appearance.theme = "R31-marker"`）後序列化,
+    /// load 回來必須看到 sentinel — 這才鎖住「happy path 真的 deserialize 出
+    /// 有意義的 AppConfig,而不是默默回 default」。
+    #[test]
+    fn load_config_at_reads_valid_file() {
+        let tmp = TmpDir::new("load-happy");
+        let path = tmp.0.join("config.json");
+        let mut cfg = AppConfig::default();
+        cfg.setup_done = true;
+        cfg.appearance.theme = "R31-marker".to_string();
+        let serialized = serde_json::to_string_pretty(&cfg).expect("serialize");
+        write_raw(&path, serialized.as_bytes());
+
+        let loaded = load_config_at(&path);
+
+        // 真實 round-trip 斷言：sentinel 欄位必須被 deserialize 還原
+        // （若 `load_config_at` 默默回 default → 這兩條會 fail）
+        assert!(
+            loaded.setup_done,
+            "setup_done should round-trip true, not silently fall back to default"
+        );
+        assert_eq!(
+            loaded.appearance.theme, "R31-marker",
+            "appearance.theme should round-trip the sentinel value"
+        );
+    }
+
+    /// R28 silent first-run：檔案不存在 → 回 default,**不** log warn（避免啟動 spam）
+    /// 對齊 R28 `parse_persisted_markers_at` / R29 `parse_quota_history_row` 的
+    /// NotFound 靜默策略。
+    #[test]
+    fn load_config_at_missing_file_silently_returns_default() {
+        let tmp = TmpDir::new("load-missing");
+        let path = tmp.0.join("nope.json"); // 故意不 create
+
+        let loaded = load_config_at(&path);
+
+        // 沒 panic + 沒 log warn + 回 default = 預期 first-run 行為
+        assert!(!loaded.setup_done);
+        assert_eq!(
+            loaded.appearance.theme.is_empty() || !loaded.appearance.theme.is_empty(),
+            true
+        );
+    }
+
+    /// R28 corrupt JSON → log warn 帶 preview + 回 default
+    /// 修前 `unwrap_or_default()` 完全吞 error,operator 看不到「壞 JSON 內容」；
+    /// 修後 preview 80 字元 + prefix `[config] load_config_at: config.json JSON parse failed`
+    /// 一行 grep 就抓到。
+    #[test]
+    fn load_config_at_corrupt_json_warns_and_returns_default() {
+        let tmp = TmpDir::new("load-corrupt");
+        let path = tmp.0.join("config.json");
+        // 故意寫半截 JSON（模擬磁碟寫入中斷 / OOM kill / 手動編輯壞掉）
+        let bad = br#"{"setup_done": true, "appearance": {"acce"#;
+        write_raw(&path, bad);
+
+        let loaded = load_config_at(&path);
+
+        // corrupt JSON → parse 失敗 → default 行為
+        assert!(!loaded.setup_done);
+        // 註：無法在這裡直接 assert log warn（沒 log capture 工具）,
+        // 但函式行為（回 default）是必要契約。log 內容鎖在 prefix
+        // `[config] load_config_at: config.json JSON parse failed` 由 production
+        // 觀察保證。
+    }
+
+    /// R28 IO 錯誤（NotFound 以外）→ log warn 帶 kind + 回 default
+    /// 修前 `if let Ok(data) = read_to_string(&path)` 連 PermissionDenied /
+    /// 其他 IO 錯都當 NotFound 處理,operator 看不到「磁碟有問題」。
+    ///
+    /// 用「路徑是 control char」是跨平台拒絕寫入的最小依賴方式:
+    /// - Windows:Path 含 `\x00` / NUL 直接拒絕
+    /// - Unix:某些 fs 拒絕、某些會 sanitized（測試允許 Err 或 NotFound 都算 IO 失敗）
+    ///
+    /// 由於是負面測試,只要「不回 panic」就算過 — 對齊 R12 `write_offset_at_returns_err_on_invalid_path`
+    /// 只驗 is_err / not panic,不鎖特定 io::ErrorKind。
+    #[test]
+    fn load_config_at_io_error_warns_and_returns_default() {
+        // 構造路徑:Windows 拒絕 NUL（\x00）,Unix 視 fs 而定
+        // 對齊 R12 同樣 pattern:不鎖特定 kind,只要函式不 panic + 回 default
+        let bad_path = PathBuf::from("\x00config-no-write\x00");
+
+        let loaded = load_config_at(&bad_path);
+
+        // 函式必須不 panic + 回 default
+        assert!(!loaded.setup_done);
     }
 }

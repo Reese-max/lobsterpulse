@@ -24,6 +24,7 @@ fn curl(method: &str, url: &str, token: &str, body: Option<&str>) -> Result<Vec<
     cmd.args([
         "-s",
         "-S",
+        "-f",
         "-X",
         method,
         "-H",

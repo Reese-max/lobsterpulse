@@ -4,6 +4,51 @@
 
 ## 改善紀錄
 
+### [2026-06-01] Round 2 — Discord HTTP 4xx silent fail → surfaced
+**類型**: M0（user-facing 阻斷 bug）
+**KPI**: K-discord-err-visibility
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| discord-err-visibility | silent (curl 無 -f) | surfaced (exit 22 = HTTP err) | ✓ |
+| yes/no 投票可用性 | broken on 429/400 emoji | working + 顯式 error | ✓ |
+| 「測試連線」按鈕錯誤訊息 | `no message id: {…}` | `curl exit 22: …` | ✓ |
+
+**為什麼**:
+- R1 結論「LobsterPulse 端無 M0」是「已建立功能無 panic」層級
+- 本輪重看 LobsterPulse-specific 新程式碼（`openab_bridge.rs` / `discord.rs`），找出**功能性 silent failure**：
+  - `discord.rs::curl()` 沒加 `-f` flag → HTTP 4xx/5xx curl 仍 exit 0
+  - `add_reaction` 對 rate-limit (429) / invalid emoji (400) 回 `Ok(())` 而非 `Err`
+  - 所有 caller 都 `let _ =` 吞 error → 投票 ✅❌ 在 429 觸發時整個決策流永遠卡住
+  - `send_message` 走 `parse_msg_id` 會回「no message id: {…}」誤導 user，實際是 401
+- 影響面：自動投票決策 / 確認按鈕 / OpenAB 轉發 / 「測試連線」UX 全中
+- chore_treadmill 紅線要求本輪必 M0-M3，本 bug 完美符合 M0 定義
+
+**搜尋**:
+- 查 `.lp-notify.health` = HTTP 401 確認 notify daemon 憑證壞（loop infra，非 LP 代碼）
+- grep `discord::` / `openab_bridge::` 所有 call site 確認影響範圍
+- 確認 Discord REST API 對 204/2xx 不受 `-f` 影響（不會誤報 success）
+
+**做了什麼**:
+- `src-tauri/src/discord.rs::curl()` args array 加 `-f` flag（一行）
+- 副作用：所有 Discord function 對 HTTP 4xx/5xx 統一回 `Err("curl exit 22: …")`
+- 204 No Content（部分 Discord endpoint）不受影響，繼續 exit 0
+
+**驗證**:
+- `cargo check` → Finished 1.79s ✓
+- `bash test/smoke-test.sh` → PASS (cargo check 綠) ✓
+- 未做整合測試（需真 Discord token）；curl 行為變更是文件化的，無破壞性風險
+
+**結果**: PASS（M0 bug 修復落地）
+
+**不做的範圍**（記錄給後續輪次）:
+- 跨平台 `curl.exe` → `curl` 命名：CLAUDE.md 仍標 Windows-first，本輪最小修
+- `let _ =` 改為 `if let Err(e) = log::error!(...)`：caller side 改善是另議題，需逐個 audit auto_rules.rs call site
+- Unit test 對 curl mock 需引入 wiremock / mockall，超出本輪最小修
+- `.lp-notify.health` HTTP 401 = loop notify daemon 憑證壞，非 LP 代碼，本輪不動
+
+---
+
 ### [2026-06-01] Round 1 — BACKLOG ↔ Codebase 對齊盤點
 **類型**: 不適用（盤點輪，無程式碼變更）
 **KPI**: N/A（無法推進）

@@ -1,5 +1,5 @@
 use crate::hook_event::HookEvent;
-use log::{error, info};
+use log::{error, info, warn};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -80,28 +80,48 @@ async fn handle_client(
 
     let response = if let Some(body_start) = find_body_start(data) {
         let body = &data[body_start..];
-        match serde_json::from_slice::<crate::hook_event::RawHookEvent>(body) {
-            Ok(raw) => {
-                let mut event = raw.normalize(&provider);
-
-                // Normalize event names across CLIs
-                normalize_event_name(&mut event);
-
-                // Generate session_id if missing (Gemini/Copilot may not send one)
-                if event.session_id.is_empty() {
-                    event.session_id = format!("{}-default", event.provider);
+        match process_body(body, &provider) {
+            Ok(event) => {
+                if tx.send(event).is_err() {
+                    warn!(
+                        "[hook_server] tx.send failed (receiver dropped) for provider={}",
+                        provider
+                    );
                 }
-
-                let _ = tx.send(event);
                 "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
             }
-            Err(_) => "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            Err(()) => {
+                // 對齊 R6 模式：JSON parse 失敗不再 silent——surfaced via log::warn。
+                // Body 截前 200 byte 避免 log 爆；非 UTF-8 用 lossy 顯示。
+                let preview_len = body.len().min(200);
+                let preview = String::from_utf8_lossy(&body[..preview_len]);
+                warn!(
+                    "[hook_server] JSON parse failed for provider={} body={}",
+                    provider, preview
+                );
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            }
         }
     } else {
         "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     };
 
     let _ = stream.write_all(response.as_bytes()).await;
+}
+
+/// 從 HTTP body 解析 + 標準化 provider event。
+/// 抽成 pure function 方便 unit test；失敗回 Err(())，呼叫端決定 log/response 策略。
+fn process_body(body: &[u8], provider: &str) -> Result<HookEvent, ()> {
+    let raw: crate::hook_event::RawHookEvent = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => return Err(()),
+    };
+    let mut event = raw.normalize(provider);
+    normalize_event_name(&mut event);
+    if event.session_id.is_empty() {
+        event.session_id = format!("{}-default", event.provider);
+    }
+    Ok(event)
 }
 
 /// Parse provider from HTTP request line: "POST /hook/claude HTTP/1.1"
@@ -185,7 +205,7 @@ fn normalize_event_name(event: &mut HookEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_event_name;
+    use super::{normalize_event_name, process_body};
     use crate::hook_event::HookEvent;
 
     fn make_event(name: &str, status: Option<&str>) -> HookEvent {
@@ -217,6 +237,42 @@ mod tests {
         let mut e = make_event("tool_call_update", Some("failed"));
         normalize_event_name(&mut e);
         assert_eq!(e.hook_event_name, "PostToolUseFailure");
+    }
+
+    #[test]
+    fn process_body_parses_valid_event() {
+        let body = br#"{"hook_event_name":"Stop","session_id":"abc"}"#;
+        let event = process_body(body, "claude").expect("valid json should parse");
+        assert_eq!(event.provider, "claude");
+        assert_eq!(event.hook_event_name, "Stop");
+        assert_eq!(event.session_id, "abc");
+    }
+
+    #[test]
+    fn process_body_returns_err_on_invalid_json() {
+        let body = b"not json { broken";
+        assert!(process_body(body, "claude").is_err());
+    }
+
+    #[test]
+    fn process_body_defaults_session_id_when_missing() {
+        let body = br#"{"hook_event_name":"Stop"}"#;
+        let event = process_body(body, "openx").expect("valid json should parse");
+        assert_eq!(event.session_id, "openx-default");
+    }
+
+    #[test]
+    fn process_body_normalizes_snake_case_event_name() {
+        let body = br#"{"hook_event_name":"pre_tool_use","session_id":"s1"}"#;
+        let event = process_body(body, "copilot").expect("valid json should parse");
+        assert_eq!(event.hook_event_name, "PreToolUse");
+    }
+
+    #[test]
+    fn process_body_promotes_failed_post_tool_use_to_failure() {
+        let body = br#"{"hook_event_name":"PostToolUse","session_id":"s1","tool_status":"failed"}"#;
+        let event = process_body(body, "openx").expect("valid json should parse");
+        assert_eq!(event.hook_event_name, "PostToolUseFailure");
     }
 }
 

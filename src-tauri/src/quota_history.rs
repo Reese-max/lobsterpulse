@@ -414,10 +414,11 @@ mod tests {
     }
 
     /// R32 contract：0-byte 檔（disk full / 寫入中斷常見殘留）應回 `Ok(empty)`，
-    /// 對齊 first-run NotFound 契約。`parse_quota_history_row` 對壞 row 採「log warn
-    /// + skip」策略、不會讓整檔變 Err，所以「全檔都是壞 row」也是 `Ok(empty)`
-    /// 帶 log warn。真正的 IO 錯（如磁碟鎖、目錄）才會回 Err（見
-    /// `load_history_at_io_error_returns_err`）。
+    /// 對齊 first-run NotFound 契約。
+    ///
+    /// `parse_quota_history_row` 對壞 row 採「log warn + skip」策略、不會讓整檔
+    /// 變 Err，所以「全檔都是壞 row」也是 `Ok(empty)` 帶 log warn。真正的 IO 錯
+    /// （如磁碟鎖、目錄）才會回 Err（見 `load_history_at_io_error_returns_err`）。
     #[test]
     fn load_history_at_empty_file_returns_ok_empty() {
         let path = tmp_csv("empty");

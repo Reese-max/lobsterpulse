@@ -5,6 +5,65 @@
 ## 改善紀錄
 
 
+### [2026-06-02] R46 — K28 `lobsterpulse_provider_completed_sessions_stddev_seconds` gauge + 9 tests（R45 WIP 撿收）
+**類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26→K27→K28 線）
+**KPI**: `_metrics_emitted_K28` 累計 +1（累計 21 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25/K26/K27 → K28）
+
+**KPI 進展表**:
+| KPI | 前值 (R45) | 後值 (R46) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 20 | 21 | +1 |
+| Lib 總 unit tests | 257 | 266 | +9 |
+| K28 pure fn test | 0 | 6 | +6 |
+| K28 render test | 0 | 3 | +3 |
+| 24h chore_ratio (rolling) | 待 R46 盤 | TBD | — |
+| 0 R46 範圍 lint warning | 0 | 0 | 持平 |
+
+**為什麼**:
+- 補完 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) 四件套之外的 **波動性**維度：同 avg 60s 的 provider 可能 stddev=5（穩定）或 stddev=300（短任務/長任務混跑），operator 一看 stddev 就知道該 provider session 時長分布狀態。例：avg 60s, latest 65s, max 7200s, min 8s, **stddev 280s** = 過去 2 小時 outlier 跟 8 秒極短 session 拉高波動，operator 端 alert `stddev > 300` 觸發「該 provider 短/長任務混跑待分桶」
+- R45 wrap-up（`31b98cc`）時 K28 WIP 100% scaffold 完成（Welford online algorithm fields + update 邏輯 + pure fn + 6 unit test + render block + 3 render test + 12 fixture initializer）但沒 commit —— 跟 R44 撿 R43 WIP K26 同 pattern，R46 撿 R45 WIP 落地（補漏 + 修 1 個 test fixture assertion bug + 跑驗證就 commit，比從零開新 metric 快 5-10x token + 時間）
+- 沿用 Welford online algorithm 而非最樸素的「保留所有 sample 在 Vec」：O(1) 空間（Vec 會 unbounded grow，上線跑一週 sample 數就破萬）+ 數值穩定性比「先算 mean 再算 Σ(x-mean)²」高一個數量級（避免大數吃小數）。`mean` / `M2` 跟 K23 `completed_sessions_count` 強綁定（不在 ProviderTotals 另存 count 欄位）—— stddev 跟 completed count 永遠同步，不會有 count 跟 stddev 不一致的中間態
+- 第一個 f64 metric（K 系列 K3-K27 全用 i64 整數）：stddev 數學本質決定用連續值（樣本 [10, 20] variance = 50, stddev ≈ 7.07s 強制裁整為 7 → 0.07s 精度流失）。emit 沿用 `{:.4}` 4 位小數固定 precision 跟 K25 avg 對齊
+- 跟 K12 `idle_ratio` / K25 `avg` 同屬「既有資料源派生指標」, 補 K22 / K23 / K24 / K25 / K26 / K27 六維體系的「波動性」維度
+- H0 cap 持續觸發（chore_ratio 33% > 30% threshold）→ 本輪 M1 KPI 推進（沿 R42/R43/R44/R45 同 K-tag series 主軸）, 撿既有 pattern scaffold（Welford 對稱 K22/K23/K24/K26/K27 的 lifetime aggregate 邏輯, 但改 f64 雙精度），token / 時間密度最高
+
+**搜尋**: 沿用 K22 / K25 / K26 / K27 既有 pattern —— ProviderTotals lifetime aggregate + pure fn `*_at` 攤平 + render 端 alphabetical sort。stddev 算法選 Welford online algorithm 跟 K25 一致（不是 sample stddev 用 N-1），因為 lifetime aggregate 不分 sample/population 用 N 不用 N-1。沒新搜。
+
+**做了什麼**:
+- `session.rs:419-441` `ProviderTotals` 加 `completed_sessions_mean_secs: f64` + `completed_sessions_m2_secs: f64` 兩欄位（Welford online algorithm 累積, `f64` 預設 0.0 跟 K25 avg 對齊, count 沿用 K23 不另存）
+- `session.rs:673-693` `record_completed_session_age` 觸發點 Welford update —— `x = clamped_age as f64; n_new = count as f64; delta = x - mean; mean += delta / n_new; delta2 = x - mean; M2 += delta * delta2`，第一次完成時 count 0→1 自動初始化 mean=該 sample + M2=0（單樣本無波動 → stddev=0，沿用 K26/K27 `clamped_age` 變數）。`as f64` 轉換在 i64::MAX 範圍內精確，saturation 不可能發生在現實 session duration 量級
+- `session.rs:930-959` 新 `completed_sessions_stddev_at` pure fn（攤平 `ProviderTotals` → `HashMap<provider, f64>` 給 render; 過濾 `count == 0` 沿用 K22 / K26 / K27 語意但走 count 過濾不用 None —— K28 不用 Option 是因為 Welford mean/M2 是 `f64` 預設 0.0, 沒有「無值」vs「值=0」的可區分性, 改用 count 過濾更明確; formula: `(M2 / count).sqrt()` population stddev 跟 K25 avg 一致用 N 不用 N-1, lifetime aggregate 不分 sample/population）
+- `session.rs:1789-1892` 6 個 unit test：first completion 初始化 mean/M2、Welford 兩樣本 mean=15/M2=50 數值驗證、負值 clamp、Welford 跟 K23 強綁定、單樣本 emit 0、count=0 過濾、per-provider 隔離
+- `lib.rs:1987-2006` `render_prometheus_body` emit K28 HELP/TYPE + alphabetical 全 provider sample（K6-K27 既契約, `{:.4}` 4 位小數 f64 格式跟 K25 avg 一致, 跟 K26/K27 整數格式區分; count=1 emit 0.0000 視為有效資料, 跟 K25 avg=該 sample 邏輯一致; count=0 過濾不 emit 假資料）
+- `lib.rs:2963` test module imports 加 `completed_sessions_stddev_at`
+- `lib.rs` 12 個 test fixture `ProviderTotals` initializer 補 `completed_sessions_mean_secs: 0.0` + `completed_sessions_m2_secs: 0.0`（跟 production `ProviderTotals::default()` 同語意, 跟 K26/K27 fixture 整合註解為「K26/K27/K28 落地」）
+- `lib.rs:6945-7173` 3 個 K28 emit integration test —— `completed_sessions_stddev_empty_totals_emits_header_only`（empty-state 跟 K22 / K26 / K27 一致）+ `completed_sessions_stddev_per_provider_isolated_and_skips_zero_count`（cicx stddev=20 / gemini stddev=0 / openx count=0 跳過 隔離 emit）+ `completed_sessions_stddev_alphabetical_sort_and_four_decimal_precision`（3 provider 非字母序插入 → alphabetical 排序 + f64 4 位小數格式 + 跟 K22 / K25 / K26 / K27 / K28 五件套各自 emit 各自的值）
+
+**R46 撿 R45 WIP 修的測試 bug**:
+- `lib.rs:7147-7153` R45 WIP 漏寫的 test fixture assertion bug：cicx fixture 設 `last_completed_session_age_secs: Some(200)` 但 R45 assertion 寫 `cicx latest 100`（100 是 min 不是 latest，fixture 跟 assertion 不一致），R46 撿 WIP 跑 test 才抓出（跟 R44 撿 R43 WIP K26 漏的 2 個 emit test bug 同 pattern）。修法：assertion 改成 `cicx latest 200`，跟 fixture + 註解一致（fixture 寫 `latest=200`，K22 latest gauge 跟 K27 min gauge 兩者值不同 —— 這是 R45 寫 WIP 時 fixture / assertion 沒對齊的 copy-paste 漏）
+- 這是 dirty WIP 漏寫的測試 fixture bug，R45 wrap-up 階段 code 寫了但沒跑測試就 commit docs，R46 撿 WIP 收尾時補跑發現
+
+**驗證**:
+- `cargo build --lib --tests`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo test --lib --no-fail-fast`: **266 passed; 0 failed; 0 ignored**(R45 257 + R46 +9 K28 new, 0 regression, 0 flake)
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked supervisor 檔, 符合 R13 防護）
+
+**結果**: PASS（K28 落地 + 補 R45 WIP 漏的 1 個 test fixture assertion bug + 0 R46 範圍 lint warning + 0 regression + 266/266 tests + commit `7785941`）
+
+**KPI-impact: K28 per-provider 完成 session 時長 population stddev gauge 從 0 → 1 metric + 波動性觀測維度 0 → 1 + 9 new tests**
+
+**不做的範圍**（給後續輪次）:
+- `render_prometheus_body` 12 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct（R26/R27 policy 已記；K6-K28 共 21 個 metrics 都各自 inline 派發 + alphabetical sort，重構可一次清掉 ~150 行 render helper 內的 sort 邏輯但要搬 K6 起的所有 emit 段，跨輪考慮）
+- K15 / K16 shared counter race 真正解法（改 per-test `Arc<Mutex<u64>>` 或測試層局部 mock，R35/R36/R37/R44/R45 多次記錄，跨輪考慮）
+- hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊（R37 wrap-up 已記）
+- K6-K28 metrics 整合 single `MetricsSnapshot` struct 餵前端（跨輪考慮）
+- K29+ 後續方向：failure rate（需 failed session counter, 跟 `failure_count` 欄位可能重疊待盤點）、p95/p99 percentile（需 rolling buffer / histogram, O(1) 空間不像 Welford 那樣直接套用）
+
+---
+
+
 ### [2026-06-02] R45 — K27 `lobsterpulse_provider_completed_sessions_min_duration_seconds` gauge + 9 tests
 **類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26→K27 線）
 **KPI**: `_metrics_emitted_K27` 累計 +1（累計 20 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25/K26 → K27）

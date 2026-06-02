@@ -736,3 +736,53 @@
 **結果**: PASS（M0 silent-fail surfacing 收尾 read_usage_snapshots 鏈 + M1 K19 gauge 補 K6 細顆度盲點 + 0 lint warning on R33 範圍 + 0 regression + 10 new tests, commit `b86fd6b`)
 
 **KPI-impact: silent_fail_sites_observable +7 paths + per-state observability 維度 0→1 + per-provider gauge 種類 +1 + Lib 總 unit tests +10（K19 補 K6/K8 都沒覆蓋的「per-state 分佈」盲點,operator alert rule `lobsterpulse_provider_sessions_by_state{state="stale"} > 5` 一行寫完,不再需要靠 K6 + K8 心跳秒數湊訊號）**
+
+### [2026-06-02] R34 — sidecar `lobster-pulse-hook` 3 條 silent-fail 全部 surfaced + `read_port_at` pure fn 抽出 + 7 unit tests
+**類型**: M0（silent-fail surfacing 收尾 sidecar 端）
+**KPI**: silent_fail_sites_observable +3 paths（sidecar 端 stdin read / port file parse / TCP post 三條 `let _ = ...` 鏈）
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| Sidecar silent-fail sites | 3 | 0 | -3 |
+| Sidecar unit tests | 0 | 7 | +7 |
+| Lib unit tests（總,無 regress） | 185 | 185 | 0 |
+| Clippy warning on R34 範圍 | 0 | 0 | 0 |
+
+**為什麼**:
+R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail sweep 留 R34 候選」,但 tail_new_events 在 lib 內、已有完整 metric 覆蓋;真正的 0-observability 死角其實是 `bin/lobster-pulse-hook`（每個 CLI 透過這個 sidecar 餵 event,失敗就 silently 0 訊息,operator 看到「LP 沒反應」完全無從分 stdin/port/post 三條因果鏈誰斷）。Sidecar 沒有 metric 路徑可觀察,只能靠 stderr 留線索,屬 **M0 必修** 而非 H0。
+
+**搜尋**:
+- 對齊既有 pattern:`openab_bridge::read_offset_at(path)` / `write_offset_at(path, val)` pure fn + caller 統一 log — 抽 `read_port_at(path: &Path) -> Option<u16>` 走同 pattern,讓「路徑不存在(預期)」vs「讀失敗/parse 失敗(unexpected)」在 caller 端可分流 log 級別
+- 不擴 cargo deps、純 std(eprintln 到 stderr)— 多數 CLI 會 capture 子進程 stderr,線索可達 operator,同時 sidecar 仍 exit 0 不破壞 parent CLI
+
+**做了什麼**:
+- `lobster-pulse-hook.rs::main`:
+  - `stdin.read_to_string` 失敗 → `eprintln!` 到 stderr + 仍送空 body(由 server 端 validate,維持 sidecar exit 0)
+  - `read_port` 失敗 → `eprintln!` note + fallback DEFAULT_PORT
+  - `post` 失敗 → `eprintln!` 含 port + provider(區分 LP 沒啟動 / port 不通 / write 失敗)
+- 抽出 `read_port_at(path: &Path) -> Option<u16>` pure fn,3 條路徑分流(NotFound / 讀失敗 / parse 失敗)
+- 新增 `read_port_at_tests` module 5 tests:
+  1. 不存在檔案 → None(NotFound → stderr note)
+  2. 非 u16 garbage → None(stderr warn)
+  3. 合法 u16 → 原樣回傳
+  4. 含 whitespace/newline → trim 後正確解析
+  5. u16 overflow(99999)→ None(非 silent 截斷)
+- 新增 `post_tests` module 2 tests:
+  1. ephemeral TCP listener 收到 `/hook/{provider}` + body + Content-Length header(happy path contract)
+  2. 連到已 drop 的 port → `Err`(不能 silent 吞)
+
+**驗證**:
+- `cargo test --bin lobster-pulse-hook` **7 passed / 0 failed / 0 ignored**
+- `cargo test --lib` **185 passed / 0 failed / 0 regress**
+- `cargo clippy --lib --bins -- -D warnings` **0 warning**
+- `cargo build --bin lobster-pulse-hook` clean
+
+**不做的範圍**（給後續輪次）:
+- sidecar 加 `LOG_LEVEL` env 控 stderr verbosity:目前 always-on 對 first-run 友善但生產環境吵,留 R35 觀察
+- 把 `read_port_at` 從 sidecar 抽出共用 crate:sidecar 仍獨立 binary 不依賴 LP lib 邏輯,目前重複量小不抽象
+- engineering-log.md 已 ~750 行(R33 提到 675 > 500 cap 候選)— 本輪 scope 純 M0,留 R35+ 觀察 H0 rotate
+- 對齊 openab_bridge 的 tail_new_events 收 silent-fail(已在 R33 收尾範圍,本輪不重複)
+
+**結果**: PASS（M0 silent-fail surfacing 收尾 sidecar 端 + 0 lint warning on R34 範圍 + 0 regression + 7 new tests + 1 pure fn 抽出, commit 待送）
+
+**KPI-impact: sidecar_silent_fail_sites 3→0 + sidecar_unit_tests 0→7 + sidecar stderr 觀測維度 0→3（stdin/port/post）**

@@ -5,6 +5,60 @@
 ## 改善紀錄
 
 
+### [2026-06-02] R45 — K27 `lobsterpulse_provider_completed_sessions_min_duration_seconds` gauge + 9 tests
+**類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26→K27 線）
+**KPI**: `_metrics_emitted_K27` 累計 +1（累計 20 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25/K26 → K27）
+
+**KPI 進展表**:
+| KPI | 前值 (R44) | 後值 (R45) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 19 | 20 | +1 |
+| Lib 總 unit tests | 248 | 257 | +9 |
+| K27 pure fn test | 0 | 6 | +6 |
+| K27 render test | 0 | 3 | +3 |
+| 24h chore_ratio (rolling) | 33% | 待 R46 盤 | — |
+| 0 R45 範圍 lint warning | 0 | 0 | 持平 |
+
+**為什麼**:
+- 補完 K22 (latest) / K25 (avg) / K26 (max) 三件套的第四角 **min** → 形成 **min / max / latest / avg 四件套**：operator 端可一次看「該 provider 歷史最快 / 最慢 / 最近 / 平均」四個視角,快速分辨 session 時長分佈（例：avg 60s, latest 65s, max 7200s, min 8s = 大部分 session 都跑 ~1 分鐘,但偶有 2 小時 outlier, 且曾有 8 秒極短 session 可能是 fast-path / 早期測試 / 假觸發）。可設 alert `min < 1` 觸發「該 provider 有次秒級完成 session」異常信號
+- 沿用 K22 / K26 Option 語意：缺資料（`min_completed_session_age_secs: None`）不 emit sample（避免 Prometheus 端把「沒看到」當「min=0」誤判「該 provider 瞬間完成」= 假健康信號）,已寫入後 saturating_min 不倒退（session 結束 + 30 min stale 回收後 ProviderTotals 仍保留 → Prometheus gauge 不會倒退）。`i64` 而非 `u64` 跟 K22 / K26 一致,雖然實際寫入值都被 `age.max(0)` clamp 過,留 `i64` 方便未來若要支援 signed duration metric 直接擴充
+- H0 cap 持續觸發(chore_ratio 33% > 30% threshold)→ 本輪 M1 KPI 推進（沿 R42/R43/R44 同 K-tag series 主軸）, 撿既有 pattern scaffold(K27 saturating_min 鏡像對稱 K26 saturating_max), token / 時間密度最高
+- 跟 K12 `idle_ratio` 同屬「既有資料源派生指標」, 補 K22 / K23 / K24 / K25 / K26 五維體系的「最快 / 最慢」分布維度
+
+**搜尋**: 沿用 K22 / K25 / K26 既有 pattern —— ProviderTotals lifetime aggregate + pure fn `*_at` 攤平 + render 端 alphabetical sort + 整數 emit（沒 f64, 跟 K22 / K26 對齊, min 是「單點 saturating_min」語意沒浮點小數必要）。沒新搜。
+
+**做了什麼**:
+- `session.rs:403-422` `ProviderTotals` 加 `min_completed_session_age_secs: Option<i64>` 欄位（跟 K22 / K26 對稱：i64 為主, `age.max(0)` clamp 過, `None` = 該 provider 累計收過 event 但還沒完成過 session, 觸發點 SessionEnd + Working→Idle 兩路徑）
+- `session.rs:618-634` `record_completed_session_age` 觸發點 saturating_min 更新 —— 沿用 K26 同個 `clamped_age` 變數（K26 已先做 `age.max(0)` clamp）, 第一次完成時 `None` 直接寫 `Some(clamped_age)`, 後續完成用 `prev.min(clamped_age)` 降級
+- `session.rs:876-893` 新 `completed_sessions_min_duration_at` pure fn（攤平 `ProviderTotals` → `HashMap<provider, secs>` 給 render; 過濾 `None` 沿用 K22 / K26 語意, lifetime saturating_min 寫入後不蒸發）
+- `session.rs:1553-1707` 6 個 unit test（第一次完成初始化 / saturating_min 降級 / 較大值保持 / 負值 clamp / `completed_sessions_min_duration_at` 過濾 None / per-provider 隔離）
+- `lib.rs:1954-1989` `render_prometheus_body` emit K27 HELP/TYPE + alphabetical 全 provider sample（K6-K26 既契約, 整數格式, 跟 K22 / K26 saturating 鏡像對稱）
+- `lib.rs:6670-6869` 3 個 K27 emit integration test —— `completed_sessions_min_duration_empty_totals_emits_header_only`（empty-state 跟 K22 / K26 一致）+ `completed_sessions_min_duration_per_provider_isolated_and_skips_none`（K22 / K26 / K27 三件套隔離 emit）+ `completed_sessions_min_duration_alphabetical_sort_and_integer_format`（3 provider 非字母序插入 → alphabetical 排序 + 整數格式 + 跟 K22 / K25 / K26 三件套同 totals 各自 emit 各自的值）
+- `lib.rs` 12 個 test fixture `ProviderTotals` initializer 補 `min_completed_session_age_secs: None`（跟 production `ProviderTotals::default()` 同語意, 跟 K26 fixture 整合註解為「K26 / K27 落地」）
+- `lib.rs:2911` test module imports 加 `completed_sessions_min_duration_at` 派生函式
+
+**驗證**:
+- `cargo build --lib --tests`: 0 warning（K27 pure fn 已從 render helper 內被呼叫, dead_code warning 消失）
+- `cargo fmt --check`: 0 diff
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo test --lib`: **257 passed; 0 failed; 0 ignored**(R44 248 + R45 +9 K27 new, 0 regression, 0 flake; 第一次跑有 1 個 hook_server flaky test fail (R15 已知 race, 隔離重跑 pass, 跨輪處理) → 第二次跑 248 + 9 = 257 全綠)
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked supervisor 檔, 符合 R13 防護）
+
+**結果**: PASS（K27 落地 + 0 R45 範圍 lint warning + 0 regression + 257/257 tests）
+
+**KPI-impact: metrics 維度 +1（per-provider 歷史最短完成 session gauge）, 測試 248→257**
+
+**不做的範圍**（給後續輪次）:
+- `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct（R26/R27 policy 已記；K6-K27 共 20 個 metrics 都各自 inline 派發 + alphabetical sort，重構可一次清掉 ~150 行 render helper 內的 sort 邏輯但要搬 K6 起的所有 emit 段，跨輪考慮）
+- K15 / K16 shared counter race 真正解法（改 per-test `Arc<Mutex<u64>>` 或測試層局部 mock，R35/R36/R37/R44/R45 多次記錄，跨輪考慮）
+- hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊（R37 wrap-up 已記）
+- 2 個 pre-existing `quota_history.rs:419-420` clippy doc-lazy-continuation violation —— R38 已清（追問：實際上 R38 commit `d2976a7` 已修，這條已不適用；待下輪盤點時從「不做的範圍」清掉）
+- K6-K21 metrics 整合 single `MetricsSnapshot` struct 餵前端（跨輪考慮）
+- K28+ 後續方向：percentile (p50/p95/p99, 需 rolling buffer / histogram)、failure rate (需 failed session counter, 跟 `failure_count` 欄位可能重疊待盤點)
+
+---
+
+
 ### [2026-06-02] R44 — K26 `lobsterpulse_provider_completed_sessions_max_duration_seconds` gauge + 8 tests（R43 WIP 收尾）
 **類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26 線）
 **KPI**: `_metrics_emitted_K26` 累計 +1（累計 18 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25 → K26）

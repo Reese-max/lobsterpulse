@@ -862,3 +862,39 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 
 **結果**: PASS（K29 撿收 R46 WIP + 修 R46 WIP K25 隔離 assertion bug + 0 regression + 275/275 全綠）
 **KPI-impact: metrics 維度 +1（per-provider failure-to-completion ratio gauge, 補 K22-K28 duration 分布外的「失敗 vs 成功比」觀測維度, alert 閾值 ratio > 2.0 觸發「該 provider session 平均 retry 2 次以上」健康度異常信號）**
+
+### [2026-06-03] R48 — K30 `lobsterpulse_provider_completed_sessions_p95_duration_seconds` gauge + 9 tests（撿收 R47 後 dirty WIP）
+**類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26→K27→K28→K29→K30 線）
+**KPI**: `_metrics_emitted_K30` 累計 +1（累計 23 個 K-tag metrics）
+
+**KPI 進展表**:
+| KPI | 前值 (R47) | 後值 (R48) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 22 | 23 | +1 |
+| Lib 總 unit tests | 275 | 284 | +9 |
+| K30 pure fn test | 0 | 6 | +6 |
+| K30 render test | 0 | 3 | +3 |
+| 0 R48 範圍 lint warning | 0 | 0 | 持平 |
+| 0 R48 範圍 fmt diff | 0 | 0 | 持平 |
+
+**為什麼**: 對齊 LobsterPulse v5.1 mission「本機 CLI + OpenAB 雙路徑觀察」可觀察性 —— K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) / K29 (failure ratio) 六件套覆蓋「最近一次 / 中心趨勢 / 分布離散 / 失敗比」, 沒覆蓋「SLO 邊界延遲」維度。K30 reservoir 1024 + sort 找 P95 = operator 端 alert `p95 > 300` (5 分鐘) = 該 provider 95% session 都在 5 分鐘以上 = SLO 異常信號, 比 stddev (受 outlier 影響大) 更直觀反映「典型慢任務」邊界。R47 commit 後 dirty WIP 留 K30 整套: field + const + record 觸發點 + pure fn + 6 unit test + emission code + 12 fixture 補欄位, R48 撿收只缺 3 個 render test + 驗證。
+**搜尋**: 沿用既有 K28 Welford O(1) 空間語意 + K22-K27 lifetime aggregate 模式; P95 數學本質要求 sort → 採 Vitter Algorithm R reservoir sampling (count < capacity 直接 push, count >= capacity 用 `Utc::now().timestamp_nanos() % len` 當 pseudo-random index replace, 無外部 `rand` 依賴)。無新搜（P95 + reservoir sampling 是標準監控 pattern）。
+**做了什麼**:
+- `src-tauri/src/session.rs:439-466` `ProviderTotals` 加 `completed_sessions_p95_samples: Vec<i64>` 欄位
+- `src-tauri/src/session.rs:468-475` 加 `P95_RESERVOIR_CAPACITY: usize = 1024` 常數（Chebyshev: 樣本 ≥ 1000 P95 估計誤差 < ~1.5%, 1024 是 2^10 對齊 cache line）
+- `src-tauri/src/session.rs:722-737` `record_completed_session_age` 觸發點同步 reservoir push/replace
+- `src-tauri/src/session.rs:1014-1034` 加 `completed_sessions_p95_at` 純 fn（sort samples → index = len * 95/100, 過濾 samples.is_empty(), `min(len-1)` 避免 OOB）
+- `src-tauri/src/session.rs:1980-2077` 6 個 unit test（push 累積 / 負值 clamp / reservoir bounded 1024 / empty skip / 20-sample P95=20 / per-provider 隔離）
+- `src-tauri/src/lib.rs:2034-2052` `render_prometheus_body` emit K30 HELP/TYPE + alphabetical sort 全 provider 樣本（i64 整數無 f64 4 位小數）
+- `src-tauri/src/lib.rs` 12 個 test fixture `ProviderTotals` initializer 補 `completed_sessions_p95_samples: Vec::new(),` 欄位
+- `src-tauri/src/lib.rs:7490-7655` 3 個 K30 render test（empty / per-provider 隔離 + empty skip / alphabetical sort + 整數 precision + 跟 K22/K29 隔離雙驗證）
+- `src-tauri/src/session.rs:468-475` 修 3 個 clippy `doc_lazy_continuation` 加空行分段（doc 多句無空行被誤判 list item）
+- `src-tauri/src/session.rs:732-734` 修 1 個 fmt line too long（rustfmt auto-fix split 一行）
+
+**驗證**:
+- `cargo test --lib`: 284 passed; 0 failed（+9 K30, 0 regression, R47 275 → 284）
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+
+**結果**: PASS（K30 撿收 R47 後 dirty WIP + 3 個 render test 補完 + 3 doc lint + 1 fmt auto-fix + 0 regression + 284/284 全綠）
+**KPI-impact: metrics 維度 +1（per-provider 95 百分位延遲 gauge, 補 K22-K29 六件套外的「SLO 邊界延遲」觀測維度, alert 閾值 p95 > 300 觸發 SLO 異常信號）**

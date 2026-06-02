@@ -2803,4 +2803,172 @@ mod tests {
             "cicx 跟 openx 灌同樣本集 → P50 必等 (per-provider 隔離 + 同樣本 → 同結果)"
         );
     }
+
+    // ============== R52：K23 (count) / K24 (total) / K25 (avg) 跨 K-tag 數學不變式護欄 ==============
+    // 策略顧問 R50 巡邏「DRIFTING + 凍結 gauge 補閉環」→ R51 補 K30/K31/K32 percentile
+    // bounds, R52 順同樣紀律補 K23/K24/K25 「count / total / avg」三件套的數學
+    // 不變式護欄。K23 / K24 / K25 是 lifetime aggregate 的「次數 / 總時長 / 平均
+    // 時長」三件套,語意強綁定:K25 = K24 / K23 (count > 0) 是定義恆等式,若未來
+    // 有人 (a) 改 K23 trigger 點漏 +1, (b) 改 K24 累加用 saturating 改 wrapping
+    // 污染 sum, (c) 改 K25 派生用 total 改成 sum_squared, 或 (d) 改 K25 emit
+    // 條件從 count > 0 改成 count >= 0 漏掉 0/0 NaN 防線, 現有 K23/K24/K25 18
+    // 個 unit test 都抓不出 (都是單 metric 隔離, 沒跨 K-tag 算術驗證), 要到
+    // production Prometheus 端 alert 異常時才被動發現。R52 補這層 cross-metric
+    // invariant 護欄, 跟 R51 K30/K31/K32 bounds 同樣紀律, CI 1 秒抓出。
+
+    #[test]
+    fn r52_k23_k24_k25_count_total_avg_invariant_across_sample_counts() {
+        // property-style: 對 N ∈ {1, 3, 10, 50, 100} 各自餵 samples 1..=N
+        // (sum = N*(N+1)/2), 斷言 K23=N / K24=sum / K25=sum/N (數學恆等式),
+        // 並驗 K25 算術跟 K24/K23 一致 (f64 epsilon, 避免 IEEE 754 尾數雜訊
+        // 誤判)。涵蓋小樣本 (N=1 → avg=1.0) 跟大樣本 (N=100 → avg=50.5) 兩
+        // 種語意。 若有人改 K23 觸發點漏 +1 → K23 != N 立即抓出; 改 K24
+        // saturating 改 wrapping 污染 sum → K24 != sum 立即抓出; 改 K25 派生
+        // 用錯欄位 → K25 != sum/N 立即抓出。
+        let sizes = [1usize, 3, 10, 50, 100];
+        for n in sizes {
+            let mut m = SessionManager::new();
+            for i in 1..=n as i64 {
+                m.record_completed_session_age("cicx", i);
+            }
+            let totals = m
+                .provider_totals
+                .get("cicx")
+                .expect("cicx entry should exist after N>=1 samples");
+            // K23 count
+            assert_eq!(
+                totals.completed_sessions_count, n as u64,
+                "N={n}: K23 completed_sessions_count 必須 = N (lifetime +1 觸發點未漏)"
+            );
+            // K24 total = 1+2+...+N = N*(N+1)/2
+            let expected_total = (n as u64) * ((n as u64) + 1) / 2;
+            assert_eq!(
+                totals.completed_sessions_total_duration_secs, expected_total,
+                "N={n}: K24 total_duration_secs 必須 = N*(N+1)/2 = {expected_total} \
+                 (lifetime saturating_add 未污染 sum)"
+            );
+            // K25 pure fn 派生值 (R52 護欄不污染既有 K23/K24/K25 內部 submodule
+            // imports, 用 fully-qualified path 直接拿 fn 避免 E0252 reimport 衝突)
+            let count_map = crate::session::completed_sessions_count_at(&m.provider_totals);
+            let total_map =
+                crate::session::completed_sessions_total_duration_at(&m.provider_totals);
+            let avg_map =
+                crate::session::completed_sessions_average_duration_at(&m.provider_totals);
+            let k23 = *count_map.get("cicx").expect("cicx K23 missing");
+            let k24 = *total_map.get("cicx").expect("cicx K24 missing");
+            assert_eq!(
+                k23, n as u64,
+                "N={n}: pure fn K23 emit 必須 = ProviderTotals.completed_sessions_count = {n}"
+            );
+            assert_eq!(
+                k24, expected_total,
+                "N={n}: pure fn K24 emit 必須 = ProviderTotals.completed_sessions_total_duration_secs = {expected_total}"
+            );
+            // K25 派生: 必須等於 K24 / K23 (數學恆等式, f64 epsilon 1e-9 容差)
+            let k25 = avg_map
+                .get("cicx")
+                .copied()
+                .unwrap_or_else(|| panic!("N={n}: K25 應 emit (count > 0), 但 missing"));
+            let expected_avg = expected_total as f64 / n as f64;
+            assert!(
+                (k25 - expected_avg).abs() < 1e-9,
+                "N={n}: K25={k25} 必須 == K24/K23 = {expected_avg} (count/total/avg 數學不變式, f64 epsilon 1e-9)"
+            );
+            // 額外: 跨 3 個 pure fn emit 結果必須互相一致 (避免有人改某個純 fn 漏
+            // sync 跟 ProviderTotals 來源)
+            assert_eq!(
+                k23, totals.completed_sessions_count,
+                "N={n}: pure fn K23 跟 ProviderTotals.completed_sessions_count 必須一致"
+            );
+            assert_eq!(
+                k24, totals.completed_sessions_total_duration_secs,
+                "N={n}: pure fn K24 跟 ProviderTotals.completed_sessions_total_duration_secs 必須一致"
+            );
+        }
+    }
+
+    #[test]
+    fn r52_k23_k24_k25_emission_set_consistency_under_zero_count_providers() {
+        // 跨 K-tag emission 集合一致性護欄: K25 emit set (count > 0) ⊆ K24
+        // emit set (全部 provider) ⊆ K23 emit set (全部 provider)。 同時驗
+        // 當 count == 0 時 K25 必須不 emit (0/0 NaN 防線, 不能 emit 0.0 假冒
+        // average=0 假健康信號), 但 K23/K24 仍 emit 0 (counter 0 是有效資
+        // 料, 跟 missing 不同語意)。 4 provider 混合: cicx (count=3, total=
+        // 180 → avg=60), claude (count=0, total=0 → K25 跳過), gemini
+        // (count=2, total=7200 → avg=3600), openx (count=0, total=0 → K25
+        // 跳過)。
+        let mut m = SessionManager::new();
+        // cicx: 3 samples [10, 60, 110] sum=180
+        for age in [10i64, 60, 110] {
+            m.record_completed_session_age("cicx", age);
+        }
+        // claude: 故意不 record → count=0, total=0
+        m.provider_totals
+            .entry("claude".to_string())
+            .or_default();
+        // gemini: 2 samples [3600, 3600] sum=7200
+        for age in [3600i64, 3600] {
+            m.record_completed_session_age("gemini", age);
+        }
+        // openx: 故意不 record → count=0, total=0
+        m.provider_totals
+            .entry("openx".to_string())
+            .or_default();
+
+        let count_map = crate::session::completed_sessions_count_at(&m.provider_totals);
+        let total_map = crate::session::completed_sessions_total_duration_at(&m.provider_totals);
+        let avg_map = crate::session::completed_sessions_average_duration_at(&m.provider_totals);
+
+        // K23 emit 全部 4 provider (counter 0 是有效)
+        for p in ["cicx", "claude", "gemini", "openx"] {
+            assert!(
+                count_map.contains_key(p),
+                "K23 counter 0 是有效, 必須 emit 全部 4 provider 但 {p} missing"
+            );
+        }
+        // K24 emit 全部 4 provider (counter 0 是有效)
+        for p in ["cicx", "claude", "gemini", "openx"] {
+            assert!(
+                total_map.contains_key(p),
+                "K24 counter 0 是有效, 必須 emit 全部 4 provider 但 {p} missing"
+            );
+        }
+        // K25 emit 只有 count > 0 的 provider (cicx, gemini)
+        assert!(
+            avg_map.contains_key("cicx"),
+            "cicx count=3 > 0, K25 必須 emit, 但 missing"
+        );
+        assert!(
+            avg_map.contains_key("gemini"),
+            "gemini count=2 > 0, K25 必須 emit, 但 missing"
+        );
+        assert!(
+            !avg_map.contains_key("claude"),
+            "claude count=0, K25 必須跳過 (0/0 NaN 防線), 但 emit 了"
+        );
+        assert!(
+            !avg_map.contains_key("openx"),
+            "openx count=0, K25 必須跳過 (0/0 NaN 防線), 但 emit 了"
+        );
+        // K25 emit set ⊆ K24 emit set ⊆ K23 emit set (三層次包含關係)
+        assert!(
+            avg_map.keys().all(|p| total_map.contains_key(p)),
+            "K25 emit set 必須 ⊆ K24 emit set (K25 是 K24/K23 派生, 不能比 K24 emit 更多)"
+        );
+        assert!(
+            total_map.keys().all(|p| count_map.contains_key(p)),
+            "K24 emit set 必須 ⊆ K23 emit set (K24 是 K23 + duration 聚合, 不能比 K23 emit 更多)"
+        );
+        // K25 算術: cicx avg=60, gemini avg=3600
+        assert!(
+            (avg_map["cicx"] - 60.0).abs() < 1e-9,
+            "cicx K25 必須 = 180/3 = 60.0, got {}",
+            avg_map["cicx"]
+        );
+        assert!(
+            (avg_map["gemini"] - 3600.0).abs() < 1e-9,
+            "gemini K25 必須 = 7200/2 = 3600.0, got {}",
+            avg_map["gemini"]
+        );
+    }
 }

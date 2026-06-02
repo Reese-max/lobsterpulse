@@ -6664,6 +6664,173 @@ mod render_prometheus_tests {
         );
     }
 
+    // ============== R52：K23 (count) / K24 (total) / K25 (avg) 跨 K-tag render 一致性護欄 ==============
+    // 策略顧問 R50 巡邏「DRIFTING + 凍結 gauge 補閉環」→ R52 補既有 K23/K24/K25
+    // 三件套 render 端 cross-metric emission 一致性護欄。K23 (counter) / K24
+    // (counter) / K25 (gauge) 是 lifetime aggregate 派生三件套,語意強綁定: K25
+    // = K24 / K23 (count > 0) 是定義恆等式, render 端必須 (a) count > 0 的
+    // provider 三條 series 全部 emit + K25 算術跟 K24/K23 一致, (b) count = 0
+    // 的 provider K23/K24 emit 0 (counter 0 有效) + K25 跳過 (0/0 NaN 防線)。
+    // 既有 K23/K24/K25 14 個 render test 都是單 metric 隔離, 沒驗證「同
+    // provider 三條 series 互相 emit 一致」, 若有人未來改 render 端 emit 邏輯
+    // 漏 K25 或 K24 (e.g. 誤把 K25 條件從 count > 0 改成 count >= 0 emit 0.0),
+    // 現有 test 抓不出, 要到 Prometheus scrape 端 alert 異常才被動發現。
+
+    #[test]
+    fn r52_k23_k24_k25_render_emission_consistency_across_mixed_count_providers() {
+        // 4 provider 混合: cicx (count=3, total=180 → avg=60) + claude (count=0,
+        // total=0 → K25 跳過) + gemini (count=2, total=7200 → avg=3600) + openx
+        // (count=0, total=0 → K25 跳過)。 對齊 session.rs R52
+        // `r52_k23_k24_k25_emission_set_consistency_under_zero_count_providers`
+        // 純 fn 護欄的 fixture, 補 render 端的同語意不變式 (count > 0 三條全
+        // emit + K25 算術一致, count = 0 K25 跳過 + K23/K24 emit 0)。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 3,
+                completed_sessions_total_duration_secs: 180,
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 2,
+                completed_sessions_total_duration_secs: 7200,
+                ..Default::default()
+            },
+        );
+        totals.insert("openx".to_string(), ProviderTotals::default());
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // ── Part A: count > 0 provider (cicx, gemini) 三條 series 必須全 emit + K25 算術正確
+        for (p, expected_count, expected_total, expected_avg_str) in [
+            ("cicx", 3, 180, "60.0000"),
+            ("gemini", 2, 7200, "3600.0000"),
+        ] {
+            // K23 counter 整數
+            assert!(
+                body.contains(&format!(
+                    "lobsterpulse_provider_completed_sessions_total{{provider=\"{p}\"}} {expected_count}\n"
+                )),
+                "{p}: K23 count={expected_count} 必須 emit (count > 0 → K23 必 emit), body: {body}"
+            );
+            // K24 counter 整數
+            assert!(
+                body.contains(&format!(
+                    "lobsterpulse_provider_completed_sessions_total_duration_seconds{{provider=\"{p}\"}} {expected_total}\n"
+                )),
+                "{p}: K24 total={expected_total} 必須 emit (count > 0 → K24 必 emit), body: {body}"
+            );
+            // K25 gauge f64 4 位小數
+            assert!(
+                body.contains(&format!(
+                    "lobsterpulse_provider_completed_sessions_average_duration_seconds{{provider=\"{p}\"}} {expected_avg_str}\n"
+                )),
+                "{p}: K25 avg={expected_avg_str} 必須 emit (count > 0 → K25 必 emit), body: {body}"
+            );
+        }
+        // 跨 K-tag emission set 互不污染: cicx/gemini 三條 series 都必須 emit 完整
+        // (沒有「K25 emit 了但 K24 漏」之類的不一致破壞)
+        let cicx_k23 = body
+            .find("lobsterpulse_provider_completed_sessions_total{provider=\"cicx\"} 3\n")
+            .expect("cicx K23 sample line");
+        let cicx_k24 = body
+            .find("lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"cicx\"} 180\n")
+            .expect("cicx K24 sample line");
+        let cicx_k25 = body
+            .find("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 60.0000\n")
+            .expect("cicx K25 sample line");
+        // K25 emit K24 emit K23 (K25 是 K24/K23 派生, 順序應 K23 → K24 → K25)
+        // 但 emit 順序只需「都在」, 不嚴格要求 monotonic (依 render block 排列)
+        assert!(
+            cicx_k23 < cicx_k25 && cicx_k24 < cicx_k25,
+            "cicx K25={cicx_k25} 必須在 K23={cicx_k23} / K24={cicx_k24} 之後 emit \
+             (K25 是 K24/K23 派生, 順序應 K23/K24 → K25)"
+        );
+
+        // ── Part B: count = 0 provider (claude, openx) K25 跳過 + K23/K24 emit 0
+        for p in ["claude", "openx"] {
+            // K23 counter 0 仍 emit (counter 0 跟 missing 不同語意)
+            assert!(
+                body.contains(&format!(
+                    "lobsterpulse_provider_completed_sessions_total{{provider=\"{p}\"}} 0\n"
+                )),
+                "{p}: K23 count=0 仍 emit (counter 0 有效), 不能 skip, body: {body}"
+            );
+            // K24 counter 0 仍 emit
+            assert!(
+                body.contains(&format!(
+                    "lobsterpulse_provider_completed_sessions_total_duration_seconds{{provider=\"{p}\"}} 0\n"
+                )),
+                "{p}: K24 total=0 仍 emit (counter 0 有效), 不能 skip, body: {body}"
+            );
+            // K25 count=0 必須跳過 (0/0 NaN 防線, emit 0.0 = 假健康信號)
+            assert!(
+                !body.contains(&format!(
+                    "lobsterpulse_provider_completed_sessions_average_duration_seconds{{provider=\"{p}\"}}"
+                )),
+                "{p}: K25 count=0 必須跳過 (0/0 NaN 防線), 但 emit 了 sample, body: {body}"
+            );
+        }
+
+        // ── Part C: K25 算術跟 K24/K23 在 render 端一致 (parse render 端 f64 4 位小數)
+        // cicx K25 = 60.0000 = 180/3 ✓, gemini K25 = 3600.0000 = 7200/2 ✓ — 已
+        // Part A 用 exact string match 驗證, 此處額外驗 K25 沒 emit 任何「異常值」
+        // (e.g. NaN / Infinity / 負值) 跨 4 provider
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} NaN"),
+            "K25 不能 emit NaN (count > 0 派生必為有限值), body: {body}"
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"gemini\"} NaN"),
+            "K25 不能 emit NaN (count > 0 派生必為有限值), body: {body}"
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} -"),
+            "K25 不能 emit 負值 (total/count 必 >= 0), body: {body}"
+        );
+
+        // ── Part D: 跨 K-tag emission set 包含關係 (跟 session.rs pure fn 護欄對齊)
+        // 計數: K23 sample line 數量 = 4 (全部 provider), K24 sample line 數量 = 4
+        // (全部 provider), K25 sample line 數量 = 2 (只有 cicx + gemini)
+        let k23_count = body
+            .matches("lobsterpulse_provider_completed_sessions_total{provider=\"")
+            .count();
+        let k24_count = body
+            .matches("lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"")
+            .count();
+        let k25_count = body
+            .matches("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"")
+            .count();
+        assert_eq!(
+            k23_count, 4,
+            "K23 emit 必須 = 4 provider (counter 0 有效), got {k23_count}, body: {body}"
+        );
+        assert_eq!(
+            k24_count, 4,
+            "K24 emit 必須 = 4 provider (counter 0 有效), got {k24_count}, body: {body}"
+        );
+        assert_eq!(
+            k25_count, 2,
+            "K25 emit 必須 = 2 provider (cicx + gemini, count > 0), got {k25_count}, body: {body}"
+        );
+    }
+
     // ============== K26 per-provider completed_sessions_max_duration_seconds gauge ==============
     // 跟 K22 (latest) / K25 (avg) 形成 max / latest / avg 三件套 gauge。 對齊 K22
     // emit 語意: Option 過濾 — 該 provider 累計收過 event 但還沒完成過 session → 缺

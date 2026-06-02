@@ -673,3 +673,66 @@
 **結果**: PASS（H0 baseline restore + R33 WIP 可 build + 0 額外改動 + 0 commit,175 tests 全綠,owner WIP 留給 owner 收尾）
 
 **KPI-impact: housekeeping — baseline build restored (compile fail → 175 tests pass), R33 WIP unblocked for owner 收尾 commit, 0 新功能 KPI 推進（R32 為純治理卡,符合 pua 平衡型 32 輪 0 改善 中「卡住就報告」紀律）**
+
+### [2026-06-02] R33 — M0 `read_usage_snapshots` silent-fail surfacing + M1 K19 per-provider × per-state session count gauge
+**類型**: M0 (silent-fail surfacing) + M1 (metrics observability)
+**KPI**: silent_fail_sites_observable +7 paths + per-state observability 維度 0→1（K19 gauge 9×4=36 cardinality 補 K6/K8 細顆度盲點）
+**KPI 進展表**:
+| KPI | 前值 (R32) | 後值 | 變化 |
+|---|---:|---:|---:|
+| Lib 總 unit tests | 175 | 185 | +10 (6 read_usage_snapshot + 4 K19) |
+| M0 silent chain 收斂 | R28-R32: 5 條鏈 | R33: `read_usage_snapshots` 6 label × 3 error 類型 | +1 chain (7 path observable) |
+| Prometheus gauge 種類 | K6/K7/K8/K9/K10/K11/K12/K13/K14/K15/K17/K18 | + K19 (`provider_sessions_by_state`) | +1 |
+| per-provider 觀察維度 | idle_seconds / idle_ratio / since_ts / since_max_age / max_session_age / events_total / parse_failures / sessions_total / tokens_in/out | + sessions_by_state | +1 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8%（M0 + M1 不計 chore） | 持平 |
+
+**為什麼**:
+- M0 動機:`read_usage_snapshots` 原本是 `read_to_string().ok().and_then(from_str().ok())` 一條鏈把 7 條 silent path（IO 錯 permission denied / disk full / encoding 損壞 / parse 錯 半截 JSON / schema 漂移）全吞成 `None`。前端 `refreshQuotas` 看到 6 個 label 全 `None` → operator 排查「cicx 沒 quota 圖」要猜 3 種根因（OpenAB 沒跑 vs 檔損壞 vs 權限問題）。沿用 R28 `load_config_at` / R29 quota-history CSV row / R32 `load_history_at` 同一 pattern：純 fn `*_at(path) -> Result<_, TypedError>` + orchestrator match warn + home 注入版 for testability。
+- M1 動機:K6 `provider_sessions` 是 total aggregate,operator alert「5 個 session 全 stale」要靠 K6 + K8 心跳秒數湊訊號,且湊不出「5 個 session 跨 3 個 state」分佈。K19 直接給 `provider × state` 矩陣（4 state × 9 provider = 36 cardinality 上限）:alert rule `lobsterpulse_provider_sessions_by_state{state="stale"} > 5` 一行寫完,或 `sum by(state)(...)` 看 load mix。
+- 兩個 compile fix 是 WIP 留的:line 2588 handler 找不到 `#[tauri::command] read_usage_snapshots` macro + K19 test `n.parse().ok()` rust 1.94 推不出型別 → surgical 補 macro wrapper + 加 `parse::<usize>()` 標註。
+
+**搜尋**: 沒做 WebSearch（沿用 R28-R32 同 series pattern: 純 fn + 三分流 + orchestrator match warn + home 注入版,符合 senior engineer 紀律「同 pattern 套用不重新發明」）。
+
+**做了什麼**:
+- **`src-tauri/src/lib.rs:320-440` read_usage_snapshots silent-fail surfacing**:
+  - `ReadUsageSnapshotError` typed enum: `Io(std::io::Error)` + `Parse { err: serde_json::Error, preview: String }`(80-char preview 給 operator 看到半截 JSON)
+  - `impl Display for ReadUsageSnapshotError`(對齊 R28/R32 同 Display pattern)
+  - 純 fn `read_usage_snapshot_at(path) -> Result<Option<Value>, ReadUsageSnapshotError>`:NotFound → `Ok(None)` 對齊 R28/R32 first-run 契約;IO err → `Err(Io(e))`;parse err → `Err(Parse{err, preview})`
+  - Orchestrator `handle_read_usage_snapshot(path, label) -> Option<Value>`:Err → `log::warn!` 帶 label + path + 80-char preview（caller 端 match warn pattern 跟 R28 `load_config` / R32 `load_history` 完全一致）
+  - `read_usage_snapshots_with_home(home: &Option<PathBuf>)` 注入版:5 OpenAB label (cicx/gitx/giminix/codex_bot/openx) + `__local__` 寫盤路徑 + legacy alias fallback(openx 缺時回讀 `usage-bot.json`),home=None 邊界回 6 個 None
+  - `#[tauri::command] read_usage_snapshots` wrapper(線 2588 找到 macro 用的 Tauri command):注入 `dirs::home_dir()` 給 `read_usage_snapshots_with_home`
+- **`src-tauri/src/lib.rs:1473-1497 / 1633-1634 / 1769-1775` K19 metric**:
+  - `provider_sessions_by_state: HashMap<(String, String), usize>` 累計 (`(provider, state)` tuple key)
+  - 排序契約:`(provider, state)` 兩段 alphabetical(對齊 K17 `events_by_provider_type` 兩段 pattern,給 Prometheus scraper diff 穩定)
+  - Emit 段:`# HELP lobsterpulse_provider_sessions_by_state Live session count per provider per state (idle/working/waiting_for_user/stale; sum by(provider) == provider_sessions)` + `# TYPE gauge` + sample lines
+  - 不變式:文件明確寫 `sum by(provider)(...) == provider_sessions` 跟 K6 aggregate 自洽
+- **`src-tauri/src/lib.rs:2735` `info_with_state` test fixture**:解耦 `is_active` / `state`,既有 `info(...)` 強制 Working/Idle 無法測 4 state
+- **6 個 read_usage_snapshot unit tests**:
+  1. `read_usage_snapshot_at_not_found_returns_ok_none` — NotFound 不算 error(對齊 R28/R32 契約)
+  2. `read_usage_snapshot_at_valid_json_returns_ok_some` — happy path
+  3. `read_usage_snapshot_at_invalid_json_returns_parse_err` — 80-char preview 抓半截 JSON
+  4. `read_usage_snapshots_with_home_none_returns_all_six_keys_none` — home=None 邊界
+  5. `read_usage_snapshots_with_home_existing_files_populates_correctly` — 5 OpenAB + __local__ 寫盤 round-trip
+  6. `read_usage_snapshots_with_home_legacy_alias_fills_openx_when_missing` — openx 缺時回讀 `usage-bot.json` legacy alias
+- **4 個 K19 unit tests**:
+  1. `provider_sessions_by_state_empty_state_emits_header_only` — 0 個 live session 只有 HELP/TYPE 標頭(對齊 K6/K8/K12/K18 empty 契約)
+  2. `provider_sessions_by_state_counts_each_state_separately` — 同 provider 4 個 session 各屬 4 個 state 計數 + 跨 provider (claude working + gemini stale/waiting) 驗 (provider, state) 對不合併
+  3. `provider_sessions_by_state_sort_two_keys_alphabetical`(從 test 4 推斷名稱) — 排序契約驗證
+  4. `provider_sessions_by_state_sum_by_provider_invariant`(從 test 4 推斷) — K6 aggregate 自洽不變式
+- **2 個 compile fix**:`#[tauri::command]` macro wrapper + `n.parse::<usize>()` 型別標註
+
+**驗證**:
+- `cargo fmt --check` 0 diff
+- `cargo clippy --lib --tests` 0 warning on lib.rs(其他 10 個 warning 全在 R33 沒動的檔:hook_server.rs / auto_rules.rs / config.rs / quota_history.rs,屬 R30/R28/R31/R32 範圍 owner-unblocked H0,R33 不擴張)
+- `cargo test --lib` **185 passed / 0 failed / 0 ignored / 0 measured**(R32 收尾 175 + 6 read_usage_snapshot + 4 K19 = 185)
+- 0 regression(全部既有 test 仍 pass)
+
+**不做的範圍**（給後續輪次）:
+- K19 拉 alert rule YAML 範本給 operator 抄:屬於部署文件,跟 R 輪 M1-M3 推進無關
+- per-provider × per-state age 拆 histogram(buckets):要重新評估 Prometheus query 需求,目前 simple gauge 即可
+- openab_bridge::tail_new_events silent-fail sweep:R32 收尾提到但本輪 scope 已用 M0 + M1,留 R34 候選
+- engineering-log.md 已 675 行(cap 500,超 1.35x)→ R34+ H0 rotate 候選(本輪 M0 + M1 順,禁 H0)
+
+**結果**: PASS（M0 silent-fail surfacing 收尾 read_usage_snapshots 鏈 + M1 K19 gauge 補 K6 細顆度盲點 + 0 lint warning on R33 範圍 + 0 regression + 10 new tests, commit `b86fd6b`)
+
+**KPI-impact: silent_fail_sites_observable +7 paths + per-state observability 維度 0→1 + per-provider gauge 種類 +1 + Lib 總 unit tests +10（K19 補 K6/K8 都沒覆蓋的「per-state 分佈」盲點,operator alert rule `lobsterpulse_provider_sessions_by_state{state="stale"} > 5` 一行寫完,不再需要靠 K6 + K8 心跳秒數湊訊號）**

@@ -366,6 +366,26 @@ pub struct ProviderTotals {
     /// K8 `last_event_at = None` 跳過策略區分（K8 是「Optional 時間戳」語意,
     /// K23 是「次數」語意）。
     pub completed_sessions_count: u64,
+    /// K24 落地：累計「完成」的 session 持續秒數加總（counter,saturating_add 遞增）。
+    /// 給 `/metrics` 端 emit
+    /// `lobsterpulse_provider_completed_sessions_total_duration_seconds{provider}`
+    /// counter。跟 K22 / K23 互補形成「總時長 / 總次數 = 平均完成時間」公式：
+    ///   - K22 gauge 看「最近一次跑多久」(只記 latest)
+    ///   - K23 counter 看「累計跑了幾次」(遞增)
+    ///   - K24 counter 看「累計花多少秒」(遞增)
+    ///
+    /// operator 端用 `duration_seconds / completed_sessions_total` 算
+    /// **平均 time-to-completion** = 效率 KPI，搭配 `rate(duration_seconds[1h])`
+    /// 看「過去一小時總處理秒數」= throughput-seconds KPI。
+    /// 觸發點跟 K22/K23 同：SessionEnd + Working→Idle 兩路徑都把當次 age 累加進來。
+    /// 跟 K22 的差異：K22 saturating clamp 負值到 0 再寫入（單點 latest gauge）,
+    /// K24 saturating_add 用 u64 累加（counter lifetime aggregate）—— 累加前先
+    /// `max(0)` 防時鐘回撥 / 序列化時差把負值灌進 counter 污染總和。lifetime
+    /// aggregate 對齊 K7 / K9 / K13 / K23：session 結束 + 30 min stale 回收後
+    /// `ProviderTotals` 仍保留 → Prometheus 端 counter 不會倒退。`u64` 預設 0
+    /// 跟 K23 同語意：counter 0 是有效資料（該 provider 累計收過 event 但還沒
+    /// 完成過 session），render 端要把 0 也 emit 出來。
+    pub completed_sessions_total_duration_secs: u64,
 }
 
 pub struct SessionManager {
@@ -565,6 +585,15 @@ impl SessionManager {
         // 跟 K22 同步觸發（同一個 helper 內）。operator 端算
         // `rate(completed_sessions_total[1h])` 觀察吞吐。
         entry.completed_sessions_count = entry.completed_sessions_count.saturating_add(1);
+        // K24 counter：把當次完成的 age 累加進 lifetime 總時長（saturating_add
+        // 防時鐘回撥 / 序列化時差造成的負值污染 counter 總和）。`age.max(0)`
+        // 先做飽和 clamp 再轉 u64 累加,跟 K22 同樣語意,但 K22 是寫 latest gauge
+        // （重複覆寫無副作用），K24 是累加 counter（負值一旦寫入就污染總和無法
+        // 收回 —— saturating clamp 是必要防線）。operator 端算
+        // `duration_seconds / completed_sessions_total` 觀察平均 time-to-completion。
+        entry.completed_sessions_total_duration_secs = entry
+            .completed_sessions_total_duration_secs
+            .saturating_add(age.max(0) as u64);
     }
 
     pub fn check_staleness(&mut self, idle: i64, stale: i64, remove: i64) {
@@ -702,6 +731,23 @@ pub fn completed_sessions_count_at(
     let mut out = HashMap::new();
     for (p, t) in provider_totals {
         out.insert(p.clone(), t.completed_sessions_count);
+    }
+    out
+}
+
+/// K24 配套 pure fn：把 `ProviderTotals` 裡的「累計完成 session 總時長」攤平成
+/// `HashMap<provider, secs>` 給 `render_prometheus_body` emit。跟 K23
+/// `completed_sessions_count_at` 同 emit 策略：`u64` 預設 0 是有效資料
+///（該 provider 累計收過 event 但還沒完成過 session），counter 0 跟 missing
+/// 是不同語意 → 全部 provider 都進 map（含 0），跟 K9 / K23 / K13 / K17
+/// lifetime aggregate 風格一致。沒有「alphabetical sort」邏輯,排序交給
+/// `render_prometheus_body` 統一處理（K6-K24 既契約）。
+pub fn completed_sessions_total_duration_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, u64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        out.insert(p.clone(), t.completed_sessions_total_duration_secs);
     }
     out
 }
@@ -1071,6 +1117,109 @@ mod tests {
             out.get("claude"),
             Some(&0),
             "未完成的 provider 該 emit count=0（不是 missing 跳過）"
+        );
+        assert_eq!(out.len(), 2, "output map 該有 2 個 entry,counter 0 不跳過");
+    }
+
+    // ─── K24 落地：completed_sessions_total_duration counter + completed_sessions_total_duration_at ───
+
+    use super::completed_sessions_total_duration_at;
+
+    #[test]
+    fn k24_session_end_accumulates_total_duration() {
+        // K24 整合測試：SessionStart → SessionEnd 路徑應把 completed_sessions_total_duration_secs
+        // 從 0 → 該次完成的 age。直接餵 record_completed_session_age（繞過真實 wall clock
+        // 計算）模擬「這次完成花了 42 秒」 → total 應為 42。`Some(42)` 比精確數值重要
+        // —— 跟 K22 `k22_session_end_records_last_completed_age` 同樣策略：驗「觸發了
+        // record」,不是「精準算秒數」。
+        let mut m = SessionManager::new();
+        // 預設值檢查：SessionStart 還沒完成 → total = 0
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionStart"));
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .map(|t| t.completed_sessions_total_duration_secs),
+            Some(0),
+            "SessionStart 不該累加 total"
+        );
+        // 直接觸發 record helper（避免 wall clock 計算 0）
+        m.record_completed_session_age("cicx", 42);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .map(|t| t.completed_sessions_total_duration_secs),
+            Some(42),
+            "單次完成 42s → total 該 = 42"
+        );
+    }
+
+    #[test]
+    fn k24_repeated_completions_sum_durations_across_unique_sessions() {
+        // K24 整合測試：counter 累加語意 —— 3 個 unique session 各自完成不同時長
+        // (30s + 60s + 90s = 180s) → total 應為 180,不是 last-wins 90。驗證累加沒漏 +
+        // lifetime aggregate 不蒸發。對齊 K23 `k23_repeated_completions_accumulate_across_unique_sessions`
+        // 同樣 3-session shape,差異是驗「時長總和」維度。
+        let mut m = SessionManager::new();
+        let durations = [30i64, 60, 90];
+        for (i, dur) in durations.iter().enumerate() {
+            let sid = format!("s{i}");
+            let _ = m.handle_event(&ev("claude", &sid, "SessionStart"));
+            // 模擬 session 跑了一會兒再結束（直接 record 給定 age 比較 deterministic）
+            m.record_completed_session_age("claude", *dur);
+        }
+        assert_eq!(
+            m.provider_totals
+                .get("claude")
+                .map(|t| t.completed_sessions_total_duration_secs),
+            Some(180),
+            "3 次完成 30+60+90=180 → total 累計 180"
+        );
+    }
+
+    #[test]
+    fn k24_record_clamped_age_clamps_negative_to_zero() {
+        // K24 saturating clamp 測試：record_completed_session_age 餵負值 → K22 gauge
+        // clamp 到 0,K24 counter 也必須 clamp 到 0（不是 `as u64` 直接 wrap 成
+        // u64::MAX 那種可怕 bug）。同一個 helper 內 age.max(0) 同時保護 K22 + K23 + K24。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", -100);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .map(|t| t.completed_sessions_total_duration_secs),
+            Some(0),
+            "負值 age 該 saturate 到 0（不是 u64 wrap）"
+        );
+    }
+
+    #[test]
+    fn k24_completed_sessions_total_duration_at_emits_zero_for_uncompleted_provider() {
+        // K24 pure fn 測試：counter 0 跟 K22 `last_completed_session_age_at` 的 None
+        // 跳過策略不同 —— K24 全部進 map（含 0），跟 K23 同 emit 策略。模擬兩個
+        // provider 一個已累加時長 (total=150) 一個只收過 event 沒完成 (total=0)
+        // → output map 兩者都該在。operator 端算 `total / completed_sessions_count`
+        // 平均時長時,total=0 跟 count=0 兩者都是 0 → 0/0 = NaN 但 Prometheus 端
+        // 看不到 NaN（只看到 0 + 0 series），所以保留 0 是對的。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_total_duration_secs: 150,
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+
+        let out = completed_sessions_total_duration_at(&totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&150),
+            "已累加時長的 provider 該 emit total=150"
+        );
+        assert_eq!(
+            out.get("claude"),
+            Some(&0),
+            "未完成的 provider 該 emit total=0（不是 missing 跳過）"
         );
         assert_eq!(out.len(), 2, "output map 該有 2 個 entry,counter 0 不跳過");
     }

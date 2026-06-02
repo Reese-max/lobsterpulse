@@ -1868,6 +1868,33 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_total{{provider=\"{p}\"}} {count}\n"
         ));
     }
+    // K24 落地：per-provider 累計完成 session 總時長 counter。跟 K22 / K23 形成
+    // 「總時長 / 總次數 = 平均 time-to-completion」公式:operator 端算
+    // `lobsterpulse_provider_completed_sessions_total_duration_seconds /
+    // lobsterpulse_provider_completed_sessions_total` 觀察平均效率 KPI,搭配
+    // `rate(..._duration_seconds[1h])` 看「過去一小時總處理秒數」= throughput-seconds
+    // KPI。跟 K7 / K9 / K13 / K17 / K23 lifetime aggregate 對齊:ProviderTotals 寫入後
+    // 不蒸發,session 結束 + 30 min stale 回收後 counter 不會倒退。`u64` 預設 0 是
+    // 有效資料（該 provider 累計收過 event 但還沒完成過 session）,跟 K23 counter 0
+    // 同 emit 策略,跟 K22 `Option<i64> = None` 跳過策略不同。觸發點跟 K22/K23 同:
+    // SessionEnd + Working→Idle 兩路徑都把當次 age 累加進來。負值 saturating clamp
+    // 到 0 再累加（防時鐘回撥污染 counter 總和,對齊 K22 `age.max(0)` 同樣防線）。
+    // 派生:`session::completed_sessions_total_duration_at` 把 `ProviderTotals`
+    // 攤平為 `HashMap<provider, secs>`,跟 K22/K23 風格一致 —— 不在 render 端加
+    // 第 12 個參數(已是 anti-pattern,對齊 R26/R27 政策:cross-cutting snapshot
+    // 留給 M1 輪 MetricsSnapshot struct 統一處理,本輪不重構)。排序:by provider
+    // alphabetical,跟 K6-K23 既契約一致;空 map → 沒 sample line (HELP/TYPE 標頭
+    // 仍輸出)。emit 全部 provider（含 total=0）—— 跟 `last_completed_session_age_at`
+    // 過濾 None 不同,在 session.rs pure fn 內以 K22 / K23 / K24 不同策略分流。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_total_duration_seconds Lifetime sum of completed session durations in seconds per provider (counter; 0=provider seen but never completed yet, pairs with completed_sessions_total for avg time-to-completion)\n# TYPE lobsterpulse_provider_completed_sessions_total_duration_seconds counter\n");
+    let completed_duration = session::completed_sessions_total_duration_at(provider_totals);
+    let mut completed_duration_sorted: Vec<_> = completed_duration.iter().collect();
+    completed_duration_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, secs) in &completed_duration_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_total_duration_seconds{{provider=\"{p}\"}} {secs}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -2899,6 +2926,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -2931,6 +2962,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -2962,6 +2997,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -2985,6 +3024,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3009,6 +3052,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3032,6 +3079,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3056,6 +3107,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3084,6 +3139,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3109,6 +3168,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3131,6 +3194,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3155,6 +3222,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -3189,6 +3260,10 @@ mod render_prometheus_tests {
                 // K23 落地：test fixture 預設 0（未完成過 session）,
                 // 跟 production `ProviderTotals::default()` 同語意。
                 completed_sessions_count: 0,
+                // K24 落地：test fixture 預設 0（未完成過 session → 無時長可累加）,
+                // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
+                // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
+                completed_sessions_total_duration_secs: 0,
             },
         )
     }
@@ -5880,6 +5955,156 @@ mod render_prometheus_tests {
         );
         assert!(
             !body.contains("lobsterpulse_provider_last_completed_session_age_seconds{provider=\"gemini\"} 1500.0\n"),
+            "整數格式契約(不是 float)"
+        );
+    }
+
+    // ============== K24 per-provider completed_sessions_total_duration_seconds counter ==============
+    // 跟 K22/K23 互補形成「總時長 / 總次數 = 平均 time-to-completion」公式:operator 端算
+    // `..._duration_seconds / ..._total` 觀察平均效率 KPI。3 個 render test 覆蓋
+    // empty / zero / alphabetical 排序三個邊界,跟 K20-K23 既有 render test 風格一致。
+    // 數據源:不是獨立 HashMap,直接讀 `provider_totals` —— 跟 K6 / K7 / K8 / K9 / K10 /
+    // K13 / K17 / K18 / K19 / K22 / K23 同資料源,讓 render helper 自己派發 pure fn
+    // 攤平（對齊 R26/R27 政策:cross-cutting snapshot 留給 M1 輪 MetricsSnapshot struct
+    // 統一處理,本輪不重構 render 端 12 個參數的怪 signature）。
+
+    #[test]
+    fn completed_sessions_total_duration_empty_totals_emits_header_only() {
+        // 對齊 K11 / K18 / K19 / K20 / K21 / K22 empty-state 契約:空 map → 沒 sample line
+        // (HELP/TYPE 標頭仍輸出),不丟假資料。ProviderTotals 沒 entry → 該 provider 不會被
+        // 寫進 metric,避免 Prometheus 端把「沒看到」當「total=0」誤判「這 provider 沒在跑」。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            body.contains("# HELP lobsterpulse_provider_completed_sessions_total_duration_seconds")
+        );
+        assert!(body.contains(
+            "# TYPE lobsterpulse_provider_completed_sessions_total_duration_seconds counter"
+        ));
+        // 沒 sample line — 用 lines().filter(starts_with) 鎖真正的 sample line,
+        // 避免 `!contains("metric_name ")` 跟 HELP/TYPE 標頭(也含「name + 空格」)誤撞。
+        let k24_samples: Vec<&str> = body
+            .lines()
+            .filter(|l| {
+                l.starts_with("lobsterpulse_provider_completed_sessions_total_duration_seconds{")
+            })
+            .collect();
+        assert!(
+            k24_samples.is_empty(),
+            "空 totals 不應 emit sample line, got: {k24_samples:?}, body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_total_duration_zero_is_emitted_not_dropped() {
+        // 語意關鍵:total=0 (該 provider 累計收過 event 但還沒完成過 session) 是有效資料,
+        // 不是 missing。對齊 K20 `quota_remaining_pct_zero_pct_is_emitted_not_dropped` +
+        // K21 `quota_history_csv_age_some_zero_emits_zero_not_dropped` + K23
+        // `completed_sessions_count_at_emits_zero_for_uncompleted_provider` 同契約:
+        // 「counter 0 跟 missing 是不同語意,Prometheus 端應該看到 0」 —— K24 用同一策略。
+        // 構造 ProviderTotals entry with total=0（其他欄位 default）→ render 必須 emit
+        // `..._duration_seconds{provider="cicx"} 0`,不能跳過。0 跟 K24 公式的 0/0 配套：
+        // K23 count=0 + K24 total=0 → 0/0 = NaN Prometheus 端不會展示 NaN,只看到 0 + 0 兩
+        // 條 series → render 保留 0 是對的。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 0,
+                completed_sessions_total_duration_secs: 0,
+                ..Default::default()
+            },
+        );
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"cicx\"} 0\n"
+            ),
+            "0 是有效資料必須 emit, body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_total_duration_alphabetical_sort_across_providers() {
+        // 多 provider 故意非字母序插入(openx, cicx, gemini)→ 輸出必須 alphabetical
+        // (cicx, gemini, openx),跟 K6-K23 既契約一致,給 Prometheus scraper diff 穩定。
+        // 同時驗證不同時長(180 / 7200 / 42)都會 emit + 整數格式(不是 float)。挑選這三個
+        // 數字刻意避免 0,順帶驗 K24 saturating_add 累加後的值正確（不是 last-wins）。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "openx".to_string(),
+            ProviderTotals {
+                completed_sessions_total_duration_secs: 42,
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_total_duration_secs: 180,
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_total_duration_secs: 7200,
+                ..Default::default()
+            },
+        );
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        let cicx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"cicx\"} 180\n")
+            .expect("cicx sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"gemini\"} 7200\n")
+            .expect("gemini sample line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"openx\"} 42\n")
+            .expect("openx sample line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider completed_sessions_total_duration_seconds 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, gemini={gemini_idx}, openx={openx_idx})"
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"gemini\"} 7200.0\n"),
             "整數格式契約(不是 float)"
         );
     }

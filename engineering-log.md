@@ -818,3 +818,64 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 
 **綜合**: 1/10
 **指令**: 已注入修正指令
+
+---
+
+### [2026-06-02] R36 — K20 WIP 收尾:per-provider quota_remaining_pct gauge + 修 double-IO + 補 render-side test
+**類型**: M1（KPI-extending,K6-K19 Prometheus metrics 系列延伸:K11 freshness 補 K20 consumption 維度,給 operator 端 `lobsterpulse_provider_quota_remaining_pct{provider="cicx"} < 10` alert 用）
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| Prometheus metrics series 數 | 12 (R27 baseline: K6/K7/K8/K9/K10/K11/K12/K13/K14/K15/K16/K17/K18/K19) | 13 (+K20 quota_remaining_pct) | +1 |
+| lib_unit_tests | 191 (R35 baseline) | 201 | +10 (5 quota_history::latest_quota_pct_at + 5 render_prometheus K20 emit) |
+| quota_history 觀測維度 | 1 (K11 freshness age) | 2 (+K20 consumption pct) | +1 |
+| R36 範圍 clippy 新增 violation | 0 | 0 | 0 |
+
+**為什麼**:
+- 對齊 K11 freshness 維度:snapshot 多舊看 K11(age),quota 還剩多少看 K20(consumption pct),兩者搭配讓 operator alert rule 不誤判「cicx snapshot 還在但其實 quota 已耗盡」
+- 跟既有 R30 `get_quota_history` silent-fail surfacing 模式一致:match Err → log warn + 整段留空(header only),不部分 emit 假資料
+- 接續 R35 wrap-up「不做的範圍」提到的「end-to-end 監控拼圖」最後一塊:Discord endpoint health(K14)已落地 + quota consumption(K20)落地,operator 端監控維度拼齊
+- 24h chore_ratio 0%(本輪 M1 順)
+
+**WIP 收尾修正**:
+1. **3 個 compile error 修掉**:K20 WIP 改 `render_prometheus_body` signature 加 `quota_remaining_pct: &HashMap<String, u8>` 參數,但漏補 3 個 K14 Discord test call site 的新參數(arg #6),compile 炸 3 個 E0061
+2. **double-IO bug 修掉**:WIP 寫成 `match quota_history::load_history() { Ok(_) => match dirs::home_dir() { ... quota_history::latest_quota_pct_at(&path) }}`,外層 `load_history()` 讀一次檔案但結果用 `Ok(_)` 丟掉,內層 `latest_quota_pct_at` 再讀一次 → 每次 `/metrics` scrape 都讀 2 次 quota-history.csv。修法:直接走 `latest_quota_pct_at`(內部已呼叫 `load_history_at`),pattern 對齊上面 `quota_snapshot_mtimes` 先取 home dir
+3. **render-side test 補齊**:WIP 只把 function signature 補上(8 個 test call site 加 `&HashMap::new()` 參數),但沒補真正驗 K20 emit 行為的 test → 本輪補 5 個
+
+**做了什麼**:
+- `quota_history.rs:93-114` 新增 `latest_quota_pct_at(path) -> Result<HashMap<String, u8>, String>` 純 fn(內部走 `load_history_at`,對每個 runner name 取 max-ts 那筆的 pct)
+- `quota_history.rs:432-527` 5 個新 unit test:
+  1. `latest_quota_pct_at_not_found_returns_ok_empty` — first-run NotFound → Ok(empty)
+  2. `latest_quota_pct_at_picks_max_ts_per_name` — 三筆 cicx(故意非時間序插入)→ 挑 max-ts 那筆 42
+  3. `latest_quota_pct_at_skips_rows_outside_keep_window` — 31 天前 row 應被 KEEP_DAYS cutoff 過濾
+  4. `latest_quota_pct_at_zero_pct_is_emitted_not_dropped` — 0% 是有效資料(runner quota 耗盡)必須保留
+  5. `latest_quota_pct_at_io_error_returns_err` — 目錄 path 應回 Err 讓 caller log warn
+- `lib.rs:1317-1346` `render_prometheus` 端接 `latest_quota_pct_at`,home dir 缺失 / IO 錯 → log warn + 整段留空(對齊 R30 `get_quota_history` pattern)
+- `lib.rs:1491` `render_prometheus_body` signature 加 `quota_remaining_pct: &HashMap<String, u8>` 參數
+- `lib.rs:1763-1788` 落地 emit 段:HELP/TYPE 標頭 + alphabetical 排序 sample line
+- `lib.rs:4685-5035` 補 3 個 K14 Discord test call site 漏掉的 arg
+- `lib.rs:5241-5391` 5 個新 render-side test:
+  1. `quota_remaining_pct_empty_map_emits_header_only` — 0 runner 沒 sample line,只有 HELP/TYPE
+  2. `quota_remaining_pct_single_provider_emits_one_sample_line` — 單 provider → 1 sample line
+  3. `quota_remaining_pct_alphabetical_sort_across_providers` — 故意非字母序輸入(openx/cicx/gemini)→ 輸出必須 alphabetical
+  4. `quota_remaining_pct_zero_pct_is_emitted_not_dropped` — 0% 必須 emit(critical signal 保留),不能是 ` 0.0` float
+  5. `quota_remaining_pct_emits_integer_not_float` — 鎖住 ` 42\n` 整數格式(對齊 K13 `events_total_emits_integer_not_float` 契約)
+
+**搜尋**: 沒做 WebSearch(沿用 R32 `load_history_at` / R30 `load_local_usage_snapshot_at` / K11 quota freshness / K13 integer format 既有 pattern,supervisor 評分改善靠「補 render-side test 把 R33-R35 一系列 silent-fail 治理線的 emit 端契約也補上」)
+
+**驗證**:
+- `cargo fmt --check` 過(修了 WIP 1 處 format 斷行)
+- `cargo clippy --lib --tests -- -D warnings` **0 R36 範圍 violation**(10 個 pre-existing violation 全在 R24/R30/R32/R35 範圍,按 R35 wrap-up 同樣「Touch only what you must」原則不修,列在「不做的範圍」)
+- `cargo test --lib --no-fail-fast` **201 passed; 0 failed; 0 ignored**(R35 baseline 191 + K20 5 quota_history + 5 render = 201,0 regression)
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`(untracked supervisor 檔,符合 R13 防護)
+
+**結果**: PASS(K20 落地 + WIP double-IO 修掉 + render-side test 補齊 + 0 R36 範圍 lint warning + 0 regression + 201/201 tests)
+
+**KPI-impact: K20 per-provider quota_remaining_pct gauge 從 0 → 1 metric + quota consumption 觀測維度 0 → 1 + 10 new tests**
+
+**不做的範圍**(給後續輪次):
+- 10 個 pre-existing clippy doc-lazy-continuation violation(hook_server.rs:424, auto_rules.rs:2206, config.rs x6, quota_history.rs:396-397)全在 R24/R30/R32/R35 範圍,R36 沒改這些 line → 按 R35 wrap-up 原則「Touch only what you must」不修;累計技術債,後續開 M0 收尾輪一次清掉
+- K20 接前端 quota bar(目前 `lobsterpulse_provider_quota_remaining_pct` 只有 Prometheus metric,前端 panel 還沒接 — 跨前後端,留 M1 輪開)
+- K6-K19 lifetime-vs-live → 整合 single `MetricsSnapshot` struct 餵前端(R35 「不做的範圍」留的,跨輪考慮)
+- `is_port_listening` 走 tokio async silent-fail surfacing(R35 「不做的範圍」留的)

@@ -586,7 +586,10 @@ fn find_body_start(data: &[u8]) -> Option<usize> {
 #[derive(Debug)]
 enum ReadPortFileError {
     Io(std::io::Error),
-    Parse { err: std::num::ParseIntError, raw: String },
+    Parse {
+        err: std::num::ParseIntError,
+        raw: String,
+    },
 }
 
 // 手寫 PartialEq：std::io::Error 沒派生 PartialEq（OS-level 內部表徵跨平台不一致），
@@ -596,10 +599,9 @@ impl PartialEq for ReadPortFileError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
-            (
-                Self::Parse { err: ea, raw: ra },
-                Self::Parse { err: eb, raw: rb },
-            ) => ea == eb && ra == rb,
+            (Self::Parse { err: ea, raw: ra }, Self::Parse { err: eb, raw: rb }) => {
+                ea == eb && ra == rb
+            }
             _ => false,
         }
     }

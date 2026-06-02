@@ -5265,7 +5265,10 @@ mod render_prometheus_tests {
             .lines()
             .filter(|l| l.starts_with("lobsterpulse_provider_quota_remaining_pct{"))
             .count();
-        assert_eq!(sample_count, 0, "empty map 不應 emit sample line, body: {body}");
+        assert_eq!(
+            sample_count, 0,
+            "empty map 不應 emit sample line, body: {body}"
+        );
     }
 
     #[test]
@@ -5285,15 +5288,16 @@ mod render_prometheus_tests {
             Utc::now(),
         );
 
-        assert!(body.contains(
-            "lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 42\n"
-        ));
+        assert!(body.contains("lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 42\n"));
         // 沒其他 provider:sample line 應只有 1 行
         let sample_count = body
             .lines()
             .filter(|l| l.starts_with("lobsterpulse_provider_quota_remaining_pct{"))
             .count();
-        assert_eq!(sample_count, 1, "單 provider 應只有 1 sample line, body: {body}");
+        assert_eq!(
+            sample_count, 1,
+            "單 provider 應只有 1 sample line, body: {body}"
+        );
     }
 
     #[test]

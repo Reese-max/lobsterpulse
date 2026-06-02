@@ -462,9 +462,8 @@ mod tests {
         let ts_new = now - 100;
         let ts_openx = now - 50;
         // 故意非時間序：ts_old 先寫、ts_mid 第二、ts_new 第三
-        let body = format!(
-            "{ts_old},cicx,10\n{ts_mid},cicx,20\n{ts_new},cicx,42\n{ts_openx},openx,7\n"
-        );
+        let body =
+            format!("{ts_old},cicx,10\n{ts_mid},cicx,20\n{ts_new},cicx,42\n{ts_openx},openx,7\n");
         std::fs::write(&path, body).expect("write csv");
         let r = latest_quota_pct_at(&path).expect("valid csv 應回 Ok");
         assert_eq!(r.len(), 2, "2 runner 應都進 map，實際: {r:?}");

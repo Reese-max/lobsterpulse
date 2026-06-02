@@ -718,3 +718,49 @@ URGENCY: MEDIUM
 - `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct (R26/R27/R51/R52/R53/R54 policy 持續記錄, R55 持續, 跨輪考慮)
 - hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記, R55 持續, 跨輪考慮)
 - trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, 跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理)
+
+---
+
+### [2026-06-03] Round 56 — R58 護欄: K24 lifetime total duration vs K22-K27 6 K 跨樣本數 + 跨 4 provider aggregate consistency 護欄 (commit 7a0b455)
+
+**類型**: M2（KPI 量測補強 — R5x 護欄鏈延伸, 合策略顧問 R50 「凍結新增 gauge 一週」紀律, 純護欄不開新 metric）
+
+**KPI 進展表**:
+| KPI | 前值 (R55) | 後值 (R56) | 變化 |
+|---|---:|---:|---:|
+| cross-K 護欄鏈 | 8 (R51/R52/R53/R54/R55 chain/R56 lifetime↔window/R57 K22↔K10 freshness + K35 helper correctness) | 9 (+R58 K22-K27 6 K 同步性護欄) | +1 |
+| lib_unit_tests | 342 (R55 wrap-up) | 345 (R58 +3) | +3 |
+| R58 範圍 clippy 新增 violation | 0 | 0 | 持平 |
+| R58 範圍 fmt diff | 0 | 0 | 持平 |
+
+**為什麼**:
+- R55 wrap-up 列 R56 三候選：(1) K36 P5 percentile 新 metric (違反 R50 紀律) / (2) K24 lifetime total duration vs K22-K27 lifetime aggregate consistency 護欄 (R51-R57 護欄鏈延伸) / (3) K35 過濾條件跟 K23 lifetime count consistency 護欄
+- 選 R58 = 候選 2：R52 蓋 K23/K24/K25 (count/total/avg) 三 K 數學不變式, R53 蓋 K22/K26/K27 (latest/max/min) 三 K bounds chain, **沒有任何一條護欄把 K24 (cumulative total) 跟 K22 (latest) + K26 (max) + K27 (min) 拉通驗證 6 K 同步性**。R58 補這層「6 K 同 fn 內單步同步」cross-K 護欄, 避免未來 refactor `record_completed_session_age` 拆 fn 變異步 (K22 寫了 K24 沒加 / K24 累加用 saturating 改 wrapping 污染 sum / K25 派生用錯欄位 / K26 max 比較方向反 / K27 min 比較方向反) → 單 K 測試抓不出, production Prometheus 端 alert 異常時才被動發現
+- 候選 1 (K36) 違反 R50 紀律跳過, 候選 3 (K35 vs K23 filter consistency) 經分析 K35 過濾 (count≥1 AND since.is_some(), 頻率語意) 跟 K23 過濾 (lifetime aggregate 計次語意) 是不同維度, 護欄增量有限, 留 R58+ 觀察是否真需要
+- 24h chore_ratio 0% (本輪純 M2 護欄, 無 H0 治理債)
+
+**搜尋**: 沿用 R52 (K23/K24/K25) + R53 (K22/K26/K27) 護欄模板, property-style 跨 N 樣本數 + 跨 4 provider 隔離強化, 沿 R5x 護欄鏈命名 + 註解紀律
+
+**做了什麼** (src-tauri/src/session.rs +292 行 / 3 new tests / 0 既有 code 改動):
+- `r58_k22_k23_k24_k25_k26_k27_six_way_aggregate_consistency_across_sample_sizes`: property-style 跨 N ∈ {1, 2, 5, 10, 50} 樣本數, 斷言 6 K 各自精確值 (K22=latest=N, K23=N, K24=sum=N*(N+1)/2, K25=sum/N, K26=max=N, K27=min=1) + K27*count ≤ K24 ≤ K26*count 包夾不變式 + K22 ∈ [K27, K26] + K25 ∈ [K27, K26] + K28 ≤ (K26-K27)/2 半寬上限
+- `r58_k22_k24_incremental_delta_consistency_per_record_step`: 6 sample [3, 7, -5, 1, 12, 5] 餵入 (含 -5 負值 clamp 0 路徑), 斷言每步 K24 delta == age.max(0) (沒污染, 沒漏 sample, saturating OK) + K22 寫入 clamp 後值 (不是原始負值) + K23 遞增 + K26/K27 即時更新 (避免「K22 寫了 K26/K27 沒更新」同步退化)
+- `r58_k22_k23_k24_k25_k26_k27_per_provider_isolation_under_mixed_samples`: 4 provider 隔離強化 — cicx samples [10,20,30] sum=60 / claude samples [100,200] sum=300 / gemini count=0 (K25 跳過 0/0 NaN) / openx samples [5] 單樣本 + 6 K 各自精確值 + K25 純 fn 派生 (cicx=20 / claude=150 / openx=5 / gemini 跳) + K28 stddev 派生 (cicx ≈ 8.165 [Welford 偏離平方 100+0+100=200, n=3 → sqrt(200/3)] / claude = 50.0 [n=2, sqrt(2500)] / openx = 0.0 單樣本 / gemini 跳)
+
+**驗證**:
+- `cargo test --lib`: **345 passed; 0 failed; 0 regress** (R55 wrap-up 342 + R58 +3, 連 2 次穩定)
+- `cargo clippy --lib --tests -- -D warnings`: **0 warning**
+- `cargo fmt --check`: **0 diff**
+
+**結果**: PASS (R58 K22-K27 6 K aggregate consistency 護欄落地 + 3 new tests + 0 lint warning + 0 fmt diff + 0 regression + 345/345 tests, commit 7a0b455)
+
+**KPI-impact: cross-K 護欄 8→9 (補 R52/R53 未覆蓋的 K24↔K22+K26+K27 拉通驗證缺口, 護欄鏈 +1 條) + lib_unit_tests 342→345 + K24 aggregate 觀測維度 0→1 (跨 K 同步性可被 CI 1 秒抓, 不靠 production Prometheus alert 被動發現)**
+
+**不做的範圍** (給後續輪次):
+- R58 render-side 護欄 (lib.rs 補 K22-K27 emit 順序鎖 + 跨 K 數值一致): 本輪 session.rs 護欄鏈已補完, render-side emission 補完屬 M2 子任務, 留 R57+ 觀察
+- K36 P5 percentile (R55 wrap-up 候選 1): 仍違反 R50 「凍結新增 gauge 一週」紀律, 留 R57+ 解封後考慮
+- K35 vs K23 lifetime filter consistency 護欄 (R55 wrap-up 候選 3): 經分析 K35 過濾 (count≥1 AND since.is_some(), frequency 語意) 跟 K23 過濾 (lifetime aggregate count 語意) 是不同維度, R58 護欄增量有限, 留 R58+ 觀察是否真需要護欄
+- K15/K16 shared counter race 真正解法: 跨輪持續紀錄, R55 era race flaky 已 surface 確認還活著, 改 per-test `Arc<Mutex<u64>>` 或測試層局部 mock 真正解法留跨輪考慮
+- `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct (R26/R27/R51/R52/R53/R54/R55/R56 policy 持續記錄, R56 持續, 跨輪考慮)
+- hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記, R56 持續, 跨輪考慮)
+- trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, 跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理)
+

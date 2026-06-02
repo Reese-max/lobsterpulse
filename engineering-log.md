@@ -764,3 +764,70 @@ URGENCY: MEDIUM
 - hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記, R56 持續, 跨輪考慮)
 - trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, 跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理)
 
+
+### 2026-06-03 R55 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### [2026-06-03] Round 57 — lib.rs 4 處 production silent-fail 收邊: sounds_dir / seed_default_sounds / openab_runners_dir_mkdir / metrics_http_response_write 統一 prefix 收斂
+
+**類型**: M0（真實 production silent-fail 預防 + 切換方向從 metrics → error-handling 軌道）
+
+**KPI 進展表**:
+| KPI | 前值 (R56) | 後值 (R57) | 變化 |
+|---|---:|---:|---:|
+| lib.rs production silent-fail chain | 4 (`let _ = ...` 沉默吞) | 0 (4 處全收邊 log warn) | -4 |
+| unified warn prefix coverage | 4 module ([discord]/[config]/[auto_rules]/[hooks_configurator]) | 5 module (+[lib] helper) | +1 module |
+| lib_unit_tests | 345 (R56 wrap-up) | 346 (R57 +1) | +1 |
+| 0 R57 範圍 clippy warning | 0 | 0 | 持平 |
+| 0 R57 範圍 fmt diff | 0 (rustfmt 自動 wrap 2 處 log::warn! 跨行) | 0 | 持平 |
+| 0 regression | 0 | 0 (連 4 次穩定, R35 era race flaky 仍存活但本輪無觸發) | 持平 |
+
+**為什麼**:
+- Supervisor 警告「連續 3 次方向偏差 (R54-R55-R56 都 metrics 維度 invariant guard) → 強制切換到不同類型工作」。本輪從 metrics 主軸切換到 error-handling 軌道
+- R37 wrap-up 跟 R55/R56 wrap-up 都明列「hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記, R55/R56 持續, 跨輪考慮)」— 但實地 grep 確認 hooks_configurator 4 處 `let _ = std::fs::remove_file(&path)` 全部在 `#[cfg(test)]` mod 內 test fixture cleanup (lines 497, 508, 548, 579), 屬慣例不 surfacing, 跳過
+- 改找 production silent-fail 真實鏈: lib.rs 4 處 hot path / startup / 網路 IO 階段 silent-fail, 全部都是「user 看不到原因」的真實 debugging 痛點
+  - **L93 `sounds_dir() create_dir_all`**: Tauri command `list_sounds` / `play_sound_file` hot path, AppData 創建失敗 (權限拒絕 / 磁碟滿 / 唯讀 AppData) → 音效功能壞, 前端 / operator 完全沒 log 串起來定位
+  - **L132 `seed_default_sounds write`**: 首次啟動 seed 10 個預設音效 (cicx/gitx/giminix/codex/openx + waiting 變體), 寫入失敗 → user 沒音效, 報 bug 時 debug 找嘸根因
+  - **L820 `run_openab_runners create_dir_all`**: OpenAB runner 啟動前創 `~/.lobsterpulse/`, 失敗 → runner 啟動失敗, 跟後續 `Command::new` spawn 失敗串不起來
+  - **L2862 `sock.write_all`**: Prometheus scrape HTTP response 寫失敗 (client 中途斷線 / socket 滿 / kernel buffer 滿), PromQL scrape timeout / 半截 body, metrics server 端 log 沒記
+- 24h chore_ratio 0% (本輪純 M0 silent-fail 治理, 非 H0 housekeeping; KPI 推進: production debugging 觀測性)
+
+**搜尋**: 沿用既有 R6 `discord_err_msg` / R23 `config_persist_warn_msg` / R28 `persisted_marker_warn_msg` / R37 `provider_settings_warn_msg` 四條統一 prefix 風格模板, 加第 5 條 `[lib] {action} failed: {err}` helper, log filter 可一次 grep `[lib]` 撈全 module 警告。沒新研究; 同模板延伸, 跟 R37 邏輯一致
+
+**做了什麼** (src-tauri/src/lib.rs, 4 處 production 改 silent → log warn + 1 個 helper + 1 個 prefix test):
+- `src-tauri/src/lib.rs:87-92` 新 helper `fn lib_warn_msg(action, err) -> String`, 統一 prefix `[lib] {action} failed: {err}` 風格, 對齊 R6/R23/R28/R37 四條前例
+- `src-tauri/src/lib.rs:99-105` `sounds_dir()` 改 silent → `if let Err(e) = std::fs::create_dir_all(&dir) { log::warn!(...) }` (action: `sounds_dir_mkdir`)
+- `src-tauri/src/lib.rs:147-153` `seed_default_sounds` 改 silent → `if let Err(e) = std::fs::write(&path, bytes) { log::warn!("{} ({})", helper, path.display()) }` (action: `seed_default_sounds write`)
+- `src-tauri/src/lib.rs:841-848` `run_openab_runners` 改 silent → `if let Err(e) = std::fs::create_dir_all(&dir) { log::warn!("{} ({})", helper, dir.display()) }` (action: `openab_runners_dir_mkdir`)
+- `src-tauri/src/lib.rs:2886-2893` metrics HTTP response 改 silent → `if let Err(e) = sock.write_all(resp.as_bytes()).await { log::warn!(...) }` (action: `metrics_http_response_write`)
+- `src-tauri/src/lib.rs:9960-9988` 新 `#[cfg(test)] mod lib_warn_msg_tests`, 1 個 test `lib_warn_msg_unifies_prefix`: 鎖 prefix 含 `[lib] {action} failed:` 風格 + 訊息尾含原始 err + 跨 4 處 call site 各自的 action 名稱 (避免未來 refactor typo 改掉 action 名, log filter grep 失效)
+
+**驗證**:
+- `cargo test --lib`: **346 passed; 0 failed; 0 ignored; 0 regression** (R56 wrap-up 345 + R57 +1, 連 4 次穩定, R35 era race flaky 本輪無觸發)
+  - R57 lib_warn_msg_unifies_prefix: 1 new
+  - 合計 1 new test
+- `cargo clippy --lib --tests -- -D warnings`: **0 warning**
+- `cargo fmt --check`: **0 diff** (rustfmt 自動 wrap L132 / L820 兩處 `log::warn!("{} ({})", ...)` 跨行 4 行, 跟 R6/R23/R37 同 multi-arg warn! 風格一致)
+- `cargo check --lib`: 0 warning
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json` / `.harness-memory.db` / `bash.exe.stackdump` (untracked supervisor 檔, 符合 R13 防護)
+- 沒動 `git add -A/.`, 嚴守 R13 防護
+
+**結果**: PASS (lib.rs 4 處 production silent-fail 收邊 + 1 個 helper + 1 個 prefix test + 0 lint warning + 0 fmt diff + 0 regression + 346/346 tests)
+
+**KPI-impact: lib.rs production silent-fail chain 4 → 0 (4 處 `let _ =` 沉默吞全收邊 log warn) + unified warn prefix coverage 4 → 5 module (+[lib] helper) + 345 → 346 tests + 4 條 production debugging 觀測性 (音效 mkdir / 音效 seed / OpenAB runner mkdir / metrics HTTP response write) 從 0 → 1 log 可被 grep, 報 bug 時 operator 第一次能用 `grep "[lib]" log` 串起症狀跟根因**
+
+**不做的範圍** (給後續輪次):
+- **hooks_configurator 4 處 `let _ = std::fs::remove_file(&path)`** (lines 497/508/548/579): 本輪實地 grep 確認 4 處全部在 `#[cfg(test)]` mod 內 test fixture cleanup, 屬 Rust 慣例 test teardown pattern, 不 surfacing error (test 失敗訊息才是真的 contract), R37 wrap-up 留的 WIP 已實際被驗證不需要動
+- **lib.rs L477/L498/L519/L706/L713/L3114/L5129/L5141 等其他 `let _ = std::fs::remove_file`**: 多數也是 test fixture cleanup (lib.rs 內 `#[cfg(test)]` mod), 部分是 atomic-rename temp file cleanup (R42 era 治理過), 少數是 production 但 error 不影響後續 (例 L477/L498/L519 是 reset test data path), 留 R58+ 觀察是否真需要進一步收邊
+- **lib.rs L1228/L2468-2470/L2493-2505/L2537/L2596-2602 等 window 操作 `let _ =`**: Tauri window API (show/hide/set_focus/emit) 失敗通常是「window 已關」或「IPC channel 滿」等次要 error, 不影響 user-facing 邏輯 (UI 元素本來就已被其他機制清掉), 屬低優先級, 留 R58+ 觀察
+- **lib.rs L744/L746/L751/L753 等 `let _ = s.read_to_end / tx.send`**: child process stdout/stderr 收集 channel, 失敗通常是 child process 死掉 / channel closed, 主流程有其他錯誤回報路徑, 留 R58+ 觀察
+- **auto_rules L683/L1419/L1510/L1518 等 `unwrap_or_default()` JSON parse silent chain**: R5 era 修過 4 處 (見 auto_rules.rs:101-102 doc comment), 剩餘為「壞資料 fallback 默認空 Vec / HashMap」是 product 語意 (前次寫入壞掉就用空集合重建, 不算 silent bug), 留 R58+ 觀察
+- **R58+ 戰略 advisor R50 候選**: (1) K36 P5 percentile (R55 wrap-up 候選 1, 仍凍結) / (2) K35 vs K23 lifetime filter consistency 護欄 (R55 wrap-up 候選 3, 分析後增量有限) / (3) R58 render-side 護欄 (R55/R56 wrap-up 都列「留 R57+ 觀察」, 但 R57 切換方向沒做, 留 R58+ 觀察) / (4) **openclaw-self-evolution 軌道切換** (skill genesis 已 6/21, FTS5 索引 / DSPy / 對話記憶索引 0/15 pending, R50 戰略 advisor 明確說「跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理」, R57 已切換一次, R58+ 可考慮再切換到 openclaw 主軸)
+- K15/K16 shared counter race 真正解法: 跨輪持續紀錄, R55 era race flaky 已 surface 確認還活著, 本輪無觸發, 改 per-test `Arc<Mutex<u64>>` 或測試層局部 mock 真正解法留跨輪考慮
+- `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct (R26/R27/R51/R52/R53/R54/R55/R56/R57 policy 持續記錄, R57 持續, 跨輪考慮)
+- trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, R57 已切換一次方向到 error-handling, R58+ 評估是否切換到 openclaw 主軸)

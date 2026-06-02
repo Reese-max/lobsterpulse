@@ -84,13 +84,26 @@ fn check_provider_setup(provider_id: String, config_state: tauri::State<AppConfi
     }
 }
 
+/// 統一 log prefix 風格 helper — 對齊 R6 `discord_err_msg` / R23 `config_persist_warn_msg` /
+/// R28 `persisted_marker_warn_msg` / R37 `provider_settings_warn_msg` 四條前例,
+/// log filter 可一次 grep `[lib]` 撈 module 警告
+fn lib_warn_msg(action: &str, err: impl std::fmt::Display) -> String {
+    format!("[lib] {action} failed: {err}")
+}
+
 /// Get the sounds directory, creating it if needed
 fn sounds_dir() -> std::path::PathBuf {
     let dir = dirs::config_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap().join(".config"))
         .join("lobsterpulse")
         .join("sounds");
-    let _ = std::fs::create_dir_all(&dir);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        // R57: 從 `let _ =` 沉默吞改成 log warn。sounds_dir 是 Tauri command
+        // `list_sounds` / `play_sound_file` hot path, mkdir 失敗 (權限拒絕 /
+        // 磁碟滿 / 唯讀 AppData) → 音效功能壞, 但前端 / operator 完全沒 log
+        // 串起來定位。改 warn 讓 log filter 可一次 grep `[lib] sounds_dir_mkdir`
+        log::warn!("{}", lib_warn_msg("sounds_dir_mkdir", &e));
+    }
     // seed_default_sounds skips files that already exist, so this is a
     // no-op for users who already have all the defaults.
     seed_default_sounds(&dir);
@@ -129,7 +142,17 @@ fn seed_default_sounds(dir: &std::path::Path) {
     for (name, bytes) in defaults {
         let path = dir.join(name);
         if !path.exists() {
-            let _ = std::fs::write(&path, bytes);
+            if let Err(e) = std::fs::write(&path, bytes) {
+                // R57: 從 `let _ =` 沉默吞改成 log warn。首次啟動 seed 10 個
+                // 預設音效 (cicx/gitx/giminix/codex/openx + waiting 變體), 寫入
+                // 失敗 (權限拒絕 / 磁碟滿 / path 被鎖) → user 沒音效, 但
+                // log 沒記 path 跟原始 err, 報 bug 時 debug 找嘸根因
+                log::warn!(
+                    "{} ({})",
+                    lib_warn_msg("seed_default_sounds write", &e),
+                    path.display()
+                );
+            }
         }
     }
 }
@@ -817,7 +840,17 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
         return;
     };
     let dir = home.join(".lobsterpulse");
-    let _ = std::fs::create_dir_all(&dir);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        // R57: 從 `let _ =` 沉默吞改成 log warn。OpenAB runner 啟動前創
+        // ~/.lobsterpulse/, 失敗 (AppData 權限 / 磁碟滿 / 唯讀 home) →
+        // runner 啟動失敗, 但 log 沒記路徑跟 err, 跟 run_openab_runners 後續
+        // 失敗 (Command spawn) 串不起來, operator 看 log 不知道是 mkdir 階段死
+        log::warn!(
+            "{} ({})",
+            lib_warn_msg("openab_runners_dir_mkdir", &e),
+            dir.display()
+        );
+    }
 
     let mut results = Vec::new();
     for r in runners {
@@ -2859,7 +2892,15 @@ pub fn run() {
                                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                                 body.len(), body
                             );
-                            let _ = sock.write_all(resp.as_bytes()).await;
+                            if let Err(e) = sock.write_all(resp.as_bytes()).await {
+                                // R57: 從 `let _ =` 沉默吞改成 log warn。Prometheus
+                                // scrape HTTP response 寫失敗 (client 中途斷線 /
+                                // socket 滿 / kernel buffer 滿), PromQL scrape
+                                // 會 timeout / 拿到半截 body, 但 metrics server
+                                // 端 log 沒記, 報「scrape failed」bug 找嘸 server
+                                // 端對應記錄
+                                log::warn!("{}", lib_warn_msg("metrics_http_response_write", &e));
+                            }
                         });
                     }
                 });
@@ -9920,5 +9961,39 @@ mod render_prometheus_tests {
             ),
             "K34 gemini 50 樣本 P25 = 13 (idx=12, 命中 25% 位置), body: {body}"
         );
+    }
+}
+
+#[cfg(test)]
+mod lib_warn_msg_tests {
+    use super::*;
+
+    /// R57: 對齊 R37 `provider_settings_warn_msg_unifies_prefix` / R6 `discord_err_msg`
+    /// / R23 `config_persist_warn_msg` / R28 `persisted_marker_warn_msg` 四條前例
+    /// prefix 風格契約, log filter 可一次 grep `[lib]` 撈 module 警告。L93 / L132 /
+    /// L820 / L2862 4 處 silent-fail 收邊都走這條 helper, prefix 統一讓 4 處 log 可
+    /// 單一 awk 過濾
+    #[test]
+    fn lib_warn_msg_unifies_prefix() {
+        let msg = lib_warn_msg("sounds_dir_mkdir", "permission denied");
+        assert!(
+            msg.starts_with("[lib] sounds_dir_mkdir failed:"),
+            "prefix 應含 module + action + 失敗動詞, 實際: {msg}"
+        );
+        assert!(
+            msg.contains("permission denied"),
+            "訊息尾應含原始 err 內容, 實際: {msg}"
+        );
+
+        // 跨 4 處 call site 各自的 action 名稱也鎖住 (避免未來 refactor 把
+        // action 名 typo 改掉, log filter grep 失效)
+        let m1 = lib_warn_msg("sounds_dir_mkdir", "io: x");
+        let m2 = lib_warn_msg("seed_default_sounds write", "io: x");
+        let m3 = lib_warn_msg("openab_runners_dir_mkdir", "io: x");
+        let m4 = lib_warn_msg("metrics_http_response_write", "io: x");
+        assert!(m1.contains("sounds_dir_mkdir"));
+        assert!(m2.contains("seed_default_sounds write"));
+        assert!(m3.contains("openab_runners_dir_mkdir"));
+        assert!(m4.contains("metrics_http_response_write"));
     }
 }

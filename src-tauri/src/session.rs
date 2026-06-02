@@ -401,6 +401,22 @@ pub struct ProviderTotals {
     /// 觸發點跟 K22/K23/K24 同：SessionEnd + Working→Idle 兩路徑都更新。
     /// saturating_max 在 i64::MIN 邊界退化成 `i64::MIN`(機率近 0),不是問題。
     pub max_completed_session_age_secs: Option<i64>,
+    /// K27 落地：歷史「最短」一次完成的 session 持續秒數（gauge, lifetime
+    /// saturating_min）。給 `/metrics` 端 emit
+    /// `lobsterpulse_provider_completed_sessions_min_duration_seconds{provider}`
+    /// gauge。跟 K22 (latest) / K25 (avg) / K26 (max) 互補形成 **min / max /
+    /// latest / avg 四件套**：operator 端可一次看「該 provider 歷史最快 / 最慢 /
+    /// 最近 / 平均」四個視角,快速分辨 session 時長分佈（例：avg 60s, latest 65s,
+    /// max 7200s, min 8s = 大部分 session 都跑 ~1 分鐘,但偶有 2 小時 outlier,
+    /// 且曾有 8 秒極短 session 可能是 fast-path / 早期測試 / 假觸發）。`Some(secs)`
+    /// = 至少完成過一次;`None` = 該 provider 累計收過 event 但還沒完成過 session
+    /// （沿用 K22 / K26 Option 語意,render 端缺資料不 emit sample 避免誤判
+    /// 「min=0」當「該 provider 瞬間完成」= 假健康信號）。`i64` 而非 `u64` 跟 K22 /
+    /// K26 一致 —— 雖然實際寫入值都被 `age.max(0)` clamp 過,留 `i64` 方便未來若
+    /// 要支援 signed duration metric（debug / 序列化時差偵測）直接擴充。觸發點
+    /// 跟 K22/K23/K24/K26 同：SessionEnd + Working→Idle 兩路徑都更新。
+    /// saturating_min 在 i64::MIN 邊界退化成 `i64::MIN`(機率近 0),不是問題。
+    pub min_completed_session_age_secs: Option<i64>,
 }
 
 pub struct SessionManager {
@@ -621,6 +637,17 @@ impl SessionManager {
             Some(prev) => prev.max(clamped_age),
             None => clamped_age,
         });
+        // K27 gauge：歷史「最短」一次完成時的 age。跟 K22 (latest) / K25 (avg) /
+        // K26 (max) 互補形成 min / max / latest / avg 四件套。`age.max(0)` 沿用
+        // K26 同一個 `clamped_age` 變數（K26 已先做飽和 clamp）。Option 語意跟
+        // K22 / K26 同：第一次完成時直接覆寫 Some(age)（沒有歷史 min 可比 → 第一次
+        // 就是 min）,後續完成用 saturating_min 更新 —— 跟 K26 鏡像對稱,單調遞減
+        // 語意。`i64::min` 自 Rust 1.50 起 stable,沿用 K26 `.max()` 同款 API
+        // 風格,程式碼線性對稱。
+        entry.min_completed_session_age_secs = Some(match entry.min_completed_session_age_secs {
+            Some(prev) => prev.min(clamped_age),
+            None => clamped_age,
+        });
     }
 
     pub fn check_staleness(&mut self, idle: i64, stale: i64, remove: i64) {
@@ -830,6 +857,28 @@ pub fn completed_sessions_max_duration_at(
     let mut out = HashMap::new();
     for (p, t) in provider_totals {
         if let Some(secs) = t.max_completed_session_age_secs {
+            out.insert(p.clone(), secs);
+        }
+    }
+    out
+}
+
+/// K27 配套 pure fn：把 `ProviderTotals` 裡的「歷史最短完成 session 年齡」攤平
+/// 成 `HashMap<provider, secs>` 給 `render_prometheus_body` emit。跟 K26
+/// `completed_sessions_max_duration_at` / K22 `last_completed_session_age_at`
+/// 三件套對稱：都過濾 `None`（該 provider 累計收過 event 但還沒完成過 session
+/// → gauge 缺資料,跳過不 emit sample,避免 Prometheus 端把「沒看到」當
+/// 「min=0」誤判「該 provider 瞬間完成」= 假健康信號）。`Some(secs)` 進 map
+/// —— lifetime saturating_min 寫入後不蒸發,跟 K22 / K26 lifetime gauge 對齊：
+/// session 結束 + 30 min stale 回收後 `ProviderTotals` 仍保留 → Prometheus 端
+/// gauge 不會倒退。沒有「alphabetical sort」邏輯,排序交給 `render_prometheus_body`
+/// 統一處理（K6-K26 既契約）。
+pub fn completed_sessions_min_duration_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if let Some(secs) = t.min_completed_session_age_secs {
             out.insert(p.clone(), secs);
         }
     }
@@ -1536,6 +1585,131 @@ mod tests {
                 .and_then(|t| t.max_completed_session_age_secs),
             Some(42),
             "gemini max = 42 (per-provider 隔離)"
+        );
+    }
+
+    // ─── K27 落地：completed_sessions_min_duration gauge + completed_sessions_min_duration_at ───
+
+    use super::completed_sessions_min_duration_at;
+
+    #[test]
+    fn k27_record_completed_session_age_initializes_min_on_first_completion() {
+        // 第一次完成：ProviderTotals 還沒 min_completed_session_age_secs entry
+        // （None 預設）→ 直接寫成 Some(age)（= 第一次的值）。跟 K26 init 對稱：
+        // 「第一次完成既是 min 也是 max 也是 latest」這個自然語意。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 120);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.min_completed_session_age_secs),
+            Some(120),
+            "第一次完成該直接初始化 min = 120"
+        );
+    }
+
+    #[test]
+    fn k27_record_completed_session_age_updates_min_with_smaller_value() {
+        // 第二次完成 < 既有 min → min 更新成新值。跟 K26 鏡像對稱（K26 是
+        // saturating_max 升級; K27 是 saturating_min 降級）。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 100);
+        m.record_completed_session_age("cicx", 30);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.min_completed_session_age_secs),
+            Some(30),
+            "30 < 既有 100 → min 降級成 30"
+        );
+    }
+
+    #[test]
+    fn k27_record_completed_session_age_keeps_min_with_larger_value() {
+        // 第三次完成 > 既有 min → min 保持舊值。saturating_min 單調遞減語意,
+        // 跟 K26 saturating_max 單調遞增對稱。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 10);
+        m.record_completed_session_age("cicx", 500);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.min_completed_session_age_secs),
+            Some(10),
+            "500 > 既有 10 → min 保持 10"
+        );
+    }
+
+    #[test]
+    fn k27_record_completed_session_age_clamps_negative_to_zero_for_min() {
+        // K27 跟 K22 / K26 同步吃 `age.max(0)` saturating clamp —— 時鐘回撥 /
+        // 序列化時差送進負值時不能讓 min 變成負的（0 已經是合法「極短完成」語意）,
+        // 跟 K26 同一防線。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 10);
+        m.record_completed_session_age("cicx", -50);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.min_completed_session_age_secs),
+            Some(0),
+            "負值被 clamp 到 0, 0 < 既有 10 → min 降級成 0"
+        );
+    }
+
+    #[test]
+    fn k27_completed_sessions_min_duration_at_skips_providers_with_no_completions() {
+        // 純 fn `completed_sessions_min_duration_at` 過濾 None 契約 —— provider
+        // 累計收過 event 但還沒完成過 session → 不進 map（避免 render emit
+        // `min = 0` 假健康信號, 跟 K22 / K26 一致）。
+        let mut totals = HashMap::new();
+        // 1 個有完成的 provider (min = 8)
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                min_completed_session_age_secs: Some(8),
+                ..Default::default()
+            },
+        );
+        // 1 個 default ProviderTotals (min = None) → 該跳過
+        totals.insert("claude".to_string(), ProviderTotals::default());
+
+        let out = completed_sessions_min_duration_at(&totals);
+        assert_eq!(out.get("cicx"), Some(&8), "cicx min 該 emit");
+        assert_eq!(out.get("claude"), None, "claude 還沒完成過 → 跳過");
+        assert_eq!(out.len(), 1, "只有 cicx 進 map");
+    }
+
+    #[test]
+    fn k27_completed_sessions_min_duration_at_per_provider_isolated() {
+        // K27 對齊 K22/K23/K24/K26 既有契約：每個 provider 的 min 互相隔離, 不會
+        // 互相污染（saturating_min 寫入時只看 entry 自己的欄位）。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 100);
+        m.record_completed_session_age("cicx", 200);
+        m.record_completed_session_age("claude", 5);
+        m.record_completed_session_age("gemini", 42);
+
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.min_completed_session_age_secs),
+            Some(100),
+            "cicx min = 100 (2 次完成, 較小者)"
+        );
+        assert_eq!(
+            m.provider_totals
+                .get("claude")
+                .and_then(|t| t.min_completed_session_age_secs),
+            Some(5),
+            "claude min = 5 (per-provider 隔離)"
+        );
+        assert_eq!(
+            m.provider_totals
+                .get("gemini")
+                .and_then(|t| t.min_completed_session_age_secs),
+            Some(42),
+            "gemini min = 42 (per-provider 隔離)"
         );
     }
 }

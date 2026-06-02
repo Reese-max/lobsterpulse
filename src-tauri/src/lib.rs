@@ -1984,6 +1984,26 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_min_duration_seconds{{provider=\"{p}\"}} {secs}\n"
         ));
     }
+    // K28 落地：per-provider completed_sessions_stddev gauge (Welford online
+    // algorithm)。補 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) 四件套
+    // 之外的「波動性」維度 —— 同一個 avg 60s 的 provider 可能有 stddev=5 (穩定)
+    // 或 stddev=300 (短任務/長任務混跑), operator 一看 stddev 就知道該 provider
+    // session 時長分布。資料源: ProviderTotals.completed_sessions_mean_secs /
+    // completed_sessions_m2_secs (K28 record 函式累積), 跟 K23
+    // completed_sessions_count 強綁定 (count=0 → 過濾掉, 跟 K25/K26/K27
+    // 既契約一致)。 f64 gauge, 4 位小數固定 precision (跟 K25 avg 一致; 跟
+    // K26/K27 整數區分)。 「(M2 / count).sqrt()」 純 fn 端做, render 只負責
+    // sort + format。 `count == 1` 時 M2=0 → stddev=0 → emit 為 0.0000 (視為
+    // 有效資料, 跟 K25 avg=該 sample 邏輯一致; 跟 K27 None 跳過策略不同)。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_stddev_seconds Population standard deviation in seconds of completed session durations per provider (gauge; Welford online algorithm; 4 decimal precision; count=1 emits 0; missing=no completed session yet)\n# TYPE lobsterpulse_provider_completed_sessions_stddev_seconds gauge\n");
+    let completed_stddev = session::completed_sessions_stddev_at(provider_totals);
+    let mut completed_stddev_sorted: Vec<_> = completed_stddev.iter().collect();
+    completed_stddev_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, secs) in &completed_stddev_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_stddev_seconds{{provider=\"{p}\"}} {secs:.4}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -2940,8 +2960,8 @@ mod write_local_usage_snapshot_tests {
 mod render_prometheus_tests {
     use super::*;
     use crate::session::{
-        completed_sessions_min_duration_at, last_completed_session_age_at, ProviderTotals,
-        SessionInfo, SessionState,
+        completed_sessions_min_duration_at, completed_sessions_stddev_at,
+        last_completed_session_age_at, ProviderTotals, SessionInfo, SessionState,
     };
     use chrono::TimeZone;
     use std::collections::HashMap;
@@ -3031,6 +3051,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3076,6 +3098,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3120,6 +3144,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3156,6 +3182,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3193,6 +3221,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3229,6 +3259,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3266,6 +3298,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3307,6 +3341,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3345,6 +3381,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3380,6 +3418,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3417,6 +3457,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -3464,6 +3506,8 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K27 專屬 fixture
                 // 在 K27 測試內以 struct literal 控制,既有 K6-K26 fixture 不主動填。
                 min_completed_session_age_secs: None,
+                completed_sessions_mean_secs: 0.0,
+                completed_sessions_m2_secs: 0.0,
             },
         )
     }
@@ -6895,6 +6939,236 @@ mod render_prometheus_tests {
                 "lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"cicx\"} 600\n"
             ),
             "K26 (max) 跟 K27 (min) 隔離, cicx max 仍 emit 600, body: {body}"
+        );
+    }
+
+    // ============== K28 per-provider completed_sessions_stddev_seconds gauge ==============
+    // 跟 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) 互補: 五件套中唯一
+    // 補「波動性」維度。Welford online algorithm 在 record 端累積 mean/M2,
+    // render 端只 emit `(M2 / count).sqrt()` 結果。 4 位小數 f64 格式 (跟 K25
+    // avg 一致, 跟 K26/K27 整數區分)。 count=0 過濾 (跟 K26/K27 None 跳過
+    // 語意對齊, 但走 count 過濾是因為 Welford mean/M2 預設 0.0, 沒
+    // 「無值 vs 值=0」可區分性)。 3 個 render test 覆蓋 empty / per-provider
+    // 隔離 / alphabetical sort + f64 precision, 跟 K20-K27 既有 render test
+    // 風格一致。
+
+    #[test]
+    fn completed_sessions_stddev_empty_totals_emits_header_only() {
+        // 對齊 K11 / K18 / K19 / K20 / K21 / K22 / K23 / K24 / K25 / K26 / K27
+        // empty-state 契約: 空 map → 沒 sample line (HELP/TYPE 標頭仍輸出),
+        // 不丟假資料。 ProviderTotals 沒 entry → count 預設 0 → 過濾掉,
+        // 避免 Prometheus 端把「沒看到」當「stddev=0」誤判「該 provider session
+        // 時長無波動」= 假健康信號。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(body.contains("# HELP lobsterpulse_provider_completed_sessions_stddev_seconds"));
+        assert!(
+            body.contains("# TYPE lobsterpulse_provider_completed_sessions_stddev_seconds gauge")
+        );
+        // 沒 sample line 契約: 任何 provider=... 都不該 emit (空 map → 沒資料)
+        assert!(
+            !body.lines().any(|l| l.starts_with(
+                "lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\""
+            )),
+            "empty totals 不該 emit stddev sample line, body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_stddev_per_provider_isolated_and_skips_zero_count() {
+        // per-provider 隔離 + count=0 跳過: cicx (count=2) emit, gemini
+        // (count=1, stddev=0) emit 0.0000, openx (count=0) 跳過。 用
+        // struct literal initializer 明確控制每個 provider 狀態, 跟 K20-K27
+        // 既有隔離測試風格一致。
+        let mut totals = HashMap::new();
+        // cicx: 2 samples [40, 80] → mean=60, M2=800, stddev=√400=20
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 2,
+                completed_sessions_mean_secs: 60.0,
+                completed_sessions_m2_secs: 800.0,
+                ..Default::default()
+            },
+        );
+        // gemini: 1 sample [42] → mean=42, M2=0, stddev=0 (單樣本無波動)
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 1,
+                completed_sessions_mean_secs: 42.0,
+                completed_sessions_m2_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        // openx: 0 samples → count=0 → render 端跳過, 不該 emit sample
+        totals.insert("openx".to_string(), ProviderTotals::default());
+
+        let _completed_stddev = completed_sessions_stddev_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // cicx emit 20.0000 (4 位小數 f64)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\"cicx\"} 20.0000\n"
+            ),
+            "cicx stddev = √(800/2) = 20.0000, body: {body}"
+        );
+        // gemini emit 0.0000 (count=1, 視為有效資料, 跟 K25 avg=該 sample 一致)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\"gemini\"} 0.0000\n"
+            ),
+            "gemini stddev = 0 (count=1, M2=0), body: {body}"
+        );
+        // openx 跳過: count=0 不該 emit sample line (K26/K27 None 跳過契約延伸)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\"openx\"}"
+            ),
+            "openx count=0 該跳過 (跟 K26/K27 None 語意對齊), body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_stddev_alphabetical_sort_and_four_decimal_precision() {
+        // alphabetical sort + f64 4 位小數 precision + 跟 K22/K25/K26/K27 互不
+        // 覆蓋: 三個 provider cicx/claude/gemini 不同 sample → 各自 emit 自己的
+        // stddev, alphabetical 排序 (cicx < claude < gemini), 全部 4 位小數格式。
+        let mut totals = HashMap::new();
+        // cicx: 2 samples [100, 200] → mean=150, M2=5000, stddev=√2500=50,
+        // latest=200, max=200, min=100
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(200),
+                completed_sessions_count: 2,
+                completed_sessions_total_duration_secs: 300,
+                max_completed_session_age_secs: Some(200),
+                min_completed_session_age_secs: Some(100),
+                completed_sessions_mean_secs: 150.0,
+                completed_sessions_m2_secs: 5000.0,
+                ..Default::default()
+            },
+        );
+        // claude: 3 samples [10, 20, 30] → mean=20, M2=200, stddev=√(200/3)≈8.165,
+        // latest=30, max=30, min=10
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(30),
+                completed_sessions_count: 3,
+                completed_sessions_total_duration_secs: 60,
+                max_completed_session_age_secs: Some(30),
+                min_completed_session_age_secs: Some(10),
+                completed_sessions_mean_secs: 20.0,
+                completed_sessions_m2_secs: 200.0,
+                ..Default::default()
+            },
+        );
+        // gemini: 1 sample [42] → stddev=0, latest=max=min=42
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(42),
+                completed_sessions_count: 1,
+                completed_sessions_total_duration_secs: 42,
+                max_completed_session_age_secs: Some(42),
+                min_completed_session_age_secs: Some(42),
+                completed_sessions_mean_secs: 42.0,
+                completed_sessions_m2_secs: 0.0,
+                ..Default::default()
+            },
+        );
+
+        let last_completed = last_completed_session_age_at(&totals);
+        let _completed_stddev = completed_sessions_stddev_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &last_completed,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // K28 alphabetical + 4 位小數 f64 格式驗證:
+        // cicx=50.0000 (√2500), claude=8.1650 (√(200/3)=√66.6667≈8.1650),
+        // gemini=0.0000 (count=1, M2=0)
+        let cicx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\"cicx\"} 50.0000\n")
+            .expect("cicx K28 sample line");
+        let claude_idx = body
+            .find("lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\"claude\"} 8.1650\n")
+            .expect("claude K28 sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\"gemini\"} 0.0000\n")
+            .expect("gemini K28 sample line");
+        assert!(
+            cicx_idx < claude_idx && claude_idx < gemini_idx,
+            "per-provider completed_sessions_stddev_seconds 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, claude={claude_idx}, gemini={gemini_idx})"
+        );
+        // 反向驗: 確認 emit 的是 4 位小數 f64 格式, 不是整數格式 (沒有 整數值 直接
+        // emit 沒小數點)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_stddev_seconds{provider=\"cicx\"} 50\n"
+            ),
+            "K28 f64 4 位小數契約(不是整數), 不可無小數點, body: {body}"
+        );
+        // 順便驗 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev)
+        // 五件套互不覆蓋: cicx latest=200, avg=150.0000, max=200, min=100,
+        // stddev=50.0000 各 emit 各自 metric, 沒被彼此污染
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"} 200\n"
+            ),
+            "K22 (latest) 跟 K28 (stddev) 隔離, cicx latest 仍 emit 200, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 150.0000\n"
+            ),
+            "K25 (avg) 跟 K28 (stddev) 隔離, cicx avg 仍 emit 150.0000, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"cicx\"} 200\n"
+            ),
+            "K26 (max) 跟 K28 (stddev) 隔離, cicx max 仍 emit 200, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_min_duration_seconds{provider=\"cicx\"} 100\n"
+            ),
+            "K27 (min) 跟 K28 (stddev) 隔離, cicx min 仍 emit 100, body: {body}"
         );
     }
 }

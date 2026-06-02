@@ -417,6 +417,28 @@ pub struct ProviderTotals {
     /// 跟 K22/K23/K24/K26 同：SessionEnd + Working→Idle 兩路徑都更新。
     /// saturating_min 在 i64::MIN 邊界退化成 `i64::MIN`(機率近 0),不是問題。
     pub min_completed_session_age_secs: Option<i64>,
+    /// K28 落地：Welford online algorithm 累計「完成 session 時長」的 running
+    /// mean 跟 M2 accumulator。給 `/metrics` 端 emit
+    /// `lobsterpulse_provider_completed_sessions_stddev_seconds{provider}`
+    /// gauge（**第一個 f64 metric**,K 系列 K3-K27 全用 i64 整數, K28 改 f64
+    /// 是 stddev 數學本質決定 —— 連續值強制裁整會失精度,例如 sample [10, 20]
+    /// variance = 50, stddev ≈ 7.07s, 強制裁整為 7 → 0.07s 精度流失）。兩個
+    /// 欄位都 `f64`：mean 是 current average（`(m2 / count).sqrt()` 之前的
+    /// 一階動差）,m2 是 sum of squared diffs from current mean（Welford 累積
+    /// 公式 `M2 += delta * delta2` 的二階中心動差 proxy）。`f64::NAN` 預設用
+    /// `0.0` —— 第一次完成時 `count` 從 0 → 1, Welford 公式自然把 mean 設成
+    /// 該次 sample, m2 = 0（單樣本無波動 → stddev = 0）。`count` 不另存,
+    /// 沿用 K23 `completed_sessions_count` —— stddev 跟 completed count 永遠
+    /// 同步, 不會有 count 跟 stddev 不一致的中間態。Lifteime aggregate 對齊
+    /// K22 / K23 / K24 / K26 / K27: session 結束 + 30 min stale 回收後
+    /// `ProviderTotals` 仍保留 → Prometheus 端 gauge 不會倒退。R46 引入
+    /// Welford 而非最樸素的「保留所有 sample 在 Vec」: O(1) 空間（Vec 會
+    /// unbounded grow, 上線跑一週 sample 數就破萬）+ 數值穩定性比「先算 mean
+    /// 再算 Σ(x-mean)²」高一個數量級（避免大數吃小數）。operator 端 alert
+    /// 範例: `stddev > 300` 表示該 provider session 時長波動 > 5 分鐘 = 可能有
+    /// 短任務 / 長任務混跑, 看 alert 進一步分桶。
+    pub completed_sessions_mean_secs: f64,
+    pub completed_sessions_m2_secs: f64,
 }
 
 pub struct SessionManager {
@@ -648,6 +670,26 @@ impl SessionManager {
             Some(prev) => prev.min(clamped_age),
             None => clamped_age,
         });
+        // K28 gauge：Welford online algorithm 累計 stddev。跟 K22 (latest) / K25
+        // (avg) / K26 (max) / K27 (min) 互補形成 min / max / latest / avg + stddev
+        // 五件套 —— 補「波動性」維度。`mean` / `m2` 跟 K23 `completed_sessions_count`
+        // 同步更新：Welford 公式要求 count 跟 mean / M2 一起推進, 我們這邊先 K23
+        // ++1（line 618 在 K22 之後）再算 delta, 等同「count_new = count_old + 1」
+        // 語意。delta / delta2 / M2 三步都吃 `f64` —— 雖然 `clamped_age` 是 i64
+        // 但 Welford 公式本身是連續, 強制裁整會累積誤差。`f64` 預設 0.0 跟
+        // `count: u64` 預設 0 對齊 —— 第一次完成時 count 從 0 → 1, delta = x - 0
+        // = x, mean += x/1 = x, delta2 = x - x = 0, m2 += x * 0 = 0 → stddev = 0
+        // （單樣本無波動, 跟數學直觀一致）。`as f64` 轉換用 `clamped_age as f64`
+        // (i64 → f64 在 i64::MAX 範圍內精確, saturation 不可能發生在現實 session
+        // duration 量級)。`f64` 欄位不用 `Option` —— stddev 跟 completed count
+        // 強綁定, count=0 時 render 端用 `completed_sessions_count == 0` 過濾就
+        // 不 emit (等同 None 語意, 跟 K26/K27 Option 跳過策略一致)。
+        let x = clamped_age as f64;
+        let n_new = entry.completed_sessions_count as f64;
+        let delta = x - entry.completed_sessions_mean_secs;
+        entry.completed_sessions_mean_secs += delta / n_new;
+        let delta2 = x - entry.completed_sessions_mean_secs;
+        entry.completed_sessions_m2_secs += delta * delta2;
     }
 
     pub fn check_staleness(&mut self, idle: i64, stale: i64, remove: i64) {
@@ -885,6 +927,37 @@ pub fn completed_sessions_min_duration_at(
     out
 }
 
+/// K28 配套 pure fn：把 `ProviderTotals` 裡的 Welford 累積值還原成 stddev
+/// gauge（`HashMap<provider, secs>`）給 `render_prometheus_body` emit。跟
+/// K26 `completed_sessions_max_duration_at` / K27 `completed_sessions_min_duration_at`
+/// 對稱：都過濾「沒完成過」的 provider（K26/K27 用 `Option::is_none` 過濾,
+/// K28 用 `completed_sessions_count == 0` 過濾 —— K28 不用 Option 是因為
+/// Welford mean / M2 是 `f64` 預設 0.0, 沒有「無值」vs「值=0」的可區分性,
+/// 改用 count 過濾更明確）。formula: `stddev = (M2 / count).sqrt()`
+/// (population stddev, 不是 sample —— 跟 K25 avg 一致, lifetime aggregate
+/// 不分 sample/population, 用 N 不用 N-1)。`count` 沿用 K23
+/// `completed_sessions_count` —— 跟 mean / M2 同步, 不會有 stale count。
+/// `count == 1` 時 M2 = 0（單樣本無波動）, stddev = 0 —— render 端把 0
+/// 視為有效資料 emit（K23 「0 是有效」語意延伸, 跟 K25 avg = x 對單樣本
+/// 邏輯一致）。`f64::sqrt()` 在 count == 0 時不會被呼叫（前置過濾已擋）。
+/// lifetime aggregate 對齊 K22 / K26 / K27: session 結束 + 30 min stale
+/// 回收後 `ProviderTotals` 仍保留 → Prometheus 端 gauge 不會倒退。
+/// 沒有「alphabetical sort」邏輯, 排序交給 `render_prometheus_body` 統一處理
+/// （K6-K27 既契約, K28 沿用）。
+pub fn completed_sessions_stddev_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.completed_sessions_count == 0 {
+            continue;
+        }
+        let variance = t.completed_sessions_m2_secs / t.completed_sessions_count as f64;
+        out.insert(p.clone(), variance.sqrt());
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppState {
     pub active_session: Option<SessionInfo>,
@@ -897,7 +970,7 @@ pub struct AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionManager, SessionTransition};
+    use super::{completed_sessions_stddev_at, SessionManager, SessionTransition};
     use crate::hook_event::HookEvent;
 
     fn ev(provider: &str, sid: &str, name: &str) -> HookEvent {
@@ -1711,5 +1784,119 @@ mod tests {
             Some(42),
             "gemini min = 42 (per-provider 隔離)"
         );
+    }
+
+    // ─── K28 落地：completed_sessions_stddev gauge + completed_sessions_stddev_at ───
+
+    #[test]
+    fn k28_record_completed_session_age_initializes_mean_on_first_completion() {
+        // 第一次完成：Welford 把 mean 設成該次 sample, M2 = 0 → stddev = 0
+        // (單樣本無波動, 跟數學直觀一致)。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 120);
+        let totals = m.provider_totals.get("cicx").expect("cicx entry");
+        assert_eq!(totals.completed_sessions_mean_secs, 120.0);
+        assert_eq!(totals.completed_sessions_m2_secs, 0.0);
+        assert_eq!(totals.completed_sessions_count, 1);
+    }
+
+    #[test]
+    fn k28_record_completed_session_age_welford_two_samples() {
+        // 兩樣本 [10, 20]：mean = 15, M2 = (10-15)² + (20-15)² = 50, stddev = √(50/2) = 5
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 10);
+        m.record_completed_session_age("cicx", 20);
+        let totals = m.provider_totals.get("cicx").expect("cicx entry");
+        assert_eq!(totals.completed_sessions_count, 2);
+        assert!(
+            (totals.completed_sessions_mean_secs - 15.0).abs() < 1e-9,
+            "mean = (10 + 20) / 2 = 15, got {}",
+            totals.completed_sessions_mean_secs
+        );
+        assert!(
+            (totals.completed_sessions_m2_secs - 50.0).abs() < 1e-9,
+            "M2 = (10-15)² + (20-15)² = 50, got {}",
+            totals.completed_sessions_m2_secs
+        );
+    }
+
+    #[test]
+    fn k28_record_completed_session_age_clamps_negative_to_zero_for_welford() {
+        // 負值先 saturating clamp 到 0 再餵 Welford —— 跟 K22/K26/K27 同
+        // `clamped_age` 變數, 防時鐘回撥污染 stddev mean/M2 累積。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 100);
+        m.record_completed_session_age("cicx", -50); // clamp 到 0
+        let totals = m.provider_totals.get("cicx").expect("cicx entry");
+        assert_eq!(totals.completed_sessions_count, 2);
+        // 兩樣本 [100, 0]: mean = 50, M2 = (100-50)² + (0-50)² = 5000
+        assert!(
+            (totals.completed_sessions_mean_secs - 50.0).abs() < 1e-9,
+            "mean = (100 + 0) / 2 = 50, got {}",
+            totals.completed_sessions_mean_secs
+        );
+        assert!(
+            (totals.completed_sessions_m2_secs - 5000.0).abs() < 1e-9,
+            "M2 = (100-50)² + (0-50)² = 5000, got {}",
+            totals.completed_sessions_m2_secs
+        );
+    }
+
+    #[test]
+    fn k28_completed_sessions_stddev_at_emits_zero_for_single_sample() {
+        // 純 fn 過濾 + 計算：count=1 進 map, stddev = 0
+        // （單樣本無波動, 跟 Welford 公式 M2=0 一致）。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 1,
+                completed_sessions_mean_secs: 42.0,
+                completed_sessions_m2_secs: 0.0,
+                ..Default::default()
+            },
+        );
+        let out = completed_sessions_stddev_at(&totals);
+        assert_eq!(out.get("cicx"), Some(&0.0));
+    }
+
+    #[test]
+    fn k28_completed_sessions_stddev_at_skips_providers_with_no_completions() {
+        // 過濾契約：count=0 不 emit（沿 K26/K27 None 跳過語意）。
+        let mut totals = HashMap::new();
+        totals.insert("claude".to_string(), ProviderTotals::default()); // count=0
+        let out = completed_sessions_stddev_at(&totals);
+        assert!(
+            out.is_empty(),
+            "count=0 的 provider 該跳過, 避免誤判「stddev=0」當「該 provider 瞬間完成」"
+        );
+    }
+
+    #[test]
+    fn k28_completed_sessions_stddev_at_per_provider_isolated() {
+        // per-provider 隔離：3 provider 不同 sample → 各自 emit 自己的 stddev
+        // (cicx mean=60/M2=800, claude mean=50/M2=1250, gemini mean=10/M2=0)
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 40);
+        m.record_completed_session_age("cicx", 80);
+        m.record_completed_session_age("claude", 30);
+        m.record_completed_session_age("claude", 70);
+        m.record_completed_session_age("gemini", 10);
+
+        let out = completed_sessions_stddev_at(&m.provider_totals);
+        // cicx: mean=60, M2=(40-60)² + (80-60)² = 800, stddev = √400 = 20
+        assert!(
+            (out.get("cicx").copied().unwrap_or(0.0) - 20.0).abs() < 1e-9,
+            "cicx stddev = 20 (2 樣本 mean=60, M2=800), got {:?}",
+            out.get("cicx")
+        );
+        // claude: mean=50, M2=(30-50)² + (70-50)² = 800, stddev = √400 = 20
+        assert!(
+            (out.get("claude").copied().unwrap_or(0.0) - 20.0).abs() < 1e-9,
+            "claude stddev = 20 (per-provider 隔離), got {:?}",
+            out.get("claude")
+        );
+        // gemini: count=1, stddev = 0
+        assert_eq!(out.get("gemini"), Some(&0.0));
     }
 }

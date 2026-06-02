@@ -822,3 +822,43 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 - `cargo fmt --check`: 0 diff
 **結果**: PASS（baseline 從 R40 WIP broken 恢復 + K23 落地 + 0 regression）
 **KPI-impact: metrics 維度 +1（per-provider 累計完成 session counter）**
+
+### 2026-06-03 R45 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### [2026-06-03] R47 — K29 `lobsterpulse_provider_failure_to_completion_ratio` gauge + 9 tests（R46 WIP 撿收 + 修 R46 WIP 漏的 K25 隔離 assertion bug）
+**類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26→K27→K28→K29 線）
+**KPI**: `_metrics_emitted_K29` 累計 +1（累計 22 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25/K26/K27/K28 → K29）
+
+**KPI 進展表**:
+| KPI | 前值 (R46) | 後值 (R47) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 21 | 22 | +1 |
+| Lib 總 unit tests | 266 | 275 | +9 |
+| K29 pure fn test | 0 | 6 | +6 |
+| K29 render test | 0 | 3 | +3 |
+| 0 R47 範圍 lint warning | 0 | 0 | 持平 |
+| 0 R47 範圍 fmt diff | 0 | 0 | 持平 |
+| R46 WIP bug fix 累計 | 0 | 1 | +1 |
+
+**為什麼**: 對齊 LobsterPulse v5.1 mission「本機 CLI + OpenAB 雙路徑觀察」的可觀察性 —— K22-K28 五件套（latest/avg/max/min/stddev）只覆蓋 session duration 分布、沒覆蓋「失敗 vs 成功比」維度。K9/K10 是純絕對失敗計數,operator 端要分辨「流量大失敗難免」（絕對值高 ratio 低）vs「流量小每次都失敗」（絕對值低 ratio 高 = 嚴重健康問題）得自己寫 PromQL `failure_count / completed_sessions_total` 除法算式 —— 兩個 metric cross-query 在 PromQL 易出錯、scrape 缺一條時算式直接壞。K29 直接在 exporter 端 emit 派生 gauge 補這個 operator 友善 ratio 維度,alert 閾值 `ratio > 2.0` = 「每完成一次 session 平均 retry 2 次以上」= 健康度異常信號。R46 寫到一半 WIP 留 K29 pure fn + render emit + 3 render test + 6 unit test + K25 隔離 assertion bug,R47 收尾:補 K25 隔離 assertion（原本寫 `!contains cicx K25` 假錯,K25 邏輯是 count>0 一律 emit 含 0.0,改用雙驗證「K25 emit 0.0000 + K29 emit 1.5000 各發各的 series line 互不污染」）。
+**搜尋**: 沿用既有 K25 `completed_sessions_average_duration_at` pure fn pattern（兩個 lifetime counter 組合成 ratio 純 derived gauge）+ K9/K10 失敗計數 source;無新搜（derived gauge 語意清楚,PromQL 派生計算移到 exporter 端是標準 pattern）。
+**做了什麼**:
+- `src-tauri/src/session.rs:991-1008` 加 `failure_to_completion_ratio_at` 純 fn（攤平 ProviderTotals → HashMap<provider, f64 ratio>, 過濾 completed_sessions_count=0 避免 0/0 數學未定義 emit 0.0 假冒「零失敗」假健康信號 —— 跟 K25「0/0 不 emit」同款防線）
+- `src-tauri/src/session.rs:1980-2077` 加 6 個 unit test（skip count=0 / zero failure emit 0.0 / integer ratio / fractional ratio / per-provider 隔離 / high failure rate=10.0）
+- `src-tauri/src/lib.rs:2007-2034` `render_prometheus_body` emit K29 HELP/TYPE + alphabetical sort 全 provider 樣本（4 位小數 f64 跟 K25 avg / K28 stddev 對齊）
+- `src-tauri/src/lib.rs:7233-7405` 加 3 個 render test（empty totals header-only / per-provider 隔離 + count=0 跳過 / alphabetical sort + 4 位小數 + K25 隔離雙驗證）
+- `src-tauri/src/lib.rs:7396` 修 R46 WIP 漏的 K25 隔離 assertion bug：原本 `!contains cicx K25` 假錯（K25 邏輯是 count>0 一律 emit 含 0.0,cicx total=0 + count=2 → K25 emit 0.0000）,改用雙驗證「K25 emit 0.0000 + K29 emit 1.5000 各發各的 series line 互不污染」（跟 K6-K28 既 K25 隔離 test 風格一致,真實反映兩 metric 隔離語意）
+
+**驗證**:
+- `cargo test --lib`: 275 passed; 0 failed（+9 K29,0 regression）
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+
+**結果**: PASS（K29 撿收 R46 WIP + 修 R46 WIP K25 隔離 assertion bug + 0 regression + 275/275 全綠）
+**KPI-impact: metrics 維度 +1（per-provider failure-to-completion ratio gauge, 補 K22-K28 duration 分布外的「失敗 vs 成功比」觀測維度, alert 閾值 ratio > 2.0 觸發「該 provider session 平均 retry 2 次以上」健康度異常信號）**

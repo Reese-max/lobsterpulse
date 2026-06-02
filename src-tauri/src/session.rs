@@ -340,6 +340,17 @@ pub struct ProviderTotals {
     /// 給 `/metrics` 端計算 per-provider `idle_seconds` gauge 用。
     /// `None` 表示該 provider 還沒收過 event。
     pub last_event_at: Option<DateTime<Utc>>,
+    /// K22 落地：最近一次「完成」的 session 持續秒數（start_time → 結束時的
+    /// last_event_time）。給 `/metrics` 端 emit
+    /// `lobsterpulse_provider_last_completed_session_age_seconds` gauge。
+    /// 觸發點：SessionEnd 事件把 session 從 map 移除時、或 Working→Idle
+    /// 轉換時 —— 兩種都算「完成」。`Some(secs)` 表示至少完成過一次，`None`
+    /// 表示該 provider 累計進來但還沒收過 SessionEnd / 還沒經歷 Working→Idle
+    /// 轉換。lifetime gauge 跟 K8 `last_event_at` / K10 `since` 同：寫入後
+    /// 不蒸發,即使 session 結束 + 30 min stale 回收後仍保留 → Prometheus 端
+    /// 可看「這 provider 最近一次 task 跑了多久」。負值 saturating clamp 到 0
+    /// （防時鐘回撥 / 序列化時差）。
+    pub last_completed_session_age_secs: Option<i64>,
 }
 
 pub struct SessionManager {
@@ -434,6 +445,16 @@ impl SessionManager {
 
         if event.hook_event_name == "SessionEnd" {
             let removed = self.sessions.remove(&event.session_id);
+            // K22 落地：SessionEnd 算「完成」一種（session 從 active map 移除
+            // 那一刻 = 結束）。先把 age 算成 owned i64 再丟給 record helper,
+            // 跟 Working→Idle 路徑吃同一個 owned-data 簽名。
+            if let Some(ref s) = removed {
+                let age = s
+                    .last_event_time
+                    .signed_duration_since(s.start_time)
+                    .num_seconds();
+                self.record_completed_session_age(&s.provider, age);
+            }
             if removed.is_some() && self.active_session_id.as_deref() == Some(&event.session_id) {
                 self.active_session_id = self.sessions.keys().next().cloned();
             }
@@ -469,13 +490,60 @@ impl SessionManager {
         session.handle_event(event);
         let now = session.state;
 
-        if prev == SessionState::Working && now == SessionState::Idle {
+        // K22 落地：Working→Idle 算「完成」另一種（runner 主動收尾
+        // session,但 session 還留在 active map,等 30 min stale 才被回收）。
+        // 在這裡把完成時的 age 寫進 ProviderTotals 跟 SessionEnd 同一個欄位
+        // —— operator 端 alert `last_completed_session_age_seconds > 1800`
+        // （30 分鐘）就會觸發「最近一次 task 跑超過 30 分鐘才收尾」。
+        //
+        // 解 E0499：`session: &mut Session` 借自 `self.sessions` 期間不能再
+        // 對 self 取 `&mut`。先把 (provider, age) clone 出來成 owned tuple
+        // 脫離 borrow,NLL 釋放 self.sessions 借用後再回頭呼叫
+        // record_completed_session_age(&mut self, ...)。
+        let completed_data = if prev == SessionState::Working && now == SessionState::Idle {
+            let age = session
+                .last_event_time
+                .signed_duration_since(session.start_time)
+                .num_seconds()
+                .max(0);
+            Some((session.provider.clone(), age))
+        } else {
+            None
+        };
+
+        let transition = if prev == SessionState::Working && now == SessionState::Idle {
             SessionTransition::Completed
         } else if prev != SessionState::WaitingForUser && now == SessionState::WaitingForUser {
             SessionTransition::StartedWaiting
         } else {
             SessionTransition::None
+        };
+
+        if let Some((provider, age)) = completed_data {
+            self.record_completed_session_age(&provider, age);
         }
+
+        transition
+    }
+
+    /// K22 配套 helper：把「session 完成時的持續秒數」寫進該 provider 的
+    /// `ProviderTotals.last_completed_session_age_secs`。lifetime gauge —— 重複
+    /// 呼叫會覆寫成最新一次的完成時 age（K9 `session_count` 才是累加 counter,
+    /// K22 只看「最近一次」不需要累計）。負值 saturating clamp 到 0,跟 K11
+    /// `compute_quota_snapshot_age_seconds` / K12 idle ratio 的負值防呆一致。
+    ///
+    /// 簽名吃 owned `&str` + `i64`（不是 `&Session`）—— caller 端要先把
+    /// session 內的 provider / age 取出成 owned 值,再呼叫本 helper。這樣
+    /// `&mut self.provider_totals` 不會跟 caller 持有的 `&mut Session`
+    /// 撞 E0499。SessionEnd 跟 Working→Idle 兩路徑都吃同一個 helper,
+    /// SessionEnd 那邊本來就把 `self.sessions.remove()` 拿到的 owned
+    /// Session 借出 `&s`,改吃 owned data 後兩路徑一致。
+    fn record_completed_session_age(&mut self, provider: &str, age: i64) {
+        let entry = self
+            .provider_totals
+            .entry(provider.to_string())
+            .or_default();
+        entry.last_completed_session_age_secs = Some(age.max(0));
     }
 
     pub fn check_staleness(&mut self, idle: i64, stale: i64, remove: i64) {
@@ -580,6 +648,24 @@ impl SessionManager {
             provider_totals: self.provider_totals.clone(),
         }
     }
+}
+
+/// K22 配套 pure fn：把 `ProviderTotals` 裡的「最近完成 session 年齡」攤平成
+/// `HashMap<provider, secs>` 給 `render_prometheus_body` emit。`None`（該
+/// provider 還沒完成過 session）跳過不放入 map —— 對齊 K8 `last_event_at` /
+/// K10 `since` 「缺資料不 emit sample」契約,避免 Prometheus 端把「沒看到」
+/// 當 0 誤判「剛剛完成 age=0」。沒有「alphabetical sort」邏輯,排序交給
+/// `render_prometheus_body` 統一處理（跟 K6/K7/K9/K10/K18 風格一致）。
+pub fn last_completed_session_age_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if let Some(age) = t.last_completed_session_age_secs {
+            out.insert(p.clone(), age);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -732,6 +818,116 @@ mod tests {
         assert_eq!(
             m.handle_event(&ev("cicx", "s2", "SessionEnd")),
             SessionTransition::None
+        );
+    }
+
+    // ─── K22 落地：record_completed_session_age + last_completed_session_age_at ───
+
+    use super::{last_completed_session_age_at, ProviderTotals};
+    use std::collections::HashMap;
+
+    #[test]
+    fn k22_session_end_records_last_completed_age() {
+        // K22 整合測試：SessionStart → SessionEnd 路徑應把 last_completed_session_age_secs
+        // 寫成 Some(0)（兩次 event 中間時差 < 1 sec → age=0）。`Some` 比精確數值重要
+        // —— 我們要驗「觸發了 record」,不是「精準算秒數」（秒數會因 wall clock 而異）。
+        let mut m = SessionManager::new();
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionStart"));
+        // 觸發 SessionEnd 之前 field 應為 None
+        assert!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.last_completed_session_age_secs)
+                .is_none(),
+            "SessionStart 不該算完成"
+        );
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionEnd"));
+        assert!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.last_completed_session_age_secs)
+                .is_some(),
+            "SessionEnd 該把 last_completed_session_age_secs 寫成 Some(_)"
+        );
+    }
+
+    #[test]
+    fn k22_working_to_idle_records_last_completed_age() {
+        // K22 整合測試：Working→Idle 轉換也算「完成」（runner 主動收尾,跟 SessionEnd
+        // 兩種語意同一個欄位）。handle_event 內部 state machine 走
+        // SessionStart → UserPromptSubmit → Stop → Working→Idle 路徑。
+        let mut m = SessionManager::new();
+        let _ = m.handle_event(&ev("claude", "c1", "SessionStart"));
+        let _ = m.handle_event(&ev("claude", "c1", "UserPromptSubmit"));
+        let _ = m.handle_event(&ev("claude", "c1", "Stop"));
+        assert!(
+            m.provider_totals
+                .get("claude")
+                .and_then(|t| t.last_completed_session_age_secs)
+                .is_some(),
+            "Working→Idle 轉換該把 last_completed_session_age_secs 寫成 Some(_)"
+        );
+    }
+
+    #[test]
+    fn k22_last_completed_session_age_at_filters_none() {
+        // K22 pure fn 測試：`last_completed_session_age_at` 對 None 欄位跳過,
+        // 對 Some(secs) 放進 map。模擬兩個 provider 一個完成一個沒完成 → output
+        // 只含完成的 provider。
+        let mut totals = HashMap::new();
+        // 完成的 provider（struct literal initializer 比 Default + field assign idiomatic）
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(42),
+                ..Default::default()
+            },
+        );
+        // 沒完成的 provider（default = None,直接用 Default::default()）
+        totals.insert("claude".to_string(), ProviderTotals::default());
+
+        let out = last_completed_session_age_at(&totals);
+        assert_eq!(out.get("cicx"), Some(&42), "完成的 provider 該 emit");
+        assert!(
+            !out.contains_key("claude"),
+            "未完成的 provider 該被跳過,不出 sample line"
+        );
+        assert_eq!(out.len(), 1, "output map 只該有 1 個 entry");
+    }
+
+    #[test]
+    fn k22_record_completed_session_age_clamps_negative_to_zero() {
+        // K22 saturating clamp 測試：age 為負（時鐘回撥 / 序列化時差）→ clamp
+        // 到 0,不讓負值流進 Prometheus metric。helper 簽名吃 owned i64,
+        // caller 端先算出 age 再傳入（test 端不繞 Session 直接餵值）。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", -60);
+        let age = m
+            .provider_totals
+            .get("cicx")
+            .and_then(|t| t.last_completed_session_age_secs)
+            .expect("record 該寫 Some");
+        assert_eq!(age, 0, "負值 age 該 saturate 到 0");
+    }
+
+    #[test]
+    fn k22_record_completed_session_age_writes_provider_specific() {
+        // K22 隔離測試：每個 provider 獨立記錄,互不污染。cicx 完成 100s,claude
+        // 完成 200s,各自 totals 裡的值要對得上。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 100);
+        m.record_completed_session_age("claude", 200);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.last_completed_session_age_secs),
+            Some(100)
+        );
+        assert_eq!(
+            m.provider_totals
+                .get("claude")
+                .and_then(|t| t.last_completed_session_age_secs),
+            Some(200)
         );
     }
 }

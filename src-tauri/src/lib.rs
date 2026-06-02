@@ -1381,6 +1381,7 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
         &quota_snapshot_ages,
         &quota_remaining_pct,
         quota_history_csv_age,
+        &session::last_completed_session_age_at(&state.provider_totals),
         &discord_health,
         hook_metrics,
         now,
@@ -1495,12 +1496,12 @@ fn collect_quota_snapshot_mtimes(
 ///   token 會從 global metric 蒸發、Prometheus 端會看到 counter 倒退
 /// - `lobsterpulse_provider_tokens_input{provider="..."}` / `_output`：per-provider 細顆度，
 ///   來源同 `ProviderTotals`，可看各 backend 自己的 quota 消耗配比
-// `render_prometheus_body` 累積 9 個正交輸入（sessions / counts / provider_totals /
+// `render_prometheus_body` 累積 10 個正交輸入（sessions / counts / provider_totals /
 // quota_snapshot_ages / quota_remaining_pct / quota_history_csv_age /
-// discord_health / hook_parse_failures / now），每個都是
-// 來自不同 process-level state 的純 snapshot。把它們打包成 struct 沒比較乾淨
-// —— render 端是純函式,沒有 mut / no allocation 切換,純粹 string 構造。
-// 對齊 R26/R27 政策：cross-cutting snapshot 整合留給 M1 輪(K15 candidate:
+// last_completed_session_age / discord_health / hook_parse_failures / now），
+// 每個都是來自不同 process-level state 的純 snapshot。把它們打包成 struct
+// 沒比較乾淨 —— render 端是純函式,沒有 mut / no allocation 切換,純粹 string
+// 構造。對齊 R26/R27 政策：cross-cutting snapshot 整合留給 M1 輪(K15 candidate:
 // `MetricsSnapshot` struct 餵前端,render 端也順手用同個 struct),不在本輪
 // 重構。
 #[allow(clippy::too_many_arguments)]
@@ -1512,6 +1513,7 @@ fn render_prometheus_body(
     quota_snapshot_ages: &std::collections::HashMap<String, i64>,
     quota_remaining_pct: &std::collections::HashMap<String, u8>,
     quota_history_csv_age: Option<i64>,
+    last_completed_session_age: &std::collections::HashMap<String, i64>,
     discord_health: &discord::DiscordHealth,
     hook_metrics: hook_server::HookServerMetrics,
     now: DateTime<Utc>,
@@ -1818,6 +1820,27 @@ fn render_prometheus_body(
     if let Some(age) = quota_history_csv_age {
         out.push_str(&format!(
             "lobsterpulse_quota_history_csv_age_seconds {age}\n"
+        ));
+    }
+    // K22 落地：per-provider 最近一次完成 session 的持續秒數 gauge。
+    // 補 K18「最老 active session」以外的盲點：K18 是 live metric（session 結束
+    // 後 sample 自動消失），K22 是 lifetime aggregate（session 結束 / stale 回收
+    // 後仍保留）→ 跟 K6/K7/K9 lifetime 語意一致：寫入後不蒸發。
+    // 觸發點兩種都算「完成」：(1) SessionEnd 把 session 從 active map 移除時；
+    // (2) Working→Idle 轉換時（runner 主動收尾但 session 還在 map 等 30 min
+    // stale 回收）。operator alert rule 可設
+    // `lobsterpulse_provider_last_completed_session_age_seconds > 1800`
+    // （30 分鐘）觸發「最近一次 task 跑超過 30 分鐘才收尾」。0 是有效資料
+    // （session 剛 start 又馬上 SessionEnd，age ≈ 0），不是 missing。
+    // 排序:by provider alphabetical,跟 K6-K21 既契約一致;空 map → 沒 sample line
+    // (HELP/TYPE 標頭仍輸出)。
+    out.push_str("# HELP lobsterpulse_provider_last_completed_session_age_seconds Duration in seconds of the most recently completed session per provider (lifetime; missing=no completed session yet)\n# TYPE lobsterpulse_provider_last_completed_session_age_seconds gauge\n");
+    let mut last_completed_session_age_sorted: Vec<_> = last_completed_session_age.iter().collect();
+    last_completed_session_age_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, age) in &last_completed_session_age_sorted {
+        let clamped = (**age).max(0i64);
+        out.push_str(&format!(
+            "lobsterpulse_provider_last_completed_session_age_seconds{{provider=\"{p}\"}} {clamped}\n"
         ));
     }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
@@ -2847,6 +2870,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -2875,6 +2899,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -2902,6 +2927,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(last_at),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -2921,6 +2947,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: None,
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -2941,6 +2968,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -2960,6 +2988,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(since),
                 last_event_at: Some(since),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -2980,6 +3009,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -3004,6 +3034,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(since),
                 last_event_at: Some(last_event_at),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -3025,6 +3056,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(since),
                 last_event_at: None,
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -3043,6 +3075,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: Some(now),
                 last_event_at: Some(now),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -3063,6 +3096,7 @@ mod render_prometheus_tests {
                 event_type_counts: std::collections::BTreeMap::new(),
                 since: None,
                 last_event_at: Some(Utc::now()),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -3093,6 +3127,7 @@ mod render_prometheus_tests {
                 event_type_counts,
                 since: None,
                 last_event_at: Some(Utc::now()),
+                last_completed_session_age_secs: None,
             },
         )
     }
@@ -3107,6 +3142,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3171,6 +3207,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3196,6 +3233,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3223,6 +3261,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3266,6 +3305,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3290,6 +3330,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3332,6 +3373,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3356,6 +3398,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3431,6 +3474,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3475,6 +3519,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3498,6 +3543,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3524,6 +3570,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3551,6 +3598,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3577,6 +3625,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3623,6 +3672,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3644,6 +3694,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3672,6 +3723,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3697,6 +3749,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3737,6 +3790,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3768,6 +3822,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3805,6 +3860,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3839,6 +3895,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3873,6 +3930,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3977,6 +4035,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4003,6 +4062,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4034,6 +4094,7 @@ mod render_prometheus_tests {
             ]),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4069,6 +4130,7 @@ mod render_prometheus_tests {
             &quota_age_map(vec![("cicx".to_string(), 0)]), // 只有 cicx
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4202,6 +4264,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4233,6 +4296,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4259,6 +4323,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4287,6 +4352,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4328,6 +4394,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4379,6 +4446,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4407,6 +4475,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4559,6 +4628,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4583,6 +4653,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4616,6 +4687,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4646,6 +4718,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4678,6 +4751,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4712,6 +4786,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4740,6 +4815,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4780,6 +4856,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &h,
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4810,6 +4887,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &h_4xx,
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4831,6 +4909,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &h_5xx,
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4860,6 +4939,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4885,6 +4965,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4914,6 +4995,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4982,6 +5064,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5012,6 +5095,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5037,6 +5121,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5061,6 +5146,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5092,6 +5178,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5133,6 +5220,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5163,6 +5251,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5194,6 +5283,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5246,6 +5336,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5301,6 +5392,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5369,6 +5461,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5400,6 +5493,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &quota,
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5433,6 +5527,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &quota,
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5469,6 +5564,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &quota,
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5500,6 +5596,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &quota,
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5538,6 +5635,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             None,
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5571,6 +5669,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             Some(0),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5595,6 +5694,7 @@ mod render_prometheus_tests {
             &HashMap::new(),
             &HashMap::new(),
             Some(123),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5607,6 +5707,119 @@ mod render_prometheus_tests {
         assert!(
             !body.contains("lobsterpulse_quota_history_csv_age_seconds 123.0\n"),
             "不能是 float 格式, body: {body}"
+        );
+    }
+
+    #[test]
+    fn last_completed_session_age_empty_map_emits_header_only() {
+        // 對齊 K11 / K18 / K19 / K20 / K21 empty-state 契約:空 map → 沒 sample line,
+        // 只有 HELP/TYPE 標頭(讓 Prometheus scrape 端知道 metric 已註冊)。
+        // first-run 場景:該 provider 累計進來但還沒收過 SessionEnd / 還沒經歷
+        // Working→Idle 轉換,`last_completed_session_age_secs` 仍是 None → pure fn
+        // `last_completed_session_age_at` 過濾掉,進不到 map。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains("# HELP lobsterpulse_provider_last_completed_session_age_seconds"));
+        assert!(
+            body.contains("# TYPE lobsterpulse_provider_last_completed_session_age_seconds gauge")
+        );
+        // 沒 sample line — 用 lines().filter(starts_with) 鎖真正的 sample line,
+        // 避免 `!contains("metric_name ")` 跟 HELP/TYPE 標頭(也含「name + 空格」)誤撞。
+        let k22_samples: Vec<&str> = body
+            .lines()
+            .filter(|l| l.starts_with("lobsterpulse_provider_last_completed_session_age_seconds{"))
+            .collect();
+        assert!(
+            k22_samples.is_empty(),
+            "空 map 不應 emit sample line, got: {k22_samples:?}, body: {body}"
+        );
+    }
+
+    #[test]
+    fn last_completed_session_age_zero_is_emitted_not_dropped() {
+        // 語意關鍵:age=0 (session start 後馬上 SessionEnd → 兩次 event 時差 < 1 sec)
+        // 是有效資料,不是 missing。對齊 K20 `quota_remaining_pct_zero_pct_is_emitted_not_dropped`
+        // + K21 `quota_history_csv_age_some_zero_emits_zero_not_dropped` 同契約:
+        // 「0 是 critical signal,不能被當 None 跳過」 —— 這裡 0 是「session 跑 0 秒就結束」
+        // 異常訊號(可能 runner 立即 crash),operator 必須看到。
+        let mut age = HashMap::new();
+        age.insert("cicx".to_string(), 0_i64);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &age,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"} 0\n"
+            ),
+            "0 是有效資料必須 emit, body: {body}"
+        );
+    }
+
+    #[test]
+    fn last_completed_session_age_alphabetical_sort_across_providers() {
+        // 多 provider 故意非字母序插入(openx, cicx, gemini)→ 輸出必須 alphabetical
+        // (cicx, gemini, openx),跟 K6-K21 既契約一致,給 Prometheus scraper diff 穩定。
+        // 同時驗證 0 / 正數混合都會 emit + 整數格式(不是 float)。
+        let mut age = HashMap::new();
+        age.insert("openx".to_string(), 7_i64);
+        age.insert("cicx".to_string(), 0_i64);
+        age.insert("gemini".to_string(), 1500_i64);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &age,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        let cicx_idx = body
+            .find("lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"} 0\n")
+            .expect("cicx sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_last_completed_session_age_seconds{provider=\"gemini\"} 1500\n")
+            .expect("gemini sample line");
+        let openx_idx = body
+            .find(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"openx\"} 7\n",
+            )
+            .expect("openx sample line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider last_completed_session_age_seconds 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, gemini={gemini_idx}, openx={openx_idx})"
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_last_completed_session_age_seconds{provider=\"gemini\"} 1500.0\n"),
+            "整數格式契約(不是 float)"
         );
     }
 }

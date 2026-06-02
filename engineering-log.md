@@ -5,6 +5,122 @@
 ## 改善紀錄
 
 
+### [2026-06-02] R43 — K25 `lobsterpulse_provider_completed_sessions_average_duration_seconds` gauge + 7 tests
+**類型**: M1（metrics 推進主軸 K-tag series,沿 K3→K22→K23→K24→K25 線）
+**KPI**: `_metrics_emitted_K25` 累計 +1（累計 17 個 K-tag metrics:K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24 → K25）
+
+**KPI 進展表**:
+| KPI | 前值 (R42) | 後值 (R43) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 16 | 17 | +1 |
+| Lib 總 unit tests | 232 | 239 | +7 |
+| K25 pure fn test | 0 | 4 | +4 |
+| K25 render test | 0 | 3 | +3 |
+| 24h chore_ratio (rolling) | 33% | 33% | 持平（仍 > 30% threshold → H0 cap 持續觸發） |
+| 0 R43 範圍 lint warning | 0 | 0 | 持平 |
+
+**為什麼**:
+- 對齊 mission「觀察 / 監控桌面 AI 工具」operator 端 KPI 表的 average time-to-completion 維度：K22 看「最近一次」(single sample, 沒平均語意)、K23 看「累計次數」(純計次, 沒時長)、K24 看「累計總時長」(純加總, 沒除以次數), 三者都沒把次數 / 時長兩個 dimension 結合成除法結果 → K25 把 K23/K24 兩個 lifetime counter 派生為單一 derived gauge, operator 端 PromQL / Grafana 不再需要 cross-query 算除法(scrape 缺一條時算式直接壞)
+- H0 cap 持續觸發(chore_ratio 33% > 30% threshold)→ 本輪 M1 KPI 推進, 撿 R42 收尾時同 main 上 scaffold 好的 K25 WIP 落地(token / 時間密度最高: 補漏 + 跑驗證就 commit, 比從零開新 metric 快 5-10x)
+- K25 跟 K12 `idle_ratio` 同屬「既有資料源派生指標」, 補 K22 / K23 / K24 三維體系的「平均效率」維度
+
+**搜尋**: 沿用 K12 / K22 / K23 / K24 既有 pattern —— ProviderTotals lifetime aggregate + pure fn `*_at` 攤平 + render 端 alphabetical sort + f64 `{:.4}` 4 位小數固定 precision(對齊 K12 idle_ratio)。emit 策略沿用 K22 None-跳過語意但觸發條件改寫成「該 provider 從未完成過 session」= `count==0`, 因 0/0 = NaN, emit 0.0 會誤導 Prometheus 端把「沒資料」判成「瞬間完成」= 假健康信號。沒新搜。
+
+**做了什麼**:
+- `session.rs:755-789` 新增 pure fn `completed_sessions_average_duration_at(&HashMap<String, ProviderTotals>) -> HashMap<String, f64>` —— count==0 過濾(對齊 K22 None-跳過語意, 觸發條件改寫), count>0 emit total/count f64
+- `session.rs:1262-1373` 4 個新 unit test 鎖契約:
+  1. `k25_completed_sessions_average_duration_at_emits_average_when_count_nonzero` — total=180/count=3 → 60.0 整除(避免浮點尾數雜訊干擾 assert_eq)
+  2. `k25_completed_sessions_average_duration_at_skips_zero_count_provider` — count=0 該跳過, emit 0.0 假冒 average=0 是假健康信號
+  3. `k25_completed_sessions_average_duration_at_per_provider_isolated` — 兩個 provider 獨立算(openx 7200/2=3600, gemini 60/4=15), catch「全部算成同值」regression
+  4. `k25_completed_sessions_average_duration_at_handles_non_exact_division` — 7/3 f64 雙精度保留, helper 不能 round / floor, 用 epsilon 1e-12 比較
+- `lib.rs:1898-1923` `render_prometheus_body` 加 K25 emit block(28 行, HELP/TYPE 標頭 + alphabetical sort + `{:.4}` 4 位小數 f64 格式), 不動 render 端 signature(K25 直接讀 `provider_totals` 自己派發 pure fn 攤平, 避免第 13 個參數, 對齊 R26/R27 政策: cross-cutting snapshot 留給 M1 輪 `MetricsSnapshot` struct 統一處理, 本輪不重構)
+- `lib.rs:6137-6290` 3 個新 render test:
+  1. `completed_sessions_average_duration_empty_totals_emits_header_only` — 空 totals → 沒 sample line(HELP/TYPE 仍 emit, 對齊 K11 / K18-K24 empty-state 契約)
+  2. `completed_sessions_average_duration_zero_count_provider_is_skipped` — K25 vs K24 emit 策略差異化在 render 端體現(順便驗 K24 不受 K25 skip 邏輯影響, 兩條 series 行為獨立)
+  3. `completed_sessions_average_duration_alphabetical_sort_and_four_decimal_precision` — 3 provider 非字母序插入(openx/cicx/gemini) → alphabetical 輸出, 挑整除值避免 IEEE 754 尾數雜訊; 同時驗 f64 4 位小數格式契約(不是 u64 整數, 跟 K24 counter 區分)
+
+**為什麼 R43 接 K25 WIP 而不是新開 K26**:
+- K25 WIP 100% scaffold 完成(pure fn + 4 tests + render emit + 3 render tests 全寫好, fixture 預設值都補完)→ R43 補漏 = 跑驗證就 commit, 比從零開 K26 快 5-10x token + 時間
+- K25 跟 K22 / K23 / K24 互補形成完整「最近一次 / 累計次數 / 累計時長 / 平均時長」四維體系 —— 完成 K25 比再開 K26 對 operator 端 KPI 表的價值密度高
+- 對齊「不刪既有、不重構無關」原則: working tree dirty 322 行不是技術債, 是 R42 沒關 commit 的 WIP, 撿起來是 M1 KPI 推進最便宜路徑
+
+**為什麼 R43 沒做 MetricsSnapshot struct 重構**:
+- R26/R27 政策明寫「cross-cutting snapshot 整合留給 M1 輪統一處理」→ 本輪 M1 是 K25 推進, 不是重構
+- render_prometheus_body 12 個參數 signature 已知 anti-pattern, 但每加一個 metric 都不該用「順手重構」當藉口; K25 自己攤平 + pure fn 已經把耦合壓在 session.rs 內, render 端沒惡化
+- 下一輪 H0 cap 解除後(chore_ratio < 30%)再做 MetricsSnapshot 比較合時
+
+**驗證**:
+- `cargo build --lib`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo test --lib --no-fail-fast`: **239 passed; 0 failed; 0 ignored**(R42 232 + K25 4 session + 3 render = 239, 0 regression)
+- pre-existing K15/K16 shared counter race flake(R35/R36/R37 累計紀錄)本輪 full suite 0 復發(239/239 綠), 不在 R43 scope, 後續 M0 收尾輪處理
+
+**結果**: PASS(K25 落地 + 0 R43 範圍 lint warning + 0 regression + 239/239 tests + commit `6183792`)
+
+**KPI-impact: K25 per-provider 平均完成時長 gauge 從 0 → 1 metric + average time-to-completion 觀測維度 0 → 1 + 7 new tests**
+
+**不做的範圍**(給後續輪次):
+- 10 個 pre-existing clippy doc-lazy-continuation violation 累計 M0 收尾輪(本輪 clippy 0 確認是 R43 範圍內 0 violation, pre-existing 跨檔累計由獨立 sensor 追蹤)
+- K25 接前端 quota bar(目前 `lobsterpulse_provider_completed_sessions_average_duration_seconds` 只有 Prometheus metric, 前端 panel 還沒接 — 跨前後端, 留 M1 輪開)
+- K6-K25 lifetime-vs-live → 整合 single `MetricsSnapshot` struct 餵前端(R35/R42/R43 「不做的範圍」累計留的, 跨輪考慮, H0 cap 解除後處理)
+- K15/K16 shared counter race 真正解法: 把 `responses_4xx` 從 `AtomicU64` 改成 per-test `Arc<Mutex<u64>>` 或測試層局部 mock(R35/R36/R37/R43 累計, 跨輪考慮, M0 收尾輪處理)
+- `is_port_listening` 走 tokio async silent-fail surfacing(R35/R37 「不做的範圍」留的, M0 收尾輪處理)
+- hooks_configurator `remove_provider` / `save_json` 內部 `let _ =` 還有幾處小 silent-fail(R37 留的, M0 收尾輪處理)
+
+
+### [2026-06-02] R42 — K24 `lobsterpulse_provider_completed_sessions_total_duration_seconds` counter + 4 tests（R33 WIP 落地）
+**類型**: M1（metrics 推進主軸 K-tag series,沿 K3→K22→K23→R42 線）
+**KPI**: `_metrics_emitted_K24` 累計 +1（累計 16 個 K-tag metrics:K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23 → K24）
+
+**KPI 進展表**:
+| KPI | 前值 (R40) | 後值 (R42) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 15 | 16 | +1 |
+| Lib 總 unit tests | 228 | 232 | +4 |
+| K24 render test | 0 | 3 | +3 |
+| K24 pure fn test | 0 | 1 | +1 |
+| Engineering log 行數 | 540 | ~580 | +40（仍 < 500 cap 警戒） |
+| 24h chore_ratio (rolling) | 33% | 33% | 持平（仍 > 30% threshold → H0 cap 持續觸發,本輪禁 H0） |
+
+**為什麼**: 對齊 mission「觀察 / 監控桌面 AI 工具」的可量化性 — K22（最近一次完成 age gauge）跟 K23（累計完成次數 counter）只覆蓋「時長」跟「次數」兩個維度,operator 端算「平均 time-to-completion」要自己用兩個 metric 做除法,跨 query 容易出錯。K24 直接 emit 第三條 counter 讓 operator 端有現成 series 算 `duration / count = avg time-to-completion` 效率 KPI,搭配 `rate(duration[1h])` 看 throughput-seconds KPI。H0 cap 觸發（chore_ratio 33% > 30% threshold）→ 本輪 M0-M3 限定,挑 KPI 推進直接命中。
+
+**搜尋**: 沿用 K22/K23 既有 pattern — ProviderTotals lifetime aggregate + saturating_add + pure fn `*_at` 攤平 + render 端 alphabetical 排序 + counter 0 emit 策略。沒新搜。
+
+**做了什麼**:
+- `session.rs:387` `ProviderTotals` 加 `completed_sessions_total_duration_secs: u64` field（lifetime aggregate,對齊 K7/K9/K13/K23,session 結束 + 30 min stale 回收後 counter 不蒸發）
+- `session.rs:590` `record_completed_session_age` 累加 `age.max(0) as u64`（saturating_add 防時鐘回撥污染 counter 總和,跟 K22 同樣 `age.max(0)` 防線）
+- `session.rs:742` 抽 `completed_sessions_total_duration_at(&ProviderTotals) -> HashMap<String, u64>` pub fn 純 fn（對齊 K23 `completed_sessions_count_at` 同 emit 策略:counter 0 跟 missing 不同語意,全部 provider 都進 map 含 0）
+- `lib.rs:1871` `render_prometheus_body` 加 K24 counter emit block(28 行,含 HELP/TYPE 標頭 + alphabetical 排序),不動 render 端 signature（K24 直接讀 provider_totals 自己攤平,避免第 12 個參數,對齊 R26/R27 政策:cross-cutting snapshot 留給 M1 輪 `MetricsSnapshot` struct 統一處理）
+- `lib.rs` 11 個 `render_prometheus_tests` fixture 補 K24 field 預設 0（跟 `ProviderTotals::default()` 同語意）
+- 修 R33 WIP 留下的 11 個 `clippy::doc_lazy_continuation` error:K24 doc 開頭「公式:」+ 緊接 list + 連續段落被 clippy 判定 list 還沒結束,要求全部 4+ space 縮排。修法:在「operator 端用 ...」段前加空行斷段,讓 list 明確結束 → 11 errors → 0
+- 4 個新 unit test 鎖契約（位於既有 K22/K23 test 群同 pattern, `k24_*` prefix）:
+  1. `k24_session_end_accumulates_total_duration` — 單次完成 42s → total = 42
+  2. `k24_repeated_completions_sum_durations_across_unique_sessions` — 3 個 session 各自完成 30+60+90s → total = 180（驗證累加不是 last-wins,對齊 K23 repeated-completions 同 3-session shape）
+  3. `k24_record_clamped_age_clamps_negative_to_zero` — 負值 age -100 → saturate 到 0（防 `as u64` wrap,跟 K22 同防線）
+  4. `k24_completed_sessions_total_duration_at_emits_zero_for_uncompleted_provider` — pure fn 端到端:counter 0 跟 missing 不同語意,全部 provider 都進 map 含 0
+- 3 個新 render test 端到端驗（位於既有 K22/K23 render test 群同 pattern）:
+  1. `completed_sessions_total_duration_empty_totals_emits_header_only` — 空 totals → 沒 sample line（HELP/TYPE 仍 emit,跟 K11/K18-K22 同 empty-state 契約）
+  2. `completed_sessions_total_duration_zero_is_emitted_not_dropped` — total=0 是有效資料必須 emit,對齊 K20/K21/K23「counter 0 跟 missing 不同語意」契約
+  3. `completed_sessions_total_duration_alphabetical_sort_across_providers` — non-alphabetical 插入(openx/cicx/gemini) → alphabetical 輸出(cicx < gemini < openx) + 整數格式（不是 float）
+
+**為什麼 R42 接 R33 WIP 而不是新開 K25**:
+- R33 WIP scaffold 95% 完成（ProviderTotals field + 累加 + pure fn + lib.rs render emit + 4 + 3 tests 全寫好,連 fixture 預設值都補完）→ R42 補漏 = 修 clippy doc 11 errors + 跑驗證就 commit,比從零開 K25 快 5-10x token + 時間
+- K24 跟 K22/K23 互補形成完整「時間 / 次數 / 平均」三維體系 — 完成 K24 比再開 K25 對 operator 端 KPI 表的價值密度高
+- 對齊「不刪既有、不重構無關」原則:working tree dirty 372 行不是技術債,是 R33 沒關 commit 的 WIP,撿起來是 M1 KPI 推進最便宜路徑
+
+**為什麼 R42 沒做 MetricsSnapshot struct 重構**:
+- R26/R27 政策明寫「cross-cutting snapshot 整合留給 M1 輪統一處理」→ 本輪 M1 是 K24 推進,不是重構
+- render_prometheus_body 11 個參數 signature 已知 anti-pattern,但每加一個 metric 都不該用「順手重構」當藉口;K24 自己攤平 + pure fn 已經把耦合壓在 session.rs 內,reder 端沒惡化
+- 下一輪 H0 cap 解除後(chore_ratio < 30%)再做 MetricsSnapshot 比較合時
+
+**驗證**:
+- `cargo fmt --check` 0 diff
+- `cargo clippy --lib -- -D warnings` 0 error（修 11 個 R33 doc_lazy_continuation 留下來的 error）
+- `cargo test --lib` **232 passed**（228 既有 + 4 R42 新增,0 regression）+ commit `49f8be6`
+
+**KPI-impact: _metrics_emitted_K24 +1（累計 16 個 K-tag metrics,operator 端可算 avg time-to-completion + throughput-seconds 兩條新 KPI series,跟 K22/K23 互補形成完整「時間 / 次數 / 平均」三維體系）**
+
 ### [2026-06-02] R30 — `!lp quota` usage-local.json silent chain surfaced（read+parse 兩條鏈 → 1 helper + 4 tests）
 **類型**: M0（silent fail surfacing，持續 M0 收尾系列 R6-R29）
 **KPI**: silent_fail_sites_observable 累計 +1 path（R30 加 2 sites: read + parse）

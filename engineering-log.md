@@ -5,6 +5,61 @@
 ## 改善紀錄
 
 
+### [2026-06-02] R44 — K26 `lobsterpulse_provider_completed_sessions_max_duration_seconds` gauge + 8 tests（R43 WIP 收尾）
+**類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26 線）
+**KPI**: `_metrics_emitted_K26` 累計 +1（累計 18 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25 → K26）
+
+**KPI 進展表**:
+| KPI | 前值 (R43) | 後值 (R44) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 17 | 18 | +1 |
+| Lib 總 unit tests | 239 | 248 | +9 (含 1 baseline 漂移) |
+| K26 pure fn test | 0 | 4 | +4 |
+| K26 render test | 0 | 4 | +4 |
+| 24h chore_ratio (rolling) | 33% | TBD | — |
+| 0 R44 範圍 lint warning | 0 | 0 | 持平 |
+
+**為什麼**:
+- 補完「per-provider 完成 session 持續時間」三件套（max / latest / avg）的最後一角：K22 gauge 看「最近一次跑多久」（single sample 沒平均）、K25 gauge 看「平均跑多久」（派生 from K23/K24 計次 + 累計時長）、K26 gauge 看「歷史最長一次跑多久」（saturating_max lifetime, 不蒸發）。operator 端三視角並列可比 outlier：avg 60s / latest 65s / max 7200s = 過去有 2 小時 outlier session（可能 runner hang / 大 context window 場景）。可設 alert `max > 3600` 觸發「該 provider 有異常長 session 待撈」
+- R43 wrap-up（`1b6deea`）時 K26 code 已 scaffold 寫到 dirty state 但沒 commit —— R44 撿 R43 WIP 落地，token / 時間密度最高（補漏 + 修測試 bug + 跑驗證 + commit，比從零開新 metric 快 5-10x）
+- 沿用 K22 None-跳過 + saturating_max 策略：缺資料（`max_completed_session_age_secs: None`）不 emit sample（避免 Prometheus 端把「沒看到」當「max=0」誤判「該 provider 瞬間完成」= 假健康信號），已寫入後 saturating_max 不倒退（counter 語意，session 結束 + 30 min stale 回收後 ProviderTotals 仍保留 → Prometheus gauge 不會倒退）
+
+**搜尋**: 沿用 K22 / K25 既有 pattern —— ProviderTotals lifetime aggregate + pure fn `*_at` 攤平 + render 端 alphabetical sort + 整數 emit（沒 f64, 跟 K22 對齊, max 是「單點 saturating_max」語意沒浮點小數必要；K25 派生 f64 是因為 K24 / K23 除法會出現非整數結果, K26 純 saturating_max 整數足夠）。沒新搜。
+
+**做了什麼**:
+- `session.rs:386-405` `ProviderTotals` 加 `max_completed_session_age_secs: Option<i64>` 欄位（跟 K22 `last_completed_session_age_secs` 對稱：i64 為主, `age.max(0)` clamp 過, `None` = 該 provider 累計收過 event 但還沒完成過 session, 觸發點 SessionEnd + Working→Idle 兩路徑）
+- `session.rs:609-622` `record_completed_session_age` 觸發點 saturating_max 更新 —— `age.max(0)` clamp 後跟歷史 max 比，第一次完成時 `None` 直接寫 `Some(age)`，後續完成用 `prev.max(clamped_age)` 升級
+- `session.rs:815-834` 新 `completed_sessions_max_duration_at` pure fn（攤平 `ProviderTotals` → `HashMap<provider, secs>` 給 render；過濾 `None` 沿用 K22 語意，lifetime saturating_max 寫入後不蒸發）
+- `session.rs:1417-1540` 6 個 unit test（第一次完成初始化 / saturating_max 升級 / 較小值保持 / 負值 clamp / `completed_sessions_max_duration_at` 過濾 None / per-provider 隔離）
+- `lib.rs:1921-1951` `render_prometheus_body` emit K26 HELP/TYPE + alphabetical 全 provider sample（K6-K25 既契約，整數格式）
+- `lib.rs:6422-6543` 2 個 K26 emit integration test —— `per_provider_isolated_and_skips_none`（K22 跟 K26 隔離 emit）+ `alphabetical_sort_and_integer_format`（3 provider 非字母序插入 → alphabetical 排序 + 整數格式 + 跟 K22 / K25 三件套同 totals 各自 emit）
+- `lib.rs` 12 個 test fixture `ProviderTotals` initializer 補 `max_completed_session_age_secs: None`（跟 production `ProviderTotals::default()` 同語意）
+- `lib.rs:2910` test module imports 加 `last_completed_session_age_at` 派生函式
+
+**R44 收尾時發現並修的測試 bug**:
+- 兩個 K26 emit integration test 原本把 8th 參數 `last_completed_session_age: &HashMap<String, i64>` 傳 `&HashMap::new()`（空 map），導致 K22 sample line 在 body 內缺失（K22 emit 用這個外部 map，不是從 totals 派生），R44 cargo test 跑出 2 個 K26 emit test fail。修法：兩處 test 都改成 `let last_completed = last_completed_session_age_at(&totals); render_prometheus_body(..., &last_completed, ...)`，模擬 production 從 ProviderTotals 派生 K22 map 的路徑（K22 跟 K26 共用 provider_totals 資料源 → 8th 參數該跟 totals 同步不能傳空）
+- 這是 dirty WIP 漏寫的測試 fixture bug，R43 wrap-up 階段 code 寫了但沒跑測試就 commit docs，R44 收尾時補跑發現
+
+**驗證**:
+- `cargo build --lib`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo test --lib`: **248 passed; 0 failed; 0 ignored**(R43 239 + R44 +8 K26 new + 1 baseline 漂移, 0 regression, 0 flake)
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked supervisor 檔, 符合 R13 防護）
+
+**結果**: PASS（K26 落地 + 補 R43 WIP 收尾時 2 個 emit test bug + 0 R44 範圍 lint warning + 0 regression + 248/248 tests）
+
+**KPI-impact: metrics 維度 +1（per-provider 歷史最長完成 session gauge）, 測試 239→248**
+
+**不做的範圍**（給後續輪次）:
+- `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct（R26/R27 policy 已記；K6-K26 共 18 個 metrics 都各自 inline 派發 + alphabetical sort，重構可一次清掉 ~150 行 render helper 內的 sort 邏輯但要搬 K6 起的所有 emit 段，跨輪考慮）
+- K15 / K16 shared counter race 真正解法（改 per-test `Arc<Mutex<u64>>` 或測試層局部 mock，R35/R36/R37 多次記錄，跨輪考慮）
+- hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊（R37 wrap-up 已記）
+- 2 個 pre-existing `quota_history.rs:419-420` clippy doc-lazy-continuation violation —— R38 已清（追問：實際上 R38 commit `d2976a7` 已修，這條已不適用；待下輪盤點時從「不做的範圍」清掉）
+- K6-K21 metrics 整合 single `MetricsSnapshot` struct 餵前端（跨輪考慮）
+
+---
+
 ### [2026-06-02] R43 — K25 `lobsterpulse_provider_completed_sessions_average_duration_seconds` gauge + 7 tests
 **類型**: M1（metrics 推進主軸 K-tag series,沿 K3→K22→K23→K24→K25 線）
 **KPI**: `_metrics_emitted_K25` 累計 +1（累計 17 個 K-tag metrics:K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24 → K25）

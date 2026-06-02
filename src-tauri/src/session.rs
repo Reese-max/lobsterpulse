@@ -752,6 +752,42 @@ pub fn completed_sessions_total_duration_at(
     out
 }
 
+/// K25 配套 pure fn：把 `ProviderTotals` 裡的「累計完成 session 平均時長」攤平
+/// 成 `HashMap<provider, secs>` 給 `render_prometheus_body` emit。K25 是 K23
+/// (`completed_sessions_count`) / K24 (`completed_sessions_total_duration_secs`)
+/// 兩條 lifetime counter 的派生 gauge —— operator 端不再需要自己寫
+/// `..._duration_seconds / ..._total` 算式（兩個 metric cross-query 在 PromQL
+/// 易出錯、scrape 缺一條時算式直接壞），直接在 Prometheus 端抓這條 series 觀察
+/// average time-to-completion KPI（per-provider 效率訊號）。K25 補 K22 / K23 /
+/// K24 都沒覆蓋的「平均效率」維度：K22 是 single sample（最近一次）、K23 是純
+/// 計次、K24 是純加總，都沒把兩個 dimension 結合成除法結果 → K25 跟 K12
+/// `idle_ratio` 同樣屬於「既有資料源派生指標」。
+///
+/// 跟 K22 / K24 emit 策略都不同：
+/// - K22 過濾 `None`（該 provider 沒完成過 session → gauge 缺資料）
+/// - K24 全部 emit（counter 0 跟 missing 是不同語意）
+/// - K25 過濾 `count == 0`（0/0 數學未定義 → 不能 emit 0.0 假冒「平均 0 秒
+///   完成」誤導 Prometheus 端把「沒資料」判成「瞬間完成」= 假健康信號）
+///
+/// 也就是說 K25 用 K22 語意（缺資料不 emit sample）但觸發條件改寫成「該 provider
+/// 從未完成過 session」= `count==0`。`count > 0` 時 emit `total / count`（f64）。
+/// 沒有「alphabetical sort」邏輯，排序交給 `render_prometheus_body` 統一處理
+/// （K6-K24 既契約）。
+pub fn completed_sessions_average_duration_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.completed_sessions_count > 0 {
+            out.insert(
+                p.clone(),
+                t.completed_sessions_total_duration_secs as f64 / t.completed_sessions_count as f64,
+            );
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppState {
     pub active_session: Option<SessionInfo>,
@@ -1222,5 +1258,113 @@ mod tests {
             "未完成的 provider 該 emit total=0（不是 missing 跳過）"
         );
         assert_eq!(out.len(), 2, "output map 該有 2 個 entry,counter 0 不跳過");
+    }
+
+    // ─── K25 落地：completed_sessions_average_duration gauge + completed_sessions_average_duration_at ───
+
+    use super::completed_sessions_average_duration_at;
+
+    #[test]
+    fn k25_completed_sessions_average_duration_at_emits_average_when_count_nonzero() {
+        // K25 pure fn 主測：total=180 / count=3 → 60.0（剛好整除, 避免浮點尾數
+        // 雜訊干擾 assert_eq）。驗「count>0 時 emit total/count」基本路徑。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 3,
+                completed_sessions_total_duration_secs: 180,
+                ..Default::default()
+            },
+        );
+
+        let out = completed_sessions_average_duration_at(&totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&60.0),
+            "total=180, count=3 → 60.0 整除必須精確"
+        );
+        assert_eq!(out.len(), 1, "只有 cicx 一個 entry");
+    }
+
+    #[test]
+    fn k25_completed_sessions_average_duration_at_skips_zero_count_provider() {
+        // K25 vs K24 emit 策略差異化：K24 全部 emit (counter 0 是有效資料), K25
+        // 過濾 count==0 (0/0 數學未定義, emit 0.0 會誤導 Prometheus 端把「沒資料」
+        // 判成「瞬間完成」= 假健康信號)。模擬兩個 provider: cicx 有 count (5 次
+        // 完成共 250 秒 → avg=50), claude 沒 count → output 只該有 cicx, claude
+        // 不能在 map 裡。對齊 K22 `last_completed_session_age_at` 的 None-跳過
+        // 語意（缺資料不 emit sample）。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 5,
+                completed_sessions_total_duration_secs: 250,
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+
+        let out = completed_sessions_average_duration_at(&totals);
+        assert_eq!(out.get("cicx"), Some(&50.0), "cicx average = 50.0");
+        assert!(
+            !out.contains_key("claude"),
+            "count=0 該跳過, 不能 emit 0.0 假冒 average=0"
+        );
+        assert_eq!(out.len(), 1, "output 只該有 cicx 一個 entry");
+    }
+
+    #[test]
+    fn k25_completed_sessions_average_duration_at_per_provider_isolated() {
+        // 兩個 provider 各自獨立算平均, 驗證 iterate 過程不會互相污染（共用 map
+        // 寫入時的 entry 衝突）。openx: 7200/2=3600.0, gemini: 60/4=15.0
+        // —— 數字差距大順便 catch「全部算成同值」的 regression。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "openx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 2,
+                completed_sessions_total_duration_secs: 7200,
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 4,
+                completed_sessions_total_duration_secs: 60,
+                ..Default::default()
+            },
+        );
+
+        let out = completed_sessions_average_duration_at(&totals);
+        assert_eq!(out.get("openx"), Some(&3600.0), "openx avg = 3600");
+        assert_eq!(out.get("gemini"), Some(&15.0), "gemini avg = 15");
+        assert_eq!(out.len(), 2, "兩 provider 都該在 map 裡");
+    }
+
+    #[test]
+    fn k25_completed_sessions_average_duration_at_handles_non_exact_division() {
+        // 7/3 = 2.3333... (recurring) —— 驗 f64 在 helper 端保留 IEEE 754 雙精度
+        // 結果, render 端才做 `{:.4}` 截斷。helper 不能 round 也不能 floor, 必須
+        // 留 raw f64 給 render 端決定精度（對齊 K12 idle_ratio helper 同樣 f64
+        // 透傳策略）。用 epsilon 比較避免寫死 2.3333... 字面值。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 3,
+                completed_sessions_total_duration_secs: 7,
+                ..Default::default()
+            },
+        );
+
+        let out = completed_sessions_average_duration_at(&totals);
+        let avg = out.get("cicx").copied().unwrap_or(0.0);
+        assert!(
+            (avg - 7.0_f64 / 3.0_f64).abs() < 1e-12,
+            "7/3 必須精確 f64 結果, got {avg}"
+        );
     }
 }

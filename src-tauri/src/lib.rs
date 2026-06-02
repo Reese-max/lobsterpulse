@@ -1895,6 +1895,32 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_total_duration_seconds{{provider=\"{p}\"}} {secs}\n"
         ));
     }
+    // K25 落地：per-provider 平均完成 session 時長 gauge。K23 (count) / K24
+    // (total_duration) 兩條 lifetime counter 的派生指標 —— operator 端不再需要
+    // 自己寫 `..._duration_seconds / ..._total` 算式（兩個 metric cross-query 在
+    // PromQL / Grafana 都易出錯, scrape 缺一條時算式直接壞；單一 derived gauge
+    // 直接拿即可）。補 K22 / K23 / K24 都沒覆蓋的「平均效率 KPI」維度：K22 看
+    // 「最近一次」(single sample, 沒平均語意), K23 看「累計次數」(純計次, 沒
+    // 時長), K24 看「累計總時長」(純加總, 沒除以次數) → K25 把次數 / 時長兩個
+    // dimension 結合成除法, 跟 K12 `idle_ratio` 同樣是「既有資料源派生指標」。
+    // `count == 0` 走 K22 語意（missing 跳過, 不 emit sample）—— 0/0 數學未定義,
+    // emit 0.0 會誤導 Prometheus 端把「沒資料」判成「瞬間完成」= 假健康信號。
+    // `count > 0` 才 emit `total / count` 浮點結果, 4 位小數固定 precision（跟 K12
+    // `idle_ratio` `{:.4}` 同格式, 避免 IEEE 754 尾數雜訊）。數據源：不是獨立
+    // HashMap, 直接讀 `provider_totals` —— 跟 K22 / K23 / K24 同資料源, 讓 render
+    // helper 自己派發 pure fn 攤平（對齊 R26/R27 政策: cross-cutting snapshot
+    // 留給 M1 輪 MetricsSnapshot struct 統一處理, 本輪不重構 render 端 12 個參數
+    // 的怪 signature）。排序: by provider alphabetical, 跟 K6-K24 既契約一致;
+    // 空 map → 沒 sample line (HELP/TYPE 標頭仍輸出)。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_average_duration_seconds Average duration in seconds of completed sessions per provider (gauge; derived from completed_sessions_total_duration_seconds / completed_sessions_total; missing=no completed session yet)\n# TYPE lobsterpulse_provider_completed_sessions_average_duration_seconds gauge\n");
+    let completed_avg = session::completed_sessions_average_duration_at(provider_totals);
+    let mut completed_avg_sorted: Vec<_> = completed_avg.iter().collect();
+    completed_avg_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, avg) in &completed_avg_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_average_duration_seconds{{provider=\"{p}\"}} {avg:.4}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -6106,6 +6132,158 @@ mod render_prometheus_tests {
         assert!(
             !body.contains("lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"gemini\"} 7200.0\n"),
             "整數格式契約(不是 float)"
+        );
+    }
+
+    // ============== K25 per-provider completed_sessions_average_duration_seconds gauge ==============
+    // 跟 K23 (count) / K24 (total_duration) 形成派生 average time-to-completion KPI。
+    // 3 個 render test 覆蓋 empty / zero-count-skip / alphabetical+precision 三個邊界,
+    // 跟 K20-K24 既有 render test 風格一致。數據源:不是獨立 HashMap,直接讀 `provider_totals`
+    // —— 跟 K6-K24 同資料源, 讓 render helper 自己派發 pure fn 攤平（對齊 R26/R27 政策:
+    // cross-cutting snapshot 留給 M1 輪 MetricsSnapshot struct 統一處理, 本輪不重構
+    // render 端 12 個參數的怪 signature）。
+
+    #[test]
+    fn completed_sessions_average_duration_empty_totals_emits_header_only() {
+        // 對齊 K11 / K18 / K19 / K20 / K21 / K22 / K23 / K24 empty-state 契約:
+        // 空 map → 沒 sample line (HELP/TYPE 標頭仍輸出), 不丟假資料。
+        // ProviderTotals 沒 entry → 該 provider 不會被寫進 metric, 避免 Prometheus
+        // 端把「沒看到」當「average=0」誤判「該 provider 瞬間完成」= 假健康信號。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(body
+            .contains("# HELP lobsterpulse_provider_completed_sessions_average_duration_seconds"));
+        assert!(body.contains(
+            "# TYPE lobsterpulse_provider_completed_sessions_average_duration_seconds gauge"
+        ));
+        // 沒 sample line — 用 lines().filter(starts_with) 鎖真正的 sample line,
+        // 避免 `!contains("metric_name ")` 跟 HELP/TYPE 標頭(也含「name + 空格」)誤撞。
+        let k25_samples: Vec<&str> = body
+            .lines()
+            .filter(|l| {
+                l.starts_with("lobsterpulse_provider_completed_sessions_average_duration_seconds{")
+            })
+            .collect();
+        assert!(
+            k25_samples.is_empty(),
+            "空 totals 不應 emit K25 sample line, got: {k25_samples:?}, body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_average_duration_zero_count_provider_is_skipped() {
+        // K25 vs K24 emit 策略差異化在 render 端的體現：K24 emit 0 (counter 0 是
+        // 有效), K25 count=0 → 跳過 (0/0 = NaN, emit 0.0 會誤導成「平均 0 秒
+        // 完成」= 假健康信號)。構造 cicx entry with count=0 + total=0 (default)
+        // → render 不該 emit K25 sample line (但 K24 仍會 emit `..._duration_seconds{...} 0`
+        // —— 順便在 assert 中驗 K24 不受 K25 skip 邏輯影響, 兩條 series 行為獨立)。
+        let mut totals = HashMap::new();
+        totals.insert("cicx".to_string(), ProviderTotals::default());
+
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"}"
+            ),
+            "count=0 該跳過 K25 sample, 不能 emit 0.0 假冒 average=0, body: {body}"
+        );
+        // K24 不受 K25 skip 邏輯影響, 仍 emit 0 (counter 0 跟 K25 跳過是不同語意)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_total_duration_seconds{provider=\"cicx\"} 0\n"
+            ),
+            "K24 emit 策略獨立於 K25, count=0 仍 emit total=0, body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_average_duration_alphabetical_sort_and_four_decimal_precision() {
+        // 3 provider 非字母序插入(openx, cicx, gemini)→ 輸出必須 alphabetical
+        // (cicx, gemini, openx), 跟 K6-K24 既契約一致, 給 Prometheus scraper diff
+        // 穩定。同時驗 f64 `{:.4}` 4 位小數固定 precision：(cicx 180/3=60, gemini
+        // 7200/2=3600, openx 42/1=42 —— 全部整除 → 末四碼 0000)。挑整除值避免
+        // IEEE 754 尾數雜訊干擾 precision assert。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "openx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 1,
+                completed_sessions_total_duration_secs: 42,
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 3,
+                completed_sessions_total_duration_secs: 180,
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 2,
+                completed_sessions_total_duration_secs: 7200,
+                ..Default::default()
+            },
+        );
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        let cicx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 60.0000\n")
+            .expect("cicx sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"gemini\"} 3600.0000\n")
+            .expect("gemini sample line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"openx\"} 42.0000\n")
+            .expect("openx sample line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider completed_sessions_average_duration_seconds 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, gemini={gemini_idx}, openx={openx_idx})"
+        );
+        // 反向驗：確認 emit 的是 f64 4 位小數格式, 不是 u64 整數格式 (沒有 `.0000` 結尾)
+        // K24 counter 是整數 (沒小數), K25 gauge 是 f64 — 必須在輸出區分開。
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 60\n"),
+            "f64 4 位小數格式契約(不是 u64 整數), 必須含 `.0000` 結尾, body: {body}"
         );
     }
 }

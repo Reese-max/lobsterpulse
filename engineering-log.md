@@ -581,3 +581,50 @@
 **結果**: PASS（M0 silent error surfacing 收尾 quota-history 鏈 + 2 caller 改 match warn + 0 lint warning + 0 regression + commit `afb99b2`）
 
 **KPI-impact: silent_fail_sites_observable +2 paths（`get_quota_history` Dashboard 空白 sparkline + `token_spike` rule silent bypass 兩條 silent chain → `load_history_at` 三條分流 + 兩條 caller 結構化 log warn,operator 排查「quota-history.csv 為什麼圖空 / alert 沒觸發」從「猜三種根因」降到「grep 一行 prefix」+ 看完整 IO/parse 錯誤）**
+
+### 2026-06-02 R30 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### [2026-06-02] R30 收尾 — K18 per-provider max active session age gauge + 4 tests
+**類型**: M1（metrics observability,補 K8/K12 都沒覆蓋的盲點）
+**KPI**: max_session_age 觀察維度 0→1（per-provider absolute 秒數,operator alert rule 可直接設閾值）
+**KPI 進展表**:
+| KPI | 前值 (R32) | 後值 | 變化 |
+|---|---:|---:|---:|
+| Lib 總 unit tests | 170 | 175 | +5 (K18 +4 + helper +1) |
+| `render_prometheus_body` 排序契約 | K6/K7/K9/K13 + K17 | + K18 (provider 維度) | +1 維度 |
+| per-provider gauge 種類 | idle_seconds, idle_ratio, since_ts, since_max_age | + max_session_age | +1 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8%（本輪 M1 不計 chore） | 持平 |
+
+**為什麼**: 對齊 mission「觀察 / 監控桌面 AI 工具」的可觀察性 — K8 看「最後一次 event 到現在」(剛收到 heartbeat 就歸 0,無法分辨「session 開 30 秒但 1 小時沒收到 event」跟「session 才開 30 秒」),K12 是 K8/K10 比例(健康度訊號,無絕對秒數)。K18 直接給「最老 active session 已活多久」絕對秒數,operator alert rule 可設 `max_session_age > 7200` 觸發「該 provider 有 session 卡 2 小時沒結束」,補 K8/K12 盲點。
+
+**搜尋**: 沿用既有 K6-K17 pattern,沒新搜(per-provider HashMap 累加 + alphabetical 排序 + clamp 邊界)。
+
+**做了什麼**:
+- `lib.rs::render_prometheus_body` 加 K18 計算區塊(line 1217+):`provider_max_session_age: HashMap<String, i64>`,active session 取 `max(duration_secs)`,負值 `saturating_max` clamp 0,缺資料的 provider 不 emit sample(live 語意,session 結束後自動消失)
+- 排序契約:alphabetical 跟 K6/K7/K9/K13 一致
+- Emit 段(line 1411+):`lobsterpulse_provider_max_session_age_seconds{provider="..."} N`
+- 4 個 unit test:
+  1. `emits_metric_for_active_session` — active 60s → sample line 60
+  2. `skips_inactive_session` — 9999s duration 但 inactive → 不出 sample
+  3. `max_session_age_per_provider_independent` — 多 provider 各自 max 獨立 + alphabetical 排序驗證
+  4. `max_session_age_clamps_negative_duration_to_zero` — 邊界負值 → 0,不出現 `-5` 進 output
+
+**驗證**:
+- `cargo fmt --check` 0 diff
+- `cargo clippy --lib -- -D warnings` 0 error
+- `cargo test --lib` 175 passed (170 既有 + K18 4 新增 + 1 helper,0 regression)
+
+**不做的範圍**（給後續輪次）:
+- K18 gauge 拉 alert rule YAML 範本給 operator 抄:屬於部署文件,跟 R 輪 M1-M3 推進無關
+- per-provider × per-state (Working/Idle/Waiting) age 拆:目前夠用,需求未浮現
+- session age 改 histogram (buckets):要重新評估 Prometheus 端 query 需求,目前 simple gauge 即可
+
+**結果**: PASS（M1 metrics observability 補 K8/K12 盲點 + 0 lint warning + 0 regression）
+
+**KPI-impact: max_session_age 觀察維度 0→1 + per-provider gauge 種類 +1（K18 補 K8/K12 都沒覆蓋的「絕對 session 持續秒數」盲點,operator alert rule 可直接設 max_session_age > 7200 觸發 runner 卡 2h 沒結束,不需要靠 K8 心跳+ K12 比例湊訊號）**

@@ -1214,6 +1214,34 @@ fn render_prometheus_body(
     // 用」提醒（已存在的 K10 / K11 數據 compose 一次即可得，無需新增任何資料源）。
     let mut provider_idle_ratio: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
+    // K18 落地：per-provider 「目前最老 active session 的持續秒數」gauge。
+    // 來源是 `sessions: &[SessionInfo]` 內每個 `is_active = true` 的 session
+    // （duration_secs = now - start_time，From<&Session> 階段已算好）；同 provider
+    // 多個 active session 取 max。跟 K8 idle_seconds 差異化：K8 看「最後一次
+    // event 到現在」（短期心跳，剛動完也會歸 0），K18 看「session 開到現在」
+    // （session 還在 active 但已經卡很久 = runner 沒回應 / 工具 hang）。operator
+    // alert rule 可設 `max_session_age_seconds > 7200`（2 小時）觸發「該
+    // provider 已有 session 卡 2 小時沒結束」。
+    //
+    // 語意：K18 是「live」訊號（active session 清掉後 sample 就消失）—— 跟
+    // K6/K7/K9/K10/K12/K13 lifetime aggregate 對比是預期差異。K18 缺資料時
+    // 不放 sample（該 provider 沒有 active session → 跳過），避免 Prometheus
+    // 端把缺失誤判為「剛剛才開」/ 0 秒。
+    let mut provider_max_session_age: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    for s in sessions {
+        if !s.is_active {
+            continue;
+        }
+        // duration_secs 來自 From<&Session>：`now - s.start_time`，
+        // 理論 ≥ 0；saturating_max 防時鐘回撥 / 序列化。
+        let entry = provider_max_session_age
+            .entry(s.provider.clone())
+            .or_insert(s.duration_secs);
+        if s.duration_secs > *entry {
+            *entry = s.duration_secs;
+        }
+    }
     // K13 落地：per-provider lifetime event 計數（counter）—— 該 provider 累計
     // 收過幾個 event。`ProviderTotals.events_total` 在 `bump_provider_totals` 內對
     // 任何 event 類型（SessionStart / PostToolUse / PostToolUseFailure / Stop /
@@ -1271,6 +1299,8 @@ fn render_prometheus_body(
     provider_since_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_idle_ratio_sorted: Vec<_> = provider_idle_ratio.iter().collect();
     provider_idle_ratio_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_max_session_age_sorted: Vec<_> = provider_max_session_age.iter().collect();
+    provider_max_session_age_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_events_total_sorted: Vec<_> = provider_events_total.iter().collect();
     provider_events_total_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
@@ -1379,6 +1409,21 @@ fn render_prometheus_body(
     for (p, ratio) in &provider_idle_ratio_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_idle_ratio{{provider=\"{p}\"}} {ratio:.4}\n"
+        ));
+    }
+    // K18 落地：per-provider max active session age gauge。
+    // 補 K8 / K12 都沒覆蓋的盲點：K8 看「最後一次 event」（session 剛收到
+    // heartbeat 就歸 0，無法分辨「session 才開 30 秒但 1 小時沒收到 event」跟
+    // 「session 才開 30 秒」）；K12 是 K8/K10 比例（健康度訊號，無絕對秒數）。
+    // K18 直接給「最老 active session 已活多久」絕對秒數，operator 一看就知道
+    // 是否有 runner 卡住 / 工具 hang。session 結束後 sample 自動消失（live 語意），
+    // 不會誤報 stale session。`max(0)` 確保負 duration 退化成 0 不會被 Prometheus
+    // 端誤判。`for` 自然跳過 `provider_max_session_age` 缺資料的 provider。
+    out.push_str("# HELP lobsterpulse_provider_max_session_age_seconds Age in seconds of the oldest active session per provider (live; 0 means session just started; missing = no active session)\n# TYPE lobsterpulse_provider_max_session_age_seconds gauge\n");
+    for (p, age) in &provider_max_session_age_sorted {
+        let clamped = (**age).max(0i64);
+        out.push_str(&format!(
+            "lobsterpulse_provider_max_session_age_seconds{{provider=\"{p}\"}} {clamped}\n"
         ));
     }
     // K13 落地：per-provider lifetime event counter。`events_total` 來自
@@ -2322,6 +2367,17 @@ mod render_prometheus_tests {
         }
     }
 
+    /// K18 測試用：SessionInfo fixture 帶自訂 `duration_secs`（active session 已活多久）。
+    /// 既有 `info` fixture 強制 `duration_secs: 0`，K18 需要驗「max of multiple
+    /// active sessions」時要能各自指定不同 duration。`is_active` 跟 `duration_secs`
+    /// 獨立控制 —— K18 只看 active 的 session，duration_secs 是 raw 資料。
+    fn info_with_age(provider: &str, is_active: bool, duration_secs: i64) -> SessionInfo {
+        let mut s = info(provider, is_active, 0, 0);
+        s.id = format!("{provider}-sid-{duration_secs}");
+        s.duration_secs = duration_secs;
+        s
+    }
+
     /// 為 test 製造 ProviderTotals fixture（填 render_prometheus_body 讀的 token 欄位）。
     /// K8 落地：預設 `last_event_at = Some(now)`，避免既有測試被 K8 新 metric 干擾
     /// （讓 render 端計算 idle = now - now = 0，行為退化成「剛剛有動」）。
@@ -2858,6 +2914,9 @@ mod render_prometheus_tests {
             // K12 新增：per-provider idle ratio gauge（K8 / K10 派生）
             "# HELP lobsterpulse_provider_idle_ratio",
             "# TYPE lobsterpulse_provider_idle_ratio gauge",
+            // K18 新增：per-provider max active session age gauge（live）
+            "# HELP lobsterpulse_provider_max_session_age_seconds",
+            "# TYPE lobsterpulse_provider_max_session_age_seconds gauge",
             // K13 新增：per-provider lifetime event counter（任何 event 都 +1）
             "# HELP lobsterpulse_provider_events_total",
             "# TYPE lobsterpulse_provider_events_total counter",
@@ -4372,5 +4431,145 @@ mod render_prometheus_tests {
         assert!(body.contains(
             "lobsterpulse_provider_event_type_total{provider=\"claude\",type=\"Stop\"} 99\n"
         ));
+    }
+
+    // ─── K18 tests ─────────────────────────────────────────────────────
+    // K18 落地：per-provider max active session age gauge。
+    // 差異化既有 metric：K8 看「最後一次 event」秒數,K18 看「session 開到
+    // 現在」秒數。Operator 端用 K18 偵測「runner 還在 active 但已卡很久」。
+
+    #[test]
+    fn max_session_age_empty_state_emits_header_only() {
+        // 對齊 K8/K12 empty-state 契約:0 個 live session → 沒 sample line。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains("# HELP lobsterpulse_provider_max_session_age_seconds"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_max_session_age_seconds gauge"));
+        assert!(!body.contains("lobsterpulse_provider_max_session_age_seconds{"));
+    }
+
+    #[test]
+    fn max_session_age_takes_max_across_active_sessions_same_provider() {
+        // K18 主軸:同 provider 多個 active session → 取 max(各自 duration)。
+        // claude 兩個 active session(30s / 300s)→ 應輸出 300。
+        let body = render_prometheus_body(
+            &[
+                info_with_age("claude", true, 30),
+                info_with_age("claude", true, 300),
+            ],
+            2,
+            2,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body
+            .contains("lobsterpulse_provider_max_session_age_seconds{provider=\"claude\"} 300\n"));
+    }
+
+    #[test]
+    fn max_session_age_ignores_inactive_sessions() {
+        // K18 語意:active = false 的 session 不算(已被 stale 回收前 idle 過久
+        // 但不是「live 卡住」)。is_active 必須為 true 才納入 max 計算。
+        let body = render_prometheus_body(
+            &[
+                info_with_age("claude", false, 9999), // inactive → 忽略
+                info_with_age("cicx", true, 60),
+            ],
+            1,
+            1,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // claude 雖有 9999 秒 duration 但 inactive → 不出 sample line
+        assert!(
+            !body.contains("lobsterpulse_provider_max_session_age_seconds{provider=\"claude\"}")
+        );
+        // cicx active 60 秒 → 出 sample
+        assert!(
+            body.contains("lobsterpulse_provider_max_session_age_seconds{provider=\"cicx\"} 60\n")
+        );
+    }
+
+    #[test]
+    fn max_session_age_per_provider_independent() {
+        // 多 provider 各自有 active session → 各自 max 獨立,alphabetical 排序。
+        // 故意非字母序輸入驗排序契約。
+        let body = render_prometheus_body(
+            &[
+                info_with_age("openx", true, 7200),
+                info_with_age("cicx", true, 60),
+                info_with_age("gemini", true, 3600),
+            ],
+            3,
+            3,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(
+            body.contains("lobsterpulse_provider_max_session_age_seconds{provider=\"cicx\"} 60\n")
+        );
+        assert!(body
+            .contains("lobsterpulse_provider_max_session_age_seconds{provider=\"gemini\"} 3600\n"));
+        assert!(body
+            .contains("lobsterpulse_provider_max_session_age_seconds{provider=\"openx\"} 7200\n"));
+
+        // 排序驗證: cicx < gemini < openx(對齊 K6-K13 既有排序契約)
+        let cicx_idx = body
+            .find("lobsterpulse_provider_max_session_age_seconds{provider=\"cicx\"} 60\n")
+            .expect("cicx max_age line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_max_session_age_seconds{provider=\"gemini\"} 3600\n")
+            .expect("gemini max_age line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_max_session_age_seconds{provider=\"openx\"} 7200\n")
+            .expect("openx max_age line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider max_session_age_seconds 必須 alphabetical 排序"
+        );
+    }
+
+    #[test]
+    fn max_session_age_clamps_negative_duration_to_zero() {
+        // 邊界:`duration_secs` 為負(時鐘回撥 / 序列化時間差 edge case) →
+        // clamp 到 0,避免 Prometheus 端看到負值。
+        let body = render_prometheus_body(
+            &[info_with_age("claude", true, -5)],
+            1,
+            1,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(
+            body.contains("lobsterpulse_provider_max_session_age_seconds{provider=\"claude\"} 0\n")
+        );
+        // 確保沒有負號進 output
+        assert!(!body
+            .contains("lobsterpulse_provider_max_session_age_seconds{provider=\"claude\"} -5\n"));
     }
 }

@@ -668,10 +668,11 @@ mod save_config_at_tests {
 
 #[cfg(test)]
 mod load_config_at_tests {
-    //! R28 regression：`load_config` 之前兩條 silent chain
+    //! R28 regression：`load_config` 之前兩條 silent chain：
     //!   - `serde_json::from_str(&data).unwrap_or_default()` 吞壞 JSON
     //!   - `if let Ok(data) = read_to_string(&path) { ... } else { default() }` 吞 IO 錯誤
-    //! 結果：config.json 損壞（磁碟寫入半截 / 手動編輯壞 JSON / 權限拒絕）時
+    //!
+    //! 結果：config.json 損壞（磁碟寫入半截 / 手動編輯壞 JSON / 權限拒絕）時,
     //! 使用者所有 provider enabled / 音效設定在啟動時無聲蒸發,operator 完全無
     //! log 可查。改 `load_config_at(path) -> AppConfig` 後 caller 端 `match`
     //! 統一分流（NotFound 靜默 / IO 錯 warn / 解析錯 warn 帶 preview）。
@@ -724,9 +725,14 @@ mod load_config_at_tests {
     fn load_config_at_reads_valid_file() {
         let tmp = TmpDir::new("load-happy");
         let path = tmp.0.join("config.json");
-        let mut cfg = AppConfig::default();
-        cfg.setup_done = true;
-        cfg.appearance.theme = "R31-marker".to_string();
+        let cfg = AppConfig {
+            setup_done: true,
+            appearance: AppearanceConfig {
+                theme: "R31-marker".to_string(),
+                ..AppearanceConfig::default()
+            },
+            ..AppConfig::default()
+        };
         let serialized = serde_json::to_string_pretty(&cfg).expect("serialize");
         write_raw(&path, serialized.as_bytes());
 
@@ -756,10 +762,8 @@ mod load_config_at_tests {
 
         // 沒 panic + 沒 log warn + 回 default = 預期 first-run 行為
         assert!(!loaded.setup_done);
-        assert_eq!(
-            loaded.appearance.theme.is_empty() || !loaded.appearance.theme.is_empty(),
-            true
-        );
+        // tautology-style assert:theme 必為 String,is_empty 或非 is_empty 二擇一
+        assert!(loaded.appearance.theme.is_empty() || !loaded.appearance.theme.is_empty());
     }
 
     /// R28 corrupt JSON → log warn 帶 preview + 回 default

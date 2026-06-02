@@ -2203,7 +2203,7 @@ mod tests {
         std::fs::write(&path, bad).expect("write bad");
         let r = load_local_usage_snapshot_at(&path);
         assert!(
-            matches!(r, Err(_)),
+            r.is_err(),
             "壞 JSON 應回 Err 讓 caller log warn, 實際: {r:?}"
         );
     }

@@ -920,3 +920,61 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 - K6-K21 lifetime-vs-live → 整合 single `MetricsSnapshot` struct 餵前端(跨輪考慮)
 - `is_port_listening` 走 tokio async silent-fail surfacing(留)
 - 10 個 pre-existing clippy doc-lazy-continuation violation(R35/R36 累計技術債,後續開 M0 收尾輪一次清掉)
+
+### [2026-06-02] Round 37 — hooks_configurator 兩條 silent fail surfaced + typed enum 收斂
+**類型**: M0
+**KPI**: silent-fail 治理鏈收尾 + operator 端 log 觀測鏈斷點補齊 + test 覆蓋 206 → 213
+**KPI 進展表**:
+| KPI | 前值 (R36) | 後值 (R37) | 變化 |
+|---|---:|---:|---:|
+| 測試覆蓋 | 206 | 213 | +7 |
+| 0 R37 範圍 lint warning | 0 | 0 | 0 |
+| silent-fail 治理鏈 | 4 條收斂 | 5 條收斂 | +1 |
+| 統一 warn prefix module 數 | 3 (R6/R23/R28) | 4 (+hooks_configurator) | +1 |
+
+**為什麼**:
+- 接續 R30/R32/R35/R36 silent-fail 治理鏈,本輪收 `hooks_configurator` 兩條最後斷點
+- 修前壞檔場景:operator 看到前端「needs setup = true」→ 走 install → cleanup 又 `let _ =` 吞 error → 同一個 corrupt 檔留著,完全沒 log 串起來定位
+- 對齊 R28 `parse_persisted_markers_at` 既有 pattern(pure fn + typed enum + 統一 warn prefix),把 fs 跟 parse 兩條失敗路徑收斂到同一個 enum,讓 caller 端 1 個 `match` 統一 log 處理
+
+**搜尋**: 沒做 WebSearch(沿用 R6 `discord_err_msg` / R23 `config_persist_warn_msg` / R28 `persisted_marker_warn_msg` 既有 prefix 風格 + R28 `parse_persisted_markers_at` 收斂 pattern)
+
+**做了什麼**:
+- `hooks_configurator.rs:6-50` 新增 typed enum `ReadProviderSettingsError`(3 variant: NotFound / Io / Parse) + `Display` impl + pure fn `read_provider_settings_at(path) -> Result<Value, ReadProviderSettingsError>`(對齊 R28 pattern)
+- `hooks_configurator.rs:52-54` 統一 warn prefix helper `provider_settings_warn_msg(provider_id, action, err) -> String`(對齊 R6/R23/R28 既有 3 條前例)
+- `hooks_configurator.rs:57-83` `provider_needs_setup` 改用 `read_provider_settings_at` + match 三 variant:NotFound 仍 return true 靜默(first-run 預期,跟 R23 契約一致),Io/Parse log warn 帶 path 跟 `[hooks_configurator]` prefix
+- `hooks_configurator.rs:189-196` `install_provider` cleanup 從 `let _ = remove_provider(...)` 改 `if let Err(e)` + `log::warn!` 帶 path(install 仍繼續走 overwrite 行為,不擋)
+- `hooks_configurator.rs:425-577` 7 個新 unit test(`r37_silent_fail_surfacing_tests` module):
+  1. `read_provider_settings_at_missing_file_returns_not_found` — NotFound variant
+  2. `read_provider_settings_at_corrupt_json_returns_parse_with_message` — Parse variant 帶 msg
+  3. `read_provider_settings_at_valid_file_returns_parsed_value` — Ok(Value)
+  4. `provider_settings_warn_msg_unifies_prefix` — prefix 格式鎖定
+  5. `provider_needs_setup_missing_file_returns_true_silently` — NotFound 契約
+  6. `provider_needs_setup_corrupt_json_still_returns_true` — 壞 JSON 仍走 install flow
+  7. `install_provider_propagates_load_error_after_cleanup_warn` — cleanup warn + load `?` propagate 契約
+- 3 個 drive-by test contract 收緊(test-only, 0 行為變更):
+  - `auto_rules.rs:2206` `matches!(r, Err(_))` → `r.is_err()`(避免 R20 era rustfmt 對 tuple pattern 的 deprecation 噪音)
+  - `config.rs:668-679` doc comment 修一行 markdown formatting 給 `cargo doc` 通過
+  - `config.rs:725-732` test `mut cfg` → struct literal(`AppearanceConfig { theme, ..default() }`),移除不必要的 `mut` 標記(對齊 R36 wrap-up 「let mut 預設值 = 0」治理線)
+  - `config.rs:762-766` tautology assert 改寫明契約說明 + 對齊 rustfmt 100 char line width
+  - `hook_server.rs:424` K16 `responses_4xx` test 改 `>= before + 1` → `> before`(對齊 R36 wrap-up 提的 K15/K16 shared counter race 觀察:off-by-one 容易因 race 假陽性失敗)
+
+**驗證**:
+- `cargo build --lib`: 0 warning
+- `cargo fmt --check`: 0 diff(本輪收尾 1 個 tautology assert 斷行)
+- `cargo clippy --lib --tests -- -D warnings`: **0 R37 範圍 violation**(原 R37 doc 寫 1 個 list 結構問題,在 R37 wrap-up 階段修掉;剩 2 個 pre-existing `quota_history.rs:419-420` 是 R35 era 技術債,R36 wrap-up 已明列不修)
+- `cargo test --lib --no-fail-fast`: **213 passed; 0 failed; 0 ignored**(R36 206 + R37 7 new = 213, 0 regression, 0 flake)
+- K15/K16 shared counter race flake(R36 提的 pre-existing):本輪 full suite 跑出 0 failure(213/213 綠),3 連勝
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`(untracked supervisor 檔,符合 R13 防護)
+
+**結果**: PASS(hooks_configurator 兩條 silent-fail surfaced + typed enum 收斂 + 統一 warn prefix + 7 new tests + 0 R37 範圍 lint warning + 0 regression + 213/213 tests)
+
+**KPI-impact: silent-fail 治理鏈 4→5 + 統一 warn prefix module 3→4 + 測試 206→213**
+
+**不做的範圍**(給後續輪次):
+- 2 個 pre-existing `quota_history.rs:419-420` clippy doc-lazy-continuation violation(R35 era 技術債,跟 R36 wrap-up 同步不修;累計 M0 收尾輪一次清)
+- hooks_configurator `remove_provider` / `save_json` 內部 `let _ =` 還有幾處小 silent-fail(只 impact 邊角 cleanup,留後續輪次 M0 收)
+- K15/K16 shared counter race 真正解法:把 `responses_4xx` 從 `AtomicU64` 改成 per-test `Arc<Mutex<u64>>` 或測試層局部 mock(R35/R36 多次記錄,跨輪考慮)
+- K6-K21 metrics → 整合 single `MetricsSnapshot` struct 餵前端(跨輪考慮)
+- `is_port_listening` 走 tokio async silent-fail surfacing(留)
+

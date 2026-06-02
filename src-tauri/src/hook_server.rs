@@ -421,7 +421,7 @@ mod tests {
         let _ = process_body(b"not json { broken", "claude");
         let after = super::hook_server_metrics();
         assert!(
-            after.responses_4xx >= before.responses_4xx + 1,
+            after.responses_4xx > before.responses_4xx,
             "壞 JSON 應讓 K16 4xx counter 至少 +1，before={} after={}",
             before.responses_4xx,
             after.responses_4xx

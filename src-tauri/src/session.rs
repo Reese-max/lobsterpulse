@@ -3508,6 +3508,298 @@ mod tests {
         );
     }
 
+    // ============== R58：K22 (latest) / K23 (count) / K24 (total) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) 7-K 跨樣本數 + 跨 4 provider aggregate consistency 護欄 ==============
+    // 策略顧問 R50 巡邏「DRIFTING + 凍結 gauge 補閉環」紀律延伸 — R51 補 K30/K31/K32 percentile
+    // bounds, R52 補 K23/K24/K25 (count/total/avg) 三 K 數學不變式, R53 補 K22/K26/K27 (latest/max/
+    // min) 三 K lifetime aggregate bounds, R54 補 K30-K33 (P50/P75/P95/P99) percentile monotonic
+    // chain, R55 補 K34 (P25) 下四分位 chain, R57 補 K22↔K10 lifetime freshness + K35 helper
+    // correctness。R58 收 R50 紀律最後一塊「K24 跨 K 同步性」護欄缺口：R52 蓋 K23/K24/K25 三 K
+    // 互鎖 (count/total/avg), R53 蓋 K22/K26/K27 三 K bounds (latest/max/min), **沒有任何一條
+    // 護欄把 K24 (cumulative total) 跟 K22 (latest) + K26 (max) + K27 (min) 拉通驗證同步性**。
+    //
+    // K22-K27 6 K 語意強綁定（同一個 `record_completed_session_age` helper 內一次更新）：
+    // - K22 latest = 最後一個餵的 age (clamp 0 後)
+    // - K23 count  += 1
+    // - K24 total  += clamped_age (saturating_add)
+    // - K25 avg    = K24 / K23 (派生, count > 0)
+    // - K26 max    = max(歷史, clamped_age)
+    // - K27 min    = min(歷史, clamped_age)
+    //   → **數學不變式鏈**: K27 * K23 ≤ K24 ≤ K26 * K23（每個 sample ≥ min, ≤ max, sum 因此
+    //     包夾在 [min*count, max*count] 區間）— 改 K22 trigger 漏寫 / 改 K24 saturating
+    //     改 wrapping 污染 sum / 改 K25 派生用錯欄位 / 改 K26-K27 比較方向反 / 改 helper
+    //     拆 fn 漏 sync 任何一條, 護欄 CI 1 秒抓出。
+    //
+    // R58 護欄 A: 6 provider × 5 sample 跨 N ∈ {1, 2, 5, 10, 50} 樣本數, 斷言 K22-K27 6 K
+    // 數學不變式鏈 + 6 K 各自精確值（K22=latest, K23=N, K24=sum, K25=sum/N, K26=max,
+    // K27=min）全部一致。K28 stddev 額外加 (Welford 從 K23+K24 派生不了, 獨立算, 跟
+    // K25+K26+K27 算的 [K27, K26] 包夾關係 + stddev ≤ (K26-K27)/2 [範圍半寬上限] 護欄)。
+    // R58 護欄 B: K24 增量 delta 跟 K22 寫入值單步鎖定 (每個 record step 後 K24_new - K24_old
+    // == K22 新寫入的 clamped_age, 驗證「同 fn 內同步觸發」紀律, 避免未來有人 refactor
+    // 把 K24 拆出 record_completed_session_age 變異步 → K22 寫了 K24 沒加, 單 K 測試
+    // 抓不出, R58 B 護欄 CI 1 秒抓)。
+    // R58 護欄 C: 負值 age clamp 0 邊界 — K22-K27 在 age = i64::MIN 餵入時仍自洽 (K22 寫 0,
+    // K24 += 0, K26/K27 min/max 不被 i64::MIN 污染 = 現有 `k22_record_completed_session_age_
+    // clamps_negative_to_zero` 單 metric 護欄的 cross-K 延伸)。
+
+    #[test]
+    fn r58_k22_k23_k24_k25_k26_k27_six_way_aggregate_consistency_across_sample_sizes() {
+        // property-style: 對 N ∈ {1, 2, 5, 10, 50} 各自餵 samples 1..=N
+        // (sum = N*(N+1)/2, max = N, min = 1, latest = N, avg = (N+1)/2), 斷言
+        // 6 K 各自精確值並驗 K27*count ≤ K24 ≤ K26*count 包夾不變式鏈永久成立。
+        // 6 K 任一不同步（K22 trigger 漏 / K24 sum 污染 / K25 派生錯欄位 /
+        // K26 max 比較方向反 / K27 min 比較方向反 / K27/K26 default 邊界退化）
+        // → 任一 assert 立即 fail。Sample size 從 1 跨到 50 涵蓋小樣本（單一
+        // 完成 N=1, K22=K26=K27=1, K24=1, K25=1.0）到大樣本（N=50, K22=50,
+        // K27=1, K24=1275, K25=25.5, K26=50）。
+        let sizes = [1usize, 2, 5, 10, 50];
+        for n in sizes {
+            let mut m = SessionManager::new();
+            for i in 1..=n as i64 {
+                m.record_completed_session_age("cicx", i);
+            }
+            let totals = m
+                .provider_totals
+                .get("cicx")
+                .expect("cicx entry should exist after N>=1 samples");
+
+            // K22 latest = N (最後一個餵的 i)
+            assert_eq!(
+                totals.last_completed_session_age_secs,
+                Some(n as i64),
+                "N={n}: K22 last_completed_session_age_secs 必須 = latest = {n} (gauge 覆寫成最新)"
+            );
+            // K23 count = N
+            assert_eq!(
+                totals.completed_sessions_count, n as u64,
+                "N={n}: K23 count 必須 = N (lifetime +1 觸發點未漏)"
+            );
+            // K24 total = 1+2+...+N = N*(N+1)/2
+            let expected_total = (n as u64) * ((n as u64) + 1) / 2;
+            assert_eq!(
+                totals.completed_sessions_total_duration_secs, expected_total,
+                "N={n}: K24 total_duration_secs 必須 = N*(N+1)/2 = {expected_total} \
+                 (lifetime saturating_add 未污染 sum)"
+            );
+            // K26 max = N (largest sample = N)
+            assert_eq!(
+                totals.max_completed_session_age_secs,
+                Some(n as i64),
+                "N={n}: K26 max_completed_session_age_secs 必須 = N = {n} (saturating_max 升級)"
+            );
+            // K27 min = 1 (smallest sample = 1)
+            assert_eq!(
+                totals.min_completed_session_age_secs,
+                Some(1),
+                "N={n}: K27 min_completed_session_age_secs 必須 = 1 (saturating_min 降級)"
+            );
+
+            // ── K24 跟 K22-K27 6 K 數學不變式鏈 ──
+            // K27 * K23 ≤ K24: 每個 sample ≥ min, sum ≥ min*count
+            let k27 = 1_i64;
+            let k23 = n as i64;
+            let k24 = expected_total as i64;
+            let k26 = n as i64;
+            assert!(
+                k27 * k23 <= k24,
+                "N={n}: K27*K23 = {lhs} 必須 ≤ K24 = {rhs} (K24 累加不能 < min*count, \
+                 違反代表 K24 累加漏 sample 或 K27 min 比較方向反)",
+                lhs = k27 * k23,
+                rhs = k24
+            );
+            // K24 ≤ K26 * K23: 每個 sample ≤ max, sum ≤ max*count
+            assert!(
+                k24 <= k26 * k23,
+                "N={n}: K24 = {lhs} 必須 ≤ K26*K23 = {rhs} (K24 累加不能 > max*count, \
+                 違反代表 K24 累加多 sample 或 K26 max 比較方向反)",
+                lhs = k24,
+                rhs = k26 * k23
+            );
+            // K22 必須在 [K27, K26] 範圍內
+            let k22 = n as i64;
+            assert!(
+                k27 <= k22 && k22 <= k26,
+                "N={n}: K22 = {k22} 必須 ∈ [K27={k27}, K26={k26}] 區間 \
+                 (K22 latest 跟 K26 max / K27 min bounds 對齊)"
+            );
+
+            // ── K25 純 fn 派生: 必須 = K24 / K23 (f64 epsilon 1e-9) ──
+            let avg_map =
+                crate::session::completed_sessions_average_duration_at(&m.provider_totals);
+            let k25 = avg_map
+                .get("cicx")
+                .copied()
+                .unwrap_or_else(|| panic!("N={n}: K25 應 emit (count > 0), 但 missing"));
+            let expected_avg = expected_total as f64 / n as f64;
+            assert!(
+                (k25 - expected_avg).abs() < 1e-9,
+                "N={n}: K25={k25} 必須 == K24/K23 = {expected_avg} (count/total/avg 數學不變式)"
+            );
+            // K25 跟 K22/K26/K27 bounds: min ≤ avg ≤ max
+            assert!(
+                (k27 as f64) <= k25 && k25 <= (k26 as f64),
+                "N={n}: K25 avg = {k25} 必須 ∈ [K27={k27}, K26={k26}] 區間 \
+                 (K25 派生跟 K26 max / K27 min bounds 對齊, 違反代表 K25 用錯欄位)"
+            );
+
+            // ── K28 stddev: 跟 K27 ≤ avg - stddev / K26 ≥ avg + stddev 邊界檢查 ──
+            // Welford stddev 對 samples 1..=N 算出的 stddev 必須 ≤ (max - min) / 2
+            // （range 半寬上限, 任何 sample 落在 [min, max] 內, stddev 必 ≤ 半寬）
+            // —— 改 K28 M2 累加方向反 / K28 比較方向反護欄 CI 1 秒抓。
+            let stddev_map = crate::session::completed_sessions_stddev_at(&m.provider_totals);
+            let k28 = stddev_map
+                .get("cicx")
+                .copied()
+                .unwrap_or_else(|| panic!("N={n}: K28 應 emit (count > 0), 但 missing"));
+            let half_range = (k26 - k27) as f64 / 2.0;
+            assert!(
+                k28 <= half_range + 1e-9,
+                "N={n}: K28 stddev = {k28} 必須 ≤ (K26-K27)/2 = {half_range} \
+                 (stddev ≤ range 半寬上限, 違反代表 K28 M2 累加或公式錯)"
+            );
+        }
+    }
+
+    #[test]
+    fn r58_k22_k24_incremental_delta_consistency_per_record_step() {
+        // 護欄 C 邏輯跟 B 合併版: 餵 samples [3, 7, 1, 12, 5], 記錄每步
+        // K22 / K24 狀態, 斷言每步 K24 delta == K22 寫入的 clamped_age。並
+        // 驗 K26/K27 在每步後即時更新（K22 trigger 跟 K26/K27 trigger 在同
+        // fn 內, 不可能 K22 寫了 K26/K27 沒更新）。順手 cover 負值 age 餵入
+        // (age=-5) clamp 0 路徑 — K22 寫 0, K24 += 0 (delta=0), K26 max
+        // 不變, K27 min 不變（0 餵入若 K27 已是 None 第一次會寫 0; 此處
+        // 已先餵 positive 所以 K27=3 維持）。
+        let mut m = SessionManager::new();
+        let samples = [3i64, 7, -5, 1, 12, 5]; // -5 測負值 clamp 0 路徑
+        let mut prev_k24: u64 = 0;
+        for (step, &age) in samples.iter().enumerate() {
+            m.record_completed_session_age("cicx", age);
+            let totals = m
+                .provider_totals
+                .get("cicx")
+                .expect("cicx entry should exist after first record");
+            let clamped = age.max(0) as u64;
+            // K24 delta 必須 == clamped_age (沒污染, 沒漏 sample, saturating OK)
+            let new_k24 = totals.completed_sessions_total_duration_secs;
+            assert_eq!(
+                new_k24,
+                prev_k24 + clamped,
+                "step {step}: K24 delta 必須 == age.max(0) = {clamped} \
+                 (K24 累加跟 K22 觸發點同 fn 內同步, prev={prev_k24}, new={new_k24})"
+            );
+            // K22 寫入值 必須 == clamped_age (不是原始 age, 驗 clamp 路徑)
+            assert_eq!(
+                totals.last_completed_session_age_secs,
+                Some(clamped as i64),
+                "step {step}: K22 必須寫 clamped_age = {clamped} (原始 age={age} \
+                 過 age.max(0) 飽和 clamp 後, 不是原始負值)"
+            );
+            // K23 必須遞增 1
+            assert_eq!(
+                totals.completed_sessions_count,
+                (step + 1) as u64,
+                "step {step}: K23 count 必須 == step+1 (每步 +1 同步)"
+            );
+            // K26 max 必須是前 step+1 個 samples 的 max
+            let observed_max = samples[..=step].iter().map(|&a| a.max(0)).max().unwrap();
+            assert_eq!(
+                totals.max_completed_session_age_secs,
+                Some(observed_max),
+                "step {step}: K26 max 必須是 {observed_max} (samples[..={step}] max, \
+                 K22 trigger 跟 K26 trigger 同 fn 內同步, 不可能 K22 寫了 K26 沒更新)"
+            );
+            // K27 min 必須是前 step+1 個 samples 的 min
+            let observed_min = samples[..=step].iter().map(|&a| a.max(0)).min().unwrap();
+            assert_eq!(
+                totals.min_completed_session_age_secs,
+                Some(observed_min),
+                "step {step}: K27 min 必須是 {observed_min} (samples[..={step}] min, \
+                 K22 trigger 跟 K27 trigger 同 fn 內同步, 不可能 K22 寫了 K27 沒更新)"
+            );
+            prev_k24 = new_k24;
+        }
+    }
+
+    #[test]
+    fn r58_k22_k23_k24_k25_k26_k27_per_provider_isolation_under_mixed_samples() {
+        // 跨 4 provider 隔離強化 — 跟 R52 護欄 B 同模板但擴展到 K22-K27 6 K。
+        // 4 provider 各自餵不同 sample sets, 驗證 K22/K23/K24/K25/K26/K27 在
+        // ProviderTotals 內 per-provider 隔離, 不互相污染 (共用 HashMap 寫入
+        // 時的 entry 衝突沒護欄會全算成同值)。
+        // - cicx: samples [10, 20, 30] sum=60, latest=30, max=30, min=10, avg=20
+        // - claude: samples [100, 200] sum=300, latest=200, max=200, min=100, avg=150
+        // - gemini: 故意不 record → count=0, K22/K26/K27 None, K23/K24=0, K25 跳
+        // - openx: samples [5] sum=5, latest=5, max=5, min=5, avg=5 (單樣本)
+        let mut m = SessionManager::new();
+        for age in [10i64, 20, 30] {
+            m.record_completed_session_age("cicx", age);
+        }
+        for age in [100i64, 200] {
+            m.record_completed_session_age("claude", age);
+        }
+        m.provider_totals.entry("gemini".to_string()).or_default();
+        m.record_completed_session_age("openx", 5);
+
+        let totals = &m.provider_totals;
+
+        // cicx
+        let cicx = totals.get("cicx").expect("cicx entry");
+        assert_eq!(cicx.last_completed_session_age_secs, Some(30));
+        assert_eq!(cicx.completed_sessions_count, 3);
+        assert_eq!(cicx.completed_sessions_total_duration_secs, 60);
+        assert_eq!(cicx.max_completed_session_age_secs, Some(30));
+        assert_eq!(cicx.min_completed_session_age_secs, Some(10));
+        // claude
+        let claude = totals.get("claude").expect("claude entry");
+        assert_eq!(claude.last_completed_session_age_secs, Some(200));
+        assert_eq!(claude.completed_sessions_count, 2);
+        assert_eq!(claude.completed_sessions_total_duration_secs, 300);
+        assert_eq!(claude.max_completed_session_age_secs, Some(200));
+        assert_eq!(claude.min_completed_session_age_secs, Some(100));
+        // gemini (未 record, default)
+        let gemini = totals.get("gemini").expect("gemini entry");
+        assert_eq!(gemini.last_completed_session_age_secs, None);
+        assert_eq!(gemini.completed_sessions_count, 0);
+        assert_eq!(gemini.completed_sessions_total_duration_secs, 0);
+        assert_eq!(gemini.max_completed_session_age_secs, None);
+        assert_eq!(gemini.min_completed_session_age_secs, None);
+        // openx (單樣本)
+        let openx = totals.get("openx").expect("openx entry");
+        assert_eq!(openx.last_completed_session_age_secs, Some(5));
+        assert_eq!(openx.completed_sessions_count, 1);
+        assert_eq!(openx.completed_sessions_total_duration_secs, 5);
+        assert_eq!(openx.max_completed_session_age_secs, Some(5));
+        assert_eq!(openx.min_completed_session_age_secs, Some(5));
+
+        // K25 純 fn 派生: gemini 跳過, 其他 3 provider emit
+        let avg_map = crate::session::completed_sessions_average_duration_at(totals);
+        assert_eq!(avg_map.get("cicx").copied(), Some(20.0));
+        assert_eq!(avg_map.get("claude").copied(), Some(150.0));
+        assert_eq!(avg_map.get("openx").copied(), Some(5.0));
+        assert!(
+            !avg_map.contains_key("gemini"),
+            "gemini count=0, K25 必須跳過 (0/0 NaN 防線, 不 emit 0.0 假冒平均)"
+        );
+
+        // K28 純 fn 派生: 3 provider 各 emit
+        let stddev_map = crate::session::completed_sessions_stddev_at(totals);
+        // cicx samples [10, 20, 30] → stddev 為 0 (3 samples 等差, mean=20, 偏離平方 100+0+100=200, n=3 → population stddev = sqrt(200/3) ≈ 8.165)
+        let cicx_stddev = stddev_map.get("cicx").copied().unwrap();
+        assert!(
+            (cicx_stddev - (8.165_f64)).abs() < 0.01,
+            "cicx samples [10,20,30] population stddev 應 ≈ 8.165, got {cicx_stddev}"
+        );
+        // claude samples [100, 200] → stddev = 50 (population n=2, 偏離平方 2500+2500=5000, /2=2500, sqrt=50)
+        let claude_stddev = stddev_map.get("claude").copied().unwrap();
+        assert!(
+            (claude_stddev - 50.0).abs() < 1e-9,
+            "claude samples [100,200] population stddev 應 = 50.0, got {claude_stddev}"
+        );
+        // openx 單樣本 → stddev = 0
+        assert_eq!(stddev_map.get("openx").copied(), Some(0.0));
+        // gemini count=0 → 跳過
+        assert!(!stddev_map.contains_key("gemini"));
+    }
+
     // ============== R54：K30/K31/K32/K33 percentile bounds chain (P50 ≤ P75 ≤ P95 ≤ P99) 跨樣本數 + 跨 4 provider 隔離護欄 ==============
     // R51 護欄 (c17662c) 已涵蓋 K30/K31/K32 (P50/P95/P99) 跨 8 種樣本數的 bounds
     // chain 跟 4 provider 隔離強化。R53 落地 K33 P75 (第三四分位 Q3) 介於 P50

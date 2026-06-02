@@ -612,6 +612,46 @@ URGENCY: MEDIUM
 
 **KPI-impact: K33 P75 gauge 從 0 → 1 metric + 25 → 26 K-tag series + cross-K monotonic 護欄 +2 條 (R53 lifetime + R54 percentile) + 307 → 321 tests, 補 K22-K32 九件套外的「上四分位延遲」觀測維度, alert 閾值 p75 > 120 觸發「中段分布離散偏慢」信號, 跟 K30 P95 / K32 P99 互補形成 latency 分布輪廓**
 
+---
+
+### [2026-06-03] Round 54 — K34 P25 gauge 撿 R53 後 WIP 落地 + R55 5-percentile chain + R56 lifetime↔window 護欄
+**類型**: M1 (KPI 推進 — metrics 維度擴張 + invariant 護欄)
+**為什麼**: R53 commit (f5ca91b) 收尾時已寫 R53/R54 cross-K monotonic 護欄, R54 開工寫 K34 P25 下四分位 metric (R53 wrap-up 「不做的範圍」明確點名 K34 P25 留 R56+ 觀察 → 提前一輪落地)。P25 配合既有 P50/P75/P95/P99 形成 5-percentile 完整輪廓, 跟 K28 stddev 互補得「分布寬度 + 中心對稱性」雙維度。同時補三條護欄: R54 outlier ratio (K30 P95 / K25 avg 在 uniform < 2, extreme > 5) / R55 5-percentile chain (K34 ≤ K31 ≤ K33 ≤ K30 ≤ K32 跨 8 種樣本數 + 4-provider 隔離) / R56 lifetime↔window (K27 lifetime min ≤ K34 window P25)。
+**KPI 進展表**:
+| KPI | 前值 (R53) | 後值 (R54) | 變化 |
+|---|---:|---:|---:|
+| K-tag series | 26 | 27 | +1 (K34 P25) |
+| cross-K 護欄 | 4 (R51/R52/R53 +R54 percentile) | 7 (+R54 outlier +R55 chain +R56 lifetime↔window) | +3 |
+| lib tests | 321 | 337 | +16 |
+| clippy warning | 0 | 0 | 0 |
+**搜尋**: 沿 R51/R52/R53 既模板, 復用 K30 reservoir 1024 同一 vec, 沒開新欄位; 5-percentile 算術模板 (idx = len * pct / 100) 跟 K30-K33 一致, 不需新研究。
+**做了什麼**:
+- session.rs: `completed_sessions_p25_at` 純 fn (clone samples + sort_unstable + idx = len*25/100, 過濾 is_empty, 復用 K30 reservoir)
+- session.rs: 6 K34 unit test (empty skip / 20 sample P25=5 / per-provider 隔離 / 單樣本 / 4+100 boundary / 跟 K30-K33 共用 vec 五驗證)
+- session.rs: R55 護欄 2 個 (8 種樣本數 chain + 4-provider × 100 樣本 isolation)
+- session.rs: R54 護欄 3 個 (P95/avg uniform < 2 / extreme outlier > 5 / 4-provider isolation)
+- lib.rs: K34 emit block (HELP/TYPE 標頭 + alphabetical sort, 跟 K30-K33 emit 風格一致)
+- lib.rs: R55 R56 render emission consistency test (4 provider fixture + 6 part: 字串比對 + 6 件套 emit 順序 + emission set 一致 + 跨 lifetime↔window 算術 + chain 算術)
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json` (untracked supervisor 檔, 符合 R13 防護)
+- 沒動 `git add -A/.`, 嚴守 R13 防護
+**驗證**:
+- `cargo test --lib --no-fail-fast`: **337 passed; 0 failed; 0 ignored** (R53 321 + R54 +16, 0 regression)
+  - K34 pure fn: 6 new
+  - R55 percentile chain: 2 new
+  - R54 outlier ratio: 3 new
+  - R55 R56 render emission: 1 new
+  - R55 K34 isolation: 1 new
+  - R53 R54 session.rs (R53 內已含): 2 carryover
+  - R52 R51 護欄 (R53 內已含): 1 carryover
+  - 合計 16 new tests this round
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `cargo build --lib`: 0 warning
+
+**結果**: PASS (K34 P25 落地 + R54 outlier + R55 chain + R56 lifetime↔window 三條護欄落地 + 0 R54 範圍 lint warning + 0 fmt diff + 0 regression + 337/337 tests)
+
+**KPI-impact: K34 P25 gauge 從 0 → 1 metric + 26 → 27 K-tag series + cross-K 護欄 +3 條 (R54 outlier ratio + R55 percentile chain + R56 lifetime↔window) + 321 → 337 tests, 補 K30-K33 四件套外的「下四分位延遲」觀測維度, alert 閾值 p25 < 5 觸發「trivially fast 過多」信號, 五件套 P25/P50/P75/P95/P99 形成 latency 分布完整輪廓**
+
 **不做的範圍**(給後續輪次):
 - 策略顧問 R50 「凍結新增 gauge 一週」紀律延伸: R54-R55 仍不開新 metric, 改做 invariant 護欄、cross-K 鏈驗證、test 覆蓋率強化。K34 P25 / K35 IQR (P75 - P25) 留 R56+ 觀察
 - 沿 R51/R52/R53/R54 同樣紀律, 後續輪次可考慮補: K23/K24/K25 lifetime 跟 K30-K33 percentile 跨窗口一致性護欄 (K30 P95 跟 K25 avg 比例, 例如 P95/avg < 2 為「典型 session」, > 5 為「outlier 拉高」)

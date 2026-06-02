@@ -1150,6 +1150,68 @@ pub fn completed_sessions_p50_at(
     out
 }
 
+/// K32 配套 pure fn: 把 `ProviderTotals` 裡的 reservoir samples 排序後
+/// 取 99 百分位 (= P99, 極尾端延遲), 回 `HashMap<provider, secs>` (i64)
+/// 給 `render_prometheus_body` emit。跟 K30 P95 / K31 P50 / K22 / K25 / K26
+/// / K27 / K28 / K29 對稱: 都過濾「沒完成過」的 provider (K32 用
+/// `samples.is_empty()` 過濾, 跟 K30/K31 同款)。
+///
+/// K32 復用 K30 reservoir 同一個 `completed_sessions_p95_samples: Vec<i64>`
+/// —— 不開新欄位, 跟 K30 / K31 共用 sample 池。語意: P99 = 「最近 1024 次
+/// 完成 session 的第 99 百分位」, 跟 P95 / P50 同一 sliding window, 差別
+/// 只在 percentile 位置 (50/95/99)。Operator 端 alert 三層次: `p50 > 60`
+/// (K31 整體慢) / `p95 > 300` (K30 尾端 5% 慢 = SLO 邊界延遲) / `p99 > 600`
+/// (K32 極端尾端 1% 慢 = 異常 / 卡死信號)。三件套組合 `p50/p95/p99` 可繪出
+/// latency 分布輪廓, 不需 PromQL 算 `histogram_quantile` (有助於看 K25 avg
+/// 受 outlier 拉高時, P99 是否比 P95 顯著高 = 有極端 outlier 卡住整體分布)。
+///
+/// P99 計算: sort samples → `idx = len * 99 / 100`, 若 idx >= len 則取
+/// `len - 1` (避免 OOB; 跟 K30/K31 同款策略, 少樣本下 P99 退化成「接近
+/// max」sample 也不會 panic)。Boundary: len=1 → idx=0, P99 = 該 sample
+/// (P99 of 1 = itself, 數學直觀); len=20 → idx=19, P99 = sort 後第 20 個
+/// (= max, 少樣本 P99 退化到 max 跟 K26 max 語意對齊); len=100 → idx=99,
+/// P99 = samples[99] (= max, 剛好滿 100 樣本 P99 = max); len=1000 → idx=990。
+/// Sample 是 `i64` duration, emit 端 `{}` 不加浮點 precision (整數契約跟
+/// K30/K31 一致, 跟 K25/K28 f64 4 位小數不同 —— 原因: percentile index
+/// 已經 cast 過, 多餘小數位是 false precision, 強制裁整 0 精度流失)。
+///
+/// 為什麼 K32 復用 K30 samples 而不是另開 `Vec<i64>`:
+/// 1. 語意一致: P50/P95/P99 表徵同一 sliding window, 拆成兩/三 vec 反而
+///    語意分裂 (「這份是 P99 sample, 那份是 P50 sample」實際上同一份
+///    資料切三次);
+/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 9 provider = 72KB,
+///    開三份 = 216KB (Tauri desktop app 不痛但仍是浪費);
+/// 3. Sort 成本不變: render 端 sort 一次, 三個 quantile 共享;
+/// 4. 語意釐清成本低: doc comment 明寫「K32 復用 K30 samples」即可。
+///
+/// lifetime aggregate 對齊 K22-K31 既契約: session 結束後 `ProviderTotals`
+/// 仍保留 → Prometheus 端 gauge 不會倒退 (reservoir 是 sliding window 跟
+/// lifetime 不衝突 —— K30 doc 開頭已明寫 sliding window 設計 trade-off)。
+///
+/// 排序成本: 1024 sample O(N log N) ≈ 10000 比較 per scrape, 跟 K30/K31
+/// 同一份 vec 共享這次 sort —— K32 emit 端實際上不重排, 直接從 sort 結果
+/// 找 `idx * 99/100` 即可, runtime 額外成本 O(1)。但純 fn 端 K30/K31/K32
+/// 各自 `sort_unstable` 一次是「純函式獨立性」權衡: 同一份 `Vec<i64>` clone
+/// 三次, sort 三次, 每次 scrape 多花 ~30000 比較 (15ms 量級), 跟 metrics
+/// endpoint scrape 15s 一次比完全可忽略。
+/// 沒有「alphabetical sort」邏輯, 排序交給 `render_prometheus_body` 統一
+/// 處理 (K6-K31 既契約, K32 沿用)。
+pub fn completed_sessions_p99_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.completed_sessions_p95_samples.is_empty() {
+            continue;
+        }
+        let mut samples = t.completed_sessions_p95_samples.clone();
+        samples.sort_unstable();
+        let idx = (samples.len() * 99 / 100).min(samples.len() - 1);
+        out.insert(p.clone(), samples[idx]);
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppState {
     pub active_session: Option<SessionInfo>,
@@ -1163,8 +1225,9 @@ pub struct AppState {
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_sessions_p50_at, completed_sessions_p95_at, completed_sessions_stddev_at,
-        failure_to_completion_ratio_at, SessionManager, SessionTransition,
+        completed_sessions_p50_at, completed_sessions_p95_at, completed_sessions_p99_at,
+        completed_sessions_stddev_at, failure_to_completion_ratio_at, SessionManager,
+        SessionTransition,
     };
     use crate::hook_event::HookEvent;
 
@@ -2466,6 +2529,158 @@ mod tests {
             p50.get("cicx"),
             p95.get("cicx"),
             "P50 跟 P95 同一 sliding window 不同 quantile, 結果必須不同 (11 vs 20)"
+        );
+    }
+
+    // ============== K32 per-provider completed_sessions_p99 gauge ==============
+    // 跟 K30 P95 / K31 P50 同模板, 純 fn `completed_sessions_p99_at` 復用
+    // `ProviderTotals.completed_sessions_p95_samples` (K30/K31/K32 共用 reservoir
+    // 1024 sliding window) sort 後取 99 百分位 index, 跟 K30/K31 各自 emit
+    // 各自 percentile。樣本為空跳過 (跟 K30/K31 既「缺資料不 emit」一致, 避免
+    // P99=0 假冒「瞬間完成極端尾端 1%」假健康信號)。6 個 unit test 跟 K30/K31
+    // 既有測試對稱: empty / 20 sample 正確 / per-provider 隔離 / single sample
+    // / unsorted 輸入 / 跟 K30/K31 三件套共用 samples 互不污染。
+
+    #[test]
+    fn k32_completed_sessions_p99_at_skips_providers_with_no_samples() {
+        // 過濾語意: 對齊 K30/K31 `skips_providers_with_no_samples` —— 沒 sample
+        // 的 provider 不 emit, 避免 P99=0 假冒「極端尾端 1% 都瞬間完成」假健康
+        // 信號 (跟 K30 P95=0 / K31 P50=0 同款假健康疑慮)。
+        let mut totals = HashMap::new();
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        let out = completed_sessions_p99_at(&totals);
+        assert!(out.is_empty(), "samples 為空時 P99 不 emit, 過濾空 map");
+    }
+
+    #[test]
+    fn k32_completed_sessions_p99_at_emits_correct_extreme_20_samples() {
+        // 20 個 sample [1, 2, 3, ..., 20]: 排序後 idx = 20 * 99 / 100 = 19,
+        // samples[19] = 20 (少樣本 P99 退化到 max, 跟 K30 P95=20 / K26 max=20
+        // 對齊 —— 樣本數 < 100 時 P99 必退化到 max, 跟 numpy.percentile 行為
+        // 一致)。驗證 P99 index 計算 + sort 順序都對。
+        let mut m = SessionManager::new();
+        for i in 1..=20 {
+            m.record_completed_session_age("cicx", i);
+        }
+        let out = completed_sessions_p99_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&20),
+            "20 個 sample [1..20] sort 後 idx=19, samples[19]=20, P99=20, got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k32_completed_sessions_p99_at_per_provider_isolated() {
+        // per-provider 隔離: 跟 K30/K31 `per_provider_isolated` 對稱。cicx 3
+        // 樣本 [10, 20, 30] → sort 後 idx = 3*99/100 = 2, P99=30 (= max, 少樣本
+        // 退化); claude 3 樣本 [100, 200, 300] → sort 後 idx=2, P99=300; gemini
+        // 沒 sample → 過濾。證明 K32 跟 K30/K31 既 K-tag 一樣 per-provider 隔離
+        // 不互污染。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 10);
+        m.record_completed_session_age("cicx", 20);
+        m.record_completed_session_age("cicx", 30);
+        m.record_completed_session_age("claude", 100);
+        m.record_completed_session_age("claude", 200);
+        m.record_completed_session_age("claude", 300);
+
+        let out = completed_sessions_p99_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&30),
+            "cicx 3 樣本 sort 後 idx=2, samples=[10,20,30] 取 30 (P99 退化到 max), got {:?}",
+            out.get("cicx")
+        );
+        assert_eq!(
+            out.get("claude"),
+            Some(&300),
+            "claude 3 樣本 P99=300 (per-provider 隔離), got {:?}",
+            out.get("claude")
+        );
+        assert_eq!(out.get("gemini"), None, "gemini 沒 sample 過濾");
+        assert_eq!(out.len(), 2, "只有 cicx + claude 進 map");
+    }
+
+    #[test]
+    fn k32_completed_sessions_p99_at_single_sample_returns_that_value() {
+        // Boundary: 單樣本 P99 = itself。len=1 → idx = (1 * 99 / 100) = 0,
+        // samples[0] = 該值。證明少樣本下 P99 退化到「唯一值」不 panic
+        // (跟 K30 少樣本 P95 退化到 max / K31 P50 退化到 itself 對稱)。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 42);
+        let out = completed_sessions_p99_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&42),
+            "1 個 sample, P99 = 該值 (P99 of 1 = itself), got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k32_completed_sessions_p99_at_odd_count_returns_max() {
+        // Boundary: 奇數樣本 P99 = sort 後最大值 (= max)。5 樣本 [1, 5, 3, 2, 4]
+        // → sort 後 [1, 2, 3, 4, 5], idx = 5 * 99 / 100 = 4, samples[4] = 5
+        // = max。跟 K26 max=5 / K30 P95=5 (5 樣本 P95 也退化到 max) 對齊。
+        // 證明 unsorted 輸入也能正確取 max (sort_unstable 端驗證)。
+        let mut m = SessionManager::new();
+        for v in [1, 5, 3, 2, 4] {
+            m.record_completed_session_age("cicx", v);
+        }
+        let out = completed_sessions_p99_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&5),
+            "5 樣本 [1,5,3,2,4] sort 後 [1,2,3,4,5], idx=4, P99=5 (max), got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k32_completed_sessions_p99_at_shares_samples_with_p50_and_p95() {
+        // K32 跟 K30/K31 共用 samples vec 三驗證: 同一份 reservoir 餵 K30 /
+        // K31 / K32 三個 pure fn, 各自獨立 sort 後取不同 percentile index,
+        // 結果互不污染。20 樣本 [1..20] → K32 P99=20 (idx=19, 退化到 max),
+        // K31 P50=11 (idx=10), K30 P95=20 (idx=19, 同 P99 因少樣本退化到
+        // max), 證明 K32 不需新欄位即可 derive 跟 K30/K31 一致語意 (「最近
+        // 1024 個」) + 樣本數 < 100 時 P95 = P99 = max (語意合理, operator
+        // 看 P95 == P99 就知道樣本不夠 P99 沒有意義, 要更多 session 累積)。
+        let mut m = SessionManager::new();
+        for i in 1..=20 {
+            m.record_completed_session_age("cicx", i);
+        }
+        let p99 = completed_sessions_p99_at(&m.provider_totals);
+        let p50 = completed_sessions_p50_at(&m.provider_totals);
+        let p95 = completed_sessions_p95_at(&m.provider_totals);
+        assert_eq!(
+            p99.get("cicx"),
+            Some(&20),
+            "K32 P99 跟 K30/K31 共用 samples vec, 同 20 樣本 P99=20 (退化到 max)"
+        );
+        assert_eq!(
+            p50.get("cicx"),
+            Some(&11),
+            "K31 P50 跟 K30/K32 共用 samples vec, 同 20 樣本 P50=11"
+        );
+        assert_eq!(
+            p95.get("cicx"),
+            Some(&20),
+            "K30 P95 跟 K31/K32 共用 samples vec, 同 20 樣本 P95=20 (退化到 max, 等於 P99)"
+        );
+        // 樣本 < 100 時 K30 P95 == K32 P99, 證明少樣本 P95/P99 退化到 max
+        // (語意合理, operator 看 P95 == P99 = 該 provider 樣本不夠 P99 沒
+        // 區辨力, 需更多 session 累積)。
+        assert_eq!(
+            p95.get("cicx"),
+            p99.get("cicx"),
+            "樣本 < 100 時 P95 == P99 == max, 證明少樣本下 K30/K32 都退化到 max"
+        );
+        // P50 必須 < P99 (中位數必小於等於極端, 不可能顛倒, 數學不變式)
+        assert!(
+            p50.get("cicx").unwrap() < p99.get("cicx").unwrap(),
+            "P50=11 必須 < P99=20 (中位數 ≤ 極端, 數學不變式)"
         );
     }
 }

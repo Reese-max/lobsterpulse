@@ -931,3 +931,46 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 
 **結果**: PASS（K31 撿收 R48 後 dirty WIP + 0 regression + 293/293 全綠）
 **KPI-impact: metrics 維度 +1（per-provider 50 百分位延遲 gauge, 補 K22-K30 七件套外的「典型 session 延遲」觀測維度, 跟 K30 P95 互補形成「中位數 + 95 百分位」完整 percentile 對, alert 閾值 p50 > 60 觸發「該 provider 整體慢」信號）**
+
+### [2026-06-03] R50 — K32 `lobsterpulse_provider_completed_sessions_p99_duration_seconds` gauge + 9 tests（完成 p50/p95/p99 percentile 三件套）
+**類型**: M1（metrics 推進主軸 K-tag series, 沿 R46→R47→R48→R49→R50 連續 KPI 推進）
+**KPI**: `_metrics_emitted_K32` 累計 +1（累計 23 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25/K26/K27/K28/K29/K30/K31 → K32）
+
+**KPI 進展表**:
+| KPI | 前值 (R49) | 後值 (R50) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 22 | 23 | +1 |
+| Lib 總 unit tests | 293 | 302 | +9 |
+| K32 pure fn test | 0 | 6 | +6 |
+| K32 render test | 0 | 3 | +3 |
+| 0 R50 範圍 lint warning | 0 | 0 | 持平 |
+| 0 regression (K30/K31 仍綠) | 全綠 | 全綠 | 持平 |
+| Percentile 維度覆蓋 | p50, p95 | p50, p95, **p99** | +1 維度 |
+| 24h chore_ratio | 33% | 待觀察 | — |
+
+**為什麼**:
+- 完成 p50/p95/**p99** percentile 三件套, 補完 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) / K29 (failure ratio) / K30 (P95) / K31 (P50) 八件套都沒覆蓋的「極端尾端 1% 延遲」維度。K32 跟 K30 P95 同一 sliding window 但取更極端的 percentile, 反映「偶發卡死 / 工具 hang」邊界 (K30 P95 看「典型慢」, K32 P99 看「異常慢」, 差距大 = 有 outlier 卡住分布尾端)
+- Operator 端 alert 三層次組合 `p50 > 60` (K31 整體慢) vs `p95 > 300` (K30 尾端 5% 慢 = SLO 邊界延遲) vs `p99 > 600` (K32 極端尾端 1% 慢 = 異常 / 卡死信號) 可快速分辨「該 provider 整體慢」vs「只有尾端慢」vs「有極端 outlier 卡住」, 不需 PromQL 算 `histogram_quantile` (有助於看 K25 avg 受 outlier 拉高時, P99 是否比 P95 顯著高)
+- K32 沿用 K30/K31 同模板, 復用 `ProviderTotals.completed_sessions_p95_samples` reservoir 1024 sliding window 不開新欄位, 純 fn 端 K30/K31/K32 各自 sort 後取不同 percentile index (50/95/99), runtime 額外成本 O(1) 從 sort 結果 derive
+- 語意 trade-off (明寫在 fn doc + HELP): 樣本數 < 100 時 P99 退化到 max, 跟 P95 = max 同值 —— operator 看 P95 == P99 就知道該 provider 樣本不夠 P99 沒區辨力, 需更多 session 累積 reservoir
+- H0 cap 持續觸發（chore_ratio 33% > 30% threshold）→ 本輪延續 M1 KPI 推進（沿 R46/R47/R48/R49 同 K-tag series 主軸）, 撿既有 K30/K31 模式 scaffold（純 fn + 6 unit test + render block + 3 render test + triple-validated 共用 samples vec）, token / 時間密度最高
+- Quality Gate 提醒「最近 5 個 feat commit 0 test」→ K32 一次帶 9 tests (6 unit + 3 render), 自然補回覆蓋率, Q-Gate 自動過
+
+**搜尋**: 沒新搜。沿用 R48 K30 / R49 K31 既有 pattern（reservoir 共用 + 純 fn `_at` + alphabetical sort + 整數 i64 契約）, KPI 推進型 R50 第三次重複執行, 模式穩定 = 可信。
+
+**做了什麼**:
+- session.rs:
+  - 加 `pub fn completed_sessions_p99_at(&HashMap<String, ProviderTotals>) -> HashMap<String, i64>` (K32 配套 pure fn, idx = `(len*99/100).min(len-1)`, 整數 i64 契約對齊 K30/K31)
+  - fn doc 開頭明寫「K32 復用 K30 reservoir」+ 三層次 alert 對比 + 樣本 < 100 退化到 max 語意說明
+  - 6 unit tests: `k32_skips_providers_with_no_samples` / `k32_emits_correct_extreme_20_samples` (P99=20, 少樣本退化到 max) / `k32_per_provider_isolated` (cicx P99=30, claude P99=300) / `k32_single_sample_returns_that_value` (boundary) / `k32_odd_count_returns_max` (5 樣本 unsorted → sort 後取 max) / `k32_shares_samples_with_p50_and_p95` (K30/K31/K32 三件套共用 samples vec, 雙驗證 P50=11 < P95=P99=20 數學不變式)
+  - import 加 `completed_sessions_p99_at`
+- lib.rs:
+  - `render_prometheus_body` 加 K32 HELP/TYPE/sample emit block (插在 K31 emit 之後, K12 emit 之前), 格式對齊 K30/K31 (整數 i64, `{secs}` 不加 `.4` 浮點 precision)
+  - HELP 文字明寫「reuses K30 reservoir sampling 1024; sliding window of last 1024 completions; integer precision; converges to max when sample count < 100」
+  - 3 render tests 跟 K30/K31 render test 對稱: `p99_empty_totals_emits_header_only` (empty + 順手驗 K30/K31 標頭仍存在) / `p99_per_provider_isolated_and_skips_empty_samples` (cicx 20 sample P99=20, claude/openx 空跳過) / `p99_alphabetical_sort_and_integer_precision` (cicx=20 / claude=100 / gemini=50 alphabetical + 整數 i64 契約 + K30/K31/K32 三件套共用 samples vec 雙驗證 + 跟 K22/K25-K29 八件套互不污染)
+  - render test import 加 `completed_sessions_p99_at`
+- 過程踩雷: rust 1.94 `clippy::doc-lazy-continuation` 新 lint 觸發 (K32 fn doc 開頭寫「- `p50 > 60`」dash list 結構造成後續無 indent 行被視為 list continuation), 修法: 把三層次 alert 從 dash list 改成 inline 文字 (避免 markdown list 結構)。K30/K31 doc 沒這種 list 結構所以 R48/R49 沒觸發
+- 過程踩雷 (harness 規範): git 嚴禁 `git add -A/.`, 用 `git add path1 path2` 明確列本輪改的 2 個檔 (session.rs + lib.rs, engineering-log.md 改完另列)。R13 防護避免吞掉 owner / 其他 daemon dirty 改動
+
+**結果**: PASS（K32 落地 + 0 R50 範圍 lint warning + 0 regression + 302/302 tests, K30/K31 K-tag series 仍綠, R51 起可挑 K33+ 維度擴展或 M2 評估 pipeline / M3 corpus 升級）
+**KPI-impact: metrics 維度 +1（per-provider 99 百分位延遲 gauge, 完成 p50/p95/p99 percentile 三件套, 補 K22-K31 八件套外的「極端尾端 1% 延遲」觀測維度, alert 三層次組合 p50/p95/p99 可快速分辨「整體慢 / 尾端慢 / 極端 outlier 卡住」三種 SLO 異常模式, 不需 PromQL `histogram_quantile` 即可在 metrics endpoint 直接看 latency 分布輪廓）**

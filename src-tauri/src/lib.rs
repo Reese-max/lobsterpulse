@@ -2004,6 +2004,34 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_stddev_seconds{{provider=\"{p}\"}} {secs:.4}\n"
         ));
     }
+    // K29 落地：per-provider failure-to-completion ratio gauge (純 derived from
+    // K10 failure_count / K23 completed_sessions_count)。補 K9 / K10 (絕對失敗
+    // 計數) / K22-K28 (session duration 分布) 都沒覆蓋的「失敗 vs 成功比」維度
+    // —— operator 端可設 alert `ratio > 2.0` 觸發「該 provider session 平均
+    // retry 2 次以上」健康度異常信號。 資料源: ProviderTotals.failure_count
+    // (K10 觸發點 PostToolUseFailure +1) / ProviderTotals.completed_sessions_count
+    // (K23 觸發點 SessionEnd + Working→Idle 兩路徑 +1) —— 純 derived 不需新欄位
+    // / 新觸發點, 完全沿用既有 K10 / K23 兩條 lifetime counter。 f64 gauge,
+    // 4 位小數固定 precision (跟 K25 avg / K28 stddev 對齊; 跟 K22 / K23 / K24 /
+    // K26 / K27 整數區分)。 過濾語意: completed_sessions_count == 0 → 跳過不
+    // emit (0/0 數學未定義, 不能 emit 0.0 假冒「失敗率 0」= 假健康信號, 跟
+    // K25 「0/0 不 emit」同款防線)。 alphabetical sort 跟 K6-K28 既契約一致;
+    // 空 map → 沒 sample line (HELP/TYPE 標頭仍輸出)。
+    //
+    // Operator 用途: 跟 K9 / K10 (絕對失敗計數) 比較可分辨「絕對值高但 ratio
+    // 低」(該 provider 流量大失敗難免) vs 「絕對值低但 ratio 高」(該 provider
+    // 流量小但每次都失敗 = 嚴重健康問題) —— 後者才是真要追的, ratio 比例比
+    // 絕對值更 operator 友善。 跟 K22 / K25 / K26 / K27 / K28 五件套都各自
+    // emit 各自的值, 互不污染。
+    out.push_str("# HELP lobsterpulse_provider_failure_to_completion_ratio Average tool failures per completed session per provider (gauge; derived from K10 failure_count / K23 completed_sessions_count; 4 decimal precision; 0.0=zero failures; missing=no completed session yet)\n# TYPE lobsterpulse_provider_failure_to_completion_ratio gauge\n");
+    let failure_ratio = session::failure_to_completion_ratio_at(provider_totals);
+    let mut failure_ratio_sorted: Vec<_> = failure_ratio.iter().collect();
+    failure_ratio_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, ratio) in &failure_ratio_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_failure_to_completion_ratio{{provider=\"{p}\"}} {ratio:.4}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -2961,7 +2989,8 @@ mod render_prometheus_tests {
     use super::*;
     use crate::session::{
         completed_sessions_min_duration_at, completed_sessions_stddev_at,
-        last_completed_session_age_at, ProviderTotals, SessionInfo, SessionState,
+        failure_to_completion_ratio_at, last_completed_session_age_at, ProviderTotals, SessionInfo,
+        SessionState,
     };
     use chrono::TimeZone;
     use std::collections::HashMap;
@@ -7169,6 +7198,211 @@ mod render_prometheus_tests {
                 "lobsterpulse_provider_completed_sessions_min_duration_seconds{provider=\"cicx\"} 100\n"
             ),
             "K27 (min) 跟 K28 (stddev) 隔離, cicx min 仍 emit 100, body: {body}"
+        );
+    }
+
+    // ============== K29 per-provider failure_to_completion_ratio gauge ==============
+    // 跟 K25 (avg) 同屬「兩個 lifetime counter 組合成 ratio」純 derived 衍生
+    // gauge —— K10 failure_count / K23 completed_sessions_count 兩條 counter
+    // 在 render 端做除法 (4 位小數 f64, 跟 K25 avg / K28 stddev 對齊)。 補
+    // K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) 五件套
+    // 都沒覆蓋的「失敗 vs 成功比」維度 —— 跟 K9 / K10 絕對失敗計數互補。
+    // count=0 過濾 (跟 K25 同款防線, 0/0 數學未定義)。 3 個 render test 覆蓋
+    // empty / per-provider 隔離 / alphabetical sort + f64 precision, 跟
+    // K20-K28 既有 render test 風格一致。
+
+    #[test]
+    fn failure_to_completion_ratio_empty_totals_emits_header_only() {
+        // 對齊 K11 / K18 / K19 / K20 / K21 / K22 / K23 / K24 / K25 / K26 / K27 /
+        // K28 empty-state 契約: 空 map → 沒 sample line (HELP/TYPE 標頭仍輸出),
+        // 不丟假資料。 ProviderTotals 沒 entry → count 預設 0 → 過濾掉, 避免
+        // Prometheus 端把「沒看到」當「ratio=0」誤判「該 provider 零失敗」= 假
+        // 健康信號。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(body.contains("# HELP lobsterpulse_provider_failure_to_completion_ratio"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_failure_to_completion_ratio gauge"));
+        // 沒 sample line 契約: 任何 provider=... 都不該 emit (空 map → 沒資料)
+        assert!(
+            !body
+                .lines()
+                .any(|l| l
+                    .starts_with("lobsterpulse_provider_failure_to_completion_ratio{provider=\"")),
+            "empty totals 不該 emit failure ratio sample line, body: {body}"
+        );
+    }
+
+    #[test]
+    fn failure_to_completion_ratio_per_provider_isolated_and_skips_zero_count() {
+        // per-provider 隔離 + count=0 跳過: cicx (failure=3/completed=2) emit
+        // 1.5, claude (failure=0/completed=5) emit 0.0, openx (count=0) 跳過。
+        // 用 struct literal initializer 明確控制每個 provider 狀態, 跟 K20-K28
+        // 既有隔離測試風格一致。
+        let mut totals = HashMap::new();
+        // cicx: failure=3 / completed=2 → 1.5
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                failure_count: 3,
+                completed_sessions_count: 2,
+                ..Default::default()
+            },
+        );
+        // claude: failure=0 / completed=5 → 0.0 (零失敗, 真實健康信號, 跟
+        // 「缺資料跳過」必須分清楚)
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                failure_count: 0,
+                completed_sessions_count: 5,
+                ..Default::default()
+            },
+        );
+        // openx: completed_sessions_count=0 → render 端跳過, 不該 emit sample
+        totals.insert("openx".to_string(), ProviderTotals::default());
+
+        let _failure_ratio = failure_to_completion_ratio_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // cicx emit 1.5000 (4 位小數 f64)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"} 1.5000\n"
+            ),
+            "cicx ratio = 3/2 = 1.5000, body: {body}"
+        );
+        // claude emit 0.0000 (真實零失敗, 不是缺資料)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_failure_to_completion_ratio{provider=\"claude\"} 0.0000\n"
+            ),
+            "claude ratio = 0/5 = 0.0000 (真實零失敗), body: {body}"
+        );
+        // openx 跳過: count=0 不該 emit sample line (K25 「0/0 不 emit」同款防線)
+        assert!(
+            !body.contains("lobsterpulse_provider_failure_to_completion_ratio{provider=\"openx\"}"),
+            "openx count=0 該跳過 (跟 K25 「0/0 不 emit」同款防線), body: {body}"
+        );
+    }
+
+    #[test]
+    fn failure_to_completion_ratio_alphabetical_sort_and_four_decimal_precision() {
+        // alphabetical sort + f64 4 位小數 precision + 跟 K22 / K25 / K26 / K27 /
+        // K28 五件套互不覆蓋: 三個 provider cicx/claude/gemini 不同 failure
+        // pattern → 各自 emit 自己的 ratio, alphabetical 排序
+        // (cicx < claude < gemini), 全部 4 位小數格式。
+        let mut totals = HashMap::new();
+        // cicx: failure=3 / completed=2 → 1.5
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                failure_count: 3,
+                completed_sessions_count: 2,
+                ..Default::default()
+            },
+        );
+        // claude: failure=0 / completed=5 → 0.0 (零失敗, 真實健康信號)
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                failure_count: 0,
+                completed_sessions_count: 5,
+                ..Default::default()
+            },
+        );
+        // gemini: failure=8 / completed=1 → 8.0 (alert > 2.0 觸發「retry 過高」)
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                failure_count: 8,
+                completed_sessions_count: 1,
+                ..Default::default()
+            },
+        );
+
+        let _failure_ratio = failure_to_completion_ratio_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // K29 alphabetical + 4 位小數 f64 格式驗證:
+        // cicx=1.5000, claude=0.0000, gemini=8.0000
+        let cicx_idx = body
+            .find("lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"} 1.5000\n")
+            .expect("cicx K29 sample line");
+        let claude_idx = body
+            .find("lobsterpulse_provider_failure_to_completion_ratio{provider=\"claude\"} 0.0000\n")
+            .expect("claude K29 sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_failure_to_completion_ratio{provider=\"gemini\"} 8.0000\n")
+            .expect("gemini K29 sample line");
+        assert!(
+            cicx_idx < claude_idx && claude_idx < gemini_idx,
+            "per-provider failure_to_completion_ratio 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, claude={claude_idx}, gemini={gemini_idx})"
+        );
+        // 反向驗: 確認 emit 的是 4 位小數 f64 格式, 不是整數格式
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"} 1.5\n"
+            ),
+            "K29 f64 4 位小數契約(不是 f64 3 位小數), 不可 emit 1.5, body: {body}"
+        );
+        // 順便驗 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev)
+        // 五件套 + K29 (ratio) 互不覆蓋: cicx 在 5 個 metric 各自 emit 自己的值
+        // (ratio=1.5 跟 latest/avg/max/min/stddev 隔離, 沒被彼此污染)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"}"
+            ),
+            "K22 (latest) 跟 K29 (ratio) 隔離, cicx 在 K22 沒 latest (None) 不該 emit, body: {body}"
+        );
+        // K25 (avg) 跟 K29 (ratio) 隔離: cicx total_duration=0 + count=2 →
+        // K25 emit avg=0.0000, K29 emit ratio=1.5000 (各發各的 series line,
+        // 互不污染)。K25 pure fn 邏輯是 count>0 一律 emit (含 0.0), 不能用
+        // `!contains` 驗隔離 —— 改用「K25 跟 K29 各自 emit 各自的值」雙驗證。
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 0.0000\n"
+            ),
+            "K25 cicx avg = 0/2 = 0.0000 (K25 跟 K29 隔離, 互不污染), body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"} 1.5000\n"
+            ),
+            "K29 cicx ratio = 3/2 = 1.5000 (K25 跟 K29 隔離, 互不污染), body: {body}"
         );
     }
 }

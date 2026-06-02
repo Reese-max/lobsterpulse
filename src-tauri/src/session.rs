@@ -958,6 +958,51 @@ pub fn completed_sessions_stddev_at(
     out
 }
 
+/// K29 配套 pure fn：把 `ProviderTotals` 裡的「累計 tool 失敗次數」跟
+/// 「累計完成 session 數」組合成 failure-to-completion ratio 衍生 gauge
+/// (`HashMap<provider, ratio>`) 給 `render_prometheus_body` emit。
+///
+/// K29 是 K10 (`provider_failure_count` counter, PostToolUseFailure 累計)
+/// / K23 (`provider_completed_sessions_total` counter) 兩條 lifetime
+/// counter 的派生 gauge —— operator 端不再需要自己寫 PromQL
+/// `failure_count / completed_sessions_total` 除法算式（兩個 metric
+/// cross-query 在 PromQL 易出錯、scrape 缺一條時算式直接壞），直接在
+/// Prometheus 端抓這條 series 觀察「平均每完成一次 session 失敗幾次
+/// tool」= 失敗率 KPI, 補 K22 / K23 / K24 / K25 / K26 / K27 / K28 都沒
+/// 覆蓋的「失敗 vs 成功比」維度（K9 / K10 是純絕對失敗計數、K22-K28
+/// 是 session duration 分布、沒人把它們組合成「每完成一次有幾次失敗」
+/// 這個 operator 友善的 ratio）。
+///
+/// 跟 K25 `completed_sessions_average_duration_at` emit 策略完全一致
+/// （K25 跟 K29 都是「兩個 lifetime counter 組合成 ratio」純 derived
+/// 衍生）：
+/// - K22 過濾 `None`（該 provider 沒完成過 session → gauge 缺資料）
+/// - K24 全部 emit（counter 0 跟 missing 是不同語意）
+/// - K25 過濾 `count == 0`（0/0 數學未定義）
+/// - K29 過濾 `completed_sessions_count == 0`（0/0 數學未定義 → 不能
+///   emit 0.0 假冒「失敗率 0」誤導 Prometheus 端把「沒資料」判成「零
+///   失敗」= 假健康信號, 跟 K25 同款防線）。
+///
+/// `count > 0` 時 emit `failure_count / count` (f64, 4 位小數跟 K25 avg /
+/// K28 stddev 對齊)。語意: ratio = 2.5 表示「每完成一次 session 平均
+/// 失敗 2.5 次 tool」, alert `ratio > 2.0` 觸發「該 provider session
+/// 平均 retry 2 次以上」健康度異常信號。沒有「alphabetical sort」邏輯,
+/// 排序交給 `render_prometheus_body` 統一處理 (K6-K28 既契約, K29 沿用)。
+pub fn failure_to_completion_ratio_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.completed_sessions_count > 0 {
+            out.insert(
+                p.clone(),
+                t.failure_count as f64 / t.completed_sessions_count as f64,
+            );
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppState {
     pub active_session: Option<SessionInfo>,
@@ -970,7 +1015,10 @@ pub struct AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{completed_sessions_stddev_at, SessionManager, SessionTransition};
+    use super::{
+        completed_sessions_stddev_at, failure_to_completion_ratio_at, SessionManager,
+        SessionTransition,
+    };
     use crate::hook_event::HookEvent;
 
     fn ev(provider: &str, sid: &str, name: &str) -> HookEvent {
@@ -1898,5 +1946,138 @@ mod tests {
         );
         // gemini: count=1, stddev = 0
         assert_eq!(out.get("gemini"), Some(&0.0));
+    }
+
+    // ─── K29 落地：failure_to_completion_ratio gauge + failure_to_completion_ratio_at ───
+
+    #[test]
+    fn k29_failure_to_completion_ratio_at_skips_providers_with_no_completions() {
+        // 過濾契約：跟 K25 同款防線 —— count=0 跳過不 emit（避免 0/0 數學未定義
+        // emit 成 0.0 假冒「失敗率 0」= 假健康信號, 跟 K22 None 跳過語意對齊）。
+        let mut totals = HashMap::new();
+        totals.insert("claude".to_string(), ProviderTotals::default()); // count=0
+        let out = failure_to_completion_ratio_at(&totals);
+        assert!(
+            out.is_empty(),
+            "count=0 的 provider 該跳過, 避免誤判「失敗率=0」當「零失敗健康信號」"
+        );
+    }
+
+    #[test]
+    fn k29_failure_to_completion_ratio_at_emits_zero_when_no_failures() {
+        // failure_count=0 + completed=N > 0 → ratio = 0.0
+        // （「零失敗」= 真實健康信號, 跟 K25 「count=0 跳過」是不同語意 —— K25
+        // 跳過的是「缺資料」, K29 0.0 emit 的是「有資料且為零」, 必須分清楚）。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                failure_count: 0,
+                completed_sessions_count: 100,
+                ..Default::default()
+            },
+        );
+        let out = failure_to_completion_ratio_at(&totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&0.0),
+            "failure=0, completed=100 → ratio = 0.0 (真實零失敗健康信號)"
+        );
+    }
+
+    #[test]
+    fn k29_failure_to_completion_ratio_at_emits_integer_ratio() {
+        // 整數 ratio：failure=2, completed=1 → 2.0 (alert > 2.0 觸發閾值邊界)
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                failure_count: 2,
+                completed_sessions_count: 1,
+                ..Default::default()
+            },
+        );
+        let out = failure_to_completion_ratio_at(&totals);
+        assert!(
+            (out.get("cicx").copied().unwrap_or(-1.0) - 2.0).abs() < 1e-9,
+            "failure=2, completed=1 → ratio = 2.0, got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k29_failure_to_completion_ratio_at_emits_fractional_ratio() {
+        // 分數 ratio：failure=3, completed=4 → 0.75 (4 位小數 → 0.7500)
+        let mut totals = HashMap::new();
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                failure_count: 3,
+                completed_sessions_count: 4,
+                ..Default::default()
+            },
+        );
+        let out = failure_to_completion_ratio_at(&totals);
+        assert!(
+            (out.get("gemini").copied().unwrap_or(-1.0) - 0.75).abs() < 1e-9,
+            "failure=3, completed=4 → ratio = 0.75, got {:?}",
+            out.get("gemini")
+        );
+    }
+
+    #[test]
+    fn k29_failure_to_completion_ratio_at_per_provider_isolated() {
+        // per-provider 隔離：3 provider 各自獨立 ratio (cicx 1.0, claude 0.0,
+        // gemini 跳過) —— 互相不污染, 跟 K22-K28 既有 per-provider 隔離契約一致。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                failure_count: 3,
+                completed_sessions_count: 3,
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                failure_count: 0,
+                completed_sessions_count: 5,
+                ..Default::default()
+            },
+        );
+        totals.insert("gemini".to_string(), ProviderTotals::default()); // count=0 跳過
+
+        let out = failure_to_completion_ratio_at(&totals);
+        assert!(
+            (out.get("cicx").copied().unwrap_or(-1.0) - 1.0).abs() < 1e-9,
+            "cicx ratio = 3/3 = 1.0 (per-provider 隔離), got {:?}",
+            out.get("cicx")
+        );
+        assert_eq!(out.get("claude"), Some(&0.0), "claude 0/5 = 0.0");
+        assert_eq!(out.get("gemini"), None, "gemini count=0 跳過");
+        assert_eq!(out.len(), 2, "只有 cicx + claude 進 map");
+    }
+
+    #[test]
+    fn k29_failure_to_completion_ratio_at_handles_high_failure_rate() {
+        // 高失敗率場景：failure=10, completed=1 → 10.0 (operator alert
+        // `ratio > 2.0` 會觸發「該 provider session 平均 retry 10 次」= 健康
+        // 度嚴重異常)。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                failure_count: 10,
+                completed_sessions_count: 1,
+                ..Default::default()
+            },
+        );
+        let out = failure_to_completion_ratio_at(&totals);
+        assert!(
+            (out.get("cicx").copied().unwrap_or(-1.0) - 10.0).abs() < 1e-9,
+            "failure=10, completed=1 → ratio = 10.0 (alert > 2.0 觸發), got {:?}",
+            out.get("cicx")
+        );
     }
 }

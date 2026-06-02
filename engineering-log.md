@@ -898,3 +898,36 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 
 **結果**: PASS（K30 撿收 R47 後 dirty WIP + 3 個 render test 補完 + 3 doc lint + 1 fmt auto-fix + 0 regression + 284/284 全綠）
 **KPI-impact: metrics 維度 +1（per-provider 95 百分位延遲 gauge, 補 K22-K29 六件套外的「SLO 邊界延遲」觀測維度, alert 閾值 p95 > 300 觸發 SLO 異常信號）**
+
+### [2026-06-03] R49 — K31 `lobsterpulse_provider_completed_sessions_p50_duration_seconds` gauge + 9 tests（撿收 R48 後 dirty WIP）
+**類型**: M1（metrics 推進主軸 K-tag series, 沿 K3→K22→K23→K24→K25→K26→K27→K28→K29→K30→K31 線）
+**KPI**: `_metrics_emitted_K31` 累計 +1（累計 24 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25/K26/K27/K28/K29/K30 → K31）
+
+**KPI 進展表**:
+| KPI | 前值 (R48) | 後值 (R49) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 23 | 24 | +1 |
+| Lib 總 unit tests | 284 | 293 | +9 |
+| K31 pure fn test | 0 | 6 | +6 |
+| K31 render test | 0 | 3 | +3 |
+| 0 R49 範圍 lint warning | 0 | 0 | 持平 |
+| 0 R49 範圍 fmt diff | 0 | 0 | 持平 |
+
+**為什麼**: 對齊 LobsterPulse v5.1 mission「本機 CLI + OpenAB 雙路徑觀察」可觀察性 —— K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) / K29 (failure ratio) / K30 (P95) 七件套覆蓋「最近一次 / 中心趨勢 / 分布離散 / 失敗比 / SLO 邊界延遲」, 沒覆蓋「典型 session 延遲」維度。K31 median = 50 百分位中位數, 抗 outlier 比 K25 avg 強 (avg 受極端長任務拉高, median 不會) —— operator 端 alert `p50 > 60` (整體慢, 典型 session 都在 1 分鐘以上) vs `p95 > 300` (尾端慢) 組合可快速分辨「該 provider 整體慢」vs「只有尾端 5% 慢」, K25 avg 算不出這層細 (avg 是中心趨勢, 對 outlier 敏感)。R48 commit 後 dirty WIP 留 K31 整套: pure fn + 6 unit test + emit code + 3 render test, R49 撿收驗證即可。
+
+**搜尋**: 沿用既有 K30 reservoir sampling 1024 + sort 找 percentile 模式; K31 復用 K30 `ProviderTotals.completed_sessions_p95_samples` 同一份 vec 不開新欄位, 純 fn 端各自 sort 後取不同 percentile index (K31 取 50/100, K30 取 95/100)。P50 數學 = median = 偶數樣本取 sort[len*50/100] (取較大值, 跟 Python `statistics.median` round-up 一致, 跟 K30 偶數取較大同款策略)。無新搜 (P50 + median 是標準統計 pattern, 語意清楚)。
+
+**做了什麼**:
+- `src-tauri/src/session.rs:1093-1152` 加 `completed_sessions_p50_at` 純 fn（clone samples → `sort_unstable` → `idx = (len * 50 / 100).min(len - 1)` 過濾 OOB, samples 為空跳過防 P50=0 假健康信號, doc comment 明寫「K31 復用 K30 samples 不開新欄位」語意/記憶體/sort 成本/語意釐清 4 個權衡）
+- `src-tauri/src/session.rs:2356-2470` 6 個 unit test（空 map 過濾 / 20 樣本 P50=11 / per-provider 隔離 / 單樣本 boundary / 奇數樣本 P50=3 unsorted input / 跟 K30 共用 samples vec 雙驗證 P50=11 vs P95=20）
+- `src-tauri/src/lib.rs:2056-2079` `render_prometheus_body` emit K31 HELP/TYPE + alphabetical sort 全 provider 樣本（i64 整數無 f64 4 位小數, 跟 K30 P95 對齊）
+- `src-tauri/src/lib.rs:3034` import `completed_sessions_p50_at` 加到 use 清單
+- `src-tauri/src/lib.rs:7710-7925` 3 個 K31 render test（empty totals header-only / per-provider 隔離 + empty skip / alphabetical sort + 整數 precision + 跟 K30 共用 samples vec 雙驗證 P50=11 vs P95=20 + 跟 K22/K29 七件套互不覆蓋）
+
+**驗證**:
+- `cargo test --lib`: 293 passed; 0 failed（+9 K31, 0 regression, R48 284 → 293）
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+
+**結果**: PASS（K31 撿收 R48 後 dirty WIP + 0 regression + 293/293 全綠）
+**KPI-impact: metrics 維度 +1（per-provider 50 百分位延遲 gauge, 補 K22-K30 七件套外的「典型 session 延遲」觀測維度, 跟 K30 P95 互補形成「中位數 + 95 百分位」完整 percentile 對, alert 閾值 p50 > 60 觸發「該 provider 整體慢」信號）**

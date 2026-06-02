@@ -2053,6 +2053,29 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_p95_duration_seconds{{provider=\"{p}\"}} {secs}\n"
         ));
     }
+    // K31 落地：per-provider completed_sessions_p50 gauge (median, 50 百分位
+    // = 中位數, 復用 K30 同一份 reservoir 1024 樣本池)。補 K22 (latest) / K25
+    // (avg) / K26 (max) / K27 (min) / K28 (stddev) / K30 (P95) / K29 (failure
+    // ratio) 七件套都沒覆蓋的「典型 session 延遲」維度 —— median 抗 outlier 比
+    // K25 avg 強 (avg 受極端長任務拉高, median 不會), 跟 K30 P95 同一 sliding
+    // window 但取不同 percentile。Operator 端 alert 互補: `p50 > 60` (整體慢,
+    // 典型 session 都在 1 分鐘以上) vs `p95 > 300` (尾端慢) 組合可快速分辨
+    // 「該 provider 整體慢」vs「只有尾端 5% 慢」, K25 avg 算不出這層細 (avg
+    // 是中心趨勢, 對 outlier 敏感)。資料源: 跟 K30 共用
+    // ProviderTotals.completed_sessions_p95_samples (K31 不開新欄位, 純 fn 端
+    // 復用 K30 reservoir 取不同 percentile index, doc 開頭已明寫共用設計)。
+    // 過濾 `samples.is_empty()` 沿用 K30 「沒 sample 不 emit」防線, 跟 K22 /
+    // K25 「0/0 不 emit」同款。Sample 整數 i64, emit 端 `{secs}` 不加 `.4`
+    // 浮點 precision (K30 P95 已是整數, K31 對齊)。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_p50_duration_seconds 50th percentile (median) in seconds of completed session durations per provider (gauge; reuses K30 reservoir sampling 1024; sliding window of last 1024 completions; integer precision; missing=no completed session yet)\n# TYPE lobsterpulse_provider_completed_sessions_p50_duration_seconds gauge\n");
+    let completed_p50 = session::completed_sessions_p50_at(provider_totals);
+    let mut completed_p50_sorted: Vec<_> = completed_p50.iter().collect();
+    completed_p50_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, secs) in &completed_p50_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_p50_duration_seconds{{provider=\"{p}\"}} {secs}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -3009,7 +3032,7 @@ mod write_local_usage_snapshot_tests {
 mod render_prometheus_tests {
     use super::*;
     use crate::session::{
-        completed_sessions_min_duration_at, completed_sessions_p95_at,
+        completed_sessions_min_duration_at, completed_sessions_p50_at, completed_sessions_p95_at,
         completed_sessions_stddev_at, failure_to_completion_ratio_at,
         last_completed_session_age_at, ProviderTotals, SessionInfo, SessionState,
     };
@@ -7681,6 +7704,221 @@ mod render_prometheus_tests {
                 "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 20\n"
             ),
             "K30 cicx P95 = 20 (K29 跟 K30 隔離, 互不污染), body: {body}"
+        );
+    }
+
+    // ============== K31 per-provider completed_sessions_p50 gauge ==============
+    // 跟 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) / K29
+    // (failure ratio) / K30 (P95) 七件套互補形成「八件套」 —— K31 是第七個維度
+    // 「50 百分位延遲」= median 中位數。資料源沿用 K30 `ProviderTotals
+    // .completed_sessions_p95_samples` (K31 不開新欄位, 共用 K30 reservoir 1024
+    // sliding window), 純 fn `completed_sessions_p50_at` 跟 K30 復用同一份 vec
+    // 各自 sort 後取不同 percentile index (K31 取 50/100, K30 取 95/100)。樣本
+    // 為空跳過 (跟 K22 / K25-K30 既「缺資料不 emit」一致, 避免 P50=0 假冒「瞬間
+    // 完成中位數」假健康信號)。3 個 render test 覆蓋 empty / per-provider 隔離 /
+    // alphabetical sort + 整數 precision + 跟 K30 雙驗證同 reservoir 各自 emit
+    // 各自 percentile, 跟 K20-K30 既有 render test 風格一致。
+
+    #[test]
+    fn p50_empty_totals_emits_header_only() {
+        // 對齊 K11 / K18-K30 empty-state 契約: 空 map → 沒 sample line
+        // (HELP/TYPE 標頭仍輸出), 不丟假資料。ProviderTotals 沒 entry → samples
+        // 預設空 → 過濾掉, 避免 Prometheus 端把「沒看到」當「P50=0」誤判「該
+        // provider 瞬間完成所有 session」= 假健康信號。順手驗 K30 標頭在 K31
+        // 後仍存在, 證明 K31 沒覆蓋 K30 emit block。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            body.contains("# HELP lobsterpulse_provider_completed_sessions_p50_duration_seconds")
+        );
+        assert!(body.contains(
+            "# TYPE lobsterpulse_provider_completed_sessions_p50_duration_seconds gauge"
+        ));
+        // 沒 sample line 契約: 任何 provider=... 都不該 emit (空 map → 沒資料)
+        assert!(
+            !body.lines().any(|l| l.starts_with(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\""
+            )),
+            "empty totals 不該 emit P50 sample line, body: {body}"
+        );
+        // 順手驗 K30 標頭仍存在, 證明 K31 沒覆蓋 K30 emit block
+        assert!(
+            body.contains(
+                "# TYPE lobsterpulse_provider_completed_sessions_p95_duration_seconds gauge"
+            ),
+            "K31 補在 K30 後, K30 emit block 仍要 emit HELP/TYPE 標頭, body: {body}"
+        );
+    }
+
+    #[test]
+    fn p50_per_provider_isolated_and_skips_empty_samples() {
+        // per-provider 隔離 + samples 為空跳過: cicx (20 sample [1..20]) emit
+        // P50=11, claude (samples 為空) 跳過, openx (samples 為空) 跳過。用
+        // struct literal + `..Default::default()` 明確控制每個 provider 狀態,
+        // 跟 K20-K30 既有隔離測試風格一致。P50 計算: 20 個 sample 排序後
+        // index = 20 * 50 / 100 = 10 → samples[10] = 11 (少樣本下 P50 退到接近
+        // 中位, 跟 production pure fn 行為一致)。
+        let mut totals = HashMap::new();
+        // cicx: 20 sample [1..20] → 排序後 P50 index=10, samples[10]=11
+        let mut cicx_samples: Vec<i64> = (1..=20).collect();
+        cicx_samples.sort_unstable(); // 已排序, 為求語意清楚顯式 sort
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: cicx_samples,
+                ..Default::default()
+            },
+        );
+        // claude: samples 為空 → render 端跳過, 不該 emit sample line
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        // openx: samples 為空 → render 端跳過, 不該 emit sample line
+        totals.insert("openx".to_string(), ProviderTotals::default());
+
+        let _p50 = completed_sessions_p50_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // cicx emit 11 (i64 整數, 沒有 4 位小數 f64 跟 K25/K28/K29 不同)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"cicx\"} 11\n"
+            ),
+            "cicx P50 = samples[10] = 11 (整數 i64), body: {body}"
+        );
+        // claude 跳過: samples 為空不該 emit sample line (跟 K25 「0/0 不 emit」同款)
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"claude\"}"),
+            "claude samples 為空該跳過, body: {body}"
+        );
+        // openx 跳過: 同 claude
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx samples 為空該跳過, body: {body}"
+        );
+    }
+
+    #[test]
+    fn p50_alphabetical_sort_and_integer_precision() {
+        // alphabetical sort + i64 整數 precision + 跟 K22 / K25-K30 七件套互不
+        // 覆蓋: 三個 provider cicx/claude/gemini 同一份 reservoir 各自 sort
+        // 取不同 percentile → 各自 emit 自己的 P50 (= median), alphabetical
+        // 排序 (cicx < claude < gemini), 整數 i64 格式 (沒有 f64 4 位小數,
+        // 跟 sample 整數 duration 語意一致, 強制裁整 0 精度流失)。K31 跟
+        // K30 雙驗證: 同一份 cicx samples 餵 K30 (P95) 跟 K31 (P50), 各自
+        // emit 不同值 (K30=20 / K31=11), 證明 pure fn 各自獨立 + render
+        // emit 互不污染。
+        let mut totals = HashMap::new();
+        // cicx: 20 sample [1..20] → P50=11 (idx=10)
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: (1..=20).collect(),
+                ..Default::default()
+            },
+        );
+        // claude: 100 sample [1..100] → P50 index=50, samples[50]=51
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: (1..=100).collect(),
+                ..Default::default()
+            },
+        );
+        // gemini: 50 sample [1..50] → P50 index=25, samples[25]=26
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: (1..=50).collect(),
+                ..Default::default()
+            },
+        );
+
+        let _p50 = completed_sessions_p50_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // K31 alphabetical + 整數 i64 格式驗證: cicx=11, claude=51, gemini=26
+        let cicx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"cicx\"} 11\n")
+            .expect("cicx K31 sample line");
+        let claude_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"claude\"} 51\n")
+            .expect("claude K31 sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"gemini\"} 26\n")
+            .expect("gemini K31 sample line");
+        assert!(
+            cicx_idx < claude_idx && claude_idx < gemini_idx,
+            "per-provider P50 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, claude={claude_idx}, gemini={gemini_idx})"
+        );
+        // 反向驗: 確認 emit 的是整數 i64 格式, 不是 f64 4 位小數格式
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"cicx\"} 11.0000\n"
+            ),
+            "K31 i64 整數契約(不是 f64 4 位小數), 不可 emit 11.0000, body: {body}"
+        );
+        // K30 (P95) 跟 K31 (P50) 共用 samples vec 雙驗證: 同一份 cicx samples
+        // 餵 K30 (P95=20) 跟 K31 (P50=11), 各自 emit 各自 percentile 互不污染。
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 20\n"
+            ),
+            "K30 cicx P95 = 20 (跟 K31 P50=11 共用 samples vec, 各 emit 各 percentile), body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"cicx\"} 11\n"
+            ),
+            "K31 cicx P50 = 11 (跟 K30 P95=20 共用 samples vec, 各 emit 各 percentile), body: {body}"
+        );
+        // 順便驗 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) /
+        // K29 (ratio) 五件套 + K30 (P95) / K31 (P50) 互不覆蓋: cicx 在各 metric
+        // 各自 emit 自己的值, 互不污染 (K31 整數 vs K25/K28/K29 f64 格式本身已
+        // 隔離, 雙驗證)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"}"
+            ),
+            "K22 (latest) 跟 K31 (P50) 隔離, cicx 在 K22 沒 latest (None) 不該 emit, body: {body}"
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"}"),
+            "K29 (ratio) 跟 K31 (P50) 隔離, cicx count=0 該跳過 K29, body: {body}"
         );
     }
 }

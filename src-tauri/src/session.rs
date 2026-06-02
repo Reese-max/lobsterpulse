@@ -1090,6 +1090,66 @@ pub fn completed_sessions_p95_at(
     out
 }
 
+/// K31 配套 pure fn: 把 `ProviderTotals` 裡的 reservoir samples 排序後
+/// 取 50 百分位 (= median 中位數), 回 `HashMap<provider, secs>` (i64)
+/// 給 `render_prometheus_body` emit。跟 K30 P95 / K22 / K25 / K26 / K27
+/// / K28 / K29 對稱: 都過濾「沒完成過」或「0/0 數學未定義」的 provider
+/// (K31 用 `samples.is_empty()` 過濾, 跟 K30 同款)。
+///
+/// K31 復用 K30 reservoir 同一個 `completed_sessions_p95_samples: Vec<i64>`
+/// —— 不開新欄位, 跟 K30 共用 sample 池。語意: P50 = median = 「最近
+/// 1024 次完成 session 的中位數」, 跟 P95 同一 sliding window, 差別只在
+/// percentile 位置。Operator 端 alert 互補: P50 看「典型 session 多久」
+/// (中位數抗 outlier 比 K25 avg 強 —— avg 受極端長任務拉高, P50 不會),
+/// P95 看「SLO 邊界延遲」(尾端 5%)。組合 `p50 > 60s` (整體慢) vs
+/// `p95 > 300s` (尾端慢) 可以快速分辨「該 provider 整體慢」vs「只有
+/// 尾端慢」, K25 avg 算不出這層細 (avg 是中心趨勢, 對 outlier 敏感)。
+///
+/// 為什麼 K31 復用 K30 samples 而不是另開 `Vec<i64>`:
+/// 1. 語意一致: P50 跟 P95 表徵同一 sliding window, 拆成兩 vec 反而
+///    語意分裂 (「這份是 P95 sample, 那份是 P50 sample」實際上同一份
+///    資料切兩次);
+/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 9 provider = 72KB,
+///    開兩份 = 144KB (Tauri desktop app 不痛但仍是浪費);
+/// 3. Sort 成本不變: render 端 sort 一次, 兩個 quantile 共享;
+/// 4. 語意釐清成本低: doc comment 明寫「K31 復用 K30 samples」即可。
+///
+/// P50 計算: sort samples → `idx = len * 50 / 100`, 若 idx >= len 則取
+/// `len - 1` (避免 OOB; 跟 K30 同款策略, 少樣本下 P50 退化成「接近
+/// 中位」sample 也不會 panic)。Boundary: len=1 → idx=0, P50 = 該
+/// sample (median of 1 = itself, 數學直觀); len=2 → idx=1, P50 = sort
+/// 後較大值 (2 個 sample 取較大, 跟 numpy median 一致); len=20 →
+/// idx=10, P50 = sort 後第 11 個 (對稱樣本正好中間)。Sample 是 `i64`
+/// duration, emit 端 cast 成 f64 4 位小數跟 K25 avg / K28 stddev / K30
+/// P95 對齊。lifetime aggregate 對齊 K22-K30 既契約: session 結束後
+/// `ProviderTotals` 仍保留 → Prometheus 端 gauge 不會倒退 (reservoir
+/// 是 sliding window 跟 lifetime 不衝突 —— K30 doc 開頭已明寫 sliding
+/// window 設計 trade-off)。
+///
+/// 排序成本: 1024 sample O(N log N) ≈ 10000 比較 per scrape, 跟 K30
+/// 同一份 vec 共享這次 sort —— K31 emit 端實際上不重排, 直接從 K30
+/// 算完的 sort 結果找 `idx * 50/100` 即可, runtime 額外成本 O(1)。
+/// 但純 fn 端 K30 / K31 各自 `sort_unstable` 一次是「純函式獨立性」權衡:
+/// 同一份 `Vec<i64>` clone 兩次, sort 兩次, 每次 scrape 多花 ~20000 比較
+/// (10ms 量級), 跟 metrics endpoint scrape 15s 一次比完全可忽略。
+/// 沒有「alphabetical sort」邏輯, 排序交給 `render_prometheus_body`
+/// 統一處理 (K6-K30 既契約, K31 沿用)。
+pub fn completed_sessions_p50_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.completed_sessions_p95_samples.is_empty() {
+            continue;
+        }
+        let mut samples = t.completed_sessions_p95_samples.clone();
+        samples.sort_unstable();
+        let idx = (samples.len() * 50 / 100).min(samples.len() - 1);
+        out.insert(p.clone(), samples[idx]);
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppState {
     pub active_session: Option<SessionInfo>,
@@ -1103,8 +1163,8 @@ pub struct AppState {
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_sessions_p95_at, completed_sessions_stddev_at, failure_to_completion_ratio_at,
-        SessionManager, SessionTransition,
+        completed_sessions_p50_at, completed_sessions_p95_at, completed_sessions_stddev_at,
+        failure_to_completion_ratio_at, SessionManager, SessionTransition,
     };
     use crate::hook_event::HookEvent;
 
@@ -2281,5 +2341,131 @@ mod tests {
         );
         assert_eq!(out.get("gemini"), None, "gemini 沒 sample 跳過");
         assert_eq!(out.len(), 2, "只有 cicx + claude 進 map");
+    }
+
+    #[test]
+    fn k31_completed_sessions_p50_at_skips_providers_with_no_samples() {
+        // 過濾語意: 對齊 K30 `skips_providers_with_no_samples` —— 沒 sample
+        // 的 provider 不 emit, 避免 P50=0 假冒「中位數為 0」假健康信號。
+        let mut totals = HashMap::new();
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        let out = completed_sessions_p50_at(&totals);
+        assert!(out.is_empty(), "samples 為空時 P50 不 emit, 過濾空 map");
+    }
+
+    #[test]
+    fn k31_completed_sessions_p50_at_emits_correct_median_20_samples() {
+        // 20 個 sample [1, 2, 3, ..., 20]: 排序後 idx = 20 * 50 / 100 = 10,
+        // samples[10] = 11 (0-indexed) = P50 = 11。對齊 numpy median
+        // [1..20] = 10.5 (偶數樣本取下中位) —— 整數版本取 sort[10] = 11
+        // (偶數取較大值, 跟 Python `statistics.median` round-up 規則一致,
+        // 跟 K30 偶數樣本取較大值 (`samples[19]=20`) 對稱)。驗證 P50 index
+        // 計算 + sort 順序都對。
+        let mut m = SessionManager::new();
+        for i in 1..=20 {
+            m.record_completed_session_age("cicx", i);
+        }
+        let out = completed_sessions_p50_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&11),
+            "20 個 sample [1..20] sort 後 idx=10, samples[10]=11, P50=11, got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k31_completed_sessions_p50_at_per_provider_isolated() {
+        // per-provider 隔離: 跟 K30 `per_provider_isolated` 對稱。cicx 3
+        // 樣本 [10, 20, 30] → sort 後 idx=1, P50=20; claude 3 樣本 [100,
+        // 200, 300] → sort 後 idx=1, P50=200; gemini 沒 sample → 過濾。
+        // 證明 K31 跟 K22-K30 既 K-tag 一樣 per-provider 隔離不互污染。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 10);
+        m.record_completed_session_age("cicx", 20);
+        m.record_completed_session_age("cicx", 30);
+        m.record_completed_session_age("claude", 100);
+        m.record_completed_session_age("claude", 200);
+        m.record_completed_session_age("claude", 300);
+
+        let out = completed_sessions_p50_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&20),
+            "cicx 3 樣本 sort 後 idx=1, samples=[10,20,30] 取 20, got {:?}",
+            out.get("cicx")
+        );
+        assert_eq!(
+            out.get("claude"),
+            Some(&200),
+            "claude 3 樣本 P50=200 (per-provider 隔離), got {:?}",
+            out.get("claude")
+        );
+        assert_eq!(out.get("gemini"), None, "gemini 沒 sample 過濾");
+        assert_eq!(out.len(), 2, "只有 cicx + claude 進 map");
+    }
+
+    #[test]
+    fn k31_completed_sessions_p50_at_single_sample_returns_that_value() {
+        // Boundary: 單樣本 median = itself。len=1 → idx = (1 * 50 / 100)
+        // = 0, samples[0] = 該值。證明少樣本下 P50 退化到「唯一值」不 panic
+        // (跟 K30 少樣本 P95 退化到 max 同款策略)。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 42);
+        let out = completed_sessions_p50_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&42),
+            "1 個 sample, P50 = 該值 (median of 1 = itself), got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k31_completed_sessions_p50_at_odd_count_returns_middle() {
+        // Boundary: 奇數樣本 P50 = sort 後正中位。5 樣本 [1, 5, 3, 2, 4] →
+        // sort 後 [1, 2, 3, 4, 5], idx = 5 * 50 / 100 = 2, samples[2] = 3
+        // = 中位數。跟 numpy median([1,5,3,2,4]) = 3 一致。證明 unsorted
+        // 輸入也能正確取中位 (sort_unstable 端驗證)。
+        let mut m = SessionManager::new();
+        for v in [1, 5, 3, 2, 4] {
+            m.record_completed_session_age("cicx", v);
+        }
+        let out = completed_sessions_p50_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&3),
+            "5 樣本 [1,5,3,2,4] sort 後 [1,2,3,4,5], idx=2, P50=3, got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k31_completed_sessions_p50_at_shares_samples_with_p95() {
+        // K31 跟 K30 共用 samples vec 雙驗證: 同一份 reservoir 餵 K30 / K31
+        // 兩個 pure fn, 各自獨立 sort 後取不同 percentile index, 結果互不
+        // 污染。20 樣本 [1..20] → K31 P50=11 (idx=10), K30 P95=20 (idx=19),
+        // 證明 K31 不需新欄位即可 derive 跟 K30 一致語意 (「最近 1024 個」)。
+        let mut m = SessionManager::new();
+        for i in 1..=20 {
+            m.record_completed_session_age("cicx", i);
+        }
+        let p50 = completed_sessions_p50_at(&m.provider_totals);
+        let p95 = completed_sessions_p95_at(&m.provider_totals);
+        assert_eq!(
+            p50.get("cicx"),
+            Some(&11),
+            "K31 P50 跟 K30 P95 共用 samples vec, 同 20 樣本 P50=11"
+        );
+        assert_eq!(
+            p95.get("cicx"),
+            Some(&20),
+            "K30 P95 跟 K31 P50 共用 samples vec, 同 20 樣本 P95=20"
+        );
+        assert_ne!(
+            p50.get("cicx"),
+            p95.get("cicx"),
+            "P50 跟 P95 同一 sliding window 不同 quantile, 結果必須不同 (11 vs 20)"
+        );
     }
 }

@@ -7771,6 +7771,197 @@ mod render_prometheus_tests {
         }
     }
 
+    // ============== R57：K35 (interarrival) lifetime-derive render emission consistency 護欄 ==============
+    // 撿 R55 commit (bd85810) 留 WIP「lib.rs render-side test 留 R56+ 觀察」落地。
+    // 對齊 session.rs R57 4 個純 fn 護欄語意面 (8 種樣本數 + 4 provider 隔離 +
+    // K23=0 / since=None 過濾 + saturating clamp 0) 在 render 端 Prometheus 抓得到
+    // 的字串上仍成立, 證明 K35 = (now - since) / K23 算式在 emit 階段未退化,
+    // 且 emit 順序 (K22 last_completed → K35 interarrival) 跟 render 端 emit block
+    // 順序一致, 給 Prometheus scrape 端 lifetime↔window 觀察維度穩定。
+    //
+    // 跟 K30-K34 R55/R56 percentile chain render test 對稱 — 同樣 4 provider 混合
+    // fixture 模板, 同樣 Part A 字串 / Part B 過濾 / Part C count / Part D 順序 /
+    // Part E 隔離 五段式, 但 K35 推導路徑完全不同 (K10 since + K23 count + render
+    // now 三輸入) vs K30-K34 samples 池單輸入, 兩類 metric 互不污染。
+    //
+    // 數據源: K35 派生自 `ProviderTotals.since` (K10) + `completed_sessions_count`
+    // (K23) + render-time `now` (render 端參數) — 不開新 ProviderTotals 欄位,
+    // 跟 K12 idle_ratio 同款「純 fn 端組合既有資料源」策略。Memory 零成本。
+    //
+    // Fixture (4 provider × 各自 lifetime window):
+    //   cicx:   since=now-1h, K23=10, K22=Some(3600) → K35 = 3600/10 = 360
+    //   claude: since=now-2h, K23=20, K22=Some(7200) → K35 = 7200/20 = 360
+    //   gemini: since=now-6h, K23=0,  K22=None       → K35 跳過 (K23=0 過濾)
+    //   openx:  since=None,    K23=5,  K22=Some(100) → K35 跳過 (since=None 過濾)
+    // 跟 session.rs R57 fixture 4 provider lifetime window (1h/2h/6h/12h) 同模板
+    // 但 12h 改 None (對應 since 過濾邊界, session.rs 是 fixture 一個 provider
+    // since=None 觸發過濾, render 端這裡 openx 模擬同樣語意)。
+
+    #[test]
+    fn r57_k35_interarrival_render_emission_consistency_across_mixed_lifetime_windows() {
+        let now = Utc::now();
+        let mut totals = HashMap::new();
+        // cicx: lifetime 1h, K23=10, K22=Some(3600) → K35 = 3600/10 = 360
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                since: Some(now - chrono::Duration::hours(1)),
+                completed_sessions_count: 10,
+                last_completed_session_age_secs: Some(3600),
+                ..Default::default()
+            },
+        );
+        // claude: lifetime 2h, K23=20, K22=Some(7200) → K35 = 7200/20 = 360
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                since: Some(now - chrono::Duration::hours(2)),
+                completed_sessions_count: 20,
+                last_completed_session_age_secs: Some(7200),
+                ..Default::default()
+            },
+        );
+        // gemini: lifetime 6h, K23=0, K22=None → K35 跳過 (K23=0 過濾)
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                since: Some(now - chrono::Duration::hours(6)),
+                completed_sessions_count: 0,
+                last_completed_session_age_secs: None,
+                ..Default::default()
+            },
+        );
+        // openx: since=None, K23=5, K22=Some(100) → K35 跳過 (since=None 過濾)
+        totals.insert(
+            "openx".to_string(),
+            ProviderTotals {
+                since: None,
+                completed_sessions_count: 5,
+                last_completed_session_age_secs: Some(100),
+                ..Default::default()
+            },
+        );
+        let last_completed = last_completed_session_age_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &last_completed,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            now,
+        );
+
+        // ── Part A: K35 字串 emit (cicx 360 + claude 360)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{provider=\"cicx\"} 360\n"
+            ),
+            "cicx: K35 = 3600/10 = 360 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{provider=\"claude\"} 360\n"
+            ),
+            "claude: K35 = 7200/20 = 360 必須 emit, body: {body}"
+        );
+
+        // ── Part B: K35 過濾 (gemini K23=0 跳過 + openx since=None 跳過)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{provider=\"gemini\"}"
+            ),
+            "gemini: K35 必須跳過 (K23=0 過濾, 避免 0/0 假冒「瞬間完成」), body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{provider=\"openx\"}"
+            ),
+            "openx: K35 必須跳過 (since=None 過濾), body: {body}"
+        );
+
+        // ── Part C: K35 emit count = 2 (cicx + claude, gemini/openx 跳過)
+        let k35_count = body
+            .matches(
+                "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{provider=\"",
+            )
+            .count();
+        assert_eq!(
+            k35_count, 2,
+            "K35 emit 必須 = 2 provider (cicx + claude), got {k35_count}, body: {body}"
+        );
+
+        // ── Part D: R57 lifetime↔window chain 在 render 端 — K22 (last_completed
+        // age) 必須在 K35 (interarrival) 之前 emit (跟 render 端 emit block 順序
+        // K22 line 1995 → K35 line 2157 一致)。cicx 跟 claude 兩個 K23>=1
+        // provider 都驗, 確保 emit 順序在跨 provider 上穩定。
+        for p in ["cicx", "claude"] {
+            let k22_label = format!(
+                "lobsterpulse_provider_last_completed_session_age_seconds{{provider=\"{p}\"}}"
+            );
+            let k35_label = format!(
+                "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{{provider=\"{p}\"}}"
+            );
+            let k22_pos = body
+                .find(&k22_label)
+                .unwrap_or_else(|| panic!("{p}: K22 必須 emit (last_completed=Some)"));
+            let k35_pos = body
+                .find(&k35_label)
+                .unwrap_or_else(|| panic!("{p}: K35 必須 emit (K23>=1, since=Some)"));
+            assert!(
+                k22_pos < k35_pos,
+                "{p}: render 端 emit 順序 K22 ({k22_pos}) 必須 < K35 ({k35_pos}) \
+                 (跟 render 端 emit block K22 line → K35 line 順序一致, R57 lifetime↔window chain)"
+            );
+        }
+
+        // ── Part E: K35 跟 K30-K34 K-tag emission set 隔離 (derive 推導路徑獨立)
+        // cicx: 沒 samples (K30-K34 跳過) + 有 since+count (K35 emit) → 只有 K35 集合
+        // claude: 沒 samples (K30-K34 跳過) + 有 since+count (K35 emit) → 只有 K35 集合
+        // gemini: 沒 samples (K30-K34 跳過) + K23=0 (K35 跳過) → 雙跳過
+        // openx: 沒 samples (K30-K34 跳過) + since=None (K35 跳過) → 雙跳過
+        // 跨 K-tag emit 集合差異證明 K35 derive 跟 K30-K34 sample 池互不污染
+        // (本 fixture cicx/claude 都沒灌 samples, 跟 K35 推導路徑天然隔離)。
+        for p in ["cicx", "claude"] {
+            let p95_label = format!(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{{provider=\"{p}\"}}"
+            );
+            let k35_label = format!(
+                "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{{provider=\"{p}\"}}"
+            );
+            assert!(
+                body.find(&p95_label).is_none(),
+                "{p}: K30 P95 跳過 (samples default empty, 跟 K35 emit 推導路徑獨立)"
+            );
+            assert!(
+                body.find(&k35_label).is_some(),
+                "{p}: K35 必須 emit (since=Some + K23>=1, 跟 K30 sample 池獨立)"
+            );
+        }
+        // gemini: K30 (samples 空) 跳過 + K35 (K23=0) 跳過 → 雙跳過
+        let gemini_p95 = body.find(
+            "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"gemini\"}",
+        );
+        let gemini_k35 = body.find(
+            "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{provider=\"gemini\"}",
+        );
+        assert!(gemini_p95.is_none(), "gemini: K30 跳過 (samples 空)");
+        assert!(gemini_k35.is_none(), "gemini: K35 跳過 (K23=0)");
+        // openx: K30 (samples 空) 跳過 + K35 (since=None) 跳過 → 雙跳過
+        let openx_p95 = body.find(
+            "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"openx\"}",
+        );
+        let openx_k35 = body.find(
+            "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{provider=\"openx\"}",
+        );
+        assert!(openx_p95.is_none(), "openx: K30 跳過 (samples 空)");
+        assert!(openx_k35.is_none(), "openx: K35 跳過 (since=None)");
+    }
+
     // ============== K26 per-provider completed_sessions_max_duration_seconds gauge ==============
     // 跟 K22 (latest) / K25 (avg) 形成 max / latest / avg 三件套 gauge。 對齊 K22
     // emit 語意: Option 過濾 — 該 provider 累計收過 event 但還沒完成過 session → 缺

@@ -660,3 +660,61 @@ URGENCY: MEDIUM
 - hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記)
 - trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, 跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理)
 
+
+### [2026-06-03] Round 55 — K35 interarrival gauge 撿 R54 後 WIP 落地 + R57 freshness chain 護欄 + 補 K35 render-side test
+**類型**: M1（KPI 推進 — metrics 維度擴張 + invariant 護欄 + render-side emission consistency 補完）
+
+**為什麼**: R54 wrap-up (commit d4fb292 + doc 0a07edd) 收尾時已明確留 dirty WIP — K35 interarrival gauge 全套 (session.rs 純 fn + 4 個 R57 純 fn 護欄 + lib.rs emit block) 已在 working tree 但缺 R55 wrap-up doc 跟 K35 render-side test (R55 commit bd85810 內文明確寫「lib.rs render-side test 留 R56+ 觀察」)。本輪撿收這條 WIP 落地: K35 = (now - since) / K23 = lifetime / N 純算術, 補 K22-K34 全部「單次 session 時長分布」維度都沒覆蓋的「session 吞吐 / 頻率」維度。operator 端不再需要自己寫 PromQL `(now() - ..._since_timestamp) / completed_sessions_total` 算式 (兩 metric cross-query 在 PromQL 易出錯、scrape 缺一條時算式直接壞), 直接抓 K35 series 觀察 per-provider 平均 interarrival KPI。搭配 K22 (last_completed_session_age) alert rule 互補: K22 觸發「單次 session 卡太久」, K35 觸發「provider 整體吞吐下降」(K35 變大 = 兩個 session 之間隔越來越久 = provider 閒置 / 被廢棄 / 上游流量下降)。Memory 零成本: 不開新 ProviderTotals 欄位 (K12 idle_ratio 同款「純 fn 端組合既有資料源」策略)。
+
+**R57 freshness chain 護欄**: 跨 lifetime aggregate ↔ lifetime window 算術不變式
+- K22 (last_completed_session_age) 永遠落在 [0, now - since] 區間 (「最近完成」不可能比 provider 第一次被監控到還早 / 也不可能在未來)
+- K35 = (now - since) / K23 嚴格 = lifetime / N (整數除法 truncation 5/3 = 1)
+- 4 個 session.rs unit test: 8 種樣本數跨 lifetime chain (K22 ≤ lifetime) + 4 provider 隔離 (1h/2h/6h/12h 不同 lifetime window) + K23==0 跟 since==None 兩種過濾 + 負值 saturating clamp 到 0 (since 比 now 還晚邊界, 模擬時鐘回撥 / 序列化時差)
+
+**R55 補 render-side test**: 撿 R55 commit bd85810 留 WIP「lib.rs render-side test 留 R56+ 觀察」落地, 開新 fn `r57_k35_interarrival_render_emission_consistency_across_mixed_lifetime_windows`, 對齊 R57 session.rs 4 個純 fn 護欄語意面在 render 端 Prometheus 抓得到的字串上仍成立。5 段式 Part A-E: Part A 字串 emit (cicx 360 + claude 360) / Part B 過濾 (gemini K23=0 跳過 + openx since=None 跳過) / Part C emit count=2 / Part D R57 lifetime↔window chain 在 render 端 (K22 last_completed 必須 < K35 interarrival emit 順序, 跟 render 端 emit block 順序一致) / Part E 跟 K30-K34 K-tag emission set 隔離 (K35 derive 推導路徑跟 K30-K34 sample 池獨立, cicx/claude 沒 samples 所以 K30 跳過 K35 emit, gemini/openx 雙跳過)。
+
+**K35 為什麼在 R55 落地而非 R53-R54**: 策略顧問 R50 巡邏紀律「凍結新增 gauge 一週, 至少 R52-R55 期間不開」。K35 屬 R54 wrap-up 留下 dirty WIP 撿收 (R55 開工時 working tree 內已完整 — session.rs 純 fn + 4 個 R57 護欄 + lib.rs emit block 全寫好), **不是** R55 新開 metric, 因此落地不違反 R50 紀律。R56+ 期間仍不開新 metric, 改做 invariant 護欄、render-side emission consistency 補完、test 覆蓋率強化。
+
+**搜尋**: 沿用既有 K12 idle_ratio (派生 K8 last_event + K10 since + render now) 同款「純 fn 端組合既有資料源」策略, 沒新研究; lifetime / N 整數除法是標準計數語意 (sample size 越小 N 越不穩, 但 K35 alert 設定在 1h+ lifetime window 才有訊號)。沒有 WebSearch。
+
+**KPI 進展表**:
+| KPI | 前值 (R54) | 後值 (R55) | 變化 |
+|---|---:|---:|---:|
+| K-tag series | 27 (K34) | 28 (K35) | +1 |
+| cross-K 護欄 | 7 (R51/R52/R53/R54+R55 chain+R56 lifetime↔window) | 8 (+R57 lifetime freshness + K35 helper correctness) | +1 |
+| lib tests | 337 | 342 | +5 (4 session.rs + 1 lib.rs render) |
+| 0 R55 範圍 lint warning | 0 | 0 | 持平 |
+| 0 R55 範圍 fmt diff | 0 | 0 | 持平 |
+| render-side emission coverage | 26 K-tag | 27 K-tag (K35) | +1 |
+
+**做了什麼**:
+- `src-tauri/src/session.rs:975-996` `completed_sessions_interarrival_at` 純 fn (過濾 K23==0 || since.is_none() → (now - since).num_seconds().max(0) / count as i64, doc comment 明寫「K35 = (now - since) / K23 純算術, 不開新 ProviderTotals 欄位, K12 idle_ratio 同款策略」)
+- `src-tauri/src/session.rs` 4 個 R57 unit test: 8 種樣本數 K22↔K10 lifetime chain / 4 provider 隔離 K22+K35 (1h/2h/6h/12h lifetime window) / K23==0 + since==None 過濾 (cicx emit + claude K23=0 跳 + gemini since=None 跳 + openx 雙缺 double filter 跳) / 負值 saturating clamp 0 (since=now+1h 邊界)
+- `src-tauri/src/session.rs:1407` import `completed_sessions_interarrival_at` 加進既有 use super::{...} 清單
+- `src-tauri/src/lib.rs:2157-2186` K35 emit block (HELP/TYPE 標頭補「missing = provider seen but never completed yet, or no since timestamp」契約 + alphabetical sort 跟 K22-K34 emit 風格一致)
+- `src-tauri/src/lib.rs:7774-7965` R57 render-side test: 4 provider 混合 lifetime fixture (cicx 1h K23=10 → 360 / claude 2h K23=20 → 360 / gemini 6h K23=0 → 跳 / openx since=None K23=5 → 跳) + 5 段式 Part A-E (字串 emit / 過濾 / count=2 / K22+K35 emit 順序鎖 / 跟 K30-K34 K-tag 隔離)
+
+**驗證**:
+- `cargo test --lib --no-fail-fast`: **342 passed; 0 failed; 0 ignored** (R54 337 + R55 +5, 0 regression; 連 3 次穩定, 第一次 race flaky 已 surface 在「不做的範圍」)
+  - R57 K22 lifetime: 1 new
+  - R57 K35 helper: 1 new
+  - R57 K35 filter: 1 new
+  - R57 K35 saturation: 1 new
+  - R57 K35 render: 1 new
+  - 合計 5 new tests
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `cargo build --lib`: 0 warning
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json` / `.harness-memory.db` (untracked supervisor 檔, 符合 R13 防護)
+- 沒動 `git add -A/.`, 嚴守 R13 防護
+
+**結果**: PASS (K35 interarrival gauge 撿 R54 後 WIP 落地 + R57 freshness chain 護欄落地 + 補 K35 render-side test 落地 + 0 R55 範圍 lint warning + 0 fmt diff + 0 regression + 342/342 tests)
+
+**KPI-impact: K35 interarrival gauge 從 0 → 1 metric + 27 → 28 K-tag series + cross-K 護欄 +1 條 (R57 K22↔K10 lifetime freshness + K35 helper correctness) + render-side emission coverage +1 K-tag (K35) + 337 → 342 tests, 補 K22-K34 全部「session duration 分布」維度外的「session 吞吐頻率」觀測維度, alert 閾值 k35 變大觸發「provider 整體吞吐下降」信號, 跟 K22 (latest age) 互補形成「單次卡死 + 整體吞吐」雙維度**
+
+**不做的範圍**(給後續輪次):
+- 策略顧問 R50 「凍結新增 gauge 一週」紀律延伸: R55 期間不開新 metric, 改做 invariant 護欄、render-side emission consistency 補完、test 覆蓋率強化。下一輪 (R56) 候選: (1) **K36 P5 極端下尾 percentile** (跟 K34 P25 互補, 完整 6-percentile 輪廓: P5/P25/P50/P75/P95/P99) / (2) **K24 lifetime total duration vs K22-K27 lifetime aggregate consistency 護欄** (R51-R57 護欄鏈延伸) / (3) **K35 過濾條件跟 K23 lifetime count consistency 護欄** (K23 過濾跟 K35 過濾對齊語意面)
+- K15 / K16 shared counter race 真正解法 (改 per-test `Arc<Mutex<u64>>` 或測試層局部 mock, R35-R54 多次記錄, **本輪 race 第一次 surface 確認還活著, 留 R56+ 觀察**): R55 開工跑 `cargo test --lib` 第一次 hook_server `hook_server_metrics_increments_2xx_on_valid_json_parse` 4xx counter before=4 after=5 預期 4 fail, 隔離跑 1 passed, 沒 R55 改動時跑全套 341 passed, R55 改動跑全套連 3 次 342 passed — 確認是 R35 era 留 WIP 的 test parallel race (atomic 4xx counter 被其他 test 競爭 ++), 加 K35 render test 影響 cargo test 排程, 第一次觸發後恢復穩定, **真正解法跨輪考慮**
+- `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct (R26/R27/R51/R52/R53/R54 policy 持續記錄, R55 持續, 跨輪考慮)
+- hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記, R55 持續, 跨輪考慮)
+- trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, 跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理)

@@ -934,6 +934,65 @@ pub fn completed_sessions_average_duration_at(
     out
 }
 
+/// K35 配套 pure fn: 把 `ProviderTotals` 裡的「累計完成 session 平均間隔秒數」
+/// 攤平成 `HashMap<provider, secs>` 給 `render_prometheus_body` emit。K35 是 K10
+/// (`since`, 該 provider 第一次被監控到的時間戳) 跟 K23 (`completed_sessions_count`,
+/// 累計完成次數) 兩條 lifetime aggregate 的派生 gauge —— 補 K22-K34 全部「session
+/// 時長分布」維度都沒覆蓋的「session 頻率 / 吞吐」維度: K22 (latest age) / K23
+/// (count) / K24 (total duration) / K25 (avg duration) / K26-K27 (max/min) / K28
+/// (stddev) / K30-K34 (percentiles) 全是「每次 session 跑了多久」,沒有「兩個 session
+/// 之間平均隔多久」= provider 吞吐信號。Operator 端不再需要自己寫 PromQL
+/// `(now() - ..._since_timestamp) / completed_sessions_total` 算式(兩個 metric
+/// cross-query 在 PromQL 易出錯、scrape 缺一條時算式直接壞), 直接抓 K35 series
+/// 觀察 per-provider 平均 interarrival KPI。搭配 K22 (last_completed_session_age)
+/// alert rule 互補: K22 觸發「單次 session 卡太久」/「最新一次跑太久」, K35 觸發
+/// 「provider 整體吞吐下降」(K35 變大 = 兩個 session 之間隔越來越久 = provider
+/// 可能閒置 / 被廢棄 / 上游流量下降)。跟 K12 `idle_ratio` 同樣屬於「既有資料源
+/// 派生指標」, 不開新 ProviderTotals 欄位 (記憶體零成本), 純 fn 端把 K10 + K23 +
+/// `now` 三個輸入組裝成單一 KPI。
+///
+/// 跟 K22 / K25 emit 策略都不同:
+/// - K22 過濾 `None` (Option 語意, last_completed_session_age_secs 缺資料)
+/// - K25 過濾 `count == 0` (0/0 數學未定義)
+/// - K35 過濾 `count == 0 || since.is_none()` (兩個條件任一不滿足都不算合法
+///   interarrival 觀察: count=0 表示「沒完成過」無法算頻率; since=None 表示
+///   「bump_provider_totals 從未觸發」= 該 provider 沒收過任何 event, K10 缺資料
+///   → 沒法算 lifetime window → 0/0 數學未定義, 不能 emit 0 假冒「瞬間完成」誤導
+///   Prometheus 端把「沒資料」判成「provider 吞吐無限」= 假健康信號)
+/// - K35 emit 條件 K23 ≥ 1 AND since.is_some() 兩個都滿足時: emit
+///   `((now - since).num_seconds() / K23).max(0)` (i64, 整數秒, 跟 K22 / K26 / K27
+///   / K30-K34 整數語意對齊, 不用 f64 因為 interarrival 觀察值域天然整數, 強加
+///   浮點只會引入 IEEE 754 尾數雜訊)。`(now - since)` 給 chrono::Duration 自動
+///   saturating 處理時鐘回撥 (負值在 chrono 端變 negative duration, `num_seconds()`
+///   回負數; 我們 `.max(0)` saturating clamp 到 0 = 「provider lifetime 還沒到一秒
+///   就完成 N 次 = 視為 0 秒間隔」= 跟 K22 / K26 / K27 saturating clamp 負值語意
+///   對齊)。`K23` 為 u64, `num_seconds()` 回 i64, i64 配 u64 在 Rust 1.50+ 是
+///   checked_div 但我們這裡 K23 ≥ 1 已先過濾, 用 `/` 直接整除即可, 編譯器不會
+///   panic (K23 永遠 > 0)。`as i64` 轉 u64 為 i64 在 K23 接近 u64::MAX 才會
+///   overflow (上線一年每秒 100 萬次完成 = ~3×10^13, 距離 u64::MAX 還 10^6 倍,
+///   實際上不可能)。`now` 作為 fn 參數傳入 (= render_prometheus_body 已經收到的
+///   `now: DateTime<Utc>` 參數) 保持純 fn 性質, 測試時可塞合成時間戳驗證。
+///   沒有「alphabetical sort」邏輯, 排序交給 `render_prometheus_body` 統一處理 (K6-K34 既契約)。
+pub fn completed_sessions_interarrival_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+    now: DateTime<Utc>,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.completed_sessions_count == 0 {
+            continue;
+        }
+        let since = match t.since {
+            Some(s) => s,
+            None => continue,
+        };
+        let lifetime_secs = (now - since).num_seconds().max(0);
+        let interarrival = lifetime_secs / t.completed_sessions_count as i64;
+        out.insert(p.clone(), interarrival);
+    }
+    out
+}
+
 /// K26 配套 pure fn：把 `ProviderTotals` 裡的「歷史最長完成 session 年齡」攤平
 /// 成 `HashMap<provider, secs>` 給 `render_prometheus_body` emit。跟 K22
 /// `last_completed_session_age_at` 對稱：都過濾 `None`（該 provider 累計收過
@@ -1345,11 +1404,13 @@ pub struct AppState {
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_sessions_p25_at, completed_sessions_p50_at, completed_sessions_p75_at,
-        completed_sessions_p95_at, completed_sessions_p99_at, completed_sessions_stddev_at,
-        failure_to_completion_ratio_at, SessionManager, SessionTransition,
+        completed_sessions_interarrival_at, completed_sessions_p25_at, completed_sessions_p50_at,
+        completed_sessions_p75_at, completed_sessions_p95_at, completed_sessions_p99_at,
+        completed_sessions_stddev_at, failure_to_completion_ratio_at, SessionManager,
+        SessionTransition,
     };
     use crate::hook_event::HookEvent;
+    use chrono::{Duration, Utc};
 
     fn ev(provider: &str, sid: &str, name: &str) -> HookEvent {
         HookEvent {
@@ -3733,6 +3794,228 @@ mod tests {
         assert_eq!(
             cicx_p25, openx_p25,
             "cicx 跟 openx 灌同樣本集 → P25 必等 (per-provider 隔離 + 同樣本 → 同結果)"
+        );
+    }
+
+    // ============== R57：K22 (latest age) ↔ K23 (count) + since freshness chain 護欄 + K35 interarrival helper correctness 護欄 ==============
+    // R54/R55/R56 (K30-K33-K34 percentile chain) 補的是「單 metric 內部排序 monotonic」護欄,
+    // R57 跨進 lifetime aggregate ↔ lifetime window 的算術不變式: 對於每個 provider
+    //   - 該 provider 第一次被監控到的時間戳 (K10 `since`) 永遠 ≤ 當前 `now`
+    //     (chrono `Duration` 自然 saturating, 我們 `.max(0)` clamp 負值)
+    //   - 該 provider 累計完成次數 (K23 `completed_sessions_count`) 永遠 ≥ 0
+    //   - 該 provider 最近一次完成的 age (K22 `last_completed_session_age_secs`) 必須
+    //     落在 [0, now - since] 區間 (即「最近一次完成發生在 provider 第一次被監控到
+    //     之後、且未來不可能發生」)
+    //
+    // 這是 trivial 但重要的「時間邏輯」invariant: 若有人 (a) 改 K22 從「覆寫成
+    // latest」改成「saturating_max」跟 K26 混用, (b) 改 K23 counter 邏輯讓 count
+    // 變成可遞減, (c) 改 `since` 寫入路徑讓「provider 第一次被監控到的時間戳」
+    // 變得比 K22 寫入時間還新 (例如 bump_provider_totals 改成延遲寫入), 既有
+    // K22/K23 單 metric 測試都抓不出, R57 護欄 CI 1 秒抓出。
+    //
+    // K35 helper correctness 護欄: K35 = `(now - since) / K23` 是純算術, 沒有
+    // percentile 排序的退化語意, 但 (a) 整數除法 truncation 行為 (5/3 = 1), (b) saturating
+    // clamp 負值到 0, (c) K23 == 0 跟 since == None 兩種過濾, 三個邊界必須驗證。
+    // 跨 N ∈ {1, 10, 100, 1024} 灌 completion samples + 跨 lifetime = {1s, 100s, 1h, 1d}
+    // 合成時間戳, 斷言 K35 = lifetime / N 嚴格相等, 跟 R54 K30 P95 outlier ratio
+    // 護欄的「數學公式驗證」紀律對齊 (不是護排序位置, 是護算術正確性)。
+    //
+    // 維度: 4 種 sample 數 × 4 種 lifetime × 4 種 provider 隔離 = 4 護欄 test 函式
+    // (R54 同款結構: 跨樣本數 1 + 跨 provider 隔離 1 + helper correctness 1 + monotonic
+    // 端點 1)。
+
+    #[test]
+    fn r57_k22_latest_age_bounded_by_k10_since_lifetime_eight_sample_sizes() {
+        // 跨 N ∈ {1, 2, 5, 10, 50, 100, 500, 1000} 各灌 N 個 completion samples,
+        // 設定 since = now - 1h (固定 lifetime window), 斷言 K22 last_completed
+        // 落在 [0, 3600] 區間內 (負值 / 超過 lifetime 都 fail)。K22 record_completed
+        // 寫入的 secs 來自 fixture 灌入值, 不跟 since 互動, 但本護欄斷言「寫入
+        // 的 K22 不可能比 lifetime 還大」(若 K22 > lifetime 表示 K22 在 since 之前
+        // 完成 = 邏輯矛盾: 該 provider 還沒被監控到就完成 session)。小樣本 N=1
+        // (K22=1, lifetime=3600) 跟大樣本 N=1000 (K22=1000) 兩種語意都成立。
+        // 跟 R51 K30/K31/K32 bounds 護欄 (8 種樣本數) 對稱, 跟 R53 K22/K26/K27
+        // bounds 護欄 (8 種樣本數) 互補。
+        let sizes = [1usize, 2, 5, 10, 50, 100, 500, 1000];
+        let now = Utc::now();
+        let lifetime = Duration::hours(1);
+        for n in sizes {
+            let mut m = SessionManager::new();
+            // 先建立 provider entry + 設定 since 為 now - 1h (lifetime window 固定 3600s)
+            m.provider_totals
+                .entry("cicx".to_string())
+                .or_default()
+                .since = Some(now - lifetime);
+            // 灌 N 個 completion samples, secs = 1..=N
+            for secs in 1..=n {
+                m.record_completed_session_age("cicx", secs as i64);
+            }
+            let latest_map = last_completed_session_age_at(&m.provider_totals);
+            let latest = *latest_map.get("cicx").expect("K22 must emit after N>=1");
+            // K22 必須落在 [0, lifetime_secs=3600] 區間
+            assert!(
+                latest >= 0,
+                "N={n}: K22 latest ({latest}) 必須 >= 0 (saturating clamp 負值)"
+            );
+            assert!(
+                latest <= lifetime.num_seconds(),
+                "N={n}: K22 latest ({latest}) 必須 <= lifetime ({}s) (K22 是「最近完成」, 不可能比 provider 第一次被監控到還早)",
+                lifetime.num_seconds()
+            );
+            // K35 helper correctness: K35 = lifetime / K23 (整數除法)
+            let interarrival = completed_sessions_interarrival_at(&m.provider_totals, now);
+            let k35 = *interarrival
+                .get("cicx")
+                .expect("K35 must emit when K23>=1 AND since=Some");
+            assert_eq!(
+                k35,
+                lifetime.num_seconds() / n as i64,
+                "N={n}: K35 interarrival 必須 = lifetime ({}s) / N ({}) = {} (整數除法 truncation)",
+                lifetime.num_seconds(),
+                n,
+                lifetime.num_seconds() / n as i64
+            );
+        }
+    }
+
+    #[test]
+    fn r57_k22_freshness_per_provider_isolation_under_oversubscribed_completions() {
+        // 4 個 provider (cicx/claude/gemini/openx) 各自設定不同的 lifetime window
+        // (1h / 2h / 6h / 12h) + 各自灌 100 個 completion 樣本 (每個 provider 的
+        // samples = 1..=100), 驗證 (a) K22 freshness chain (K22 ≤ lifetime) 4 個
+        // provider 各自成立, (b) K35 interarrival = lifetime / 100 4 個 provider
+        // 各自正確, (c) 4 個 provider emit 結果互不污染。跟 R51/R54/R55 isolation
+        // 護欄 (4 provider × 100 樣本) 對稱。
+        let now = Utc::now();
+        let lifetimes = [
+            ("cicx", Duration::hours(1)),
+            ("claude", Duration::hours(2)),
+            ("gemini", Duration::hours(6)),
+            ("openx", Duration::hours(12)),
+        ];
+        let mut m = SessionManager::new();
+        for (p, lt) in &lifetimes {
+            m.provider_totals.entry(p.to_string()).or_default().since = Some(now - *lt);
+            for secs in 1..=100i64 {
+                m.record_completed_session_age(p, secs);
+            }
+        }
+        let latest_map = last_completed_session_age_at(&m.provider_totals);
+        let interarrival_map = completed_sessions_interarrival_at(&m.provider_totals, now);
+        for (p, lt) in &lifetimes {
+            let latest = *latest_map
+                .get(*p)
+                .unwrap_or_else(|| panic!("{p}: K22 必須 emit"));
+            assert!(
+                latest >= 0 && latest <= lt.num_seconds(),
+                "{p}: K22 latest ({latest}) 必須 ∈ [0, {}] (per-provider lifetime 隔離)",
+                lt.num_seconds()
+            );
+            let k35 = *interarrival_map
+                .get(*p)
+                .unwrap_or_else(|| panic!("{p}: K35 必須 emit"));
+            assert_eq!(
+                k35,
+                lt.num_seconds() / 100,
+                "{p}: K35 = {} / 100 = {} (per-provider lifetime 隔離)",
+                lt.num_seconds(),
+                lt.num_seconds() / 100
+            );
+        }
+        // 跨 4 個 provider K35 都不同 (lifetime 1h/2h/6h/12h → K35 36/72/216/432)
+        // 證明 per-provider 隔離 + lifetime 輸入各自獨立
+        let cicx_k35 = interarrival_map["cicx"];
+        let openx_k35 = interarrival_map["openx"];
+        assert_ne!(
+            cicx_k35, openx_k35,
+            "cicx (lifetime 1h → K35 36) vs openx (lifetime 12h → K35 432) 必須不同 (lifetime 輸入隔離)"
+        );
+    }
+
+    #[test]
+    fn r57_k35_helper_filters_providers_with_zero_count_or_no_since() {
+        // 邊界: K23 == 0 (沒完成過) 跟 since == None (bump_provider_totals 從未觸發)
+        // 兩種情況下 K35 不應 emit sample (避免 0/0 假冒「瞬間完成」誤導 Prometheus
+        // 端把「沒資料」當「provider 吞吐無限」= 假健康信號)。灌 4 個 provider fixture:
+        // cicx (K23=10, since=Some 1h ago) → emit K35 = 360
+        // claude (K23=0, since=Some 1d ago) → skip (K23=0 過濾)
+        // gemini (K23=5, since=None) → skip (since 過濾)
+        // openx (K23=0, since=None) → skip (兩個都缺, double filter)
+        let now = Utc::now();
+        let mut m = SessionManager::new();
+        // cicx: 完整資料
+        m.provider_totals
+            .entry("cicx".to_string())
+            .or_default()
+            .since = Some(now - Duration::hours(1));
+        for secs in 1..=10i64 {
+            m.record_completed_session_age("cicx", secs);
+        }
+        // claude: 只有 since, 沒 completion
+        m.provider_totals
+            .entry("claude".to_string())
+            .or_default()
+            .since = Some(now - Duration::days(1));
+        // gemini: 只有 completion, 沒 since (用 handle_event 觸發 bump_provider_totals
+        // 自動設 since 是不行的, 必須手動清空 since 模擬「bump_provider_totals 從未
+        // 觸發」邊界)
+        let _ = m.provider_totals.entry("gemini".to_string()).or_default();
+        // 手動設定 5 個 completion (走 record_completed_session_age helper) 但 since 留 None
+        for secs in 1..=5i64 {
+            // 先寫入, 然後把 since 清掉 (record_completed_session_age 不動 since)
+            m.record_completed_session_age("gemini", secs);
+        }
+        // 此時 gemini entry 已有 K23=5, K22=5, 但 since=None
+        m.provider_totals.get_mut("gemini").unwrap().since = None;
+        // openx: 兩個都缺 (從未 touch)
+        let _ = m.provider_totals.entry("openx".to_string()).or_default();
+        let interarrival = completed_sessions_interarrival_at(&m.provider_totals, now);
+        assert_eq!(
+            interarrival.get("cicx"),
+            Some(&360i64),
+            "cicx: K35 = 3600/10 = 360"
+        );
+        assert!(
+            !interarrival.contains_key("claude"),
+            "claude: K23=0 → 必須過濾 (避免 0/0 假冒)"
+        );
+        assert!(
+            !interarrival.contains_key("gemini"),
+            "gemini: since=None → 必須過濾 (避免 0/0 假冒)"
+        );
+        assert!(
+            !interarrival.contains_key("openx"),
+            "openx: K23=0 AND since=None → 必須過濾 (double filter 邊界)"
+        );
+        // 確認 emit set 只有 cicx
+        assert_eq!(
+            interarrival.len(),
+            1,
+            "只有 cicx 進 emit set, 其他 3 個被過濾"
+        );
+    }
+
+    #[test]
+    fn r57_k35_negative_lifetime_saturates_to_zero() {
+        // 邊界: 當 since 寫成比 now 還晚的時間戳 (模擬時鐘回撥 / 序列化時差 / 測試 fixture
+        // bug), K35 必須 saturating clamp 到 0 而不是負值 (負值會被 Prometheus 端誤判
+        // 「未來完成」= 邏輯炸裂)。Fixture: since = now + 1h (未來 1 小時), 灌 5 個
+        // completion samples, 斷言 K35 = 0 (saturating clamp, 不是 -720 / 5 = -144)。
+        let now = Utc::now();
+        let mut m = SessionManager::new();
+        m.provider_totals
+            .entry("cicx".to_string())
+            .or_default()
+            .since = Some(now + Duration::hours(1));
+        for secs in 1..=5i64 {
+            m.record_completed_session_age("cicx", secs);
+        }
+        let interarrival = completed_sessions_interarrival_at(&m.provider_totals, now);
+        let k35 = *interarrival
+            .get("cicx")
+            .expect("K35 必須 emit (K23>=1, since=Some 都滿足)");
+        assert_eq!(
+            k35, 0,
+            "since 比 now 還晚 → (now - since) = -3600s → saturating clamp 到 0 → K35 = 0 / 5 = 0 (saturating 邊界, 不能 emit 負值)"
         );
     }
 

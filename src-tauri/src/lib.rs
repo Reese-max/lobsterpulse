@@ -2154,6 +2154,37 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_p25_duration_seconds{{provider=\"{p}\"}} {secs}\n"
         ));
     }
+    // K35 落地: per-provider 平均 interarrival seconds gauge (lifetime derive)。
+    // 補 K22-K34 全部「單次 session 時長分布」維度都沒覆蓋的「session 頻率 / 吞吐」
+    // 維度: K22 (latest age) / K23 (count) / K24 (total duration) / K25 (avg duration)
+    // / K26-K27 (max/min) / K28 (stddev) / K30-K34 (percentiles) 全是「每次 session
+    // 跑了多久」, 沒有「兩個 session 之間平均隔多久」= provider 吞吐信號。派生
+    // 自 K10 `since` (該 provider 第一次被監控到的時間戳) + K23 `completed_sessions_count`
+    // (累計完成次數) + 當前 `now` (render 端已有的 DateTime<Utc> 參數, 不新引入) =
+    // K35 = `(now - since) / K23` (整數秒, i64)。operator 端不再需要自己寫 PromQL
+    // `(now() - ..._since_timestamp) / completed_sessions_total` 算式 (兩個 metric
+    // cross-query 在 PromQL 易出錯、scrape 缺一條時算式直接壞), 直接抓 K35 series
+    // 觀察 per-provider 平均 interarrival KPI。搭配 K22 (last_completed_session_age)
+    // alert rule 互補: K22 觸發「單次 session 卡太久」/「最新一次跑太久」, K35 觸發
+    // 「provider 整體吞吐下降」(K35 變大 = 兩個 session 之間隔越來越久 = provider
+    // 可能閒置 / 被廢棄 / 上游流量下降)。Memory 零成本: 不開新 ProviderTotals 欄位
+    // (K12 idle_ratio 同款策略, 純 fn 端把 K10 + K23 + now 三個輸入組裝成單一 KPI)。
+    // 過濾策略: pure fn 端已過濾 K23 == 0 || since.is_none() (兩條件任一不滿足都
+    // 不算合法 interarrival 觀察, emit 0 假冒「瞬間完成」會誤導 Prometheus 端把
+    // 「沒資料」當「provider 吞吐無限」= 假健康信號), 這裡直接 for 迭代 map 即可。
+    // HELP 寫法: 補一句「missing = provider seen but never completed / no since」
+    // 跟 K22 / K25 「missing=no completed session yet」契約一致。排序: by provider
+    // alphabetical 跟 K6-K34 既契約一致; 空 map → 沒 sample line (HELP/TYPE 標頭
+    // 仍輸出)。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_interarrival_avg_seconds Average seconds between completed sessions per provider (gauge; derived from K10 since + K23 count + render-time now; integer precision; missing=provider seen but never completed yet, or no since timestamp)\n# TYPE lobsterpulse_provider_completed_sessions_interarrival_avg_seconds gauge\n");
+    let completed_interarrival = session::completed_sessions_interarrival_at(provider_totals, now);
+    let mut completed_interarrival_sorted: Vec<_> = completed_interarrival.iter().collect();
+    completed_interarrival_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, secs) in &completed_interarrival_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{{provider=\"{p}\"}} {secs}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被

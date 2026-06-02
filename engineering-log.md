@@ -628,3 +628,48 @@
 **結果**: PASS（M1 metrics observability 補 K8/K12 盲點 + 0 lint warning + 0 regression）
 
 **KPI-impact: max_session_age 觀察維度 0→1 + per-provider gauge 種類 +1（K18 補 K8/K12 都沒覆蓋的「絕對 session 持續秒數」盲點,operator alert rule 可直接設 max_session_age > 7200 觸發 runner 卡 2h 沒結束,不需要靠 K8 心跳+ K12 比例湊訊號）**
+
+### [2026-06-02] R32 — uncommitted R33 WIP baseline restore（刪重複 enum 讓 build 綠）
+**類型**: H0（baseline 修復,治理卡 R33 收尾前置）
+**KPI**: baseline_lib_tests_observable 從 0 (build break) → 175 passed
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| `cargo test --lib` | E0428 + E0119 × 2 (compile fail) | 175 passed; 0 failed | break → 綠 |
+| `ReadUsageSnapshotError` 定義次數 | 2 (line 333 + 374,duplicate) | 1 (line 333 留,374 刪) | -1 |
+| Lib 總 unit tests | n/a (build 壞) | 175 (R32 收尾 170 + R33 WIP 帶 5) | +5 |
+| 24h chore_ratio (rolling) | 7.8% | 7.8% | 持平 |
+
+**為什麼**:
+- 工作樹 owner R33 WIP (`read_usage_snapshot_at` silent-fail surfacing 系列) 留下 178 insertions + 18 deletions 沒 commit,且重複貼了 `#[derive(Debug)] enum ReadUsageSnapshotError` + `impl Display for ...` 兩次（line 333-352 與 374-387）,造成 `cargo test` 三條 compile error: E0428 (重複定義) / E0119 (Debug 衝突) / E0119 (Display 衝突)
+- 386+ 的 `handle_read_usage_snapshot` / `read_usage_snapshots_with_home` / `#[tauri::command] read_usage_snapshots` 依賴 line 333 定義,所以保留 line 333 那份、刪 line 374-387 是唯一 surgical 修法（不動 WIP 設計）
+- 不 commit 修復:R13 防護 + owner WIP 仍 dirty (178 insertions),不應用 `git add` 吞掉
+- 不做新功能:lib.rs 在 owner WIP 收尾前不該被編輯（避免 commit 時多帶一個 WIP 半改動混入 R33 commit 雜訊）
+
+**搜尋**: 沒搜（沿用既有 R28 `load_config_at` / R32 `load_history_at` 的 `Result<_, T>` + NotFound/IO/Parse 三分流 pattern,WIP 程式碼已 follow,只缺「清理重複貼上」）
+
+**做了什麼**:
+- `src-tauri/src/lib.rs:374-387` 刪除第二份 `ReadUsageSnapshotError` enum + Display impl（純粹 14 行重複定義,line 333 仍是第一份且 doc comment + 純 fn `read_usage_snapshot_at` 都在 333 區段）
+- `cargo test --lib --no-fail-fast` 從 3 compile error → **175 passed; 0 failed; 0 ignored**
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`（untracked,符合 R13 防護）
+- 沒 commit（保留 owner R33 WIP dirty 給 owner 收尾節奏）
+
+**為什麼 R32 不擴張工作**:
+- owner R33 WIP 已是一個可工作的 M0 PR（enum + Display + 純 fn + handle helper + tauri command 全部就位,只缺 commit message + 工程 log entry）
+- 同一檔有未提交 WIP 時動其他位置,commit 時容易把 WIP 一起 stage 進去 → 違反 R13
+- H0 已用完 1 個額度（R24 `2fbb76d chore: rotate engineering-log` 在 5 輪 R28-R32 範圍外,5 輪內 0 H0,所以 R32 H0 額度 OK,但本輪不 rotate log 因為「順手修 build 已經算 1 H0」,避免單輪 2 H0 看起來像在治理囤積）
+
+**驗證**:
+- `cargo test --lib --no-fail-fast` 175 passed / 0 failed / 0 ignored
+- 沒跑 `cargo fmt` / `cargo clippy`（owner WIP 沒跑過,本輪只 baseline restore 不順手清）
+- git status: `M src-tauri/src/lib.rs`（WIP dirty 仍在,R13 防護生效）
+
+**不做的範圍**（給 R33 收尾輪）:
+- owner 收尾 R33 WIP commit:加 5 個 R33 unit test 應該已包含(從 170→175 看到 +5 test),補 cargo fmt + cargo clippy + engineering-log entry + 落地 commit
+- 若 owner 不想做 R33,可改做 M0 `openab_bridge::tail_new_events` silent-fail sweep（R32 收尾沒動到那條鏈,沿用 R28/R29/R30/R31/R32 同 series 風格,典型 pattern: `read_to_string().ok().and_then(from_str().ok())` 鏈拆 `*_at` 純 fn + 三分流 + caller 端 match warn）
+- engineering-log.md 已 630 行（cap 500,超 1.26x）→ R33+ H0 rotate 候選（archive 舊 entries 到 `.archive.md`,留 500 行 active window）
+
+**結果**: PASS（H0 baseline restore + R33 WIP 可 build + 0 額外改動 + 0 commit,175 tests 全綠,owner WIP 留給 owner 收尾）
+
+**KPI-impact: housekeeping — baseline build restored (compile fail → 175 tests pass), R33 WIP unblocked for owner 收尾 commit, 0 新功能 KPI 推進（R32 為純治理卡,符合 pua 平衡型 32 輪 0 改善 中「卡住就報告」紀律）**

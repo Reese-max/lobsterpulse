@@ -386,6 +386,21 @@ pub struct ProviderTotals {
     /// 跟 K23 同語意：counter 0 是有效資料（該 provider 累計收過 event 但還沒
     /// 完成過 session），render 端要把 0 也 emit 出來。
     pub completed_sessions_total_duration_secs: u64,
+    /// K26 落地：歷史「最長」一次完成的 session 持續秒數（gauge, lifetime
+    /// saturating_max）。給 `/metrics` 端 emit
+    /// `lobsterpulse_provider_completed_sessions_max_duration_seconds{provider}`
+    /// gauge。跟 K22 (latest gauge) / K25 (avg gauge) 互補形成 **max / latest /
+    /// avg 三件套**：operator 端可一次看「該 provider 歷史最長一次 / 最近一次 /
+    /// 平均」三個視角,快速分辨 outlier session（例：avg 60s, latest 65s, 但 max
+    /// 7200s = 過去某次有 2 小時 outlier,可能 runner hang / 大 context window
+    /// 場景）。`Some(secs)` = 至少完成過一次;`None` = 該 provider 累計收過 event
+    /// 但還沒完成過 session（沿用 K22 Option 語意,render 端缺資料不 emit sample
+    /// 避免誤判「max=0」當「該 provider 瞬間完成」= 假健康信號）。`i64` 而非 `u64`
+    /// 跟 K22 一致 —— 雖然實際寫入值都被 `age.max(0)` clamp 過,留 `i64` 方便
+    /// 未來若要支援 signed duration metric（debug / 序列化時差偵測）直接擴充。
+    /// 觸發點跟 K22/K23/K24 同：SessionEnd + Working→Idle 兩路徑都更新。
+    /// saturating_max 在 i64::MIN 邊界退化成 `i64::MIN`(機率近 0),不是問題。
+    pub max_completed_session_age_secs: Option<i64>,
 }
 
 pub struct SessionManager {
@@ -594,6 +609,18 @@ impl SessionManager {
         entry.completed_sessions_total_duration_secs = entry
             .completed_sessions_total_duration_secs
             .saturating_add(age.max(0) as u64);
+        // K26 gauge：歷史「最長」一次完成時的 age。跟 K22 (latest) / K25 (avg)
+        // 互補形成 max / latest / avg 三件套。`age.max(0)` 先做飽和 clamp 再跟
+        // 歷史 max 比,saturating_max 防 i64::MIN 邊界退化。Option 語意跟 K22 同：
+        // 第一次完成時直接覆寫 Some(age)（沒有歷史 max 可比 → 第一次就是 max）,
+        // 後續完成用 saturating_max 更新。`i64::MIN` 預設值留作 sentinel 時用
+        // `saturating_max` 自然收斂到第一次的 age —— 不需要額外 `if let Some`
+        // 分支,程式碼更線性。
+        let clamped_age = age.max(0);
+        entry.max_completed_session_age_secs = Some(match entry.max_completed_session_age_secs {
+            Some(prev) => prev.max(clamped_age),
+            None => clamped_age,
+        });
     }
 
     pub fn check_staleness(&mut self, idle: i64, stale: i64, remove: i64) {
@@ -783,6 +810,27 @@ pub fn completed_sessions_average_duration_at(
                 p.clone(),
                 t.completed_sessions_total_duration_secs as f64 / t.completed_sessions_count as f64,
             );
+        }
+    }
+    out
+}
+
+/// K26 配套 pure fn：把 `ProviderTotals` 裡的「歷史最長完成 session 年齡」攤平
+/// 成 `HashMap<provider, secs>` 給 `render_prometheus_body` emit。跟 K22
+/// `last_completed_session_age_at` 對稱：都過濾 `None`（該 provider 累計收過
+/// event 但還沒完成過 session → gauge 缺資料,跳過不 emit sample,避免
+/// Prometheus 端把「沒看到」當「max=0」誤判「該 provider 瞬間完成」= 假健康
+/// 信號）。`Some(secs)` 進 map —— lifetime saturating_max 寫入後不蒸發,跟
+/// K22 lifetime gauge 對齊：session 結束 + 30 min stale 回收後 `ProviderTotals`
+/// 仍保留 → Prometheus 端 gauge 不會倒退。沒有「alphabetical sort」邏輯,排序
+/// 交給 `render_prometheus_body` 統一處理（K6-K25 既契約）。
+pub fn completed_sessions_max_duration_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if let Some(secs) = t.max_completed_session_age_secs {
+            out.insert(p.clone(), secs);
         }
     }
     out
@@ -1365,6 +1413,129 @@ mod tests {
         assert!(
             (avg - 7.0_f64 / 3.0_f64).abs() < 1e-12,
             "7/3 必須精確 f64 結果, got {avg}"
+        );
+    }
+
+    // ─── K26 落地：completed_sessions_max_duration gauge + completed_sessions_max_duration_at ───
+
+    use super::completed_sessions_max_duration_at;
+
+    #[test]
+    fn k26_record_completed_session_age_initializes_max_on_first_completion() {
+        // 第一次完成：ProviderTotals 還沒 max_completed_session_age_secs entry
+        // （None 預設）→ 直接寫成 Some(age)（= 第一次的值）。驗「第一次完成
+        // 既是 latest 也是 max」這個自然語意。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 120);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.max_completed_session_age_secs),
+            Some(120),
+            "第一次完成該直接初始化 max = 120"
+        );
+    }
+
+    #[test]
+    fn k26_record_completed_session_age_updates_max_with_larger_value() {
+        // 第二次完成 > 既有 max → max 更新成新值。跟 K22 對稱（K22 是
+        // 重複覆寫成 latest; K26 是 saturating_max 升級）。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 100);
+        m.record_completed_session_age("cicx", 250);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.max_completed_session_age_secs),
+            Some(250),
+            "250 > 既有 100 → max 升級成 250"
+        );
+    }
+
+    #[test]
+    fn k26_record_completed_session_age_keeps_max_with_smaller_value() {
+        // 第三次完成 < 既有 max → max 保持舊值。saturating_max 單調遞增語意。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 500);
+        m.record_completed_session_age("cicx", 30);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.max_completed_session_age_secs),
+            Some(500),
+            "30 < 既有 500 → max 保持 500"
+        );
+    }
+
+    #[test]
+    fn k26_record_completed_session_age_clamps_negative_to_zero_for_max() {
+        // K26 跟 K22 同步吃 `age.max(0)` saturating clamp —— 時鐘回撥 / 序列化
+        // 時差送進負值時不能讓 max 變成負的（0 已經是合法「極短完成」語意）。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 100);
+        m.record_completed_session_age("cicx", -50);
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.max_completed_session_age_secs),
+            Some(100),
+            "負值被 clamp 到 0, max 保持 100（0 < 100, 不升級）"
+        );
+    }
+
+    #[test]
+    fn k26_completed_sessions_max_duration_at_skips_providers_with_no_completions() {
+        // 純 fn `completed_sessions_max_duration_at` 過濾 None 契約 —— provider
+        // 累計收過 event 但還沒完成過 session → 不進 map（避免 render emit
+        // `max = 0` 假健康信號, 跟 K22 / K25 一致）。
+        let mut totals = HashMap::new();
+        // 1 個有完成的 provider (max = 3600)
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                max_completed_session_age_secs: Some(3600),
+                ..Default::default()
+            },
+        );
+        // 1 個 default ProviderTotals (max = None) → 該跳過
+        totals.insert("claude".to_string(), ProviderTotals::default());
+
+        let out = completed_sessions_max_duration_at(&totals);
+        assert_eq!(out.get("cicx"), Some(&3600), "cicx max 該 emit");
+        assert_eq!(out.get("claude"), None, "claude 還沒完成過 → 跳過");
+        assert_eq!(out.len(), 1, "只有 cicx 進 map");
+    }
+
+    #[test]
+    fn k26_completed_sessions_max_duration_at_per_provider_isolated() {
+        // K26 對齊 K22/K23/K24 既有契約：每個 provider 的 max 互相隔離, 不會
+        // 互相污染（saturating_max 寫入時只看 entry 自己的欄位）。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 100);
+        m.record_completed_session_age("cicx", 200);
+        m.record_completed_session_age("claude", 9999);
+        m.record_completed_session_age("gemini", 42);
+
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .and_then(|t| t.max_completed_session_age_secs),
+            Some(200),
+            "cicx max = 200 (2 次完成, latest 較大)"
+        );
+        assert_eq!(
+            m.provider_totals
+                .get("claude")
+                .and_then(|t| t.max_completed_session_age_secs),
+            Some(9999),
+            "claude max = 9999 (per-provider 隔離)"
+        );
+        assert_eq!(
+            m.provider_totals
+                .get("gemini")
+                .and_then(|t| t.max_completed_session_age_secs),
+            Some(42),
+            "gemini max = 42 (per-provider 隔離)"
         );
     }
 }

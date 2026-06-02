@@ -1921,6 +1921,37 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_average_duration_seconds{{provider=\"{p}\"}} {avg:.4}\n"
         ));
     }
+    // K26 落地：per-provider 歷史「最長」一次完成 session 持續秒數 gauge。
+    // 跟 K22 (latest) / K25 (avg) 互補形成 **max / latest / avg 三件套**：
+    //   - K22  gauge 看「最近一次跑多久」(只記 latest)
+    //   - K25  gauge 看「平均跑多久」  (派生 from K23 / K24)
+    //   - K26  gauge 看「最長一次跑多久」(saturating_max lifetime)
+    //
+    // 對齊 K22 emit 語意:Option 過濾 —— 該 provider 累計收過 event 但還沒完成
+    // 過 session → 缺資料,跳過不 emit sample (避免 Prometheus 端把「沒看到」
+    // 當「max=0」誤判「該 provider 瞬間完成」= 假健康信號)。`Some(secs)` emit
+    // 整數秒數 (沒 f64,跟 K22 對齊, max 是「單點 saturating_max」語意沒有
+    // 浮點小數必要)。 跟 K25 派生策略一樣:數據源不是獨立 HashMap, 直接讀
+    // `provider_totals` —— 跟 K22 / K23 / K24 / K25 同資料源, 讓 render
+    // helper 自己派發 pure fn 攤平 (對齊 R26/R27 政策: cross-cutting snapshot
+    // 留給 M1 輪 MetricsSnapshot struct 統一處理, 本輪不重構 render 端 11
+    // 個參數的怪 signature)。 排序: by provider alphabetical, 跟 K6-K25
+    // 既契約一致; 空 map → 沒 sample line (HELP/TYPE 標頭仍輸出)。
+    //
+    // Operator 用途: 跟 K22 (latest) 比較可看出「最近一次是不是特別長」;
+    // 跟 K25 (avg) 比較可分辨 outlier session —— 例 avg 60s, latest 65s,
+    // 但 max 7200s = 過去某次有 2 小時 outlier, 可能 runner hang / 大 context
+    // window 場景。 也可設 alert `max > 3600` (1 小時) 觸發「該 provider 有
+    // 異常長 session 待撈」。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_max_duration_seconds Duration in seconds of the longest completed session per provider (gauge; lifetime saturating_max; missing=no completed session yet)\n# TYPE lobsterpulse_provider_completed_sessions_max_duration_seconds gauge\n");
+    let completed_max = session::completed_sessions_max_duration_at(provider_totals);
+    let mut completed_max_sorted: Vec<_> = completed_max.iter().collect();
+    completed_max_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, secs) in &completed_max_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_max_duration_seconds{{provider=\"{p}\"}} {secs}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -2876,7 +2907,9 @@ mod write_local_usage_snapshot_tests {
 #[cfg(test)]
 mod render_prometheus_tests {
     use super::*;
-    use crate::session::{ProviderTotals, SessionInfo, SessionState};
+    use crate::session::{
+        last_completed_session_age_at, ProviderTotals, SessionInfo, SessionState,
+    };
     use chrono::TimeZone;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -2956,6 +2989,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -2992,6 +3029,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3027,6 +3068,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3054,6 +3099,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3082,6 +3131,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3109,6 +3162,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3137,6 +3194,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3169,6 +3230,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3198,6 +3263,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3224,6 +3293,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3252,6 +3325,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -3290,6 +3367,10 @@ mod render_prometheus_tests {
                 // 跟 production `ProviderTotals::default()` 同語意。K24 專屬 fixture
                 // 在 K24 測試內以 struct literal 控制,既有 K6-K23 fixture 不主動填。
                 completed_sessions_total_duration_secs: 0,
+                // K26 落地：test fixture 預設 None（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。K26 專屬 fixture
+                // 在 K26 測試內以 struct literal 控制,既有 K6-K25 fixture 不主動填。
+                max_completed_session_age_secs: None,
             },
         )
     }
@@ -6284,6 +6365,212 @@ mod render_prometheus_tests {
         assert!(
             !body.contains("lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 60\n"),
             "f64 4 位小數格式契約(不是 u64 整數), 必須含 `.0000` 結尾, body: {body}"
+        );
+    }
+
+    // ============== K26 per-provider completed_sessions_max_duration_seconds gauge ==============
+    // 跟 K22 (latest) / K25 (avg) 形成 max / latest / avg 三件套 gauge。 對齊 K22
+    // emit 語意: Option 過濾 — 該 provider 累計收過 event 但還沒完成過 session → 缺
+    // 資料跳過不 emit sample, 避免 Prometheus 端把「沒看到」當「max=0」誤判「該
+    // provider 瞬間完成」= 假健康信號。 3 個 render test 覆蓋 empty / per-provider
+    // 隔離 / alphabetical sort + 整數格式三個邊界, 跟 K20-K25 既有 render test
+    // 風格一致。 數據源: 不是獨立 HashMap, 直接讀 `provider_totals` —— 跟 K22 /
+    // K25 同資料源, 讓 render helper 自己派發 pure fn 攤平 (對齊 R26/R27 政策:
+    // cross-cutting snapshot 留給 M1 輪 MetricsSnapshot struct 統一處理, 本輪不
+    // 重構 render 端 11 個參數的怪 signature)。
+
+    #[test]
+    fn completed_sessions_max_duration_empty_totals_emits_header_only() {
+        // 對齊 K11 / K18 / K19 / K20 / K21 / K22 / K23 / K24 / K25 empty-state 契約:
+        // 空 map → 沒 sample line (HELP/TYPE 標頭仍輸出), 不丟假資料。
+        // ProviderTotals 沒 entry → 該 provider 不會被寫進 metric, 避免
+        // Prometheus 端把「沒看到」當「max=0」誤判「該 provider 瞬間完成」= 假
+        // 健康信號。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            body.contains("# HELP lobsterpulse_provider_completed_sessions_max_duration_seconds")
+        );
+        assert!(body.contains(
+            "# TYPE lobsterpulse_provider_completed_sessions_max_duration_seconds gauge"
+        ));
+        // 沒 sample line — 用 lines().filter(starts_with) 鎖真正的 sample line,
+        // 避免 `!contains("metric_name ")` 跟 HELP/TYPE 標頭(也含「name + 空格」)
+        // 誤撞 (對齊 K25 同樣 pattern)。
+        let k26_samples: Vec<&str> = body
+            .lines()
+            .filter(|l| {
+                l.starts_with("lobsterpulse_provider_completed_sessions_max_duration_seconds{")
+            })
+            .collect();
+        assert!(
+            k26_samples.is_empty(),
+            "空 totals 不應 emit K26 sample line, got: {k26_samples:?}, body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_max_duration_per_provider_isolated_and_skips_none() {
+        // K26 跟 K22 / K25 對齊的 per-provider 隔離語意: 構造 2 個 provider,
+        // 1 個有 max (Some(7200)), 1 個 default (max = None) → render 端只
+        // emit 有 max 那個, default provider 不污染 output。 順便驗 K22 (latest)
+        // 跟 K26 (max) emit 行為獨立: 同樣的 totals 進去, K22 跟 K26 該 emit
+        // 各自的 sample, 不互相覆寫。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(100),
+                max_completed_session_age_secs: Some(7200),
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+
+        // K22 配套：算 `last_completed_session_age_at(&totals)` 給 8th 參數,
+        // 模擬 production 從 ProviderTotals 派生 K22 map 的路徑(K22 跟 K26 共用
+        // provider_totals 資料源 → 8th 參數該跟 totals 同步, 不能傳空 HashMap)。
+        let last_completed = last_completed_session_age_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &last_completed,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // K26 cicx: max = 7200 (saturating_max 寫入, 跟 latest=100 隔離)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"cicx\"} 7200\n"
+            ),
+            "K26 cicx 該 emit max=7200, body: {body}"
+        );
+        // K26 claude: max = None → 該跳過不 emit sample
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"claude\"}"
+            ),
+            "K26 claude (max=None) 該跳過不 emit sample, body: {body}"
+        );
+        // K22 cicx: latest = 100 (K22 跟 K26 各自獨立 emit, 不互相覆寫)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"} 100\n"
+            ),
+            "K22 cicx 仍 emit latest=100 (跟 K26 max=7200 隔離), body: {body}"
+        );
+    }
+
+    #[test]
+    fn completed_sessions_max_duration_alphabetical_sort_and_integer_format() {
+        // 3 provider 非字母序插入(openx, cicx, gemini)→ 輸出必須 alphabetical
+        // (cicx, gemini, openx), 跟 K6-K25 既契約一致, 給 Prometheus scraper
+        // diff 穩定。 整數格式: K26 跟 K22 一樣 emit 整數 (沒 f64 / 沒 .0000 結尾),
+        // 跟 K25 f64 4 位小數區分開。 順便驗 K22 / K25 / K26 三件套在同一
+        // ProviderTotals 上各自 emit 各自的值 (K22=latest, K25=avg, K26=max) 不
+        // 互相覆蓋。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "openx".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(30),
+                completed_sessions_count: 1,
+                completed_sessions_total_duration_secs: 30,
+                max_completed_session_age_secs: Some(30),
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(60),
+                completed_sessions_count: 3,
+                completed_sessions_total_duration_secs: 180,
+                max_completed_session_age_secs: Some(600),
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                last_completed_session_age_secs: Some(3600),
+                completed_sessions_count: 2,
+                completed_sessions_total_duration_secs: 7200,
+                max_completed_session_age_secs: Some(3600),
+                ..Default::default()
+            },
+        );
+        // K22 配套：同 per_provider_isolated_and_skips_none, 派生 K22 map 餵 8th
+        // 參數(3 provider 都有 last_completed_session_age_secs)→ K22 sample lines
+        // 跟 K26 sample lines 都在 output 內, 各自獨立 emit。
+        let last_completed = last_completed_session_age_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &last_completed,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // K26 alphabetical + 整數格式驗證: cicx=600, gemini=3600, openx=30
+        let cicx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"cicx\"} 600\n")
+            .expect("cicx K26 sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"gemini\"} 3600\n")
+            .expect("gemini K26 sample line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"openx\"} 30\n")
+            .expect("openx K26 sample line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider completed_sessions_max_duration_seconds 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, gemini={gemini_idx}, openx={openx_idx})"
+        );
+        // 反向驗：確認 emit 的是整數格式, 不是 f64 4 位小數格式 (沒有 `.0000` 結尾)
+        // K26 gauge 跟 K22 一樣是整數 (latest / max 都 saturating clamp 到 i64),
+        // 跟 K25 f64 4 位小數區分開。
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_max_duration_seconds{provider=\"cicx\"} 600.0000\n"),
+            "K26 整數格式契約(不是 f64 4 位小數), 不可含 `.0000` 結尾, body: {body}"
+        );
+        // 順便驗 K22 (latest) / K25 (avg) / K26 (max) 三件套互不覆蓋
+        //  K22 cicx 仍是 60 (latest), 沒被 K26 max=600 污染
+        //  K25 cicx 仍是 60.0000 (avg=180/3), 沒被 K26 整數污染
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"} 60\n"
+            ),
+            "K22 (latest) 跟 K26 (max) 隔離, cicx latest 仍 emit 60, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 60.0000\n"
+            ),
+            "K25 (avg) 跟 K26 (max) 隔離, cicx avg 仍 emit 60.0000, body: {body}"
         );
     }
 }

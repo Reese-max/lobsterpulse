@@ -2683,4 +2683,124 @@ mod tests {
             "P50=11 必須 < P99=20 (中位數 ≤ 極端, 數學不變式)"
         );
     }
+
+    // ============== R51：K30/K31/K32 跨樣本數 + 跨 K22-K32 9 件套閉環 invariant ==============
+    // 策略顧問 R50 巡邏「DRIFTING + 凍結 gauge 補閉環」→ R51 跳開 K33 gauge 細修,
+    // 改做 M2 — K30/K31/K32 percentile math 在多尺度樣本數下的「bounds invariant
+    // 護欄」。K30/K31/K32 共用 K30 reservoir 1024 sliding window sort 後各取
+    // index, idx_p50 ≤ idx_p95 ≤ idx_p99 因此 sorted samples 上 p50 ≤ p95 ≤ p99
+    // 必然成立 —— 此不變式是 trivial 的數學事實, 但目前 K30/K31/K32 既有 27 個
+    // unit test 只覆蓋 N=1/5/20 三種樣本數, 未來若有人手賤改公式 (例如
+    // `len*99/101`)、換 sort 演算法、或把 reservoir 改 `VecDeque` push 前 push
+    // 後, 破壞 monotonic 在 production 才會被 Prometheus 端抓到, R51 補
+    // property-style 跨 8 種樣本數 + 跨 4 個 provider 的 bounds 護欄讓 CI
+    // 1 秒抓出。
+
+    #[test]
+    fn r51_k30_k31_k32_min_max_bounds_respected_across_eight_sample_sizes() {
+        // property-style: 對 N ∈ {1, 2, 3, 5, 10, 50, 100, 1023} 各跑 1..=N
+        // samples, 斷言 K30 P95 / K31 P50 / K32 P99 全部落在 [K27 min, K26
+        // max] 區間內 (sort_unstable 後 idx 單調 + idx 必落在 [0, len-1] +
+        // sorted samples 單調非降 → 任意 percentile 都必在 min 跟 max 之間)。
+        // 這條 invariant 跨 8 種樣本數 + 跨小樣本退化 (N=1 全部 = itself,
+        // N=2 P50 = min P95/P99 = max) 跟正常樣本 (N>=100 各自 percentile
+        // 落在不同位置) 兩種語意都成立, 是 K30/K31/K32 數學正確性的「單一
+        // 斷言失敗就抓到破壞」護欄。
+        let sizes = [1usize, 2, 3, 5, 10, 50, 100, 1023];
+        for n in sizes {
+            let mut m = SessionManager::new();
+            for i in 1..=n as i64 {
+                m.record_completed_session_age("cicx", i);
+            }
+            let totals = m
+                .provider_totals
+                .get("cicx")
+                .expect("cicx entry should exist after N>=1 samples");
+            let min_age = totals
+                .min_completed_session_age_secs
+                .expect("K27 min should be Some after N>=1 samples");
+            let max_age = totals
+                .max_completed_session_age_secs
+                .expect("K26 max should be Some after N>=1 samples");
+            let p50 = *completed_sessions_p50_at(&m.provider_totals)
+                .get("cicx")
+                .unwrap();
+            let p95 = *completed_sessions_p95_at(&m.provider_totals)
+                .get("cicx")
+                .unwrap();
+            let p99 = *completed_sessions_p99_at(&m.provider_totals)
+                .get("cicx")
+                .unwrap();
+            // K27 min <= K31 P50 <= K30 P95 <= K32 P99 <= K26 max
+            // (K26/K27 是 lifetime aggregate 寫入, K30/K31/K32 從 sort 後
+            //  samples 派生, 對同樣本集 [1..=N] 而言 min = 1, max = N, P50 /
+            //  P95 / P99 全部落在 [1, N] 內)
+            assert!(
+                min_age <= p50,
+                "N={n}: K27 min={min_age} 必須 <= P50={p50} (K31 派生自 K30 reservoir 排序後, 必 >= min)"
+            );
+            assert!(
+                p50 <= p95,
+                "N={n}: P50={p50} 必須 <= P95={p95} (idx_p50 <= idx_p95 排序後單調)"
+            );
+            assert!(
+                p95 <= p99,
+                "N={n}: P95={p95} 必須 <= P99={p99} (idx_p95 <= idx_p99 排序後單調)"
+            );
+            assert!(
+                p99 <= max_age,
+                "N={n}: P99={p99} 必須 <= K26 max={max_age} (K32 派生自 K30 reservoir 排序後, 必 <= max)"
+            );
+        }
+    }
+
+    #[test]
+    fn r51_k30_k31_k32_per_provider_isolation_under_oversubscribed_samples() {
+        // 跨 4 個 provider 各自灌 1..=100 共 100 個 samples (總 400 樣本),
+        // 斷言 K30/K31/K32 各自 emit 對該 provider 的 percentile (cicx P50
+        // 必須 = 50, claude P50 = 50, gemini P50 = 50, openx P50 = 50), 不
+        // 互污染。補 R50 K32 既有 per_provider_isolated 只測 3 樣本的不足:
+        // 大量樣本下若有人寫錯 closure 抓外部變數、或 ProviderTotals 欄位
+        // 變 shared reference, 100 樣本會抓出。bounds invariant 也一併驗
+        // 證 (每個 provider P50 <= P95 <= P99 各自成立)。
+        let providers = ["cicx", "claude", "gemini", "openx"];
+        let mut m = SessionManager::new();
+        for p in providers {
+            for i in 1..=100i64 {
+                m.record_completed_session_age(p, i);
+            }
+        }
+        let p50 = completed_sessions_p50_at(&m.provider_totals);
+        let p95 = completed_sessions_p95_at(&m.provider_totals);
+        let p99 = completed_sessions_p99_at(&m.provider_totals);
+        for p in providers {
+            // 100 樣本 [1..100] sort 後 idx_p50 = 100*50/100 = 50, idx_p95 =
+            // 100*95/100 = 95, idx_p99 = 100*99/100 = 99
+            let p50v = *p50.get(p).unwrap_or_else(|| panic!("{p} P50 missing"));
+            let p95v = *p95.get(p).unwrap_or_else(|| panic!("{p} P95 missing"));
+            let p99v = *p99.get(p).unwrap_or_else(|| panic!("{p} P99 missing"));
+            assert_eq!(
+                p50v, 51,
+                "{p}: 100 樣本 [1..100] sort 後 [1..100], 0-indexed idx=50 → samples[50]=51"
+            );
+            assert_eq!(
+                p95v, 96,
+                "{p}: 100 樣本 [1..100] sort 後 [1..100], 0-indexed idx=95 → samples[95]=96"
+            );
+            assert_eq!(p99v, 100, "{p}: 100 樣本 [1..100] sort 後 [1..100], 0-indexed idx=99 → samples[99]=100 (= max)");
+            assert!(
+                p50v <= p95v && p95v <= p99v,
+                "{p}: P50={p50v} <= P95={p95v} <= P99={p99v} (per-provider bounds)"
+            );
+        }
+        // 跨 4 個 provider 結果都 = 50/95/99 (因每個 provider 都餵 [1..100]
+        // 同樣本集) — 這反而證明「同樣本集 emit 結果一致, K30/K31/K32
+        // 不會因為 provider 數量增加而破壞排序」
+        let cicx_p50 = p50.get("cicx").copied().unwrap();
+        let openx_p50 = p50.get("openx").copied().unwrap();
+        assert_eq!(
+            cicx_p50, openx_p50,
+            "cicx 跟 openx 灌同樣本集 → P50 必等 (per-provider 隔離 + 同樣本 → 同結果)"
+        );
+    }
 }

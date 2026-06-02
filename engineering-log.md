@@ -504,3 +504,37 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 - commit `d2976a7`(1 file / +5 -4)
 **結果**: PASS(0 lint warning baseline 恢復,測試 0 regression)
 **KPI-impact: housekeeping**
+
+### 2026-06-02 R40 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### [2026-06-02] R41 — K23 `lobsterpulse_provider_completed_sessions_total` counter 收尾（修 R40 留 WIP 12 個 initializer 漏 field + 落地 emission）
+**類型**: M1（推進 metrics KPI,K22 gauge 維度補完 → counter 維度）
+**KPI**: metrics 維度 +1（per-provider 累計完成 session 數）
+**KPI 進展表**:
+| KPI | 前值 (R40) | 後值 (R41) | 變化 |
+|---|---:|---:|---:|
+| `/metrics` lobsterpulse_* 樣本數 | 17 series | 18 series | +1 |
+| Lib 總 unit tests | 221 | 225 | +4 |
+| Lib test 編譯 | 12 error E0063 | 0 | -12 |
+| clippy warning | 0 | 0 | 持平 |
+**為什麼**: 對齊 LobsterPulse v5.1 mission「本機 CLI + OpenAB 雙路徑觀察」的可觀察性 —— K22 gauge 給「最近一次跑多久」,但 operator 看不到「累計跑了幾次」,無法算 `rate(completed_sessions_total[1h])` 觀察吞吐。K23 counter 補這維度,跟 K7 / K9 / K13 lifetime aggregate 對齊:ProviderTotals 寫入後不蒸發,session 結束 + 30 min stale 回收後 counter 不會倒退,符合 Prometheus counter 語意（單調遞增）。R40 寫到一半 WIP 留 12 個 `ProviderTotals` initializer 漏 `completed_sessions_count` 欄位 + 4 個 K23 tests + emission code,R41 收尾補欄位即可。
+**搜尋**: 沿用既有 K22 `last_completed_session_age_at` pure fn pattern + K9 `session_count` 0-default 風格;無新搜（counter 語意清楚,lifetime aggregate 對齊 K9 已驗證）。
+**做了什麼**:
+- `src-tauri/src/session.rs:354-368` `ProviderTotals` 加 `completed_sessions_count: u64` 欄位（飽和累加）
+- `src-tauri/src/session.rs:558-568` `record_completed_session_age` 觸發點同步 +1（跟 K22 同觸發點,SessionEnd + Working→Idle 兩路徑）
+- `src-tauri/src/session.rs:692-707` 加 `completed_sessions_count_at` 純 fn（攤平 ProviderTotals → HashMap<provider, count>,全部 emit 含 0）
+- `src-tauri/src/session.rs:968-1066` 4 個 unit test（SessionEnd +1、Working→Idle +1、3 個 unique session 累計 3、0 該 emit 不該跳過）
+- `src-tauri/src/lib.rs:1846-1870` `render_prometheus_body` emit K23 HELP/TYPE + alphabetical sort 全 provider 樣本
+- `src-tauri/src/lib.rs` 12 個 test fixture `ProviderTotals` initializer 補 `completed_sessions_count: 0,`（K23 default 語意,純補欄位零行為變更）
+**驗證**:
+- `cargo test --lib`: 225 passed; 0 failed（+4 K23,0 regression）
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+**結果**: PASS（baseline 從 R40 WIP broken 恢復 + K23 落地 + 0 regression）
+**KPI-impact: metrics 維度 +1（per-provider 累計完成 session counter）**

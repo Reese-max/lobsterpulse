@@ -351,6 +351,21 @@ pub struct ProviderTotals {
     /// 可看「這 provider 最近一次 task 跑了多久」。負值 saturating clamp 到 0
     /// （防時鐘回撥 / 序列化時差）。
     pub last_completed_session_age_secs: Option<i64>,
+    /// K23 落地：累計「完成」的 session 數（counter,saturating_add 遞增）。
+    /// 給 `/metrics` 端 emit
+    /// `lobsterpulse_provider_completed_sessions_total{provider}` counter。
+    /// 跟 K22 互補：K22 是「最近一次跑多久」（gauge,只記 latest）,
+    /// K23 是「累計跑了幾次」（counter,遞增）→ operator 用
+    /// `rate(completed_sessions_total[1h])` 算每小時完成速率 = 吞吐 KPI,
+    /// 補 K22 沒覆蓋的「累積次數」維度。觸發點跟 K22 同：SessionEnd + Working→Idle
+    /// 兩路徑都 +1。跟 K7 / K9 / K13 lifetime aggregate 對齊：寫入後不蒸發,
+    /// session 結束 + 30 min stale 回收後 ProviderTotals 仍保留 → Prometheus 端
+    /// counter 不會倒退。`u64` 預設 0 = 該 provider 累計進來但還沒完成過 session,
+    /// 跟 K9 `session_count` 預設 0 同語意：counter 0 是有效資料（至少看過一次
+    /// event 但還沒完成過）,不是 missing —— render 端要把 0 也 emit 出來,跟
+    /// K8 `last_event_at = None` 跳過策略區分（K8 是「Optional 時間戳」語意,
+    /// K23 是「次數」語意）。
+    pub completed_sessions_count: u64,
 }
 
 pub struct SessionManager {
@@ -543,7 +558,13 @@ impl SessionManager {
             .provider_totals
             .entry(provider.to_string())
             .or_default();
+        // K22 gauge：只記「最近一次」完成時的 age,重複呼叫覆寫成最新值。
+        // 跟 K9 `session_count` (counter,累加) 區分：K22 不累計,只留 latest。
         entry.last_completed_session_age_secs = Some(age.max(0));
+        // K23 counter：每次完成都 +1（saturating_add 防極端值 overflow）,
+        // 跟 K22 同步觸發（同一個 helper 內）。operator 端算
+        // `rate(completed_sessions_total[1h])` 觀察吞吐。
+        entry.completed_sessions_count = entry.completed_sessions_count.saturating_add(1);
     }
 
     pub fn check_staleness(&mut self, idle: i64, stale: i64, remove: i64) {
@@ -664,6 +685,23 @@ pub fn last_completed_session_age_at(
         if let Some(age) = t.last_completed_session_age_secs {
             out.insert(p.clone(), age);
         }
+    }
+    out
+}
+
+/// K23 配套 pure fn：把 `ProviderTotals` 裡的「累計完成 session 數」攤平成
+/// `HashMap<provider, count>` 給 `render_prometheus_body` emit。跟 K22
+/// `last_completed_session_age_at` 差異：K22 過濾 `None`（Option 語意）,
+/// K23 全部進 map —— `u64` 預設 0 是有效資料（該 provider 累計進來 event 但
+/// 還沒完成過 session）,counter 0 跟 missing 是不同語意,跟 K9 `session_count`
+/// 「emit 所有有 ProviderTotals entry 的 provider」風格一致。沒有「alphabetical
+/// sort」邏輯,排序交給 `render_prometheus_body` 統一處理。
+pub fn completed_sessions_count_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, u64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        out.insert(p.clone(), t.completed_sessions_count);
     }
     out
 }
@@ -929,5 +967,111 @@ mod tests {
                 .and_then(|t| t.last_completed_session_age_secs),
             Some(200)
         );
+    }
+
+    // ─── K23 落地：completed_sessions_count counter + completed_sessions_count_at ───
+
+    use super::completed_sessions_count_at;
+
+    #[test]
+    fn k23_session_end_increments_completed_count_by_one() {
+        // K23 整合測試：SessionEnd 路徑應把 completed_sessions_count 從 0 → 1。
+        // 跟 K22 `k22_session_end_records_last_completed_age` 同觸發點（都是
+        // SessionEnd → record_completed_session_age）,所以兩個 metric 同步
+        // 推進 —— 測試只驗 K23 field 值,K22 行為已在 K22 tests 內覆蓋。
+        let mut m = SessionManager::new();
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionStart"));
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .map(|t| t.completed_sessions_count),
+            Some(0),
+            "SessionStart 不該算完成 → count 仍為 0"
+        );
+        let _ = m.handle_event(&ev("cicx", "s1", "SessionEnd"));
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .map(|t| t.completed_sessions_count),
+            Some(1),
+            "SessionEnd 該把 count +1 → 1"
+        );
+    }
+
+    #[test]
+    fn k23_working_to_idle_increments_completed_count_by_one() {
+        // K23 整合測試：Working→Idle 轉換也算「完成」另一種（跟 K22 同觸發）,
+        // Stop 事件把 state 從 Working 切到 Idle → handle_event 內部偵測到
+        // prev=Working & now=Idle → 呼叫 record_completed_session_age →
+        // K23 counter +1。SessionStart → UserPromptSubmit → Stop 路徑。
+        let mut m = SessionManager::new();
+        let _ = m.handle_event(&ev("claude", "c1", "SessionStart"));
+        let _ = m.handle_event(&ev("claude", "c1", "UserPromptSubmit"));
+        assert_eq!(
+            m.provider_totals
+                .get("claude")
+                .map(|t| t.completed_sessions_count),
+            Some(0),
+            "Working 狀態下不該算完成"
+        );
+        let _ = m.handle_event(&ev("claude", "c1", "Stop"));
+        assert_eq!(
+            m.provider_totals
+                .get("claude")
+                .map(|t| t.completed_sessions_count),
+            Some(1),
+            "Stop 觸發 Working→Idle → count +1"
+        );
+    }
+
+    #[test]
+    fn k23_repeated_completions_accumulate_across_unique_sessions() {
+        // K23 整合測試：counter 語意 — 重複完成遞增。3 個 unique session 都跑完
+        // SessionEnd 路徑 → count 應為 3（不是 1,不是 last-wins）。驗證 saturating
+        // 累加沒漏 + lifetime aggregate 不蒸發（跟 K9 `session_count` 同）。
+        let mut m = SessionManager::new();
+        for i in 0..3 {
+            let sid = format!("s{i}");
+            let _ = m.handle_event(&ev("cicx", &sid, "SessionStart"));
+            let _ = m.handle_event(&ev("cicx", &sid, "SessionEnd"));
+        }
+        assert_eq!(
+            m.provider_totals
+                .get("cicx")
+                .map(|t| t.completed_sessions_count),
+            Some(3),
+            "3 個 session 各自完成 → count 累計 3"
+        );
+    }
+
+    #[test]
+    fn k23_completed_sessions_count_at_emits_zero_for_uncompleted_provider() {
+        // K23 pure fn 測試：counter 0 跟 K22 `last_completed_session_age_at` 的 None
+        // 跳過策略不同 —— K23 全部進 map（含 0）,因為「有 ProviderTotals entry 但
+        // count=0」是有效資料（該 provider 累計收過 event 但還沒完成過 session）,
+        // Prometheus 端應該看到 0 不是 missing。模擬兩個 provider 一個已完成
+        // (count=2) 一個只收過 event 沒完成 (count=0) → output map 兩者都該在。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 2,
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+
+        let out = completed_sessions_count_at(&totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&2),
+            "已完成的 provider 該 emit count=2"
+        );
+        assert_eq!(
+            out.get("claude"),
+            Some(&0),
+            "未完成的 provider 該 emit count=0（不是 missing 跳過）"
+        );
+        assert_eq!(out.len(), 2, "output map 該有 2 個 entry,counter 0 不跳過");
     }
 }

@@ -1843,6 +1843,31 @@ fn render_prometheus_body(
             "lobsterpulse_provider_last_completed_session_age_seconds{{provider=\"{p}\"}} {clamped}\n"
         ));
     }
+    // K23 落地：per-provider 累計完成 session 數 counter。跟 K22 互補 —— K22
+    // gauge 看「最近一次跑多久」(只記 latest),K23 counter 看「累計跑了幾次」
+    // (遞增),operator 端可算 `rate(completed_sessions_total[1h])` = 每小時完成
+    // 速率 = 吞吐 KPI,補 K22 沒覆蓋的「累積次數」維度。跟 K7 / K9 / K13 lifetime
+    // aggregate 對齊:ProviderTotals 寫入後不蒸發,session 結束 + 30 min stale 回收
+    // 後 counter 不會倒退。`u64` 預設 0 是有效資料（該 provider 累計收過 event
+    // 但還沒完成過 session),跟 K22 `Option<i64> = None` 跳過策略不同 —— K23
+    // counter 0 跟 missing 是不同語意,Prometheus 端應該看到 0（"0 次完成"）
+    // 而不是 missing（"沒看過"）,跟 K9 `session_count` 0 也是「有 entry 就
+    // emit」風格一致。派生:`session::completed_sessions_count_at` 把
+    // `ProviderTotals` 攤平為 `HashMap<provider, count>`,不在 render 端加第 12
+    // 個參數（已是 anti-pattern,對齊 R26/R27 政策：cross-cutting snapshot 留給
+    // M1 輪 MetricsSnapshot struct 統一處理,本輪不重構）。排序:by provider
+    // alphabetical,跟 K6-K22 既契約一致;空 map → 沒 sample line (HELP/TYPE 標頭
+    // 仍輸出)。emit 全部 provider（含 count=0）—— 跟 `last_completed_session_age_at`
+    // 過濾 None 不同,在 session.rs pure fn 內以 K22/K23 不同策略分流。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_total Lifetime count of completed sessions per provider (counter; 0=provider seen but never completed yet, never resets)\n# TYPE lobsterpulse_provider_completed_sessions_total counter\n");
+    let completed_sessions = session::completed_sessions_count_at(provider_totals);
+    let mut completed_sessions_sorted: Vec<_> = completed_sessions.iter().collect();
+    completed_sessions_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, count) in &completed_sessions_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_total{{provider=\"{p}\"}} {count}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -2871,6 +2896,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: Some(Utc::now()),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -2900,6 +2928,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: Some(Utc::now()),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -2928,6 +2959,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: Some(last_at),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -2948,6 +2982,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: None,
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -2969,6 +3006,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: Some(Utc::now()),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -2989,6 +3029,9 @@ mod render_prometheus_tests {
                 since: Some(since),
                 last_event_at: Some(since),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -3010,6 +3053,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: Some(Utc::now()),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -3035,6 +3081,9 @@ mod render_prometheus_tests {
                 since: Some(since),
                 last_event_at: Some(last_event_at),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -3057,6 +3106,9 @@ mod render_prometheus_tests {
                 since: Some(since),
                 last_event_at: None,
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -3076,6 +3128,9 @@ mod render_prometheus_tests {
                 since: Some(now),
                 last_event_at: Some(now),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -3097,6 +3152,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: Some(Utc::now()),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }
@@ -3128,6 +3186,9 @@ mod render_prometheus_tests {
                 since: None,
                 last_event_at: Some(Utc::now()),
                 last_completed_session_age_secs: None,
+                // K23 落地：test fixture 預設 0（未完成過 session）,
+                // 跟 production `ProviderTotals::default()` 同語意。
+                completed_sessions_count: 0,
             },
         )
     }

@@ -786,3 +786,35 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 **結果**: PASS（M0 silent-fail surfacing 收尾 sidecar 端 + 0 lint warning on R34 範圍 + 0 regression + 7 new tests + 1 pure fn 抽出, commit 待送）
 
 **KPI-impact: sidecar_silent_fail_sites 3→0 + sidecar_unit_tests 0→7 + sidecar stderr 觀測維度 0→3（stdin/port/post）**
+
+### [2026-06-02] Round 35 — WIP 收尾:read_existing_port_file IO/Parse silent chain 治理 (commit b4f4965)
+**類型**: M0 (silent-fail surfacing 治理線收尾)
+**KPI**: sidecar_silent_fail_sites 維持 0,server 端新增 port file IO/Parse 觀測維度 0→1
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| lib_unit_tests | 185 | 191 | +6 (read_existing_port_file_at_tests 6 cases) |
+| server 端 silent-fail 治理覆蓋 | R28/R32/R33 (config / quota_history / usage_snapshot) | +port file | +1 路徑 |
+| hook_server 純 fn 測試覆蓋 | 0 (依賴 tokio 整合測試) | 1 (read_existing_port_file_at) | +1 |
+**為什麼**: 對齊 R28/R32/R33/R34 同族 silent-fail 治理,server 端 `read_existing_port_file` 之前用 `read_to_string().ok()?; trim().parse().ok()` 雙層 .ok()? 把 IO err(permission denied / disk full / 半截寫入)跟 parse err(內容壞掉 / u16 overflow / 空檔)全吞成 None,server 流程誤判「沒有其他 instance」→ 直接 bind 新 port → 潛在 duplicate LP 風險。
+**搜尋**: 沿用 R34 sidecar `read_port_at` pattern (純 fn + 路徑注入 + 1 happy + 3 boundary + 1 symmetry);同族 enum 命名對齊 R33 `ReadUsageSnapshotError`(Io / Parse { err, raw })。
+**做了什麼**:
+- 拆出 `read_existing_port_file_at(path) -> Result<Option<u16>, ReadPortFileError>` 純 fn
+- 新增 `ReadPortFileError` enum: Io(std::io::Error) / Parse { err: ParseIntError, raw: String } (NotFound 走 Ok(None))
+- orchestrator `read_existing_port_file` 端 match warn:expected NotFound 走 Ok(None) 不 log(避免吵 first-run),unexpected IO/Parse 走 `log::warn!` 含 path + 完整 err
+- 6 unit tests: NotFound / valid u16 / whitespace trim / garbage parse with raw 保留 / u16 overflow(99999 > u16::MAX)/ empty file(crash mid-write)
+- 手寫 `impl PartialEq`(std::io::Error 沒派生 PartialEq,Io 用 ErrorKind 比)
+**結果**: PASS (191/191 lib tests + 6/6 new tests + 0 R35 範圍 clippy 新增 violation + commit b4f4965)
+**為什麼是 M0 不是 H0**: 直接消除「server 誤判 port file 壞掉而 bind duplicate port」的可能性,屬於會讓 KPI(監控正確性)量測受影響的 silent fail。
+**不做的範圍**:
+- line 424 pre-existing clippy(本次 R35 改動範圍 580+,line 424 為歷史 doc-lazy-continuation,CLAUDE.md 「Touch only what you must」不修)
+- port file 改用 lock file 防止「讀到半截寫入」(需更動 on-disk contract,跨 R 才考慮)
+- 對齊 `is_port_listening` 也加 silent-fail surfacing(走 tokio async,留 R36+ 觀察)
+
+### 2026-06-02 R35 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令

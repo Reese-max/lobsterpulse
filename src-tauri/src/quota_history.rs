@@ -90,6 +90,32 @@ pub fn load_history() -> Result<std::collections::HashMap<String, Vec<(u64, u8)>
     load_history_at(&path)
 }
 
+/// 從指定 path 讀 quota-history，回傳「每個 runner 名稱的最新 (max-ts) pct」map。
+/// 抽成 pure fn 對齊 K11 `compute_quota_snapshot_age_seconds` / K8 idle pattern：
+///   - Prometheus `lobsterpulse_provider_quota_remaining_pct` gauge 直接吃這個 map
+///   - missing entry（runner 沒 snapshot）→ caller 端不在 metric map 裡放 entry
+///     → 對齊 K8 `last_event_at = None` 跳過策略：避免 Prometheus 把「沒看到」
+///     當「0% quota 耗盡」誤判
+///   - IO 錯 / load_history 失敗 → `Err(String)`（caller 端 log warn 對齊 R30
+///     `get_quota_history` pattern，整個 metric map 留空，不部分 emit 假資料）
+///   - 空檔 / 全是壞 row → `Ok(empty HashMap)`，對齊 first-run NotFound 契約
+///
+/// 實作直接走 `load_history_at`（不重複 IO / 解析邏輯），只負責 reduce：
+/// 對每個 `(name, vec<(ts, pct)>)` 取 `vec.iter().max_by_key(|(ts, _)| ts)` 對應 pct。
+pub fn latest_quota_pct_at(
+    path: &std::path::Path,
+) -> Result<std::collections::HashMap<String, u8>, String> {
+    let history = load_history_at(path)?;
+    let mut out: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
+    for (name, rows) in history {
+        // rows 可能為空（load_history_at 已過濾 cutoff 跟壞 row，但保險檢查）
+        if let Some((_ts, pct)) = rows.iter().max_by_key(|(ts, _)| *ts) {
+            out.insert(name, *pct);
+        }
+    }
+    Ok(out)
+}
+
 /// 從指定 path 讀 quota-history。抽成 pure fn 方便 unit test 鎖 contract：
 /// - NotFound（檔不存在）→ `Ok(HashMap::new())`（first-run 預期，不算 silent-fail）
 /// - IO 錯（權限拒絕 / 磁碟鎖住）→ `Err(String)`（caller 端要 log warn）
@@ -400,6 +426,106 @@ mod tests {
         assert!(
             r.is_err(),
             "目錄 path 應回 Err（read_to_string 對目錄 IO 失敗）讓 caller log warn，實際: {r:?}"
+        );
+    }
+
+    // ===== K20 latest_quota_pct_at tests =====
+
+    /// K20 contract：NotFound（first-run 還沒建立 quota-history.csv）必須回 `Ok(empty)`，
+    /// 對齊 R32 `load_history_at_not_found_returns_ok_empty` 契約 → render 端可以
+    /// 安全地「不輸出 sample line」而不是誤判「0% quota 耗盡」。
+    #[test]
+    fn latest_quota_pct_at_not_found_returns_ok_empty() {
+        let path = tmp_csv("latest-notfound");
+        let _ = std::fs::remove_file(&path);
+        let r = latest_quota_pct_at(&path);
+        assert!(
+            matches!(r, Ok(ref m) if m.is_empty()),
+            "NotFound 應回 Ok(empty HashMap)，實際: {r:?}"
+        );
+    }
+
+    /// K20 contract：每個 runner 只回「max-ts 那筆的 pct」（不是平均、不是 sum、不是首筆）。
+    /// 故意插入 cicx 三筆（ts=now-300/now-100/now-200）→ 預期輸出 cicx→42（now-100 那筆）。
+    /// openx 一筆（ts=now-50）→ 預期 7。對齊 R30 `get_quota_history` Dashboard 給前端
+    /// sparkline 用「最新一點」的語意，operator alert `quota_remaining_pct < 10`
+    /// 也只關心「現在還剩多少」。
+    #[test]
+    fn latest_quota_pct_at_picks_max_ts_per_name() {
+        let path = tmp_csv("latest-max-ts");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let ts_old = now - 300;
+        let ts_mid = now - 200;
+        let ts_new = now - 100;
+        let ts_openx = now - 50;
+        // 故意非時間序：ts_old 先寫、ts_mid 第二、ts_new 第三
+        let body = format!(
+            "{ts_old},cicx,10\n{ts_mid},cicx,20\n{ts_new},cicx,42\n{ts_openx},openx,7\n"
+        );
+        std::fs::write(&path, body).expect("write csv");
+        let r = latest_quota_pct_at(&path).expect("valid csv 應回 Ok");
+        assert_eq!(r.len(), 2, "2 runner 應都進 map，實際: {r:?}");
+        assert_eq!(r.get("cicx"), Some(&42), "cicx 應挑 max-ts 那筆 42");
+        assert_eq!(r.get("openx"), Some(&7), "openx 唯一一筆 7");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// K20 contract：超 KEEP_DAYS 30 天的舊 row 必須被 cutoff 過濾掉（不走 reduce），
+    /// 對齊 R32 `load_history_at` 既有的時間窗過濾 → map 留空（first-run 等價）。
+    /// 對齊 R32 同一 dynamic ts 策略（寫死 2023-11 會被 cutoff 過濾掉 → 測試 fail）。
+    #[test]
+    fn latest_quota_pct_at_skips_rows_outside_keep_window() {
+        let path = tmp_csv("latest-cutoff");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // KEEP_DAYS=30 → 31 天前 = now - 31*86400，應被過濾
+        let ts_too_old = now - 31 * 86400;
+        let body = format!("{ts_too_old},cicx,99\n");
+        std::fs::write(&path, body).expect("write csv");
+        let r = latest_quota_pct_at(&path).expect("valid csv 應回 Ok");
+        assert!(
+            r.is_empty(),
+            "31 天前的 row 應被 cutoff 過濾，map 應為空，實際: {r:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// K20 contract：0% quota 是有效資料（runner quota 已耗盡 → operator 必須看到），
+    /// 不能在 reduce 階段當作 None 跳過。對齊 R32 `load_history_at` 把 0 視為合法 u8。
+    #[test]
+    fn latest_quota_pct_at_zero_pct_is_emitted_not_dropped() {
+        let path = tmp_csv("latest-zero");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let ts = now - 100;
+        let body = format!("{ts},cicx,0\n");
+        std::fs::write(&path, body).expect("write csv");
+        let r = latest_quota_pct_at(&path).expect("valid csv 應回 Ok");
+        assert_eq!(
+            r.get("cicx"),
+            Some(&0),
+            "0% 是有效 quota 耗盡訊號，必須保留，實際: {r:?}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// K20 contract：IO 錯（目錄 path → read_to_string 失敗）必須傳出 `Err`，
+    /// 對齊 R32 `load_history_at_io_error_returns_err` + R30 `load_local_usage_snapshot_at_io_error_returns_err`
+    /// 同一 pattern：caller 端才能 log warn，整個 metric map 留空，不部分 emit 假資料。
+    #[test]
+    fn latest_quota_pct_at_io_error_returns_err() {
+        let dir_path = std::env::temp_dir();
+        let r = latest_quota_pct_at(&dir_path);
+        assert!(
+            r.is_err(),
+            "目錄 path 應回 Err（load_history_at 內部 read 失敗）讓 caller log warn，實際: {r:?}"
         );
     }
 }

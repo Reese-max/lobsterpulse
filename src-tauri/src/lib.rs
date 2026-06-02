@@ -1314,6 +1314,31 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
             compute_quota_snapshot_age_seconds(now, *m).map(|age| (p.clone(), age))
         })
         .collect();
+    // K20 落地：讀 quota-history.csv 取「每 runner 最新 pct」→ 餵
+    // `lobsterpulse_provider_quota_remaining_pct` gauge。對齊 R30 `get_quota_history`
+    // silent-fail surfacing 模式：match Err → log warn + 留空 HashMap（不部分 emit），
+    // render 端見空 map 走「header only」契約。
+    //
+    // 對齊上面 `quota_snapshot_mtimes` 同一 pattern:先取 home dir → 拼 path →
+    // 走 `latest_quota_pct_at` pure fn（內部已呼叫 `load_history_at`,檔案只讀一次,
+    // 不重複 IO）。無 home dir / IO 錯 / parse 錯 → log warn + 整段留空,跟 K11
+    // 「header only」契約一致。
+    let quota_remaining_pct: std::collections::HashMap<String, u8> = match dirs::home_dir() {
+        Some(home) => {
+            let path = home.join(".lobsterpulse").join("quota-history.csv");
+            match quota_history::latest_quota_pct_at(&path) {
+                Ok(m) => m,
+                Err(e) => {
+                    log::warn!(
+                        "[lib::render_prometheus] quota_remaining_pct 讀取失敗: {e} \
+                         — provider_quota_remaining_pct 段留空（header only）"
+                    );
+                    std::collections::HashMap::new()
+                }
+            }
+        }
+        None => std::collections::HashMap::new(),
+    };
     // K14 落地：讀 Discord health state（process-level，單一 Discord 端點）。
     // 從模組級 `discord::health_snapshot()` 拿 snapshot,避免 render 端持鎖跨越整個
     // string 構造（snapshot 是 `DiscordHealth` 是 `Copy`,複製成本 = 4 個 u64 + 1 個 enum）。
@@ -1329,6 +1354,7 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
         state.active_count as u64,
         &state.provider_totals,
         &quota_snapshot_ages,
+        &quota_remaining_pct,
         &discord_health,
         hook_metrics,
         now,
@@ -1457,6 +1483,7 @@ fn render_prometheus_body(
     active_count: u64,
     provider_totals: &std::collections::HashMap<String, session::ProviderTotals>,
     quota_snapshot_ages: &std::collections::HashMap<String, i64>,
+    quota_remaining_pct: &std::collections::HashMap<String, u8>,
     discord_health: &discord::DiscordHealth,
     hook_metrics: hook_server::HookServerMetrics,
     now: DateTime<Utc>,
@@ -1726,6 +1753,28 @@ fn render_prometheus_body(
     for (p, age) in &quota_snapshot_ages_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_quota_snapshot_age_seconds{{provider=\"{p}\"}} {age}\n"
+        ));
+    }
+    // K20 落地：per-provider quota 剩餘百分比 gauge。對齊 K11 同族「quota 觀測維度」:
+    // K11 看「snapshot 多舊」(freshness),K20 看「quota 還剩多少」(consumption)。
+    // operator alert rule 可設 `lobsterpulse_provider_quota_remaining_pct{provider="cicx"} < 10`
+    // 觸發「cicx 即將耗盡」告警,搭配 K11 `age > 600` 判斷「snapshot 沒更新,數字可能過期」一起看,避免假警報。
+    //
+    // 語意關鍵:0 是有效資料(runner quota 已耗盡 → operator 必須看到),不能
+    // 在 emit 階段當作 None 跳過 → map 缺 entry 才不出 sample(對齊 K11「寧可
+    // 少一條 sample 也不要假裝 0」相反:K20 的 0 是 critical signal,必須保留)。
+    // 資料源:`render_prometheus` 端從 quota-history.csv 透過 `latest_quota_pct_at`
+    // 純 fn 載入,match Err → log warn + 整段留空(不部分 emit 假資料)對齊
+    // R30 `get_quota_history` 模式。
+    //
+    // 排序:by provider alphabetical,跟 K6-K19 既契約一致;空 map → 沒 sample line
+    // (HELP/TYPE 標頭仍輸出,跟 K11 同一 header-only 契約)。
+    out.push_str("# HELP lobsterpulse_provider_quota_remaining_pct Latest quota remaining percent per runner from quota-history.csv (0=exhausted, missing=no sample)\n# TYPE lobsterpulse_provider_quota_remaining_pct gauge\n");
+    let mut quota_remaining_pct_sorted: Vec<_> = quota_remaining_pct.iter().collect();
+    quota_remaining_pct_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, pct) in &quota_remaining_pct_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_quota_remaining_pct{{provider=\"{p}\"}} {pct}\n"
         ));
     }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
@@ -3013,6 +3062,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3060,6 +3110,7 @@ mod render_prometheus_tests {
             0,
             &totals_map(vec![totals("claude", 100, 50)]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3082,6 +3133,7 @@ mod render_prometheus_tests {
             1,
             1,
             &totals_map(vec![totals("codex", 200, 80)]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -3106,6 +3158,7 @@ mod render_prometheus_tests {
             &sessions,
             4,
             2,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -3149,6 +3202,7 @@ mod render_prometheus_tests {
                 totals("cicx", 500, 250),
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3170,6 +3224,7 @@ mod render_prometheus_tests {
                 totals("cicx", 200, 100),
                 totals("gemini", 300, 150),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -3211,6 +3266,7 @@ mod render_prometheus_tests {
             0,
             &totals_map(vec![totals("claude", 9999, 4444), totals("cicx", 1, 1)]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3232,6 +3288,7 @@ mod render_prometheus_tests {
             1,
             1,
             &totals_map(vec![totals("claude", 1, 1)]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -3306,6 +3363,7 @@ mod render_prometheus_tests {
                 totals_with_failures("gemini", 0, 0, 12),
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3348,6 +3406,7 @@ mod render_prometheus_tests {
                 totals_with_failures("cicx", 0, 0, 2),   // 2 次失敗
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3367,6 +3426,7 @@ mod render_prometheus_tests {
             &[],
             0,
             0,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -3393,6 +3453,7 @@ mod render_prometheus_tests {
                 totals_no_event("cicx"), // 從未收過 event
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3418,6 +3479,7 @@ mod render_prometheus_tests {
                 totals_at("cicx", 0, 0, 0, now - chrono::Duration::seconds(30)),
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3441,6 +3503,7 @@ mod render_prometheus_tests {
                 totals_at("cicx", 0, 0, 0, now - chrono::Duration::seconds(60)),
                 totals_at("gemini", 0, 0, 0, now - chrono::Duration::seconds(3600)),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -3486,6 +3549,7 @@ mod render_prometheus_tests {
                 now + chrono::Duration::seconds(1), // 故意未來 1 秒
             )]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3503,6 +3567,7 @@ mod render_prometheus_tests {
             &[],
             0,
             0,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -3531,6 +3596,7 @@ mod render_prometheus_tests {
                 totals_with_session_count("claude", 0), // 0（理論不會出現，但驗 0 也輸出）
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3553,6 +3619,7 @@ mod render_prometheus_tests {
                 totals_with_session_count("cicx", 3),
                 totals_with_session_count("gemini", 7),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -3592,6 +3659,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3620,6 +3688,7 @@ mod render_prometheus_tests {
                 totals_with_since("cicx", cicx_since),
                 totals_with_since("gemini", gemini_since),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -3656,6 +3725,7 @@ mod render_prometheus_tests {
                 totals_no_since("cicx"), // 故意不填 since
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3688,6 +3758,7 @@ mod render_prometheus_tests {
                 totals_with_since("cicx", now - chrono::Duration::days(7)),
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -3719,6 +3790,7 @@ mod render_prometheus_tests {
                 totals_with_since("cicx", cicx_since),
                 totals_with_since("gemini", gemini_since),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -3822,6 +3894,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3846,6 +3919,7 @@ mod render_prometheus_tests {
                 ("gemini".to_string(), 120),
                 ("openx".to_string(), 600),
             ]),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3875,6 +3949,7 @@ mod render_prometheus_tests {
                 ("cicx".to_string(), 10),
                 ("__local__".to_string(), 5),
             ]),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -3908,6 +3983,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &quota_age_map(vec![("cicx".to_string(), 0)]), // 只有 cicx
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4039,6 +4115,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4068,6 +4145,7 @@ mod render_prometheus_tests {
                 // cicx 從未收過 event → 跳過
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4091,6 +4169,7 @@ mod render_prometheus_tests {
             &totals_map(vec![
                 totals_no_since("cicx"), // since=None → K10 也跳過，但 K12 額外驗
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4117,6 +4196,7 @@ mod render_prometheus_tests {
                     now - chrono::Duration::seconds(30), // 對照：claude 有 ratio = 0.5
                 ),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4156,6 +4236,7 @@ mod render_prometheus_tests {
                     now - chrono::Duration::seconds(15), // 15/30 = 0.5000
                 ),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4206,6 +4287,7 @@ mod render_prometheus_tests {
                 totals_with_since_and_last_at("cicx", now - chrono::Duration::seconds(120), now),
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             now,
@@ -4231,6 +4313,7 @@ mod render_prometheus_tests {
                 // claude 有 ratio = 0（剛剛在動）→ 必須 emit
                 totals_with_since_and_last_at("claude", now - chrono::Duration::days(30), now),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4382,6 +4465,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4403,6 +4487,7 @@ mod render_prometheus_tests {
                 totals_with_events("claude", 42),
                 totals_with_events("cicx", 7),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4435,6 +4520,7 @@ mod render_prometheus_tests {
                 totals_with_events("gemini", 0), // 從未收過 event
             ]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4462,6 +4548,7 @@ mod render_prometheus_tests {
                 totals_with_events("cicx", 1),
                 totals_with_events("gemini", 2),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4492,6 +4579,7 @@ mod render_prometheus_tests {
             0,
             0,
             &totals_map(vec![totals_with_events("claude", 42)]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4525,6 +4613,7 @@ mod render_prometheus_tests {
             0,
             &totals_map(vec![totals_with_events("claude", u64::MAX)]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4549,6 +4638,7 @@ mod render_prometheus_tests {
             &[],
             0,
             0,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -4589,6 +4679,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &h,
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4617,6 +4708,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &h_4xx,
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4634,6 +4726,7 @@ mod render_prometheus_tests {
             &[],
             0,
             0,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &h_5xx,
@@ -4663,6 +4756,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4685,6 +4779,7 @@ mod render_prometheus_tests {
                 "claude",
                 &[("UserPromptSubmit", 3)],
             )]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4712,6 +4807,7 @@ mod render_prometheus_tests {
                     &[("PostToolUseFailure", 1), ("UserPromptSubmit", 4)],
                 ),
             ]),
+            &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
@@ -4779,6 +4875,7 @@ mod render_prometheus_tests {
                 &[("UserPromptSubmit", 100), ("Stop", 99)],
             )]),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4807,6 +4904,7 @@ mod render_prometheus_tests {
             0,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4830,6 +4928,7 @@ mod render_prometheus_tests {
             2,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4850,6 +4949,7 @@ mod render_prometheus_tests {
             ],
             1,
             1,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -4879,6 +4979,7 @@ mod render_prometheus_tests {
             ],
             3,
             3,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -4920,6 +5021,7 @@ mod render_prometheus_tests {
             1,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -4946,6 +5048,7 @@ mod render_prometheus_tests {
             &[],
             0,
             0,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -4975,6 +5078,7 @@ mod render_prometheus_tests {
             ],
             6,
             6,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -5025,6 +5129,7 @@ mod render_prometheus_tests {
             ],
             4,
             4,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &discord::DiscordHealth::default(),
@@ -5080,6 +5185,7 @@ mod render_prometheus_tests {
             4, // active=4
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
             &discord::DiscordHealth::default(),
             hook_server::HookServerMetrics::default(),
             Utc::now(),
@@ -5127,5 +5233,161 @@ mod render_prometheus_tests {
         assert!(body.contains(
             "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"working\"} 1\n"
         ));
+    }
+
+    // ============== K20 per-provider quota_remaining_pct gauge ==============
+    // 對齊 K11 freshness 維度（snapshot 多舊）補 consumption 維度（quota 還剩多少）:
+    // operator alert `lobsterpulse_provider_quota_remaining_pct{provider="cicx"} < 10`
+    // 觸發「cicx 即將耗盡」,搭配 K11 `age > 600` 判「snapshot 沒更新」避免假警報。
+    // 5 個 test 覆蓋:empty / single / sort / 0 保留 / integer 格式。
+    // 資料源 `latest_quota_pct_at` 的 5 個 unit test 在 `quota_history.rs` 端。
+
+    #[test]
+    fn quota_remaining_pct_empty_map_emits_header_only() {
+        // 對齊 K11 / K18 / K19 empty-state 契約：0 個 runner 有 quota 資料 →
+        // 沒 sample line,只有 HELP/TYPE 標頭(讓 Prometheus scrape 端知道 metric 已註冊)。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains("# HELP lobsterpulse_provider_quota_remaining_pct"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_quota_remaining_pct gauge"));
+        // 沒 sample line:grep "lobsterpulse_provider_quota_remaining_pct{" 拿掉 HELP/TYPE 應為 0
+        let sample_count = body
+            .lines()
+            .filter(|l| l.starts_with("lobsterpulse_provider_quota_remaining_pct{"))
+            .count();
+        assert_eq!(sample_count, 0, "empty map 不應 emit sample line, body: {body}");
+    }
+
+    #[test]
+    fn quota_remaining_pct_single_provider_emits_one_sample_line() {
+        // 主軸:單 runner 有 quota 資料 → emit 一行 sample,值 = map 內的 pct。
+        let mut quota = HashMap::new();
+        quota.insert("cicx".to_string(), 42_u8);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &quota,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains(
+            "lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 42\n"
+        ));
+        // 沒其他 provider:sample line 應只有 1 行
+        let sample_count = body
+            .lines()
+            .filter(|l| l.starts_with("lobsterpulse_provider_quota_remaining_pct{"))
+            .count();
+        assert_eq!(sample_count, 1, "單 provider 應只有 1 sample line, body: {body}");
+    }
+
+    #[test]
+    fn quota_remaining_pct_alphabetical_sort_across_providers() {
+        // 多 provider 故意非字母序插入(openx, cicx, gemini)→ 輸出必須 alphabetical
+        // (cicx, gemini, openx),跟 K6-K19 既契約一致,給 Prometheus scraper diff 穩定。
+        let mut quota = HashMap::new();
+        quota.insert("openx".to_string(), 7_u8);
+        quota.insert("cicx".to_string(), 42_u8);
+        quota.insert("gemini".to_string(), 100_u8);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &quota,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        let cicx_idx = body
+            .find("lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 42\n")
+            .expect("cicx sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_quota_remaining_pct{provider=\"gemini\"} 100\n")
+            .expect("gemini sample line");
+        let openx_idx = body
+            .find("lobsterpulse_provider_quota_remaining_pct{provider=\"openx\"} 7\n")
+            .expect("openx sample line");
+        assert!(
+            cicx_idx < gemini_idx && gemini_idx < openx_idx,
+            "per-provider quota_remaining_pct 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, gemini={gemini_idx}, openx={openx_idx})"
+        );
+    }
+
+    #[test]
+    fn quota_remaining_pct_zero_pct_is_emitted_not_dropped() {
+        // 語意關鍵:0% 是 critical signal(runner quota 已耗盡 → operator 必須看到),
+        // 不能在 render 階段當作 None 跳過。對齊 R32 `load_history_at_zero_pct_emitted`
+        // + K20 `latest_quota_pct_at_zero_pct_is_emitted_not_dropped` 同契約。
+        let mut quota = HashMap::new();
+        quota.insert("cicx".to_string(), 0_u8);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &quota,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(
+            body.contains("lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 0\n"),
+            "0% 是有效 quota 耗盡訊號,必須 emit, body: {body}"
+        );
+        // 確保不是 float 格式(` 0.0` 不該出現)
+        assert!(
+            !body.contains("lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 0.0\n"),
+            "0 必須是整數格式,不是 float, body: {body}"
+        );
+    }
+
+    #[test]
+    fn quota_remaining_pct_emits_integer_not_float() {
+        // 鎖住 ` 42\n` 整數格式(不是 ` 42.0`):u8 → Display 是整數,跟 K13
+        // `events_total_emits_integer_not_float` 同契約,避免混淆 gauge 語意
+        // (整數 42 = 42% 剩餘,float 42.0 會被 Prometheus 端視為 double metric)。
+        let mut quota = HashMap::new();
+        quota.insert("cicx".to_string(), 42_u8);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &quota,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(
+            body.contains("lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 42\n"),
+            "整數格式契約, body: {body}"
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_quota_remaining_pct{provider=\"cicx\"} 42.0\n"),
+            "不能是 float 格式, body: {body}"
+        );
     }
 }

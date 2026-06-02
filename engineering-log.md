@@ -879,3 +879,44 @@ R33 wrap-up「不做的範圍」提「openab_bridge::tail_new_events silent-fail
 - K20 接前端 quota bar(目前 `lobsterpulse_provider_quota_remaining_pct` 只有 Prometheus metric,前端 panel 還沒接 — 跨前後端,留 M1 輪開)
 - K6-K19 lifetime-vs-live → 整合 single `MetricsSnapshot` struct 餵前端(R35 「不做的範圍」留的,跨輪考慮)
 - `is_port_listening` 走 tokio async silent-fail surfacing(R35 「不做的範圍」留的)
+
+### [2026-06-02] Round 36 — K21 quota_history_csv_age_seconds gauge 收尾落地
+**類型**: M1
+**KPI**: K21 CSV pipeline freshness metric 0 → 1 + 監控維度 +1
+**KPI 進展表**:
+| KPI | 前值 (R35) | 後值 (R36) | 變化 |
+|---|---:|---:|---:|
+| 監控 metrics 總數 | K1-K20 共 20 個 | K1-K21 共 21 個 | +1 |
+| 測試覆蓋 | 201 | 206 | +5 |
+| 0 R36 範圍 lint warning | 0 | 0 | 0 |
+
+**為什麼**:
+- 接續 R30/R32/R35 silent-fail 治理線(quota_history → load_local_usage_snapshot_at → load_history_at → quota_history_csv_mtime_at),把 silent path 收斂成 typed Result + first-run Ok(None) 契約
+- 對齊 K11 freshness(5 個 snapshot age)+ K20 同一資料源(quota-history.csv consumption)互補:operator 端可同時看「每個 bot snapshot 多舊」(K11)跟「聚合 CSV pipeline 多舊」(K21),alert rule `csv_age > 1800`(30 分鐘)觸發「OpenAB 沒在寫 quota-history」
+
+**搜尋**: 沒做 WebSearch(沿用既有 K11/K20 + R30/R32 pattern,supervisor 評分改善靠「補 R35 WIP + 修 2 個空 state test 誤判」)
+
+**做了什麼**:
+- `quota_history.rs`: 新增 `quota_history_csv_mtime_at(path) -> Result<Option<SystemTime>, String>` pure fn(對齊 R30/R32 helper 風格),+ 2 個 unit test 覆蓋 NotFound/Existing
+- `lib.rs`: `render_prometheus` 端新增 `quota_history_csv_age: Option<i64>` 計算 + 傳入 `render_prometheus_body`
+- `lib.rs`: `render_prometheus_body` emit 新 gauge `lobsterpulse_quota_history_csv_age_seconds`(HELP/TYPE 常駐,None 不出 sample)
+- `lib.rs`: 3 個新 render_prometheus test(first-run None header-only / Some(0) emit 0 / Some(123) emit integer),鎖整數格式 + 「0 是有效資料」語意
+- 修 R35 WIP 的 2 個空 state test bug:`!body.contains("metric_name ")` 撞 HELP/TYPE 標頭(也含「name + 空格」),改用 `body.lines().filter(starts_with)` 鎖真正的 sample line
+
+**驗證**:
+- `cargo build --lib`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `cargo clippy --lib -- -D warnings`: 0 R36 範圍 violation
+- `cargo test --lib`: **206 passed; 0 failed**(R35 201 + K21 5 new = 206,0 regression)
+- pre-existing `hook_server_metrics_increments_2xx_on_valid_json_parse` flake(K15/K16 shared counter race):本輪 full suite 跑出 0 failure(206/206 綠),flake 沒復發 → 不在 R36 scope
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json`(untracked supervisor 檔,符合 R13 防護)
+
+**結果**: PASS(K21 落地 + R35 WIP 收尾 + 2 個空 state test 修正 + 0 lint warning + 0 regression + 206/206 tests + commit `c87bd0a`)
+
+**KPI-impact: K21 quota_history_csv_age gauge 從 0 → 1 metric + CSV pipeline freshness 觀測維度 0 → 1 + 5 new tests**
+
+**不做的範圍**(給後續輪次):
+- K21 接前端 quota bar(目前只有 Prometheus metric,前端 panel 還沒接 — 跨前後端,留 M1 輪開)
+- K6-K21 lifetime-vs-live → 整合 single `MetricsSnapshot` struct 餵前端(跨輪考慮)
+- `is_port_listening` 走 tokio async silent-fail surfacing(留)
+- 10 個 pre-existing clippy doc-lazy-continuation violation(R35/R36 累計技術債,後續開 M0 收尾輪一次清掉)

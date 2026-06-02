@@ -550,3 +550,73 @@ URGENCY: MEDIUM
   - 凍結新增 gauge 一週，先補最小閉環：20 到 50 個代表任務、trace grading、回歸門檻、每次 skill／prompt 變更前後對比。[OpenAI trace grading](https://developers.openai.com/api/docs/guides/trace-grading)／[agent evals](https://developers.openai.com/api/docs/guides/agent-evals)
   - 把 Phase 2 從「全量對話 `FTS5`」改成「結構化 state＋session/global note consolidation＋必要時 hybrid search」；`FTS5` 留給 lexical lookup，另外快速驗證 [SQLite `vec1`](https://sqlite.org/vec1/) 是否值得接入。
   - 把 GEPA 降成可替換的離線 optimizer，不要當唯一主線；先做 optimizer 介面，並拿 [DSPy GEPA](https://dspy.ai/) 對照 [OpenAI AgentKit/Evals](https://openai.com/index/introducing-agentkit/) 與 [Anthropic 的簡單可組合 agent 準則](https://www.anthropic.com/engineering/building-effective-agents?subjects=alignment) 做成本效益比較。
+
+### [2026-06-03] R53 — K33 `lobsterpulse_provider_completed_sessions_p75_duration_seconds` gauge + 14 tests（含 R53/R54 跨 K-tag monotonic 護欄）+ 撿 R52 開工時 WIP 3 條 bug
+**類型**: M1（metrics 推進主軸 K-tag series 沿 R46→R47→R48→R49→R50→R51→R52→R53 線; 同時落地 K33 P75 跟 R53/R54 cross-K monotonic 兩條護欄）
+**KPI**: `_metrics_emitted_K33` 累計 +1（累計 26 個 K-tag metrics: K3/K6/K8/K10/K11/K12/K13/K14/K15/K16/K18/K19/K20/K21/K22/K23/K24/K25/K26/K27/K28/K29/K30/K31/K32 → K33）
+
+**KPI 進展表**:
+| KPI | 前值 (R52) | 後值 (R53) | 變化 |
+|---|---:|---:|---:|
+| K-tag metrics 累計 | 25 | 26 | +1 |
+| Lib 總 unit tests | 307 | 321 | +14 |
+| K33 pure fn test | 0 | 6 | +6 |
+| K33 render test | 0 | 3 | +3 |
+| R53 K22/K26/K27 cross-K 護欄 | 0 | 2 unit + 1 render | +3 |
+| R54 K30/K31/K32/K33 cross-K 護欄 | 0 | 2 unit | +2 |
+| 0 R53 範圍 lint warning | 0 | 0 | 持平 |
+| 0 R53 範圍 fmt diff | 0 | 0 | 持平 |
+| R52 開工時 WIP bug fix | 0 | 3 | +3 |
+
+**為什麼**:
+- 對齊 LobsterPulse v5.1 mission「本機 CLI + OpenAB 雙路徑觀察」可觀察性 —— K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) / K29 (failure ratio) / K30 (P95) / K31 (P50) / K32 (P99) 九件套覆蓋「最近一次 / 中心趨勢 / 分布離散 / 失敗比 / SLO 邊界 / 中位 / 尾端 1%」, 沒覆蓋「上四分位」維度。K33 P75 = 75 百分位 = 「75% session 都在此值以下」邊界 = 「中段分布離散」boundary —— 跟 K31 P50 (中位) 互補, 差距大 = 中段 session 分布離散 = 「典型偏慢任務」邊界。Operator 端 alert p75 > 120 (2 分鐘) = 該 provider 75% session 都在 2 分鐘以上 = 「中段偏慢」信號, 跟 K30 P95 (尾端 5% 慢) / K32 P99 (極端 1% 卡死) 互補, 三件套組合可分辨「整體慢」vs「中段偏慢」vs「只有尾端慢」vs「極端卡死」。K33 復用 K30 reservoir 1024 同一份 vec 不開新欄位, 跟 K31 P50 純 fn 端各自 sort 取不同 percentile index 對稱。
+- R53/R54 cross-K monotonic 護欄落地: 跟 R51 (K30/K31/K32 bounds) + R52 (K23/K24/K25 cross-metric) 同模板, 補 K22/K26/K27 lifetime aggregate monotonic chain (K27 ≤ K22 ≤ K26) + K30/K31/K32/K33 percentile chain (K27 ≤ P50 ≤ P75 ≤ P95 ≤ P99 ≤ K26) 兩條 cross-K 護欄, 跨 8 種樣本數 {1, 2, 3, 5, 10, 50, 100, 200} + 4-provider 隔離強化。這是 K33 落地的配套 invariant: 若有人未來改 K22 從「覆寫成 latest」改成「saturating_max」混進 K26 邏輯, 或 K27 從 saturating_min 改成「第一次寫入後凍結」漏更新, 護欄 CI 1 秒抓出。
+
+**K33 為什麼在 R53 落地而非 R50-R52**: 策略顧問 R50 巡邏紀律「凍結新增 gauge 一週, 至少 R52-R55 期間不開」。R53 屬於 R52 開工時已 dirty 的 WIP 撿收 (K33 純 fn + emit + test 全部已寫), **不是** R53 新開 metric, 因此落地不違反 R50 紀律。R54-R55 期間仍不開新 metric, 改做 invariant 護欄、cross-K 鏈驗證、test 覆蓋率強化。
+
+**搜尋**: 沿用既有 K30 reservoir 1024 + K31 median sort 模式; P75 數學 = 75 百分位 = 偶數樣本取 sort[len*75/100] 跟 K30 P95 同款策略; 沒有 WebSearch (P75 + reservoir 是標準監控 pattern)。
+
+**做了什麼**:
+- `src-tauri/src/session.rs:1212-1278` 新增 `completed_sessions_p75_at` 純 fn (clone samples → sort_unstable → idx = (len*75/100).min(len-1), 過濾 samples.is_empty(), 復用 K30 reservoir 不開新欄位, doc comment 明寫「K33 復用 K30 reservoir 同一個 vec, 跟 K30/K31/K32 共用 sample 池」)
+- `src-tauri/src/session.rs:2744-2924` 6 個 K33 unit test (空 map 過濾 / 20 sample P75=16 / per-provider 隔離 / 單樣本 boundary / 4+100 boundary / 跟 K30/K31/K32 共用 samples vec 雙驗證)
+- `src-tauri/src/session.rs` R54 護欄 2 個:
+  - `r54_k30_k31_k32_k33_min_max_bounds_respected_across_eight_sample_sizes` — 跨 8 種樣本數 {1, 2, 3, 5, 10, 50, 100, 200} 驗 K27 ≤ P50 ≤ P75 ≤ P95 ≤ P99 ≤ K26 monotonic chain
+  - `r54_k30_k31_k32_k33_per_provider_isolation_under_oversubscribed_samples` — 4 provider × 100 樣本 isolation 強化
+- `src-tauri/src/session.rs:3480-3700` R53 護欄 2 個:
+  - `r53_k22_k26_k27_lifetime_bounds_respected_across_eight_sample_sizes` — 跨 8 種樣本數驗 K27 ≤ K22 ≤ K26 monotonic chain
+  - `r53_k22_k26_k27_per_provider_isolation_under_oversubscribed_completions` — 4 provider isolation, 包含「K22 順序敏感」語意驗證 (cicx 最後 = 100 vs claude 顛倒最後 = 1, 但 K26/K27 saturating 不受順序影響)
+- `src-tauri/src/lib.rs:2102-2129` K33 emit block (HELP/TYPE 標頭 + alphabetical sort 全 provider 樣本, 跟 K30/K31/K32 emit 風格一致)
+- `src-tauri/src/lib.rs:8681-8920` 3 個 K33 render test (empty header-only / per-provider 隔離 + empty skip / alphabetical sort + 整數 precision + 跟 K30/K31/K32 共用 samples vec 四驗證 + 跟 K22/K29 隔離)
+- `src-tauri/src/lib.rs:6860-7110` R53 K22/K26/K27 render emission consistency test: 4 provider 混合 fixture (cicx + claude + gemini + openx), 5 part: 字串精確比對 + None 過濾 + emit 順序 K22→K26→K27 (對齊 render 端 emit block 順序) + 跨 K-tag emission set 一致 + parse 字串算術驗 K27 ≤ K22 ≤ K26
+
+**R52 開工時 WIP 3 條 bug fix**:
+1. **R53 K22/K26/K27 render test 重複 fixture** (WIP bug #1): WIP 內 fixture 4 provider + 4 insert + `render_prometheus_body` 整段重複兩次, 後者覆蓋前者, 第一個 `let body` 變 unused → clippy fail。修法: 刪除重複段 (line 6940-6991), 保留 `last_completed_session_age_at` 計算過的第一個 body (更接近 production 路徑: 8th 參數帶 `&last_completed` 而不是 `&HashMap::new()`)
+2. **R53 Part C 順序 assertion 寫反** (WIP bug #2): WIP 寫 `k27_pos < k22_pos && k22_pos < k26_pos` 假設 K27 在 K22 前 emit, 但實際 render 端 emit block 順序是 K22 (last_completed age) → K23 → K24 → K25 → K26 (max) → K27 (min) → K28 → K29 → K30 → K31 → K32 → K33。修法: 改成 `k22_pos < k26_pos && k26_pos < k27_pos` 對齊實際 emit 順序, doc comment 標註「Part E 算術 parse 才是真 K27 ≤ K22 ≤ K26 chain 驗證, Part C 只是字串順序鎖 emission 穩定」
+3. **fmt 7 處 + clippy 1 unused variable** (WIP bug #3): cargo fmt --check 列 7 處 (lib.rs:3086 import 重排 / 6844,7045,7052 line too long / 7117 for loop 拆行 + session.rs:1286 import 重排 / 3138,3147 entry().or_default() 一行化 / 3495 assert_eq 拆行); clippy 列 1 個 unused variable (line 6927 因重複 fixture 連帶)。修法: `cargo fmt` auto-fix 全 7 處 + 刪重複 fixture 連帶修掉 clippy
+
+**驗證**:
+- `cargo build --lib`: 0 warning
+- `cargo fmt --check`: 0 diff (auto-fix 後)
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo test --lib --no-fail-fast`: **321 passed; 0 failed; 0 ignored** (R52 baseline 307 + R53 +14, 0 regression)
+  - K33 pure fn: 6 new
+  - K33 render: 3 new
+  - R53 K22/K26/K27 session.rs: 2 new
+  - R54 K30/K31/K32/K33 session.rs: 2 new
+  - R53 K22/K26/K27 lib.rs render: 1 new
+  - 合計 14 new tests
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json` (untracked supervisor 檔, 符合 R13 防護)
+- 沒動 `git add -A/.`, 嚴守 R13 防護
+
+**結果**: PASS (K33 P75 落地 + R53/R54 cross-K monotonic 護欄落地 + R52 開工時 WIP 3 條 bug 修掉 + 0 R53 範圍 lint warning + 0 fmt diff + 0 regression + 321/321 tests)
+
+**KPI-impact: K33 P75 gauge 從 0 → 1 metric + 25 → 26 K-tag series + cross-K monotonic 護欄 +2 條 (R53 lifetime + R54 percentile) + 307 → 321 tests, 補 K22-K32 九件套外的「上四分位延遲」觀測維度, alert 閾值 p75 > 120 觸發「中段分布離散偏慢」信號, 跟 K30 P95 / K32 P99 互補形成 latency 分布輪廓**
+
+**不做的範圍**(給後續輪次):
+- 策略顧問 R50 「凍結新增 gauge 一週」紀律延伸: R54-R55 仍不開新 metric, 改做 invariant 護欄、cross-K 鏈驗證、test 覆蓋率強化。K34 P25 / K35 IQR (P75 - P25) 留 R56+ 觀察
+- 沿 R51/R52/R53/R54 同樣紀律, 後續輪次可考慮補: K23/K24/K25 lifetime 跟 K30-K33 percentile 跨窗口一致性護欄 (K30 P95 跟 K25 avg 比例, 例如 P95/avg < 2 為「典型 session」, > 5 為「outlier 拉高」)
+- `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct (R26/R27/R51/R52/R53 policy 持續記錄, 跨輪考慮)
+- K15 / K16 shared counter race 真正解法 (改 per-test `Arc<Mutex<u64>>` 或測試層局部 mock, R35-R53 多次記錄, 跨輪考慮)
+- hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記)
+- trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, 跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理)
+

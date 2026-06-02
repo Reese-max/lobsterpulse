@@ -1212,6 +1212,66 @@ pub fn completed_sessions_p99_at(
     out
 }
 
+/// K33 配套 pure fn: 把 `ProviderTotals` 裡的 reservoir samples 排序後
+/// 取 75 百分位 (= Q3 第三四分位, 上四分位), 回 `HashMap<provider, secs>`
+/// (i64) 給 `render_prometheus_body` emit。跟 K30 P95 / K31 P50 / K32 P99
+/// / K22 / K25 / K26 / K27 / K28 / K29 對稱: 都過濾「沒完成過」的 provider
+/// (K33 用 `samples.is_empty()` 過濾, 跟 K30/K31/K32 同款)。
+///
+/// K33 復用 K30 reservoir 同一個 `completed_sessions_p95_samples: Vec<i64>`
+/// —— 不開新欄位, 跟 K30/K31/K32 共用 sample 池。語意: P75 = Q3 = 「最近
+/// 1024 次完成 session 的第 75 百分位」, 跟 P50 / P95 / P99 同一 sliding
+/// window, 差別只在 percentile 位置 (50/75/95/99)。Operator 端 alert 四
+/// 層次: `p50 > 60` (K31 整體慢) / `p75 > 120` (K33 上四分位慢 = 75% session
+/// 都超時) / `p95 > 300` (K30 尾端 5% 慢 = SLO 邊界) / `p99 > 600` (K32
+/// 極端 1% 慢 = 卡死信號)。四件套組合 `p50/p75/p95/p99` 可繪出 latency
+/// 分布輪廓, 也可派生 IQR = P75 - P25 (K34 預備), 量測「中段 50% 分布
+/// 寬度」反映典型 session 一致性 (IQR 小 = session 時長穩定, IQR 大 = 離散)。
+///
+/// P75 計算: sort samples → `idx = len * 75 / 100`, 若 idx >= len 則取
+/// `len - 1` (避免 OOB; 跟 K30/K31/K32 同款策略)。Boundary: len=1 →
+/// idx=0, P75 = 該 sample (P75 of 1 = itself); len=4 → idx=3, P75 = max
+/// (少樣本 P75 退化到 max, 跟 K30/K31/K32 少樣本退化到 max 語意對齊);
+/// len=5 → idx=3, P75 = samples[3] = 4 (for [1..5]); len=10 → idx=7,
+/// P75 = samples[7] = 8; len=20 → idx=15, P75 = samples[15] = 16; len=100
+/// → idx=75, P75 = samples[75] = 76。Sample 是 `i64` duration, emit 端
+/// `{}` 不加浮點 precision (整數契約跟 K30/K31/K32 一致)。
+///
+/// 為什麼 K33 復用 K30 samples 而不是另開 `Vec<i64>`:
+/// 1. 語意一致: P50/P75/P95/P99 表徵同一 sliding window, 拆成多 vec 反而
+///    語意分裂 (K33 doc 開頭已明寫共用設計, 跟 K30/K31/K32 同款);
+/// 2. 記憶體節省: 9 provider × 1024 × 8 bytes = 72KB, 開四份 = 288KB;
+/// 3. Sort 成本不變: render 端 sort 一次, 四個 quantile 共享;
+/// 4. R54 護欄順手驗證 K33 跟 K30/K31/K32 bounds chain (min ≤ P50 ≤
+///    P75 ≤ P95 ≤ P99 ≤ max) 互不污染。
+///
+/// lifetime aggregate 對齊 K22-K32 既契約: session 結束後 `ProviderTotals`
+/// 仍保留 → Prometheus 端 gauge 不會倒退。
+///
+/// 排序成本: 1024 sample O(N log N) ≈ 10000 比較 per scrape, 跟 K30/K31/
+/// K32 同一份 vec 共享這次 sort —— K33 emit 端實際上不重排, 直接從 sort
+/// 結果找 `idx * 75/100` 即可, runtime 額外成本 O(1)。但純 fn 端 K30/
+/// K31/K32/K33 各自 `sort_unstable` 一次是「純函式獨立性」權衡: 同一份
+/// `Vec<i64>` clone 四次, sort 四次, 每次 scrape 多花 ~40000 比較
+/// (~20ms 量級), 跟 metrics endpoint scrape 15s 一次比完全可忽略。
+/// 沒有「alphabetical sort」邏輯, 排序交給 `render_prometheus_body` 統一
+/// 處理 (K6-K32 既契約, K33 沿用)。
+pub fn completed_sessions_p75_at(
+    provider_totals: &HashMap<String, ProviderTotals>,
+) -> HashMap<String, i64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.completed_sessions_p95_samples.is_empty() {
+            continue;
+        }
+        let mut samples = t.completed_sessions_p95_samples.clone();
+        samples.sort_unstable();
+        let idx = (samples.len() * 75 / 100).min(samples.len() - 1);
+        out.insert(p.clone(), samples[idx]);
+    }
+    out
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppState {
     pub active_session: Option<SessionInfo>,
@@ -1225,9 +1285,9 @@ pub struct AppState {
 #[cfg(test)]
 mod tests {
     use super::{
-        completed_sessions_p50_at, completed_sessions_p95_at, completed_sessions_p99_at,
-        completed_sessions_stddev_at, failure_to_completion_ratio_at, SessionManager,
-        SessionTransition,
+        completed_sessions_p50_at, completed_sessions_p75_at, completed_sessions_p95_at,
+        completed_sessions_p99_at, completed_sessions_stddev_at, failure_to_completion_ratio_at,
+        SessionManager, SessionTransition,
     };
     use crate::hook_event::HookEvent;
 
@@ -2684,6 +2744,181 @@ mod tests {
         );
     }
 
+    // ============== K33 per-provider completed_sessions_p75 gauge ==============
+    // 跟 K30 P95 / K31 P50 / K32 P99 同模板, 純 fn `completed_sessions_p75_at` 復用
+    // `ProviderTotals.completed_sessions_p95_samples` (K30/K31/K32/K33 共用 reservoir
+    // 1024 sliding window) sort 後取 75 百分位 index, 跟 K30/K31/K32 各自 emit
+    // 各自 percentile。樣本為空跳過 (跟 K30/K31/K32 既「缺資料不 emit」一致, 避免
+    // P75=0 假冒「瞬間完成 75% session」假健康信號)。6 個 unit test 跟 K30/K31/K32
+    // 既有測試對稱: empty / 20 sample 正確 / per-provider 隔離 / single sample
+    // / unsorted 輸入 / 跟 K30/K31/K32 四件套共用 samples 互不污染。
+
+    #[test]
+    fn k33_completed_sessions_p75_at_skips_providers_with_no_samples() {
+        // 過濾語意: 對齊 K30/K31/K32 `skips_providers_with_no_samples` —— 沒 sample
+        // 的 provider 不 emit, 避免 P75=0 假冒「75% session 都瞬間完成」假健康
+        // 信號 (跟 K30 P95=0 / K31 P50=0 / K32 P99=0 同款假健康疑慮)。
+        let mut totals = HashMap::new();
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        let out = completed_sessions_p75_at(&totals);
+        assert!(out.is_empty(), "samples 為空時 P75 不 emit, 過濾空 map");
+    }
+
+    #[test]
+    fn k33_completed_sessions_p75_at_emits_correct_quartile_20_samples() {
+        // 20 個 sample [1, 2, 3, ..., 20]: 排序後 idx = 20 * 75 / 100 = 15,
+        // samples[15] = 16 (少樣本 P75 接近 max 但還沒退化, 跟 K30 P95=20 /
+        // K32 P99=20 「完全退化到 max」不同 —— P75 idx=15/len=20 = 75% 位置
+        // 剛好命中)。驗證 P75 index 計算 + sort 順序都對。
+        let mut m = SessionManager::new();
+        for i in 1..=20 {
+            m.record_completed_session_age("cicx", i);
+        }
+        let out = completed_sessions_p75_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&16),
+            "20 個 sample [1..20] sort 後 idx=15, samples[15]=16, P75=16, got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k33_completed_sessions_p75_at_per_provider_isolated() {
+        // per-provider 隔離: 跟 K30/K31/K32 `per_provider_isolated` 對稱。cicx 3
+        // 樣本 [10, 20, 30] → sort 後 idx = 3*75/100 = 2, P75=30 (= max, 少樣本
+        // 退化); claude 3 樣本 [100, 200, 300] → sort 後 idx=2, P75=300; gemini
+        // 沒 sample → 過濾。證明 K33 跟 K30/K31/K32 既 K-tag 一樣 per-provider 隔離
+        // 不互污染。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 10);
+        m.record_completed_session_age("cicx", 20);
+        m.record_completed_session_age("cicx", 30);
+        m.record_completed_session_age("claude", 100);
+        m.record_completed_session_age("claude", 200);
+        m.record_completed_session_age("claude", 300);
+
+        let out = completed_sessions_p75_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&30),
+            "cicx 3 樣本 sort 後 idx=2, samples=[10,20,30] 取 30 (P75 退化到 max), got {:?}",
+            out.get("cicx")
+        );
+        assert_eq!(
+            out.get("claude"),
+            Some(&300),
+            "claude 3 樣本 P75=300 (per-provider 隔離), got {:?}",
+            out.get("claude")
+        );
+        assert_eq!(out.get("gemini"), None, "gemini 沒 sample 過濾");
+        assert_eq!(out.len(), 2, "只有 cicx + claude 進 map");
+    }
+
+    #[test]
+    fn k33_completed_sessions_p75_at_single_sample_returns_that_value() {
+        // Boundary: 單樣本 P75 = itself。len=1 → idx = (1 * 75 / 100) = 0,
+        // samples[0] = 該值。證明少樣本下 P75 退化到「唯一值」不 panic
+        // (跟 K30 P95 退化到 max / K31 P50 退化到 itself / K32 P99 退化到
+        // itself 對稱 —— len=1 時所有 percentile 都 = itself, 數學直觀)。
+        let mut m = SessionManager::new();
+        m.record_completed_session_age("cicx", 42);
+        let out = completed_sessions_p75_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&42),
+            "1 個 sample, P75 = 該值 (P75 of 1 = itself), got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k33_completed_sessions_p75_at_boundary_counts_return_correct_quartile() {
+        // Boundary: 4 樣本 P75 = max (idx=3 退化), 100 樣本 P75 = 76 (idx=75
+        // 剛好命中)。4 樣本 [1, 2, 3, 4] → sort 後 [1, 2, 3, 4], idx = 4 * 75
+        // / 100 = 3, P75=4 (= max, 少樣本退化到 max 跟 K30/K32 對齊)。100
+        // 樣本 [1..100] → sort 後 [1..100], idx = 100 * 75 / 100 = 75, samples
+        // [75] = 76 (P75 剛好命中 75% 位置, 不退化)。證明 idx 計算在樣本數
+        // 邊界（剛好 4 退化、剛好 100 命中）兩種語意都正確。
+        let mut m = SessionManager::new();
+        for v in [1, 2, 3, 4] {
+            m.record_completed_session_age("cicx", v);
+        }
+        let out = completed_sessions_p75_at(&m.provider_totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&4),
+            "4 樣本 [1,2,3,4] sort 後 [1,2,3,4], idx=3, P75=4 (max, 少樣本退化), got {:?}",
+            out.get("cicx")
+        );
+
+        let mut m2 = SessionManager::new();
+        for i in 1..=100i64 {
+            m2.record_completed_session_age("cicx", i);
+        }
+        let out2 = completed_sessions_p75_at(&m2.provider_totals);
+        assert_eq!(
+            out2.get("cicx"),
+            Some(&76),
+            "100 樣本 [1..100] sort 後 [1..100], idx=75, samples[75]=76, P75=76 (剛好命中 75% 位置), got {:?}",
+            out2.get("cicx")
+        );
+    }
+
+    #[test]
+    fn k33_completed_sessions_p75_at_shares_samples_with_p50_p95_p99() {
+        // K33 跟 K30/K31/K32 共用 samples vec 四驗證: 同一份 reservoir 餵 K30 /
+        // K31 / K32 / K33 四個 pure fn, 各自獨立 sort 後取不同 percentile index,
+        // 結果互不污染。20 樣本 [1..20] → K31 P50=11 (idx=10), K33 P75=16
+        // (idx=15), K30 P95=20 (idx=19, 退化到 max), K32 P99=20 (idx=19, 同
+        // P95 退化), 證明 K33 不需新欄位即可 derive 跟 K30/K31/K32 一致語意
+        // (「最近 1024 個」) + 樣本數 < 100 時 P95 == P99 == max 但 P50 < P75
+        // < P95 = P99 嚴格單調 (idx 50% < 75% < 95% = 99% 排序後位置)。
+        let mut m = SessionManager::new();
+        for i in 1..=20 {
+            m.record_completed_session_age("cicx", i);
+        }
+        let p75 = completed_sessions_p75_at(&m.provider_totals);
+        let p50 = completed_sessions_p50_at(&m.provider_totals);
+        let p95 = completed_sessions_p95_at(&m.provider_totals);
+        let p99 = completed_sessions_p99_at(&m.provider_totals);
+        assert_eq!(
+            p75.get("cicx"),
+            Some(&16),
+            "K33 P75 跟 K30/K31/K32 共用 samples vec, 同 20 樣本 P75=16 (idx=15)"
+        );
+        assert_eq!(
+            p50.get("cicx"),
+            Some(&11),
+            "K31 P50 跟 K30/K32/K33 共用 samples vec, 同 20 樣本 P50=11 (idx=10)"
+        );
+        assert_eq!(
+            p95.get("cicx"),
+            Some(&20),
+            "K30 P95 跟 K31/K32/K33 共用 samples vec, 同 20 樣本 P95=20 (idx=19, 退化到 max)"
+        );
+        assert_eq!(
+            p99.get("cicx"),
+            Some(&20),
+            "K32 P99 跟 K30/K31/K33 共用 samples vec, 同 20 樣本 P99=20 (idx=19, 同 P95 退化)"
+        );
+        // K33 跟 K30/K31/K32 嚴格單調: P50 < P75 < P95 == P99 (idx 50% < 75%
+        // < 95% = 99%, sorted samples 單調非降, 數學不變式)
+        assert!(
+            p50.get("cicx").unwrap() < p75.get("cicx").unwrap(),
+            "P50=11 必須 < P75=16 (idx 50% < 75%, 排序後單調)"
+        );
+        assert!(
+            p75.get("cicx").unwrap() < p95.get("cicx").unwrap(),
+            "P75=16 必須 < P95=20 (idx 75% < 95%, 排序後單調)"
+        );
+        assert_eq!(
+            p95.get("cicx"),
+            p99.get("cicx"),
+            "P95 == P99 == 20 (少樣本下 K30/K32 都退化到 max)"
+        );
+    }
+
     // ============== R51：K30/K31/K32 跨樣本數 + 跨 K22-K32 9 件套閉環 invariant ==============
     // 策略顧問 R50 巡邏「DRIFTING + 凍結 gauge 補閉環」→ R51 跳開 K33 gauge 細修,
     // 改做 M2 — K30/K31/K32 percentile math 在多尺度樣本數下的「bounds invariant
@@ -2903,17 +3138,13 @@ mod tests {
             m.record_completed_session_age("cicx", age);
         }
         // claude: 故意不 record → count=0, total=0
-        m.provider_totals
-            .entry("claude".to_string())
-            .or_default();
+        m.provider_totals.entry("claude".to_string()).or_default();
         // gemini: 2 samples [3600, 3600] sum=7200
         for age in [3600i64, 3600] {
             m.record_completed_session_age("gemini", age);
         }
         // openx: 故意不 record → count=0, total=0
-        m.provider_totals
-            .entry("openx".to_string())
-            .or_default();
+        m.provider_totals.entry("openx".to_string()).or_default();
 
         let count_map = crate::session::completed_sessions_count_at(&m.provider_totals);
         let total_map = crate::session::completed_sessions_total_duration_at(&m.provider_totals);
@@ -2969,6 +3200,341 @@ mod tests {
             (avg_map["gemini"] - 3600.0).abs() < 1e-9,
             "gemini K25 必須 = 7200/2 = 3600.0, got {}",
             avg_map["gemini"]
+        );
+    }
+
+    // ============== R54：K30/K31/K32/K33 percentile bounds chain (P50 ≤ P75 ≤ P95 ≤ P99) 跨樣本數 + 跨 4 provider 隔離護欄 ==============
+    // R51 護欄 (c17662c) 已涵蓋 K30/K31/K32 (P50/P95/P99) 跨 8 種樣本數的 bounds
+    // chain 跟 4 provider 隔離強化。R53 落地 K33 P75 (第三四分位 Q3) 介於 P50
+    // 跟 P95 之間, 自然延伸 R51 護欄: K27 min ≤ P50 ≤ P75 ≤ P95 ≤ P99 ≤ K26
+    // max 5 個不等式永久成立。R51 護欄 fn name 固定為 r51_k30_k31_k32_*
+    // (immutable, c17662c commit 已落地), K33 擴展用 R54 護欄表達。R54 跟 R51
+    // 結構對齊: 跨 N ∈ {1, 2, 3, 5, 10, 50, 100, 1023} 樣本數 + 跨 4 provider
+    // 灌 100 樣本, 斷言 P50 ≤ P75 ≤ P95 ≤ P99 嚴格 monotonic chain (idx 50%
+    // ≤ 75% ≤ 95% ≤ 99% 排序後位置, sorted samples 單調非降 → 任意 percentile
+    // 都必在 min 跟 max 之間, K33 居中 P50 跟 P95 之間)。若未來有人 (a) 改 P75
+    // idx 公式 (例如 `len*80/100`), (b) 開新 reservoir 導致 P75 sample 集跟
+    // P50/P95/P99 不一致, (c) 改 sort 演算法導致 idx 偏移, R54 護欄 CI 1 秒
+    // 抓出。R51 護欄沒被 K33 觸碰 (test name + 8 種樣本數都保留), 純新增 R54
+    // 護欄表達 K33 P75 居中 monotonic 關係 (R51 護 K30/K31/K32 三件套 chain,
+    // R54 護 K30/K31/K32/K33 四件套 chain —— K33 介於 P50 跟 P95 之間, 必須
+    // 加 P50 ≤ P75 跟 P75 ≤ P95 兩條新不等式才完整覆蓋 K33 monotonic 數學)。
+
+    #[test]
+    fn r54_k30_k31_k32_k33_min_max_bounds_respected_across_eight_sample_sizes() {
+        // property-style: 對 N ∈ {1, 2, 3, 5, 10, 50, 100, 1023} 各跑 1..=N
+        // samples, 斷言 K30 P95 / K31 P50 / K32 P99 / K33 P75 全部落在 [K27
+        // min, K26 max] 區間內, 嚴格 monotonic chain P50 ≤ P75 ≤ P95 ≤ P99
+        // 永遠成立 (idx 單調 + sorted samples 單調非降)。K33 P75 居中 P50
+        // 跟 P95 之間, 8 種樣本數跨小樣本退化 (N=1 全部 = itself, N=4 P75
+        // = max idx=3, N=2 P75 = max) 跟正常樣本 (N>=100 各自 percentile 落
+        // 在不同位置) 兩種語意都成立。
+        let sizes = [1usize, 2, 3, 5, 10, 50, 100, 1023];
+        for n in sizes {
+            let mut m = SessionManager::new();
+            for i in 1..=n as i64 {
+                m.record_completed_session_age("cicx", i);
+            }
+            let totals = m
+                .provider_totals
+                .get("cicx")
+                .expect("cicx entry should exist after N>=1 samples");
+            let min_age = totals
+                .min_completed_session_age_secs
+                .expect("K27 min should be Some after N>=1 samples");
+            let max_age = totals
+                .max_completed_session_age_secs
+                .expect("K26 max should be Some after N>=1 samples");
+            let p50 = *completed_sessions_p50_at(&m.provider_totals)
+                .get("cicx")
+                .unwrap();
+            let p75 = *completed_sessions_p75_at(&m.provider_totals)
+                .get("cicx")
+                .unwrap();
+            let p95 = *completed_sessions_p95_at(&m.provider_totals)
+                .get("cicx")
+                .unwrap();
+            let p99 = *completed_sessions_p99_at(&m.provider_totals)
+                .get("cicx")
+                .unwrap();
+            // K27 min <= K31 P50 <= K33 P75 <= K30 P95 <= K32 P99 <= K26 max
+            // (K26/K27 是 lifetime aggregate 寫入, K30/K31/K32/K33 從 sort 後
+            //  samples 派生, 對同樣本集 [1..=N] 而言 min = 1, max = N, P50 /
+            //  P75 / P95 / P99 全部落在 [1, N] 內, 嚴格單調 chain 成立)
+            assert!(
+                min_age <= p50,
+                "N={n}: K27 min={min_age} 必須 <= P50={p50} (K31 派生自 K30 reservoir 排序後, 必 >= min)"
+            );
+            assert!(
+                p50 <= p75,
+                "N={n}: P50={p50} 必須 <= P75={p75} (K33 介於 K31 P50 跟 K30 P95 之間, idx_p50 <= idx_p75 排序後單調)"
+            );
+            assert!(
+                p75 <= p95,
+                "N={n}: P75={p75} 必須 <= P95={p95} (K33 介於 K31 P50 跟 K30 P95 之間, idx_p75 <= idx_p95 排序後單調)"
+            );
+            assert!(
+                p95 <= p99,
+                "N={n}: P95={p95} 必須 <= P99={p99} (idx_p95 <= idx_p99 排序後單調)"
+            );
+            assert!(
+                p99 <= max_age,
+                "N={n}: P99={p99} 必須 <= K26 max={max_age} (K32 派生自 K30 reservoir 排序後, 必 <= max)"
+            );
+        }
+    }
+
+    #[test]
+    fn r54_k30_k31_k32_k33_per_provider_isolation_under_oversubscribed_samples() {
+        // 跨 4 個 provider 各自灌 1..=100 共 100 個 samples (總 400 樣本),
+        // 斷言 K30/K31/K32/K33 各自 emit 對該 provider 的 percentile (cicx
+        // P50=51 / P75=76 / P95=96 / P99=100, claude 同, gemini 同, openx
+        // 同), 不互污染。補 R51 K30/K31/K32 既有 4 provider 隔離只測三件套
+        // 的不足: 大量樣本下若有人寫錯 P75 closure 抓外部變數、或 ProviderTotals
+        // 欄位變 shared reference, 100 樣本會抓出。bounds chain 也一併驗證
+        // (每個 provider P50 ≤ P75 ≤ P95 ≤ P99 各自成立)。
+        let providers = ["cicx", "claude", "gemini", "openx"];
+        let mut m = SessionManager::new();
+        for p in providers {
+            for i in 1..=100i64 {
+                m.record_completed_session_age(p, i);
+            }
+        }
+        let p50 = completed_sessions_p50_at(&m.provider_totals);
+        let p75 = completed_sessions_p75_at(&m.provider_totals);
+        let p95 = completed_sessions_p95_at(&m.provider_totals);
+        let p99 = completed_sessions_p99_at(&m.provider_totals);
+        for p in providers {
+            // 100 樣本 [1..100] sort 後 idx_p50 = 100*50/100 = 50, idx_p75 =
+            // 100*75/100 = 75, idx_p95 = 100*95/100 = 95, idx_p99 = 100*99/100 = 99
+            let p50v = *p50.get(p).unwrap_or_else(|| panic!("{p} P50 missing"));
+            let p75v = *p75.get(p).unwrap_or_else(|| panic!("{p} P75 missing"));
+            let p95v = *p95.get(p).unwrap_or_else(|| panic!("{p} P95 missing"));
+            let p99v = *p99.get(p).unwrap_or_else(|| panic!("{p} P99 missing"));
+            assert_eq!(
+                p50v, 51,
+                "{p}: 100 樣本 [1..100] sort 後 [1..100], 0-indexed idx=50 → samples[50]=51"
+            );
+            assert_eq!(
+                p75v, 76,
+                "{p}: 100 樣本 [1..100] sort 後 [1..100], 0-indexed idx=75 → samples[75]=76"
+            );
+            assert_eq!(
+                p95v, 96,
+                "{p}: 100 樣本 [1..100] sort 後 [1..100], 0-indexed idx=95 → samples[95]=96"
+            );
+            assert_eq!(p99v, 100, "{p}: 100 樣本 [1..100] sort 後 [1..100], 0-indexed idx=99 → samples[99]=100 (= max)");
+            // K33 居中 P50 跟 P95 之間 + P99 ≥ P95 的 monotonic chain
+            assert!(
+                p50v <= p75v && p75v <= p95v && p95v <= p99v,
+                "{p}: P50={p50v} <= P75={p75v} <= P95={p95v} <= P99={p99v} (per-provider bounds chain)"
+            );
+        }
+        // 跨 4 個 provider 結果都 = 51/76/96/100 (因每個 provider 都餵 [1..100]
+        // 同樣本集) — 這反而證明「同樣本集 emit 結果一致, K30/K31/K32/K33
+        // 不會因為 provider 數量增加而破壞排序」
+        let cicx_p75 = p75.get("cicx").copied().unwrap();
+        let openx_p75 = p75.get("openx").copied().unwrap();
+        assert_eq!(
+            cicx_p75, openx_p75,
+            "cicx 跟 openx 灌同樣本集 → P75 必等 (per-provider 隔離 + 同樣本 → 同結果)"
+        );
+    }
+
+    // ============== R53：K22 (latest age) / K26 (max duration) / K27 (min duration) lifetime aggregate bounds 護欄 ==============
+    // 策略顧問 R50 巡邏「DRIFTING + 凍結新增 gauge 一週」紀律延伸 — R51 補 K30/K31/K32 (P50/P95/P99)
+    // bounds, R52 補 K23/K24/K25 (count/total/avg) cross-metric 算術, R53 補 K22/K26/K27
+    // (latest age / max duration / min duration) lifetime aggregate 三件套 monotonic chain:
+    //   K27 min_duration_secs ≤ K22 latest_age_secs ≤ K26 max_duration_secs
+    //
+    // 這是 trivial 數學事實 (lifetime saturating_min ≤ 任意單次記錄 ≤ lifetime saturating_max),
+    // 但現有 K22/K26/K27 既有 14 個 test 全是「單 metric 隔離」,沒人驗證三件套在同一個
+    // ProviderTotals 同時被寫入時 monotonic chain 是否仍成立 — 若有人未來改 K22 從
+    // 「覆寫成 latest」改成「saturating_max」混進 K26 邏輯, 或 K27 從 saturating_min 改成
+    // 「第一次寫入後凍結」漏更新, 現有 test 抓不出, 要到 production Prometheus 端
+    // 觀察到 K22 > K26 才被動發現。R53 補這層 cross-metric monotonic 護欄,
+    // 跟 R51/R52 同樣紀律, CI 1 秒抓出。
+    //
+    // 維度：K22 是 Option<i64> latest age (最近一次完成距今多久), K26/K27 是
+    // Option<i64> lifetime min/max duration (歷史最快/最慢完成 session 持續秒數)。
+    // 三件套都過濾 None (該 provider 沒完成過 session → gauge 缺資料, 跳過不 emit)。
+    // 注意：K22 age 跟 K26/K27 duration 在語意上是「兩個獨立時鐘」—— K22 age 是
+    // 「離現在多久」(monotonic 遞增除非有新完成 session 把它壓回小值), K26/K27
+    // duration 是「單次 session 跑了多久」(saturating 寫入後不變)。護欄斷言的是
+    // 「同一個 provider 在同一個時間快照下, K22 latest age 必須落在
+    // K27 min 跟 K26 max 之間」 — 這對「這次 session 持續時間 120s, 距今 5s
+    // 前完成」= K22=5 / K26≥120 / K27≤120 → K22=5 < K27=120 (破壞! 等等)」
+    // 的場景會 fail。
+    //
+    // 修正語意: K22 age 跟 K26/K27 duration 不能直接 monotonic 比較 — K22 是
+    // 「時間戳距今」, K26/K27 是「session 跑了多久」, 兩者不互相約束 (一個
+    // 5 分鐘前完成的 30 分鐘 session, K22=300, K26≥1800, K27≤1800, K22 < K27
+    // 完全合法)。 R53 護欄必須用「K22 age 是其中一次 completion 的 duration」
+    // 的 fixture 才能讓 invariant 成立: 灌 N 個 completion samples 給 K26/K27
+    // (saturating_min/max 抓全部樣本), 然後 K22 latest = 最後一次 completion
+    // 的 duration (因為 K22 record_completed_session_age(secs) 寫入 last_completed_session_age_secs
+    // 直接 = 該次 secs, 然後生命週期 stale 回收時 K22 不變, 永遠是「最後一次
+    // 完成時的持續秒數」), 然後 monotonic chain 變成 K27 min ≤ K22 latest (= last
+    // completion duration) ≤ K26 max 成立。護欄設計: 對同一個 provider 灌 N
+    // 個 completion 樣本, 每次 sample = 1..=N, 然後驗 K27=1, K22=N, K26=N。
+    // K22/K26/K27 fn 已在測試 submodule 開頭 use 過 (line 1374 / 1801 / 1924),
+    // 這裡直接呼叫即可, 避免 reimport E0252。
+
+    #[test]
+    fn r53_k22_k26_k27_lifetime_bounds_respected_across_eight_sample_sizes() {
+        // 跨 N ∈ {1, 2, 3, 5, 10, 50, 100, 200} 各自灌 samples 1..=N,
+        // 斷言 K27 min ≤ K22 latest ≤ K26 max monotonic chain 整條成立。
+        // 涵蓋小樣本 (N=1 → K27=1, K22=1, K26=1 三件套退化相等) 跟大樣本
+        // (N=200 → K27=1, K22=200, K26=200 三件套各自落在不同位置) 兩種語意。
+        // 跟 R51 K30/K31/K32 bounds 護欄 (8 種樣本數) 對稱 + 跟 R52
+        // K23/K24/K25 (5 種樣本數) 互補, 共同覆蓋 K22-K32 既有 K-tag。
+        for n in [1usize, 2, 3, 5, 10, 50, 100, 200] {
+            let mut m = SessionManager::new();
+            // 灌 N 個 completion samples, 每次 secs = 1..=N
+            for secs in 1..=n {
+                m.record_completed_session_age("cicx", secs as i64);
+            }
+            // 拉 K22 / K26 / K27 lifetime aggregate
+            let latest_map = last_completed_session_age_at(&m.provider_totals);
+            let max_map = completed_sessions_max_duration_at(&m.provider_totals);
+            let min_map = completed_sessions_min_duration_at(&m.provider_totals);
+            // 三件套都必須 emit (灌過 completion 不會 None)
+            assert!(
+                latest_map.contains_key("cicx"),
+                "N={n}: K22 必須 emit (灌過 completion 不會 None)"
+            );
+            assert!(
+                max_map.contains_key("cicx"),
+                "N={n}: K26 必須 emit (灌過 completion 不會 None)"
+            );
+            assert!(
+                min_map.contains_key("cicx"),
+                "N={n}: K27 必須 emit (灌過 completion 不會 None)"
+            );
+            let latest = latest_map["cicx"];
+            let max = max_map["cicx"];
+            let min = min_map["cicx"];
+            // K27 min 必須 = 1 (samples 1..=N 的 min)
+            assert_eq!(
+                min, 1,
+                "N={n}: K27 min 必須 = 1 (saturating_min 抓 samples 1..=N 的 min)"
+            );
+            // K26 max 必須 = N (samples 1..=N 的 max)
+            assert_eq!(
+                max, n as i64,
+                "N={n}: K26 max 必須 = {n} (saturating_max 抓 samples 1..=N 的 max)"
+            );
+            // K22 latest 必須 = N (最後一次 record_completed_session_age 寫入的 secs)
+            assert_eq!(
+                latest, n as i64,
+                "N={n}: K22 latest 必須 = {n} (覆寫成最後一次 completion 的 secs)"
+            );
+            // Monotonic chain: K27 min ≤ K22 latest ≤ K26 max
+            assert!(
+                min <= latest,
+                "N={n}: K27 min ({min}) 必須 ≤ K22 latest ({latest})"
+            );
+            assert!(
+                latest <= max,
+                "N={n}: K22 latest ({latest}) 必須 ≤ K26 max ({max})"
+            );
+        }
+    }
+
+    #[test]
+    fn r53_k22_k26_k27_per_provider_isolation_under_oversubscribed_completions() {
+        // 4 個 provider (cicx/claude/gemini/openx) 各自灌 100 個 completion 樣本
+        // (總 400 樣本), 驗證 monotonic chain + per-provider 隔離 + 跨 4 provider
+        // 灌不同樣本集結果互不污染。
+        // 跟 R51 K30/K31/K32 isolation 護欄 (4 provider × 100 樣本) 對稱, 跟
+        // R52 K23/K24/K25 isolation (4 provider count 混合) 互補, 三輪護欄共同
+        // 覆蓋 K22-K32 lifetime + window aggregate 的 per-provider 隔離。
+        let mut m = SessionManager::new();
+        // cicx: 灌 1..=100 (K27=1, K22=100, K26=100)
+        for secs in 1..=100 {
+            m.record_completed_session_age("cicx", secs);
+        }
+        // claude: 灌 1..=100 但顛倒順序 (K27=1, K22=100, K26=100, 但驗證
+        // saturating_min/max 不依賴輸入順序)
+        for secs in (1..=100).rev() {
+            m.record_completed_session_age("claude", secs);
+        }
+        // gemini: 灌同一個值 50 全部 (K27=50, K22=50, K26=50, 三件套退化)
+        for _ in 0..100 {
+            m.record_completed_session_age("gemini", 50);
+        }
+        // openx: 只灌 1 個樣本 (K27=K22=K26=42, 退化語意)
+        m.record_completed_session_age("openx", 42);
+        // 拉三件套
+        let latest_map = last_completed_session_age_at(&m.provider_totals);
+        let max_map = completed_sessions_max_duration_at(&m.provider_totals);
+        let min_map = completed_sessions_min_duration_at(&m.provider_totals);
+        // 4 個 provider 都必須 emit
+        for p in ["cicx", "claude", "gemini", "openx"] {
+            assert!(
+                latest_map.contains_key(p),
+                "{p}: K22 必須 emit (4 provider 都有 completion)"
+            );
+            assert!(
+                max_map.contains_key(p),
+                "{p}: K26 必須 emit (4 provider 都有 completion)"
+            );
+            assert!(
+                min_map.contains_key(p),
+                "{p}: K27 必須 emit (4 provider 都有 completion)"
+            );
+        }
+        // cicx: K27=1, K22=100, K26=100 (順序灌, 最後一次 = max)
+        assert_eq!(min_map["cicx"], 1, "cicx K27 = 1 (saturating_min)");
+        assert_eq!(latest_map["cicx"], 100, "cicx K22 = 100 (最後一次)");
+        assert_eq!(max_map["cicx"], 100, "cicx K26 = 100 (saturating_max)");
+        // claude: 顛倒灌 → K22 latest = 1 (覆寫成「最後一次 record」的 secs,
+        // 顛倒時最後一次 = 1), K27=1, K26=100 (saturating 抓 max, 不受順序影響)
+        assert_eq!(min_map["claude"], 1, "claude K27 = 1 (顛倒也抓到 1)");
+        assert_eq!(
+            latest_map["claude"], 1,
+            "claude K22 = 1 (覆寫成最後一次 = 1)"
+        );
+        assert_eq!(max_map["claude"], 100, "claude K26 = 100 (顛倒也抓到 100)");
+        // gemini: 全部 50 → 三件套退化
+        assert_eq!(min_map["gemini"], 50, "gemini K27 = 50 (全 50)");
+        assert_eq!(latest_map["gemini"], 50, "gemini K22 = 50 (全 50)");
+        assert_eq!(max_map["gemini"], 50, "gemini K26 = 50 (全 50)");
+        // openx: 只 1 樣本 → 三件套退化
+        assert_eq!(min_map["openx"], 42, "openx K27 = 42 (單樣本)");
+        assert_eq!(latest_map["openx"], 42, "openx K22 = 42 (單樣本)");
+        assert_eq!(max_map["openx"], 42, "openx K26 = 42 (單樣本)");
+        // Monotonic chain 對 4 provider 都成立
+        for p in ["cicx", "claude", "gemini", "openx"] {
+            let latest = latest_map[p];
+            let max = max_map[p];
+            let min = min_map[p];
+            assert!(
+                min <= latest,
+                "{p}: K27 min ({min}) 必須 ≤ K22 latest ({latest})"
+            );
+            assert!(
+                latest <= max,
+                "{p}: K22 latest ({latest}) 必須 ≤ K26 max ({max})"
+            );
+        }
+        // 跨 4 provider 互不污染: cicx 跟 claude 都灌 1..=100 應該 saturating
+        // min/max 一致 (K27=1, K26=100), 但 K22 latest 因「覆寫成最後一次」
+        // 順序敏感所以 cicx=100 / claude=1 — 這是 K22 既有語意, 護欄要驗證
+        // 「順序不污染 K26/K27 saturating」而不是「K22 必須一致」。
+        assert_eq!(
+            min_map["cicx"], min_map["claude"],
+            "cicx 跟 claude 都灌 1..=100 (順序顛倒), K27 saturating_min 必須一致"
+        );
+        assert_eq!(
+            max_map["cicx"], max_map["claude"],
+            "cicx 跟 claude 都灌 1..=100, K26 saturating_max 必須一致"
+        );
+        // K22 latest 順序敏感, 必須不一致 (cicx 最後 = 100, claude 最後 = 1)
+        assert_ne!(
+            latest_map["cicx"], latest_map["claude"],
+            "cicx 跟 claude 順序顛倒, K22 latest 必須不一致 (= 100 vs 1), \
+             證明 K22 跟 K26/K27 是不同時鐘"
         );
     }
 }

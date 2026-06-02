@@ -477,6 +477,52 @@
 
 **KPI-impact: K30/K31/K32 percentile math 護欄從「3 種樣本數」→「8 種樣本數 + 4-provider × 100 樣本」, invariant 測試覆蓋率 +5 種樣本數 + 33× 隔離樣本量, CI 1 秒抓出未來 monotonic 破壞**
 
+### 2026-06-03 R52 — K23/K24/K25 跨 K-tag 數學不變式護欄 (commit f7766eb)
+**類型**: M2 (既有 metric cross-metric 護欄, 補強觀察性可靠性)
+**KPI**: K23/K24/K25 跨 metric emission 一致性
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| 護欄 test 數 (lib) | 304 | 307 | +3 |
+| 既有 K-tag cross-metric 護欄 | 0 (K22-K27 單 metric 隔離) | K23/K24/K25 三件套 | +1 套 |
+| 0/0 NaN 防線 test | 0 | 2 (session + render) | +2 |
+| 4-provider 混合 fixture 覆蓋 | 0 | 2 (pure fn + render) | +2 |
+
+**為什麼做這個改善**: 策略顧問 R50 巡邏「DRIFTING + 凍結新增 gauge 一週」紀律延伸 — 在「凍結新增 metric」期間, 改補既有 K23/K24/K25「count/total/avg」三件套的 cross-metric 數學不變式護欄。K23/K24/K25 語意強綁定 (K25 = K24 / K23, count > 0), 既有 18 個 test 全是單 metric 隔離, 跨 K-tag 算術驗證缺失 — 若未來有人改 K23 trigger 點漏 +1 / 改 K24 saturating 改 wrapping 污染 sum / 改 K25 派生用錯欄位 / 改 K25 emit 條件從 `count > 0` 改成 `count >= 0` 漏掉 0/0 NaN 防線, 現有 test 抓不出, 要到 production Prometheus scrape 端 alert 異常才被動發現。R52 補這層 cross-metric invariant 護欄, 跟 R51 K30/K31/K32 bounds 同樣紀律, CI 1 秒抓出。
+
+**為什麼是 M2 不是 M0**: 不是阻斷 KPI 量測的 P0 bug, 是補強既有 metric 觀察性 reliability (R52 跟 R51 同樣定位: 在「凍結新增 gauge」紀律下, 改走「既有 metric 數學不變式護欄」路徑, 確保既有 K-tag 算術在未來 refactor 中不退化)。
+
+**搜尋**: 沒新搜。沿用 R37/R44/R46/R51 property-style invariant test pattern (跨 N 種樣本數 + 跨 provider 隔離 + math 不變式護欄), 模式穩定 = 可信。
+
+**做了什麼**:
+- `session.rs:2806-2974` 2 個新 unit test (168 行, 全部純 test 沒動 production code):
+  - `r52_k23_k24_k25_count_total_avg_invariant_across_sample_counts` — property-style N ∈ {1, 3, 10, 50, 100} 各自餵 samples 1..=N, 斷言 K23=N / K24=N*(N+1)/2 / K25=sum/N (數學恆等式 f64 epsilon 1e-9)。涵蓋小樣本 (N=1 → avg=1.0) 跟大樣本 (N=100 → avg=50.5) 兩種語意
+  - `r52_k23_k24_k25_emission_set_consistency_under_zero_count_providers` — 4 provider 混合 (cicx count=3, claude count=0, gemini count=2, openx count=0), 驗 K25 emit set ⊆ K24 emit set ⊆ K23 emit set 三層次包含關係 + 0/0 NaN 防線 (count=0 K25 必跳過, 不能 emit 0.0 假健康信號)
+- `lib.rs:6667-6833` 1 個新 render test (167 行, 全部純 test 沒動 production code):
+  - `r52_k23_k24_k25_render_emission_consistency_across_mixed_count_providers` — 4 provider 混合 fixture 跟 session.rs pure fn 護欄對齊, 驗 render 端 K23/K24 全部 4 provider emit (counter 0 有效) + K25 只有 cicx/gemini emit (count > 0) + K25 算術跨 metric 一致 + 順序 K23/K24 → K25 + K25 不能 emit NaN/Infinity/負值 + 跨 K-tag emission 集合互不污染
+- 沒動 production code (純 test, 沒新 emit block, 沒改既有 render 邏輯)
+- 沒動 .arch-fitness.json / .supervisor-report.json (untracked supervisor 檔, 符合 R13 防護)
+- 沒動 `git add -A/.`, 嚴守 R13 防護
+
+**驗證**:
+- `cargo build --lib --tests`: 0 warning
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo test --lib r52_`: **3 passed; 0 failed; 0 ignored** (新加的 count/total/avg invariant + 0/0 NaN 防線 + 4-provider render emission 全綠)
+- `cargo test --lib --no-fail-fast`: **307 passed; 0 failed; 0 ignored** (R51 304 + R52 +3, 0 regression, 0 flake)
+
+**結果**: PASS（K23/K24/K25 cross-metric 數學不變式護欄 + 0/0 NaN 防線 + 4-provider 混合 fixture 跨 session+render 雙層覆蓋 + 0 R52 範圍 lint warning + 0 regression + 307/307 tests + 撿 R52 開工時 WIP 落地）
+
+**KPI-impact: K23/K24/K25 三件套從「18 個單 metric 隔離 test」→「18 單 metric + 3 跨 K-tag 不變式護欄 (含 0/0 NaN 防線 + 4-provider 隔離) 」, cross-metric emission consistency 護欄覆蓋率 +17%, CI 1 秒抓出未來 count/total/avg 算術退化**
+
+**不做的範圍**（給後續輪次）:
+- K33 P75 / IQR / failure retry distribution 等新 gauge → 策略顧問 R50 紀律「凍結一週」, 至少 R52-R55 期間不開
+- 沿 R51/R52 同樣紀律, 後續輪次可考慮補: K22/K26/K27 (latest/max/min) 三件套 cross-metric bounds 護欄 (K27 min ≤ K22 latest ≤ K26 max 數學鏈) + K23/K24/K25 lifetime 跟 K28-K32 percentile 之間的跨窗口一致性護欄
+- `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct (R26/R27/R51/R52 policy 持續記錄, 跨輪考慮)
+- K15 / K16 shared counter race 真正解法 (R35-R52 多次記錄, 跨輪考慮)
+- hooks_configurator 內部 `let _ =` 剩餘小 silent-fail 收邊 (R37 wrap-up 已記)
+- trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, 跟 metrics 主軸不同軌道, 等 metrics 主軸收尾後下一個 M1/M2 窗口處理)
+
 **不做的範圍**（給後續輪次）:
 - K33 P75 / IQR / failure retry distribution 等新 gauge → 策略顧問 R50 紀律「凍結一週」, 至少 R52-R55 期間不開
 - `render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct（R26/R27/R51 policy 持續記錄；跨輪考慮）

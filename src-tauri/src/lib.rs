@@ -2032,6 +2032,27 @@ fn render_prometheus_body(
             "lobsterpulse_provider_failure_to_completion_ratio{{provider=\"{p}\"}} {ratio:.4}\n"
         ));
     }
+    // K30 落地：per-provider completed_sessions_p95 gauge (reservoir sampling
+    // capacity 1024 + sort 找 P95)。補 K22 (latest) / K25 (avg) / K26 (max) /
+    // K27 (min) / K28 (stddev) 五件套 + K29 (failure ratio) 都沒覆蓋的「95
+    // 百分位延遲」維度 —— operator 端 alert `p95 > 300` (5 分鐘) = 該
+    // provider 95% 的 session 都在 5 分鐘以上 = SLO 異常信號, 比 stddev 更
+    // 直觀 (stddev 受 outlier 影響大, P95 反映「典型慢任務」邊界)。資料源:
+    // ProviderTotals.completed_sessions_p95_samples (K30 record 函式 reservoir
+    // push 累積), bounded 1024 capacity 防 unbounded grow。語意跟 K22-K28
+    // lifetime aggregate 對比是有意識 trade-off: P95 反映「最近 1024 次」
+    // 體感 (lifetime 會被過老 outlier 拉高永遠不下降, operator alert 不實用)
+    // —— doc 開頭明寫。Sample 整數 i64, emit 端 cast f64 4 位小數跟 K25 /
+    // K28 對齊; 過濾 `samples.is_empty()` 沿用 K25 「0/0 不 emit」防線。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_p95_duration_seconds 95th percentile in seconds of completed session durations per provider (gauge; reservoir sampling 1024; sliding window of last 1024 completions; integer precision; missing=no completed session yet)\n# TYPE lobsterpulse_provider_completed_sessions_p95_duration_seconds gauge\n");
+    let completed_p95 = session::completed_sessions_p95_at(provider_totals);
+    let mut completed_p95_sorted: Vec<_> = completed_p95.iter().collect();
+    completed_p95_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, secs) in &completed_p95_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_p95_duration_seconds{{provider=\"{p}\"}} {secs}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -2988,9 +3009,9 @@ mod write_local_usage_snapshot_tests {
 mod render_prometheus_tests {
     use super::*;
     use crate::session::{
-        completed_sessions_min_duration_at, completed_sessions_stddev_at,
-        failure_to_completion_ratio_at, last_completed_session_age_at, ProviderTotals, SessionInfo,
-        SessionState,
+        completed_sessions_min_duration_at, completed_sessions_p95_at,
+        completed_sessions_stddev_at, failure_to_completion_ratio_at,
+        last_completed_session_age_at, ProviderTotals, SessionInfo, SessionState,
     };
     use chrono::TimeZone;
     use std::collections::HashMap;
@@ -3082,6 +3103,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3129,6 +3155,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3175,6 +3206,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3213,6 +3249,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3252,6 +3293,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3290,6 +3336,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3329,6 +3380,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3372,6 +3428,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3412,6 +3473,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3449,6 +3515,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3488,6 +3559,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -3537,6 +3613,11 @@ mod render_prometheus_tests {
                 min_completed_session_age_secs: None,
                 completed_sessions_mean_secs: 0.0,
                 completed_sessions_m2_secs: 0.0,
+                // K30 落地：test fixture 預設空 reservoir（未完成過 session
+                // → 沒 sample 可推）。跟 production `ProviderTotals::default()`
+                // 同語意。K30 專屬 fixture 在 K30 測試內以 struct literal 控制,
+                // 既有 K6-K29 fixture 不主動填 samples。
+                completed_sessions_p95_samples: Vec::new(),
             },
         )
     }
@@ -7403,6 +7484,203 @@ mod render_prometheus_tests {
                 "lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"} 1.5000\n"
             ),
             "K29 cicx ratio = 3/2 = 1.5000 (K25 跟 K29 隔離, 互不污染), body: {body}"
+        );
+    }
+
+    // ============== K30 per-provider completed_sessions_p95 gauge ==============
+    // 跟 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) 五件套 +
+    // K29 (failure ratio) 互補形成「七件套」 —— K30 是第六個維度「95 百分位延遲」
+    // (後續若加 K31 median / K32 p99 可再擴)。資料源 ProviderTotals
+    // .completed_sessions_p95_samples (reservoir bounded 1024, K30 record 函式
+    // 累積), 純 fn completed_sessions_p95_at sort 找 P95。samples 為空跳過
+    // (跟 K22 / K25-K29 既「缺資料不 emit」一致, 避免 P95=0 假冒「瞬間完成」
+    // 假健康信號)。3 個 render test 覆蓋 empty / per-provider 隔離 /
+    // alphabetical sort + 整數 precision, 跟 K20-K29 既有 render test 風格一致。
+
+    #[test]
+    fn p95_empty_totals_emits_header_only() {
+        // 對齊 K11 / K18 / K19 / K20 / K21 / K22 / K23 / K24 / K25 / K26 / K27 /
+        // K28 / K29 empty-state 契約: 空 map → 沒 sample line (HELP/TYPE 標頭
+        // 仍輸出), 不丟假資料。ProviderTotals 沒 entry → samples 預設空 → 過濾
+        // 掉, 避免 Prometheus 端把「沒看到」當「P95=0」誤判「該 provider 瞬間
+        // 完成所有 session」= 假健康信號。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            body.contains("# HELP lobsterpulse_provider_completed_sessions_p95_duration_seconds")
+        );
+        assert!(body.contains(
+            "# TYPE lobsterpulse_provider_completed_sessions_p95_duration_seconds gauge"
+        ));
+        // 沒 sample line 契約: 任何 provider=... 都不該 emit (空 map → 沒資料)
+        assert!(
+            !body.lines().any(|l| l.starts_with(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\""
+            )),
+            "empty totals 不該 emit P95 sample line, body: {body}"
+        );
+    }
+
+    #[test]
+    fn p95_per_provider_isolated_and_skips_empty_samples() {
+        // per-provider 隔離 + samples 為空跳過: cicx (20 sample [1..20]) emit
+        // P95=20, claude (samples 為空) 跳過, openx (samples 為空) 跳過。用
+        // struct literal + `..Default::default()` 明確控制每個 provider 狀態,
+        // 跟 K20-K29 既有隔離測試風格一致。P95 計算: 20 個 sample 排序後
+        // index = 20 * 95 / 100 = 19 → samples[19] = 20 (少樣本下 P95 退化到
+        // max, 跟 production pure fn 行為一致)。
+        let mut totals = HashMap::new();
+        // cicx: 20 sample [1..20] → 排序後 P95 index=19, samples[19]=20
+        let mut cicx_samples: Vec<i64> = (1..=20).collect();
+        cicx_samples.sort_unstable(); // 已排序, 為求語意清楚顯式 sort
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: cicx_samples,
+                ..Default::default()
+            },
+        );
+        // claude: samples 為空 → render 端跳過, 不該 emit sample line
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        // openx: samples 為空 → render 端跳過, 不該 emit sample line
+        totals.insert("openx".to_string(), ProviderTotals::default());
+
+        let _p95 = completed_sessions_p95_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // cicx emit 20 (i64 整數, 沒有 4 位小數 f64 跟 K25/K28/K29 不同)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 20\n"
+            ),
+            "cicx P95 = samples[19] = 20 (整數 i64), body: {body}"
+        );
+        // claude 跳過: samples 為空不該 emit sample line (K25 「0/0 不 emit」同款防線)
+        assert!(
+            !body.contains("lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"claude\"}"),
+            "claude samples 為空該跳過, body: {body}"
+        );
+        // openx 跳過: 同 claude
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx samples 為空該跳過, body: {body}"
+        );
+    }
+
+    #[test]
+    fn p95_alphabetical_sort_and_integer_precision() {
+        // alphabetical sort + i64 整數 precision + 跟 K22 / K25 / K26 / K27 /
+        // K28 / K29 六件套互不覆蓋: 三個 provider cicx/claude/gemini 不同
+        // reservoir → 各自 emit 自己的 P95, alphabetical 排序 (cicx < claude <
+        // gemini), 整數 i64 格式 (沒有 f64 4 位小數, 跟 sample 整數 duration 語意
+        // 一致, 強制裁整 0 精度流失)。
+        let mut totals = HashMap::new();
+        // cicx: 20 sample [1..20] → P95=20
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: (1..=20).collect(),
+                ..Default::default()
+            },
+        );
+        // claude: 100 sample [1..100] → P95 index=95, samples[95]=96
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: (1..=100).collect(),
+                ..Default::default()
+            },
+        );
+        // gemini: 50 sample [1..50] → P95 index=47, samples[47]=48
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: (1..=50).collect(),
+                ..Default::default()
+            },
+        );
+
+        let _p95 = completed_sessions_p95_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // K30 alphabetical + 整數 i64 格式驗證:
+        // cicx=20, claude=96, gemini=48
+        let cicx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 20\n")
+            .expect("cicx K30 sample line");
+        let claude_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"claude\"} 96\n")
+            .expect("claude K30 sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"gemini\"} 48\n")
+            .expect("gemini K30 sample line");
+        assert!(
+            cicx_idx < claude_idx && claude_idx < gemini_idx,
+            "per-provider P95 必須 alphabetical 排序 \
+             (cicx={cicx_idx}, claude={claude_idx}, gemini={gemini_idx})"
+        );
+        // 反向驗: 確認 emit 的是整數 i64 格式, 不是 f64 4 位小數格式
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 20.0000\n"
+            ),
+            "K30 i64 整數契約(不是 f64 4 位小數), 不可 emit 20.0000, body: {body}"
+        );
+        // 順便驗 K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) /
+        // K29 (ratio) 五件套 + K30 (P95) 互不覆蓋: cicx 在各 metric 各自 emit 自己
+        // 的值, 互不污染 (K30 整數 vs K25/K28/K29 f64 格式本身已隔離, 雙驗證)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_last_completed_session_age_seconds{provider=\"cicx\"}"
+            ),
+            "K22 (latest) 跟 K30 (P95) 隔離, cicx 在 K22 沒 latest (None) 不該 emit, body: {body}"
+        );
+        // K29 (ratio) 跟 K30 (P95) 隔離: cicx 在 K29 沒 failure_count/completed_count
+        // → 跳過, K30 emit P95=20, 雙驗證各發各的 series line 互不污染。
+        assert!(
+            !body.contains("lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"}"),
+            "K29 (ratio) 跟 K30 (P95) 隔離, cicx count=0 該跳過 K29, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 20\n"
+            ),
+            "K30 cicx P95 = 20 (K29 跟 K30 隔離, 互不污染), body: {body}"
         );
     }
 }

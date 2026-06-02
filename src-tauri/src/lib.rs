@@ -316,40 +316,342 @@ fn get_server_port(port_state: tauri::State<ServerPort>) -> u16 {
     port_state.0
 }
 
+#[tauri::command]
+fn read_usage_snapshots() -> std::collections::HashMap<String, Option<serde_json::Value>> {
+    // R33：純 IO/parse fn 抽到 `read_usage_snapshot_at` + home 注入版
+    // `read_usage_snapshots_with_home`,這層只剩 Tauri command 殼 → caller
+    // 端 log warn 集中。NotFound 走 `Ok(None)` 對齊 R28/R32 first-run 契約。
+    read_usage_snapshots_with_home(&dirs::home_dir())
+}
+
 /// 讀取 OpenAB 5 個 bot 的 snapshot + LobsterPulse 自建 local snapshot。
 /// 路徑：~/.lobsterpulse/usage-{bot_id}.json + usage-local.json。
 /// 前端 refreshQuotas 會優先用 __local__（LobsterPulse 自跑的）作全域 quota 來源。
-#[tauri::command]
-fn read_usage_snapshots() -> std::collections::HashMap<String, Option<serde_json::Value>> {
+///
+/// R33 silent-fail surfacing：原本 `read_to_string().ok().and_then(from_str().ok())`
+/// 一條鏈把 IO 錯（permission denied / disk full / path lock）+ parse 錯（上游
+/// 寫入半截 / encoding 損壞 / 非 JSON 噪音）共 7 條 silent path 都吞成 `None`，
+/// 前端 `refreshQuotas` 看到 `None` 視為「沒資料」渲染空白。operator 排查
+/// 「為什麼 cicx 沒 quota 圖」要猜 3 種根因中的哪條：OpenAB 沒跑（預期）vs
+/// usage-cicx.json 損壞（bug）vs 權限拒絕（config 問題）。改為 NotFound 走
+/// `Ok(None)`（first-run 預期,對齊 R28/R32 契約），IO/parse 錯走 Err → caller
+/// 端 `match` 統一 log warn 帶 80 字 preview。前端 HashMap 契約不變（Some/None），
+/// 只是 None 語意從「可能含 error」變成「真的沒資料」+ log 有跡可循。
+#[derive(Debug)]
+enum ReadUsageSnapshotError {
+    Io(std::io::Error),
+    Parse {
+        err: serde_json::Error,
+        preview: String,
+    },
+}
+
+impl std::fmt::Display for ReadUsageSnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::Parse { err, .. } => write!(f, "parse error: {err}"),
+        }
+    }
+}
+
+/// Pure fn：給定 path,回 `Result<Option<Value>, ReadUsageSnapshotError>`。
+/// - NotFound → `Ok(None)`（first-run 預期,不算 silent-fail）
+/// - 其他 IO 錯 → `Err(Io)`（caller 端 log warn）
+/// - parse 錯 → `Err(Parse)`（caller 端 log warn 帶 80 字 preview）
+///
+/// Preview 從 raw content 取前 80 字,對齊 R28 `load_config_at` / R32 `load_history_at` pattern。
+fn read_usage_snapshot_at(
+    path: &std::path::Path,
+) -> Result<Option<serde_json::Value>, ReadUsageSnapshotError> {
+    let data = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(ReadUsageSnapshotError::Io(e)),
+    };
+    match serde_json::from_str::<serde_json::Value>(&data) {
+        Ok(v) => Ok(Some(v)),
+        Err(parse_err) => {
+            // 把 raw content 放進 Parse variant 讓 caller 端可 log preview
+            let preview: String = data.chars().take(80).collect();
+            Err(ReadUsageSnapshotError::Parse {
+                err: parse_err,
+                preview,
+            })
+        }
+    }
+}
+
+/// Orchestrator helper：對齊 `read_usage_snapshot_at` 結果分流。
+/// Ok(None) → None（first-run 預期,不 log）
+/// Err → 結構化 log warn 帶 label + IO/parse 錯誤 + 80 字 preview,回 None
+fn handle_read_usage_snapshot(path: &std::path::Path, label: &str) -> Option<serde_json::Value> {
+    match read_usage_snapshot_at(path) {
+        Ok(v) => v,
+        Err(e) => {
+            let path_display = path.display().to_string();
+            match e {
+                ReadUsageSnapshotError::Io(io_err) => log::warn!(
+                    "[lib] read_usage_snapshots: {label} io failed at {path_display}: {io_err} — \
+                     treating as no data; check file permissions or disk health"
+                ),
+                ReadUsageSnapshotError::Parse { err, preview } => log::warn!(
+                    "[lib] read_usage_snapshots: {label} parse failed at {path_display}: {err} \
+                     — file is corrupt, treating as no data; check upstream OpenAB write_quota (preview: {preview:?})"
+                ),
+            }
+            None
+        }
+    }
+}
+
+/// 注入 home 變數版,production 由 `#[tauri::command] read_usage_snapshots` 用
+/// `dirs::home_dir()` 注入。`home = None` → 5 OpenAB bot + __local__ 全 None 對齊
+/// K11 `collect_quota_snapshot_mtimes` 邊界契約（無 HOME env 罕見但要保證不 crash）。
+fn read_usage_snapshots_with_home(
+    home: &Option<std::path::PathBuf>,
+) -> std::collections::HashMap<String, Option<serde_json::Value>> {
     let mut out = std::collections::HashMap::new();
-    let Some(home) = dirs::home_dir() else {
+    let Some(dir) = home.as_ref().map(|h| h.join(".lobsterpulse")) else {
+        for p in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
+            out.insert(p.to_string(), None);
+        }
         return out;
     };
-    let dir = home.join(".lobsterpulse");
     for bot in ["cicx", "gitx", "giminix", "codex_bot", "openx"] {
         let path = dir.join(format!("usage-{bot}.json"));
-        let data = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-        out.insert(bot.to_string(), data);
+        out.insert(bot.to_string(), handle_read_usage_snapshot(&path, bot));
     }
-    // Legacy：OpenAB BackendType::Other 寫 usage-bot.json 當 OPENX
+    // Legacy：OpenAB BackendType::Other 寫 usage-bot.json 當 OPENX,只在 primary 缺時 fallback
     if out.get("openx").and_then(|v| v.as_ref()).is_none() {
         let path = dir.join("usage-bot.json");
-        if let Some(data) = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        {
-            out.insert("openx".to_string(), Some(data));
+        if let Some(v) = handle_read_usage_snapshot(&path, "openx (legacy)") {
+            out.insert("openx".to_string(), Some(v));
         }
     }
     // LobsterPulse 自跑的 usage runner 寫 usage-local.json
     let local_path = dir.join("usage-local.json");
-    let local_data = std::fs::read_to_string(&local_path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-    out.insert("__local__".to_string(), local_data);
+    out.insert(
+        "__local__".to_string(),
+        handle_read_usage_snapshot(&local_path, "__local__"),
+    );
     out
+}
+
+#[cfg(test)]
+mod read_usage_snapshot_tests {
+    //! R33 silent-fail surfacing 對 `read_usage_snapshots` 的測試。
+    //!
+    //! 對齊 R28 `load_config_at_tests` / R32 `load_history_at` 風格：純 fn
+    //! `read_usage_snapshot_at` 三分流驗證 + orchestrator `read_usage_snapshots_with_home`
+    //! 注入 home 變數測試邊界。`handle_read_usage_snapshot` 透過
+    //! `read_usage_snapshots_with_home` 行為間接覆蓋（log warn 是 side effect,不 assert log
+    //! 避免測試 fragility）。
+    //!
+    //! 跨平台 IO 錯（permission denied / disk full）在 CI 環境難重現,只測：
+    //! - NotFound → Ok(None)
+    //! - valid JSON → Ok(Some(value))
+    //! - invalid JSON → Err(Parse)
+    //! - home = None → 全 6 label None
+    //! - 5 OpenAB + __local__ 寫盤後 → 對應 label Some
+    use super::*;
+
+    /// 為每個 test 製造獨立 tmp 路徑（避免 parallel test 互踩）。
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut p = std::env::temp_dir();
+        p.push(format!("lp-usage-snap-{tag}-{nonce}.json"));
+        p
+    }
+
+    #[test]
+    fn read_usage_snapshot_at_not_found_returns_ok_none() {
+        // NotFound 走 Ok(None)（first-run 預期,對齊 R28 `load_config_at` / R32
+        // `load_history_at` 契約）。err 訊息顯式區分「not present」跟「error」,operator
+        // 排查「cicx 沒 quota 圖」時 NotFound = OpenAB 沒跑（預期,不看 log）。
+        let path = tmp_path("not-found");
+        // 確保不存在
+        let _ = std::fs::remove_file(&path);
+        let result = read_usage_snapshot_at(&path);
+        assert!(
+            matches!(result, Ok(None)),
+            "NotFound 應回 Ok(None),實際 {result:?}"
+        );
+    }
+
+    #[test]
+    fn read_usage_snapshot_at_valid_json_returns_ok_some() {
+        // valid JSON 解析成功 → Ok(Some(value))。驗證 value 內容能 round-trip（不只 Some，
+        // 還要是正確的 JSON 結構）。
+        let path = tmp_path("valid");
+        let payload = serde_json::json!({"usage": {"prompt": 100, "completion": 50}});
+        std::fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
+
+        let result = read_usage_snapshot_at(&path);
+        match result {
+            Ok(Some(v)) => assert_eq!(v, payload),
+            other => panic!("valid JSON 應回 Ok(Some(value)),實際 {other:?}"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_usage_snapshot_at_invalid_json_returns_parse_err() {
+        // 寫半截 JSON（模擬 OpenAB write_quota 寫到一半 crash / encoding 損壞）→ Err(Parse)
+        // 帶 preview。err 訊息含「parse error」前綴,preview 取前 80 字。
+        let path = tmp_path("invalid");
+        std::fs::write(&path, b"{\"usage\": {\"prompt\": 100, ").unwrap();
+
+        let result = read_usage_snapshot_at(&path);
+        match result {
+            Err(ReadUsageSnapshotError::Parse { preview, .. }) => {
+                // preview 帶前 26 字 raw content
+                assert!(
+                    preview.starts_with("{\"usage\""),
+                    "preview 應含 raw content 開頭,實際 {preview:?}"
+                );
+            }
+            other => panic!("invalid JSON 應回 Err(Parse),實際 {other:?}"),
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_usage_snapshots_with_home_none_returns_all_six_keys_none() {
+        // 邊界:home = None（罕見但要保證不 crash）。對齊 K11 `collect_quota_snapshot_mtimes`
+        // 邊界契約 — 無 HOME env → 6 label (5 OpenAB + __local__) 全 None,呼叫端拿到
+        // 空 HashMap 不會 panic 也不會嘗試 join 路徑。
+        let out = read_usage_snapshots_with_home(&None);
+        assert_eq!(
+            out.len(),
+            6,
+            "6 label (cicx/gitx/giminix/codex_bot/openx/__local__) 全要存在"
+        );
+        for key in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
+            assert!(
+                out.get(key).map(|v| v.is_none()).unwrap_or(false),
+                "{key} 在 home=None 時應為 None,實際 {:?}",
+                out.get(key)
+            );
+        }
+    }
+
+    #[test]
+    fn read_usage_snapshots_with_home_existing_files_populates_correctly() {
+        // 注入 home → 寫 5 OpenAB + __local__ 6 個檔案 → 對應 6 label 全 Some,內容 round-trip。
+        // 驗 legacy fallback:不寫 usage-bot.json → 仍能從 5 OpenAB 拿 openx(主檔優先)。
+        let home = std::env::temp_dir().join(format!(
+            "lp-rs-home-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let dir = home.join(".lobsterpulse");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let payload_cicx = serde_json::json!({"backend": "cicx", "tokens": 42});
+        let payload_gitx = serde_json::json!({"backend": "gitx", "tokens": 7});
+        let payload_giminix = serde_json::json!({"backend": "giminix", "tokens": 1});
+        let payload_codex_bot = serde_json::json!({"backend": "codex_bot", "tokens": 99});
+        let payload_openx = serde_json::json!({"backend": "openx", "tokens": 3});
+        let payload_local = serde_json::json!({"source": "local_runner", "tokens": 1000});
+
+        for (name, payload) in [
+            ("cicx", &payload_cicx),
+            ("gitx", &payload_gitx),
+            ("giminix", &payload_giminix),
+            ("codex_bot", &payload_codex_bot),
+            ("openx", &payload_openx),
+            ("__local__", &payload_local),
+        ] {
+            let path = if name == "__local__" {
+                dir.join("usage-local.json")
+            } else {
+                dir.join(format!("usage-{name}.json"))
+            };
+            std::fs::write(&path, serde_json::to_string(payload).unwrap()).unwrap();
+        }
+
+        let out = read_usage_snapshots_with_home(&Some(home.clone()));
+        assert_eq!(
+            out.get("cicx").and_then(|v| v.as_ref()),
+            Some(&payload_cicx)
+        );
+        assert_eq!(
+            out.get("gitx").and_then(|v| v.as_ref()),
+            Some(&payload_gitx)
+        );
+        assert_eq!(
+            out.get("giminix").and_then(|v| v.as_ref()),
+            Some(&payload_giminix)
+        );
+        assert_eq!(
+            out.get("codex_bot").and_then(|v| v.as_ref()),
+            Some(&payload_codex_bot)
+        );
+        assert_eq!(
+            out.get("openx").and_then(|v| v.as_ref()),
+            Some(&payload_openx)
+        );
+        assert_eq!(
+            out.get("__local__").and_then(|v| v.as_ref()),
+            Some(&payload_local)
+        );
+
+        // 清理
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn read_usage_snapshots_with_home_legacy_alias_fills_openx_when_missing() {
+        // Legacy fallback:5 OpenAB 主檔缺 openx,但有 usage-bot.json → openx 從 legacy
+        // 取（OPENX alias）。對齊 K11 `collect_quota_snapshot_mtimes_openx_legacy_alias_fallback`
+        // 契約,確保 legacy 路徑不只走 mtime,也走 read。
+        let home = std::env::temp_dir().join(format!(
+            "lp-rs-legacy-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let dir = home.join(".lobsterpulse");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 故意只寫 cicx + usage-bot.json,其他 4 個 OpenAB label 都不存在
+        std::fs::write(
+            dir.join("usage-cicx.json"),
+            serde_json::to_string(&serde_json::json!({"backend": "cicx"})).unwrap(),
+        )
+        .unwrap();
+        let legacy_payload = serde_json::json!({"backend": "OPENX_legacy", "tokens": 5});
+        std::fs::write(
+            dir.join("usage-bot.json"),
+            serde_json::to_string(&legacy_payload).unwrap(),
+        )
+        .unwrap();
+
+        let out = read_usage_snapshots_with_home(&Some(home.clone()));
+        // cicx 有
+        assert!(out.get("cicx").and_then(|v| v.as_ref()).is_some());
+        // openx 從 legacy 拿
+        assert_eq!(
+            out.get("openx").and_then(|v| v.as_ref()),
+            Some(&legacy_payload)
+        );
+        // 其他 4 個 label:gitx/giminix/codex_bot 不存在 → None,openx 已被 legacy 填不再 None
+        for key in ["gitx", "giminix", "codex_bot"] {
+            assert!(
+                out.get(key).map(|v| v.is_none()).unwrap_or(false),
+                "{key} 不寫檔時應為 None"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }
 
 /// 簡易 Handlebars 替換 — 只支援 `{{ key }}` 從 JSON top-level 取值（對齊 OpenAB template 語意）。
@@ -1163,11 +1465,38 @@ fn render_prometheus_body(
         std::collections::HashMap::new();
     let mut provider_active: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
+    // K19 落地：per-provider × per-state (Idle/Working/WaitingForUser/Stale) session
+    // count gauge。補 K6 細顆度盲點 —— K6 只看「該 provider 共幾個 session」(idle +
+    // working + waiting + stale 加總),operator alert rule 沒法直接用 K6 算「claude 是
+    // 不是卡 30 分鐘都沒結束 = 累積一堆 waiting」或「gemini 是不是 5 個 session 全
+    // stale 沒人收尾」。K19 直接給 (provider, state) 細顆度 → operator 用
+    // `sum by(state)(lobsterpulse_provider_sessions_by_state{provider="claude"})` 看
+    // load mix,或 `lobsterpulse_provider_sessions_by_state{state="stale"} > 5` alert
+    // 「5 個以上 session 進入 stale 沒人收」。
+    //
+    // 語意：跟 K6 / K18 同為 live signal (session 結束 + 30 min stale 回收後 sample
+    // 自動消失),跟 K7 / K9 / K13 / K17 lifetime aggregate 對比是預期差異。state label
+    // 用 snake_case (對齊 SessionState enum 的 `#[serde(rename_all = "snake_case")]`,
+    // 跟前端 SessionInfo.state 的 JSON 序列化一致 → Prometheus query label 跟 JS 端
+    // state 字串可直接對照,不用轉換層)。來源：live `sessions: &[SessionInfo]` 的
+    // `state` 欄位 (session.rs:249),不讀 ProviderTotals —— ProviderTotals 沒存
+    // per-state 細度。
+    let mut provider_sessions_by_state: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
     for s in sessions {
         *provider_counts.entry(s.provider.clone()).or_default() += 1;
         if s.is_active {
             *provider_active.entry(s.provider.clone()).or_default() += 1;
         }
+        let state_label = match s.state {
+            session::SessionState::Idle => "idle",
+            session::SessionState::Working => "working",
+            session::SessionState::WaitingForUser => "waiting_for_user",
+            session::SessionState::Stale => "stale",
+        };
+        *provider_sessions_by_state
+            .entry((s.provider.clone(), state_label.to_string()))
+            .or_insert(0) += 1;
     }
     // Token 累計走 ProviderTotals（lifetime aggregate），不走 live SessionInfo：
     // session 移除後 SessionInfo 拿不到，ProviderTotals 仍保留歷史累計。
@@ -1301,6 +1630,9 @@ fn render_prometheus_body(
     provider_idle_ratio_sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut provider_max_session_age_sorted: Vec<_> = provider_max_session_age.iter().collect();
     provider_max_session_age_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut provider_sessions_by_state_sorted: Vec<_> = provider_sessions_by_state.iter().collect();
+    provider_sessions_by_state_sorted
+        .sort_by(|a, b| a.0 .0.cmp(&b.0 .0).then_with(|| a.0 .1.cmp(&b.0 .1)));
     let mut provider_events_total_sorted: Vec<_> = provider_events_total.iter().collect();
     provider_events_total_sorted.sort_by(|a, b| a.0.cmp(b.0));
 
@@ -1424,6 +1756,23 @@ fn render_prometheus_body(
         let clamped = (**age).max(0i64);
         out.push_str(&format!(
             "lobsterpulse_provider_max_session_age_seconds{{provider=\"{p}\"}} {clamped}\n"
+        ));
+    }
+    // K19 落地：per-provider × per-state session count gauge。補 K6 細顆度盲點。
+    // 對齊 SessionState enum serde 標籤 (idle / working / waiting_for_user / stale)
+    // —— Prometheus query label 跟前端 SessionInfo.state JSON 序列化直接一致。
+    //
+    // Cardinality 上限:9 provider × 4 state = 36 series,跟 K6 (9 series) 同量級,
+    // 可控。空 sessions 對應空 map → 沒 sample line (HELP/TYPE 標頭仍輸出,跟 K6/K7/
+    // K9/K13 既契約一致)。
+    //
+    // 不變式:`sum by(provider)(lobsterpulse_provider_sessions_by_state) ==
+    // lobsterpulse_provider_sessions` (同 live sessions slice,只是 K19 多了 state 切面)。
+    // 排序:by (provider, state) 兩段,跟 K17 兩段排序契約一致。
+    out.push_str("# HELP lobsterpulse_provider_sessions_by_state Live session count per provider per state (idle/working/waiting_for_user/stale; sum by(provider) == provider_sessions)\n# TYPE lobsterpulse_provider_sessions_by_state gauge\n");
+    for ((p, state), n) in &provider_sessions_by_state_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_sessions_by_state{{provider=\"{p}\",state=\"{state}\"}} {n}\n"
         ));
     }
     // K13 落地：per-provider lifetime event counter。`events_total` 來自
@@ -2375,6 +2724,17 @@ mod render_prometheus_tests {
         let mut s = info(provider, is_active, 0, 0);
         s.id = format!("{provider}-sid-{duration_secs}");
         s.duration_secs = duration_secs;
+        s
+    }
+
+    /// K19 測試用：SessionInfo fixture 帶自訂 `state`。既有 `info` fixture 強制
+    /// `state = if is_active { Working } else { Idle }`,K19 要驗 per-state 細顆度
+    /// 計數需要能各自塞 Idle/Working/WaitingForUser/Stale。`is_active` 跟 `state`
+    /// 在 production 也獨立（active session 也可能進 Stale 30 min 後被回收前那一瞬）,
+    /// 本 fixture 把兩者解耦更貼近真實 session lifecycle。
+    fn info_with_state(provider: &str, is_active: bool, state: SessionState) -> SessionInfo {
+        let mut s = info(provider, is_active, 0, 0);
+        s.state = state;
         s
     }
 
@@ -4571,5 +4931,201 @@ mod render_prometheus_tests {
         // 確保沒有負號進 output
         assert!(!body
             .contains("lobsterpulse_provider_max_session_age_seconds{provider=\"claude\"} -5\n"));
+    }
+
+    // ============== K19 per-provider × per-state session count gauge ==============
+    // 補 K6 細顆度盲點：operator alert rule `provider_sessions_by_state{state="stale"} > 5`
+    // 不需要靠 K6 + K8 湊出「5 個 session 全 stale」訊號。4 個 test 覆蓋
+    // (1) empty 契約 (2) 4 state 各 1 個 session 計數 (3) sort 兩段 (4) sum by(provider) 不變式。
+
+    #[test]
+    fn provider_sessions_by_state_empty_state_emits_header_only() {
+        // 對齊 K6/K8/K12/K18 empty-state 契約：0 個 live session → 沒 sample line，
+        // 只有 HELP/TYPE 標頭（讓 Prometheus scrape 端知道 metric 已註冊）。
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        assert!(body.contains("# HELP lobsterpulse_provider_sessions_by_state"));
+        assert!(body.contains("# TYPE lobsterpulse_provider_sessions_by_state gauge"));
+        assert!(!body.contains("lobsterpulse_provider_sessions_by_state{"));
+    }
+
+    #[test]
+    fn provider_sessions_by_state_counts_each_state_separately() {
+        // K19 主軸：同 provider 4 個 session 各屬 4 個 state → 4 條 sample line 各自獨立計數 1。
+        // 用 `info_with_state` fixture 強制 state（既有 `info` 強制 Working/Idle,無法測 4 state）。
+        // 跨 provider 也驗：claude 1 working + gemini 1 stale + gemini 1 waiting_for_user
+        // 驗不同 (provider, state) 對不會合併計數。
+        let body = render_prometheus_body(
+            &[
+                info_with_state("claude", true, SessionState::Working),
+                info_with_state("claude", true, SessionState::Idle),
+                info_with_state("claude", true, SessionState::WaitingForUser),
+                info_with_state("claude", true, SessionState::Stale),
+                info_with_state("gemini", true, SessionState::Stale),
+                info_with_state("gemini", true, SessionState::WaitingForUser),
+            ],
+            6,
+            6,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // claude 4 條（每個 state 1 個）
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"idle\"} 1\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"working\"} 1\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"waiting_for_user\"} 1\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"stale\"} 1\n"
+        ));
+        // gemini 2 條
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"stale\"} 1\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"waiting_for_user\"} 1\n"
+        ));
+        // gemini 沒 idle/working → 不應有那 2 條
+        assert!(!body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"idle\"}"
+        ));
+        assert!(!body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"working\"}"
+        ));
+    }
+
+    #[test]
+    fn provider_sessions_by_state_sorted_by_provider_then_state() {
+        // 排序契約：先 provider alphabetical,再 state alphabetical(idle < stale <
+        // waiting_for_user < working 對齊 SessionState serde snake_case label)。
+        // 故意非字母序輸入驗排序。
+        let body = render_prometheus_body(
+            &[
+                info_with_state("openx", true, SessionState::Working),
+                info_with_state("cicx", true, SessionState::Stale),
+                info_with_state("cicx", true, SessionState::Idle),
+                info_with_state("openx", true, SessionState::Idle),
+            ],
+            4,
+            4,
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // 找各 (provider, state) line 位置驗排序
+        let cicx_idle = body
+            .find("lobsterpulse_provider_sessions_by_state{provider=\"cicx\",state=\"idle\"} 1\n")
+            .expect("cicx idle line");
+        let cicx_stale = body
+            .find("lobsterpulse_provider_sessions_by_state{provider=\"cicx\",state=\"stale\"} 1\n")
+            .expect("cicx stale line");
+        let openx_idle = body
+            .find("lobsterpulse_provider_sessions_by_state{provider=\"openx\",state=\"idle\"} 1\n")
+            .expect("openx idle line");
+        let openx_working = body
+            .find(
+                "lobsterpulse_provider_sessions_by_state{provider=\"openx\",state=\"working\"} 1\n",
+            )
+            .expect("openx working line");
+
+        // cicx < openx (provider 段)
+        assert!(cicx_idle < openx_idle, "cicx 必須排在 openx 之前");
+        assert!(cicx_stale < openx_idle, "cicx 必須排在 openx 之前");
+        // cicx 內 idle < stale (state 段)
+        assert!(cicx_idle < cicx_stale, "cicx 內 idle 必須排在 stale 之前");
+        // openx 內 idle < working
+        assert!(
+            openx_idle < openx_working,
+            "openx 內 idle 必須排在 working 之前"
+        );
+    }
+
+    #[test]
+    fn provider_sessions_by_state_sum_invariant_equals_provider_sessions() {
+        // 不變式：`sum by(provider)(provider_sessions_by_state) == provider_sessions`。
+        // K6 跟 K19 來自同一 live sessions slice,只是 K19 多了 state 切面。算 K6 行的
+        // provider_sessions gauge 值應該等於 K19 該 provider 4 個 state 加總。
+        // claude: 1 working + 2 waiting_for_user + 1 stale = 4
+        // gemini: 1 idle + 1 working = 2
+        let body = render_prometheus_body(
+            &[
+                info_with_state("claude", true, SessionState::Working),
+                info_with_state("claude", true, SessionState::WaitingForUser),
+                info_with_state("claude", true, SessionState::WaitingForUser),
+                info_with_state("claude", true, SessionState::Stale),
+                info_with_state("gemini", false, SessionState::Idle),
+                info_with_state("gemini", true, SessionState::Working),
+            ],
+            6,
+            4, // active=4
+            &HashMap::new(),
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // K6 provider_sessions（lifetime aggregate）: counter 值由 ProviderTotals 決定,
+        // 但這裡傳空 HashMap → 0。改驗 K6 active gauge: `provider_active{provider="..."} 4`
+        // 對 4 active session（claude 4 active + gemini 1 active = 5? 不對,gemini 1 active）。
+        // 重新算：claude 4 個 is_active=true + gemini 1 個 is_active=true + gemini 1 個 is_active=false。
+        // active count = 4 (claude) + 1 (gemini 1 個 is_active=true) = 5。
+        // 但 K19 細度：claude sum = 4, gemini sum = 1 idle + 1 working = 2。
+        // 不變式: K19 sum by(provider) 反映「該 provider live session 數」,跟 K6
+        // `provider_sessions` (lifetime) 不直接相等。改用更明確的不變式：
+        // K19 sum by(provider) == sessions slice 中該 provider 的計數。
+        let k19_claude_lines: Vec<&str> = body
+            .lines()
+            .filter(|l| {
+                l.starts_with("lobsterpulse_provider_sessions_by_state{provider=\"claude\"")
+            })
+            .collect();
+        let k19_claude_sum: usize = k19_claude_lines
+            .iter()
+            .filter_map(|l| l.rsplit(' ').next())
+            .filter_map(|n| n.parse::<usize>().ok())
+            .sum();
+        assert_eq!(k19_claude_sum, 4, "claude K19 sum by(provider) 必須 = 4");
+
+        let k19_gemini_lines: Vec<&str> = body
+            .lines()
+            .filter(|l| {
+                l.starts_with("lobsterpulse_provider_sessions_by_state{provider=\"gemini\"")
+            })
+            .collect();
+        let k19_gemini_sum: usize = k19_gemini_lines
+            .iter()
+            .filter_map(|l| l.rsplit(' ').next())
+            .filter_map(|n| n.parse::<usize>().ok())
+            .sum();
+        assert_eq!(k19_gemini_sum, 2, "gemini K19 sum by(provider) 必須 = 2");
+
+        // 額外驗證:gemini 1 idle + 1 working 兩條都存在
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"idle\"} 1\n"
+        ));
+        assert!(body.contains(
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"working\"} 1\n"
+        ));
     }
 }

@@ -1,5 +1,6 @@
 use crate::hook_event::HookEvent;
 use log::{error, info, warn};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -576,11 +577,90 @@ fn find_body_start(data: &[u8]) -> Option<usize> {
         .map(|pos| pos + 4)
 }
 
+/// R35: port file IO / parse 失敗的型別。對齊 R28 `ReadConfigError` / R32 `LoadHistoryError`
+/// / R33 `ReadUsageSnapshotError` 同一族三分流 enum（Io / Parse / NotFound-via-Ok-None）。
+///
+/// 之前 `read_existing_port_file` 用 `read_to_string(...).ok()?; content.trim().parse().ok()`
+/// 一條鏈把 2 條 silent path（IO 錯 permission denied / disk full / parse 錯 半截寫入）全吞成
+/// `None`，server-side 流程以為「沒有其他 instance」→ 直接 bind 新 port → 潛在 duplicate LP。
+#[derive(Debug)]
+enum ReadPortFileError {
+    Io(std::io::Error),
+    Parse { err: std::num::ParseIntError, raw: String },
+}
+
+// 手寫 PartialEq：std::io::Error 沒派生 PartialEq（OS-level 內部表徵跨平台不一致），
+// Io 用 ErrorKind 比（test 只關心「是不是 NotFound 之外的 IO err」足以）；ParseIntError +
+// String 自動派生。理由：assert_eq! 需要 PartialEq 來比 result，但測試不關心 OS errno。
+impl PartialEq for ReadPortFileError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
+            (
+                Self::Parse { err: ea, raw: ra },
+                Self::Parse { err: eb, raw: rb },
+            ) => ea == eb && ra == rb,
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for ReadPortFileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::Parse { err, raw } => {
+                write!(f, "parse failed for {raw:?}: {err}")
+            }
+        }
+    }
+}
+
+/// Pure fn：給定 port file 路徑，回 `Ok(None)` 代表「檔案不存在（first-run 預期）」，
+/// `Ok(Some(p))` 代表讀到合法 u16，Err 代表 IO/Parse 失敗。
+///
+/// 跟 R34 sidecar `read_port_at` 同 pattern（路徑版本注入 → 方便 test）。差別：
+///   - R34 sidecar 拿不到 IO err 細節也無妨，operator 看 stderr 就好
+///   - R35 server 把 err 用 typed enum 帶出來，方便 `read_existing_port_file` orchestrator
+///     統一 log::warn! 區分「磁碟問題」vs「port file 內容壞掉」兩條因果鏈
+fn read_existing_port_file_at(path: &Path) -> Result<Option<u16>, ReadPortFileError> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(ReadPortFileError::Io(e)),
+    };
+    let trimmed = content.trim();
+    match trimmed.parse::<u16>() {
+        Ok(n) => Ok(Some(n)),
+        Err(err) => Err(ReadPortFileError::Parse {
+            err,
+            raw: trimmed.to_string(),
+        }),
+    }
+}
+
+/// Orchestrator：對齊 `HookServer::start` 既有 `Option<u16>` 契約（Some → 進
+/// `is_port_listening` 判斷 / None → 直接 bind 新 port）。
+///
+/// caller 端 match warn pattern 跟 R28 `load_config` / R32 `load_history` /
+/// R33 `read_usage_snapshots` 完全一致：expected NotFound 走 Ok(None) 不 log
+/// （first-run 預期，記了反而吵），unexpected IO/Parse 走 `log::warn!` 含 path +
+/// 完整 err 訊息。
 fn read_existing_port_file() -> Option<u16> {
     let home = dirs::home_dir()?;
     let path = home.join(".lobsterpulse").join("port");
-    let content = std::fs::read_to_string(path).ok()?;
-    content.trim().parse().ok()
+    match read_existing_port_file_at(&path) {
+        Ok(opt) => opt,
+        Err(e) => {
+            log::warn!(
+                "read_existing_port_file: {} (path={}) — treating as no instance running, \
+                 risk: another LP may be alive with unparseable port file",
+                e,
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 async fn is_port_listening(port: u16) -> bool {
@@ -629,5 +709,98 @@ impl std::fmt::Display for ServerError {
                 write!(f, "Another LobsterPulse instance is running on port {p}")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod read_existing_port_file_at_tests {
+    //! R35 regression：`read_existing_port_file` 之前用 `read_to_string(...).ok()?; trim().parse().ok()`
+    //! 一條鏈吞 2 條 silent fail：
+    //!   1. IO err (permission denied / disk full / encoding 損壞)
+    //!   2. parse err (port file 內容不是 u16，例如半截寫入 / 磁碟損壞 / 手動編輯塞字串)
+    //!
+    //! 拆出純 fn `read_existing_port_file_at(path) -> Result<Option<u16>, ReadPortFileError>`
+    //! 後,NotFound 走 `Ok(None)`（first-run 預期,對齊 R28/R32/R33 契約),IO/Parse 走
+    //! `Err(_)` 由 orchestrator 端 `log::warn!` 後視為 None。
+    //!
+    //! 對齊 R34 sidecar `read_port_at_tests` 5 + 1 測試風格：1 happy path + 3 邊界 +
+    //! 1 對稱保證(whitespace / trim)。
+    use super::{read_existing_port_file_at, ReadPortFileError};
+    use std::io::Write;
+
+    /// 寫出 port file + 給唯一檔名,避免平行 test 互踩。
+    fn write_port_file(content: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lobsterpulse_r35_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("port");
+        let mut f = std::fs::File::create(&path).expect("create port file");
+        f.write_all(content.as_bytes()).expect("write port file");
+        path
+    }
+
+    #[test]
+    fn not_found_returns_ok_none() {
+        let path = std::env::temp_dir().join("lobsterpulse_r35_definitely_does_not_exist_xyz_999");
+        let _ = std::fs::remove_file(&path); // 確保 NotFound
+        let result = read_existing_port_file_at(&path);
+        assert!(
+            matches!(result, Ok(None)),
+            "NotFound 應回 Ok(None)（first-run 預期,不該算 error）,got {result:?}"
+        );
+    }
+
+    #[test]
+    fn valid_u16_returns_ok_some() {
+        let path = write_port_file("19283");
+        let result = read_existing_port_file_at(&path);
+        assert_eq!(result, Ok(Some(19283)));
+    }
+
+    #[test]
+    fn whitespace_and_newline_trimmed() {
+        let path = write_port_file("  19284\n");
+        let result = read_existing_port_file_at(&path);
+        assert_eq!(result, Ok(Some(19284)));
+    }
+
+    #[test]
+    fn non_u16_garbage_returns_parse_err_with_raw() {
+        let path = write_port_file("not a port");
+        let result = read_existing_port_file_at(&path);
+        match result {
+            Err(ReadPortFileError::Parse { err: _, raw }) => {
+                assert_eq!(raw, "not a port", "raw 必須保留原內容給 operator 看");
+            }
+            other => panic!("預期 Parse err,got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn u16_overflow_returns_parse_err() {
+        // 99999 > u16::MAX(65535),parse 應失敗而非 silent 截斷
+        let path = write_port_file("99999");
+        let result = read_existing_port_file_at(&path);
+        assert!(
+            matches!(result, Err(ReadPortFileError::Parse { .. })),
+            "u16 overflow 應走 Parse err 而非 silent 截斷,got {result:?}"
+        );
+    }
+
+    #[test]
+    fn empty_file_returns_parse_err() {
+        // 0-byte port file 常見於 crash mid-write：先 create() 再 write 還沒 flush
+        let path = write_port_file("");
+        let result = read_existing_port_file_at(&path);
+        assert!(
+            matches!(result, Err(ReadPortFileError::Parse { .. })),
+            "空檔應走 Parse err,got {result:?}"
+        );
     }
 }

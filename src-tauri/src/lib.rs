@@ -2130,6 +2130,30 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_p75_duration_seconds{{provider=\"{p}\"}} {secs}\n"
         ));
     }
+    // K34 落地: per-provider P25 (下四分位) session duration gauge。
+    // 跟 K30 P95 / K31 P50 / K32 P99 / K33 P75 同模板 (sliding window reservoir
+    // 1024 + 復用 K30 vec), 補 K33 沒覆蓋的「下四分位」維度。Operator 端 alert
+    // `p25 < 5` 觸發「該 provider 25% session 都 < 5s = 都在 trivial 工作 / 可能
+    // 沒給重 prompt」提醒, 跟 P95 (尾端 5% 慢) / P99 (極端 1% 卡死) / P75 (中
+    // 段偏慢) 互補形成 latency 分布完整輪廓。五件套 P25/P50/P75/P95/P99 跟 K28
+    // stddev + K26 max + K27 min 一起繪出「分布寬度 + 中心對稱性 + 極端邊界」
+    // 三維度。復用 K30 reservoir 不開新欄位 (記憶體 72KB 維持不變, 跟 K31/K32/
+    // K33 同樣 trade-off —— render 端每次 scrape 多算一次 sort + clone, 跟
+    // 15s scrape 週期比 ~25ms 完全可忽略)。
+    // trade-off: 樣本數 < 4 時 P25 退化到接近 min (= idx = 0 for 4 samples,
+    // idx = 0 for 1/2/3 samples); len=1 → idx=0, P25 = itself (所有 percentile
+    // 退化到唯一值, 跟 K30-K33 同款)。R53 chain 護欄覆蓋 P25 ≤ P50 ≤ P75 ≤
+    // P95 ≤ P99 ≤ K26 max monotonic invariant, 跨 8 種樣本數 + 4-provider
+    // 隔離強化, 跟 R54 K30-K33 percentile chain 護欄對稱擴充 P25 端。
+    out.push_str("# HELP lobsterpulse_provider_completed_sessions_p25_duration_seconds 25th percentile in seconds of completed session durations per provider (gauge; reuses K30 reservoir sampling 1024; sliding window of last 1024 completions; integer precision; converges to min when sample count < 4; missing=no completed session yet)\n# TYPE lobsterpulse_provider_completed_sessions_p25_duration_seconds gauge\n");
+    let completed_p25 = session::completed_sessions_p25_at(provider_totals);
+    let mut completed_p25_sorted: Vec<_> = completed_p25.iter().collect();
+    completed_p25_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, secs) in &completed_p25_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_completed_sessions_p25_duration_seconds{{provider=\"{p}\"}} {secs}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被
@@ -3086,10 +3110,10 @@ mod write_local_usage_snapshot_tests {
 mod render_prometheus_tests {
     use super::*;
     use crate::session::{
-        completed_sessions_min_duration_at, completed_sessions_p50_at, completed_sessions_p75_at,
-        completed_sessions_p95_at, completed_sessions_p99_at, completed_sessions_stddev_at,
-        failure_to_completion_ratio_at, last_completed_session_age_at, ProviderTotals, SessionInfo,
-        SessionState,
+        completed_sessions_min_duration_at, completed_sessions_p25_at, completed_sessions_p50_at,
+        completed_sessions_p75_at, completed_sessions_p95_at, completed_sessions_p99_at,
+        completed_sessions_stddev_at, failure_to_completion_ratio_at,
+        last_completed_session_age_at, ProviderTotals, SessionInfo, SessionState,
     };
     use chrono::TimeZone;
     use std::collections::HashMap;
@@ -7130,6 +7154,592 @@ mod render_prometheus_tests {
         }
     }
 
+    // ============== R54：K30 P95 (sliding window percentile) / K25 avg (lifetime arithmetic mean) render 端 outlier ratio 護欄 ==============
+    // 策略顧問 R50 巡邏「DRIFTING + 凍結新增 gauge 一週」紀律延伸 — R51 補 K30/K31/K32
+    // (P50/P95/P99) bounds, R52 補 K23/K24/K25 (count/total/avg) cross-metric 算術,
+    // R53 補 K22/K26/K27 (latest age / max duration / min duration) lifetime aggregate
+    // monotonic chain, R54 補 K30 (sliding window P95) / K25 (lifetime arithmetic mean)
+    // 跨窗口 outlier ratio render 端算術護欄: 構造 ProviderTotals fixture 模擬 4 種
+    // provider 混合場景, 驗 render 端 Prometheus 抓得到的字串上 K30 P95 / K25 avg 都能
+    // emit, parse 算術 outlier ratio per-provider 一致 (uniform < 2.0, outlier > 5
+    // alert 觸發), openx 空 provider 跳過。
+    //
+    // 跟 session.rs R54 pure fn 護欄對齊 — 純 fn 端驗 outlier ratio 在 ProviderTotals
+    // 寫入時成立, render 端驗同一不變式在 emit 後 Prometheus 抓得到的字串上仍成立。
+    // K25 emit 是 f64 4-decimal ({:.4} → 50.5 emit 為 "50.5000"), K30 P95 emit 是
+    // 整數 ({} → 96 emit 為 "96"), 兩種 format 對應 `completed_sessions_average_duration_at`
+    // 跟 `completed_sessions_p95_at` 既契約, render test 用字串比對 + f64 parse
+    // 雙驗。
+
+    #[test]
+    fn r54_k30_p95_to_k25_avg_outlier_ratio_render_emission_consistency_across_mixed_profiles() {
+        // 4 provider 混合 fixture 對應 session.rs R54 三個護欄語意面:
+        //   cicx: 100 樣本 [1..100] 均勻 → outlier ratio ≈ 1.90 < 2.0 (uniform)
+        //   claude: 6 樣本 [1,1,1,1,1,1000] outlier → outlier ratio ≈ 5.97 > 5 (alert 觸發)
+        //   gemini: 50 樣本 [1..50] 均勻 → outlier ratio ≈ 1.88 < 2.0 (uniform)
+        //   openx: 0 樣本 → 兩件套 None 跳過
+        // 對齊 session.rs R54 純 fn 護欄三個語意面 (uniform below 2.0 / outlier
+        // detected > 5 / per-provider 隔離) 在 render 端 Prometheus 抓得到的字串
+        // 上仍成立, 證明 outlier ratio alert 維度 production scrape 端可用。
+        let mut totals = HashMap::new();
+        // cicx: 100 樣本 [1..100]
+        //   K25 avg = (1+2+...+100)/100 = 5050/100 = 50.5 → emit 為 "50.5000"
+        //   K30 P95 = samples sort 後 [1..100] idx=95 = 96 → emit 為 "96"
+        //   ratio = 96/50.5 ≈ 1.901 < 2.0
+        let mut cicx_p95_samples = (1i64..=100).collect::<Vec<_>>();
+        cicx_p95_samples.sort_unstable();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 100,
+                completed_sessions_total_duration_secs: (1..=100).sum(),
+                completed_sessions_p95_samples: cicx_p95_samples,
+                ..Default::default()
+            },
+        );
+        // claude: 6 樣本 [1, 1, 1, 1, 1, 1000]
+        //   K25 avg = 1005/6 = 167.5 → emit 為 "167.5000"
+        //   K30 P95 = samples sort 後 [1, 1, 1, 1, 1, 1000] idx=5 = 1000 → emit 為 "1000"
+        //   ratio = 1000/167.5 ≈ 5.97 > 5 (alert 觸發)
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 6,
+                completed_sessions_total_duration_secs: 1005,
+                completed_sessions_p95_samples: vec![1, 1, 1, 1, 1, 1000],
+                ..Default::default()
+            },
+        );
+        // gemini: 50 樣本 [1..50]
+        //   K25 avg = (1+2+...+50)/50 = 1275/50 = 25.5 → emit 為 "25.5000"
+        //   K30 P95 = samples sort 後 [1..50] idx=47 = 48 → emit 為 "48"
+        //   ratio = 48/25.5 ≈ 1.882 < 2.0
+        let mut gemini_p95_samples = (1i64..=50).collect::<Vec<_>>();
+        gemini_p95_samples.sort_unstable();
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 50,
+                completed_sessions_total_duration_secs: (1..=50).sum(),
+                completed_sessions_p95_samples: gemini_p95_samples,
+                ..Default::default()
+            },
+        );
+        // openx: 0 樣本 → 兩件套 None 跳過
+        totals.insert("openx".to_string(), ProviderTotals::default());
+        let last_completed = last_completed_session_age_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &last_completed,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // ── Part A: K25 avg + K30 P95 字串 emit
+        // cicx: K25 avg = 50.5 → "50.5000", K30 P95 = 96 → "96"
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"cicx\"} 50.5000\n"
+            ),
+            "cicx: K25 avg=50.5000 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 96\n"
+            ),
+            "cicx: K30 P95=96 必須 emit, body: {body}"
+        );
+        // claude: K25 avg = 167.5 → "167.5000", K30 P95 = 1000 → "1000"
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"claude\"} 167.5000\n"
+            ),
+            "claude: K25 avg=167.5000 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"claude\"} 1000\n"
+            ),
+            "claude: K30 P95=1000 必須 emit, body: {body}"
+        );
+        // gemini: K25 avg = 25.5 → "25.5000", K30 P95 = 48 → "48"
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"gemini\"} 25.5000\n"
+            ),
+            "gemini: K25 avg=25.5000 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"gemini\"} 48\n"
+            ),
+            "gemini: K30 P95=48 必須 emit, body: {body}"
+        );
+
+        // ── Part B: openx 跳過 (count=0, K25 過濾; samples 空, K30 過濾)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K25 avg 必須跳過 (count=0)"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K30 P95 必須跳過 (samples 空)"
+        );
+
+        // ── Part C: parse 字串算 outlier ratio 驗 alert 邊界
+        // 對 cicx (uniform < 2.0) + claude (outlier > 5) + gemini (uniform < 2.0) 三組
+        // 從 body 解析 K25 avg 跟 K30 P95, 算 ratio 並驗 alert 邊界。parse fn 用
+        // split(&metric_label).nth(1).lines().next().parse() 跟 R52 K23/K24/K25
+        // render test 既有模式一致。
+        let parse_metric = |body: &str, metric: &str, provider: &str| -> f64 {
+            let line = format!("{metric}{{provider=\"{provider}\"}}");
+            body.split(&line)
+                .nth(1)
+                .and_then(|s| s.lines().next())
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or_else(|| panic!("{provider}: {metric} 必須能 parse, body: {body}"))
+        };
+        for (p, expect_alert) in [("cicx", false), ("claude", true), ("gemini", false)] {
+            let avg: f64 = parse_metric(
+                &body,
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds",
+                p,
+            );
+            let p95: f64 = parse_metric(
+                &body,
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds",
+                p,
+            );
+            let ratio = p95 / avg;
+            if expect_alert {
+                assert!(
+                    ratio > 5.0,
+                    "{p}: render 端 outlier ratio = {ratio:.4} 必須 > 5.0 (outlier fixture alert 觸發), body: {body}"
+                );
+            } else {
+                assert!(
+                    ratio < 2.0,
+                    "{p}: render 端 outlier ratio = {ratio:.4} 必須 < 2.0 (uniform fixture 比例有界), body: {body}"
+                );
+            }
+        }
+
+        // ── Part D: K25 emit 數量 = 3 (cicx + claude + gemini, openx 跳過)
+        let k25_count = body
+            .matches(
+                "lobsterpulse_provider_completed_sessions_average_duration_seconds{provider=\"",
+            )
+            .count();
+        let k30_count = body
+            .matches("lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"")
+            .count();
+        assert_eq!(
+            k25_count, 3,
+            "K25 emit 必須 = 3 provider (cicx + claude + gemini, openx 跳過), got {k25_count}, body: {body}"
+        );
+        assert_eq!(
+            k30_count, 3,
+            "K30 P95 emit 必須 = 3 provider, got {k30_count}, body: {body}"
+        );
+        // 跨 K-tag emission set 一致 (K25 過濾 count=0, K30 過濾 samples 空 → emit 集合相同)
+        assert_eq!(
+            k25_count, k30_count,
+            "K25 emit 集合 = K30 P95 emit 集合 (同 None 過濾, got K25={k25_count} K30={k30_count})"
+        );
+    }
+
+    // ============== R55：K30/K31/K32/K33/K34 (P95/P50/P99/P75/P25) sliding window percentile chain render 端算術護欄 + R56：K27 lifetime min ≤ K34 window P25 跨 lifetime↔window 護欄 ==============
+    // 策略顧問 R50 巡邏「DRIFTING + 凍結 gauge 補閉環」紀律延伸 — R51 補 K30/K31/K32
+    // (P50/P95/P99) bounds, R53 補 K22/K26/K27 lifetime aggregate monotonic chain,
+    // R54 補 K30 P95 / K25 avg outlier ratio cross-window, R55 補 K30-K34 五件套
+    // sliding window percentile chain (P25 ≤ P50 ≤ P75 ≤ P95 ≤ P99), R56 順手補
+    // K27 lifetime min ≤ K34 window P25 跨 lifetime↔window 護欄。
+    //
+    // 跟 session.rs R55/R56 pure fn 護欄對齊 — 純 fn 端驗 chain 在 ProviderTotals
+    // 寫入時成立, render 端驗同一不變式在 emit 後 Prometheus 抓得到的字串上仍成立。
+    // K30-K34 五件套共用 `completed_sessions_p95_samples: Vec<i64>` 同一份 reservoir
+    // (跟 K33 doc 開頭 + R54 K30 P95 fixture 同款 — 不開新欄位, 9 provider 72KB),
+    // K27 `min_completed_session_age_secs: Option<i64>` 獨立 lifetime aggregate。
+    //
+    // Chain 數學:
+    // 1. R55 五件套 chain: K34 P25 (idx=25%) ≤ K31 P50 (idx=50%) ≤ K33 P75 (idx=75%)
+    //    ≤ K30 P95 (idx=95%) ≤ K32 P99 (idx=99%) — 同 samples sort 後 percentile
+    //    index 排序位置保證單調遞增, 數學不變式對任何非空樣本集都成立。
+    // 2. R56 跨 lifetime↔window chain: K27 min_duration_secs (lifetime saturating_min)
+    //    ≤ K34 P25 (window Q1) — lifetime min = P0, P25 ≥ P0 (Q1 必 ≥ 最小值),
+    //    即使 lifetime min 來自已滑出 window 的舊 completion 也仍 ≤ window P25
+    //    (舊值更小, chain 自動成立), 數學上 lifetime min ≤ window 任一百分位。
+    //
+    // 五件套 + K27 都是 i64 整數 emit (`{}` 跟 K22/K26/K27 整數契約統一), 跟 K25/K28
+    // f64 4-decimal 兩條不同契約 (R54 已處理 K25 K30 P95 outlier 邊界, R55 不重疊)。
+
+    #[test]
+    fn r55_r56_percentile_chain_and_lifetime_min_render_emission_consistency_across_mixed_profiles()
+    {
+        // 4 provider 混合 fixture 對齊 R53/R54 既模板:
+        //   cicx: 100 樣本 [1..100] uniform → P25=26, P50=51, P75=76, P95=96, P99=100, K27=1
+        //         chain: 1 ≤ 26 ≤ 51 ≤ 76 ≤ 96 ≤ 100 ✓
+        //   claude: 6 樣本 [1,1,1,1,1,1000] outlier → P25=1, P50=1, P75=1, P95=1000, P99=1000, K27=1
+        //         chain: 1 ≤ 1 ≤ 1 ≤ 1 ≤ 1000 ≤ 1000 ✓
+        //   gemini: 50 樣本 [1..50] uniform → P25=13, P50=25, P75=38, P95=48, P99=50, K27=1
+        //         chain: 1 ≤ 13 ≤ 25 ≤ 38 ≤ 48 ≤ 50 ✓
+        //   openx: 0 樣本, K27=None → 五 percentile + K27 = 6 件套全 None 跳過
+        let mut totals = HashMap::new();
+        // cicx: 100 樣本 [1..100] + K27=1
+        let mut cicx_samples = (1i64..=100).collect::<Vec<_>>();
+        cicx_samples.sort_unstable();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 100,
+                min_completed_session_age_secs: Some(1),
+                completed_sessions_p95_samples: cicx_samples,
+                ..Default::default()
+            },
+        );
+        // claude: 6 樣本 [1,1,1,1,1,1000] + K27=1
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 6,
+                min_completed_session_age_secs: Some(1),
+                completed_sessions_p95_samples: vec![1, 1, 1, 1, 1, 1000],
+                ..Default::default()
+            },
+        );
+        // gemini: 50 樣本 [1..50] + K27=1
+        let mut gemini_samples = (1i64..=50).collect::<Vec<_>>();
+        gemini_samples.sort_unstable();
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_count: 50,
+                min_completed_session_age_secs: Some(1),
+                completed_sessions_p95_samples: gemini_samples,
+                ..Default::default()
+            },
+        );
+        // openx: 0 樣本 + K27=None → 6 件套全跳過
+        totals.insert("openx".to_string(), ProviderTotals::default());
+        let last_completed = last_completed_session_age_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &last_completed,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // ── Part A: 五 percentile + K27 = 6 件套字串 emit
+        // cicx: P25=26, P50=51, P75=76, P95=96, P99=100, K27=1
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"cicx\"} 26\n"
+            ),
+            "cicx: K34 P25=26 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"cicx\"} 51\n"
+            ),
+            "cicx: K31 P50=51 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p75_duration_seconds{provider=\"cicx\"} 76\n"
+            ),
+            "cicx: K33 P75=76 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 96\n"
+            ),
+            "cicx: K30 P95=96 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p99_duration_seconds{provider=\"cicx\"} 100\n"
+            ),
+            "cicx: K32 P99=100 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_min_duration_seconds{provider=\"cicx\"} 1\n"
+            ),
+            "cicx: K27=1 必須 emit, body: {body}"
+        );
+        // claude: P25=1, P50=1, P75=1, P95=1000, P99=1000, K27=1
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"claude\"} 1\n"
+            ),
+            "claude: K34 P25=1 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"claude\"} 1\n"
+            ),
+            "claude: K31 P50=1 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p75_duration_seconds{provider=\"claude\"} 1\n"
+            ),
+            "claude: K33 P75=1 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"claude\"} 1000\n"
+            ),
+            "claude: K30 P95=1000 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p99_duration_seconds{provider=\"claude\"} 1000\n"
+            ),
+            "claude: K32 P99=1000 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_min_duration_seconds{provider=\"claude\"} 1\n"
+            ),
+            "claude: K27=1 必須 emit, body: {body}"
+        );
+        // gemini: P25=13, P50=25, P75=38, P95=48, P99=50, K27=1
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"gemini\"} 13\n"
+            ),
+            "gemini: K34 P25=13 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"gemini\"} 26\n"
+            ),
+            "gemini: K31 P50=26 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p75_duration_seconds{provider=\"gemini\"} 38\n"
+            ),
+            "gemini: K33 P75=38 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"gemini\"} 48\n"
+            ),
+            "gemini: K30 P95=48 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p99_duration_seconds{provider=\"gemini\"} 50\n"
+            ),
+            "gemini: K32 P99=50 必須 emit, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_min_duration_seconds{provider=\"gemini\"} 1\n"
+            ),
+            "gemini: K27=1 必須 emit, body: {body}"
+        );
+
+        // ── Part B: openx 6 件套全跳過 (samples 空 + K27 None)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K34 P25 必須跳過 (samples 空), body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K31 P50 必須跳過, body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p75_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K33 P75 必須跳過, body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K30 P95 必須跳過, body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p99_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K32 P99 必須跳過, body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_min_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx: K27 必須跳過 (None), body: {body}"
+        );
+
+        // ── Part C: 5 percentile + K27 = 6 件套 emit count 對齊 (都過濾 None/samples 空)
+        let p25_count = body
+            .matches("lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"")
+            .count();
+        let p50_count = body
+            .matches("lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"")
+            .count();
+        let p75_count = body
+            .matches("lobsterpulse_provider_completed_sessions_p75_duration_seconds{provider=\"")
+            .count();
+        let p95_count = body
+            .matches("lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"")
+            .count();
+        let p99_count = body
+            .matches("lobsterpulse_provider_completed_sessions_p99_duration_seconds{provider=\"")
+            .count();
+        let k27_count = body
+            .matches("lobsterpulse_provider_completed_sessions_min_duration_seconds{provider=\"")
+            .count();
+        assert_eq!(
+            p25_count, 3,
+            "K34 P25 emit 必須 = 3 provider, got {p25_count}, body: {body}"
+        );
+        assert_eq!(
+            p50_count, 3,
+            "K31 P50 emit 必須 = 3 provider, got {p50_count}, body: {body}"
+        );
+        assert_eq!(
+            p75_count, 3,
+            "K33 P75 emit 必須 = 3 provider, got {p75_count}, body: {body}"
+        );
+        assert_eq!(
+            p95_count, 3,
+            "K30 P95 emit 必須 = 3 provider, got {p95_count}, body: {body}"
+        );
+        assert_eq!(
+            p99_count, 3,
+            "K32 P99 emit 必須 = 3 provider, got {p99_count}, body: {body}"
+        );
+        assert_eq!(
+            k27_count, 3,
+            "K27 emit 必須 = 3 provider, got {k27_count}, body: {body}"
+        );
+        // 6 件套 emit set 完全一致 (K30-K34 都過濾 samples 空, K27 過濾 None)
+        assert_eq!(
+            p25_count, p50_count,
+            "K34 emit 集合 = K31 emit 集合, got P25={p25_count} P50={p50_count}"
+        );
+        assert_eq!(
+            p50_count, p75_count,
+            "K31 emit 集合 = K33 emit 集合, got P50={p50_count} P75={p75_count}"
+        );
+        assert_eq!(
+            p75_count, p95_count,
+            "K33 emit 集合 = K30 emit 集合, got P75={p75_count} P95={p95_count}"
+        );
+        assert_eq!(
+            p95_count, p99_count,
+            "K30 emit 集合 = K32 emit 集合, got P95={p95_count} P99={p99_count}"
+        );
+        assert_eq!(
+            p99_count, k27_count,
+            "K32 emit 集合 = K27 emit 集合, got P99={p99_count} K27={k27_count}"
+        );
+
+        // ── Part E: R55 chain 算術 (K34 ≤ K31 ≤ K33 ≤ K30 ≤ K32) 在 render 端成立
+        // 對 cicx / claude / gemini 三組, 從 body 解析 5 percentile 數值, 驗 4 個不等式。
+        let parse_i64 = |body: &str, metric: &str, provider: &str| -> i64 {
+            let line = format!("{metric}{{provider=\"{provider}\"}}");
+            body.split(&line)
+                .nth(1)
+                .and_then(|s| s.lines().next())
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or_else(|| panic!("{provider}: {metric} 必須能 parse 成 i64, body: {body}"))
+        };
+        for p in ["cicx", "claude", "gemini"] {
+            let p25 = parse_i64(
+                &body,
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds",
+                p,
+            );
+            let p50 = parse_i64(
+                &body,
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds",
+                p,
+            );
+            let p75 = parse_i64(
+                &body,
+                "lobsterpulse_provider_completed_sessions_p75_duration_seconds",
+                p,
+            );
+            let p95 = parse_i64(
+                &body,
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds",
+                p,
+            );
+            let p99 = parse_i64(
+                &body,
+                "lobsterpulse_provider_completed_sessions_p99_duration_seconds",
+                p,
+            );
+            assert!(
+                p25 <= p50,
+                "{p}: R55 chain P25 ({p25}) 必須 ≤ P50 ({p50}) (render 端算術)"
+            );
+            assert!(
+                p50 <= p75,
+                "{p}: R55 chain P50 ({p50}) 必須 ≤ P75 ({p75}) (render 端算術)"
+            );
+            assert!(
+                p75 <= p95,
+                "{p}: R55 chain P75 ({p75}) 必須 ≤ P95 ({p95}) (render 端算術)"
+            );
+            assert!(
+                p95 <= p99,
+                "{p}: R55 chain P95 ({p95}) 必須 ≤ P99 ({p99}) (render 端算術)"
+            );
+        }
+
+        // ── Part F: R56 chain 算術 (K27 lifetime min ≤ K34 window P25) 在 render 端成立
+        // 對 cicx / claude / gemini 三組, 從 body 解析 K27 跟 K34 P25 數值, 驗 1 個不等式。
+        // 數學前提: K27 lifetime min 抓「歷史 N 個 completion 的最小值」 (= P0),
+        // P25 抓「window sort 後第 25 百分位」, 任一分布 P0 ≤ P25 自動成立。
+        for p in ["cicx", "claude", "gemini"] {
+            let k27 = parse_i64(
+                &body,
+                "lobsterpulse_provider_completed_sessions_min_duration_seconds",
+                p,
+            );
+            let p25 = parse_i64(
+                &body,
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds",
+                p,
+            );
+            assert!(
+                k27 <= p25,
+                "{p}: R56 chain K27 ({k27}) 必須 ≤ K34 P25 ({p25}) \
+                 (lifetime min ≤ window Q1, 數學 P0 ≤ P25 不變式, render 端算術)"
+            );
+        }
+    }
+
     // ============== K26 per-provider completed_sessions_max_duration_seconds gauge ==============
     // 跟 K22 (latest) / K25 (avg) 形成 max / latest / avg 三件套 gauge。 對齊 K22
     // emit 語意: Option 過濾 — 該 provider 累計收過 event 但還沒完成過 session → 缺
@@ -8872,6 +9482,221 @@ mod render_prometheus_tests {
         assert!(
             !body.contains("lobsterpulse_provider_failure_to_completion_ratio{provider=\"cicx\"}"),
             "K29 (ratio) 跟 K33 (P75) 隔離, cicx count=0 該跳過 K29, body: {body}"
+        );
+    }
+
+    // ============== K34 render-side tests (跟 K30 P95 / K31 P50 / K32 P99 / K33 P75 同模板) ==============
+
+    #[test]
+    fn p25_emits_header_only_when_no_samples() {
+        // 跟 K30 P95 / K31 P50 / K32 P99 / K33 P75 同款 empty header-only: 0 provider
+        // → 只有 HELP/TYPE 標頭, 沒有 sample line, 避免「沒看到」誤判「P25=0」
+        // 假健康信號。
+        let totals = HashMap::<String, ProviderTotals>::new();
+        let _p25 = completed_sessions_p25_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            body.contains("# HELP lobsterpulse_provider_completed_sessions_p25_duration_seconds"),
+            "K34 即使 0 provider 也要 emit HELP 標頭, body: {body}"
+        );
+        assert!(
+            body.contains(
+                "# TYPE lobsterpulse_provider_completed_sessions_p25_duration_seconds gauge"
+            ),
+            "K34 即使 0 provider 也要 emit TYPE 標頭, body: {body}"
+        );
+        // 沒 provider → 沒 sample line (不 emit `provider=\"xxx\"`)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\""
+            ),
+            "K34 0 provider 不 emit sample line, body: {body}"
+        );
+    }
+
+    #[test]
+    fn p25_per_provider_isolated_and_skips_empty_samples() {
+        // per-provider 隔離 + samples 為空跳過: cicx (20 sample [1..20]) emit
+        // P25=6 (idx=5, samples[5]=6, 25% 位置剛好命中), claude (samples
+        // 為空) 跳過, openx (samples 為空) 跳過。P25 計算: 20 個 sample
+        // 排序後 index = 20 * 25 / 100 = 5 → samples[5] = 6 (剛好命中 25%
+        // 位置, 不退化, 跟 K33 4 sample P75 退化到 max 對比 —— K34 在 4
+        // 樣本時 P25 就能命中精確位置)。
+        let mut totals = HashMap::new();
+        let mut cicx_samples: Vec<i64> = (1..=20).collect();
+        cicx_samples.sort_unstable();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: cicx_samples,
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        totals.insert("openx".to_string(), ProviderTotals::default());
+
+        let _p25 = completed_sessions_p25_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"cicx\"} 6\n"
+            ),
+            "cicx P25 = samples[5] = 6 (整數 i64, 25% 位置剛好命中), body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"claude\"}"
+            ),
+            "claude samples 為空 → 跳過, 不 emit sample line, body: {body}"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"openx\"}"
+            ),
+            "openx samples 為空 → 跳過, 不 emit sample line, body: {body}"
+        );
+    }
+
+    #[test]
+    fn p25_alphabetical_sort_and_integer_precision_with_k30_k31_k32_k33_isolation() {
+        // 3 個 provider (cicx/claude/gemini) 各自不同 sample 集, 驗證:
+        // 1. alphabetical 排序 (cicx < claude < gemini)
+        // 2. 整數 i64 格式 (不是 f64 4 位小數)
+        // 3. 跟 K30 P95 / K31 P50 / K32 P99 / K33 P75 共用 samples vec 五驗證
+        //    (P25 < P50 < P75 < P95 == P99 monotonic chain 在 20 樣本下嚴格成立)
+        let mut totals = HashMap::new();
+        // cicx: 1..=20 → P25=6, P50=11, P75=16, P95=20, P99=20
+        let cicx_samples: Vec<i64> = (1..=20).collect();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: cicx_samples,
+                ..Default::default()
+            },
+        );
+        // claude: 1..=100 → P25=26, P50=51, P75=76, P95=96, P99=100
+        let claude_samples: Vec<i64> = (1..=100).collect();
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: claude_samples,
+                ..Default::default()
+            },
+        );
+        // gemini: 1..=50 → P25=13, P50=26, P75=38, P95=48, P99=50
+        let gemini_samples: Vec<i64> = (1..=50).collect();
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                completed_sessions_p95_samples: gemini_samples,
+                ..Default::default()
+            },
+        );
+
+        let _p25 = completed_sessions_p25_at(&totals);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        // K34 alphabetical + 整數 i64 格式驗證
+        let cicx_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"cicx\"} 6\n")
+            .expect("cicx K34 sample line");
+        let claude_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"claude\"} 26\n")
+            .expect("claude K34 sample line");
+        let gemini_idx = body
+            .find("lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"gemini\"} 13\n")
+            .expect("gemini K34 sample line");
+        assert!(
+            cicx_idx < claude_idx && claude_idx < gemini_idx,
+            "per-provider P25 必須 alphabetical 排序 (cicx={cicx_idx}, claude={claude_idx}, gemini={gemini_idx})"
+        );
+        // 反向驗: 確認 emit 的是整數 i64 格式, 不是 f64 4 位小數格式
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"cicx\"} 6.0000\n"
+            ),
+            "K34 i64 整數契約 (不是 f64 4 位小數), 不可 emit 6.0000, body: {body}"
+        );
+        // K30 P95 / K31 P50 / K32 P99 / K33 P75 / K34 P25 共用 samples vec 五驗證:
+        // 同一份 cicx samples 餵 K30 (P95=20) / K31 (P50=11) / K32 (P99=20) /
+        // K33 (P75=16) / K34 (P25=6), 各自 emit 各自 percentile 互不污染。cicx
+        // 20 樣本 monotonic chain P25=6 < P50=11 < P75=16 < P95=20 == P99=20
+        // (樣本數 < 100 時 P95/P99 退化到 max, 但 P25/P50/P75 仍命中精確位置)。
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p95_duration_seconds{provider=\"cicx\"} 20\n"
+            ),
+            "K30 cicx P95 = 20 (跟 K31 P50=11 / K32 P99=20 / K33 P75=16 / K34 P25=6 共用 samples vec), body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p50_duration_seconds{provider=\"cicx\"} 11\n"
+            ),
+            "K31 cicx P50 = 11 (跟 K30 P95=20 / K32 P99=20 / K33 P75=16 / K34 P25=6 共用 samples vec, P50 是中位), body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p99_duration_seconds{provider=\"cicx\"} 20\n"
+            ),
+            "K32 cicx P99 = 20 (跟 K30 P95=20 / K31 P50=11 / K33 P75=16 / K34 P25=6 共用 samples vec, 少樣本退化到 max), body: {body}"
+        );
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p75_duration_seconds{provider=\"cicx\"} 16\n"
+            ),
+            "K33 cicx P75 = 16 (跟 K30 P95=20 / K31 P50=11 / K32 P99=20 / K34 P25=6 共用 samples vec, P75 命中 75% 位置), body: {body}"
+        );
+        // claude 100 樣本 P25=26: idx = 100 * 25 / 100 = 25, samples[25] = 26
+        // (K34 在 100 樣本下 P25 剛好命中精確位置, 跟 P50 idx=50=51 / P75
+        // idx=75=76 / P95 idx=95=96 / P99 idx=99=100 全部命中)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"claude\"} 26\n"
+            ),
+            "K34 claude 100 樣本 P25 = 26 (idx=25, 剛好命中 25% 位置), body: {body}"
+        );
+        // gemini 50 樣本 P25=13: idx = 50 * 25 / 100 = 12, samples[12] = 13
+        // (K34 在 50 樣本下 P25 命中精確位置)
+        assert!(
+            body.contains(
+                "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"gemini\"} 13\n"
+            ),
+            "K34 gemini 50 樣本 P25 = 13 (idx=12, 命中 25% 位置), body: {body}"
         );
     }
 }

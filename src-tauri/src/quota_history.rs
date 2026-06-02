@@ -90,6 +90,29 @@ pub fn load_history() -> Result<std::collections::HashMap<String, Vec<(u64, u8)>
     load_history_at(&path)
 }
 
+/// 從指定 path 取 quota-history.csv 的 `modified` mtime，給 Prometheus K21 gauge
+/// `lobsterpulse_quota_history_csv_age_seconds` 用：operator 看「CSV 多久沒被
+/// OpenAB 寫進來」，跟 K11 5 個 snapshot freshness 互補（K11 看「每個 bot 的
+/// current usage snapshot 多舊」、K21 看「歷史聚合 CSV pipeline 多舊」）。
+///
+/// 對齊 R32 `load_history_at` first-run 契約 + R30 `load_local_usage_snapshot_at`
+/// silent-fail surfacing 模式：
+/// - NotFound（first-run 還沒建立 CSV）→ `Ok(None)`：不是 silent-fail，caller
+///   端走「header only」契約、不出 sample line
+/// - 其他 IO 錯（權限拒絕 / 磁碟鎖住）→ `Err(String)`：caller log warn
+/// - OK → `Ok(Some(mtime))`：caller 走 `compute_quota_snapshot_age_seconds` 算 age
+///
+/// 抽成 pure fn 對齊 R28 `load_config_at` pattern：caller 端傳入 path（不一定
+/// 是 `~/.lobsterpulse/quota-history.csv`，test 端可注入 tmpdir）。
+pub fn quota_history_csv_mtime_at(path: &std::path::Path) -> Result<Option<SystemTime>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let mtime = meta.modified().map_err(|e| e.to_string())?;
+    Ok(Some(mtime))
+}
+
 /// 從指定 path 讀 quota-history，回傳「每個 runner 名稱的最新 (max-ts) pct」map。
 /// 抽成 pure fn 對齊 K11 `compute_quota_snapshot_age_seconds` / K8 idle pattern：
 ///   - Prometheus `lobsterpulse_provider_quota_remaining_pct` gauge 直接吃這個 map
@@ -526,5 +549,59 @@ mod tests {
             r.is_err(),
             "目錄 path 應回 Err（load_history_at 內部 read 失敗）讓 caller log warn，實際: {r:?}"
         );
+    }
+
+    // ============== K21 quota_history_csv_mtime_at helper ==============
+    // 對齊 K11 freshness 視角 + K20 同一資料源（quota-history.csv）。
+    // 2 個 test 覆蓋:NotFound → Ok(None) first-run 契約 / 存在 → Ok(Some(mtime))。
+    // IO 錯 path (`Err` variant) 在 portable Rust 難以穩定觸發（`metadata()` 在
+    // 目錄上也成功,不像 `read_to_string` 會因 EISDIR 失敗）,契約保留在 helper doc
+    // 端跟 R30/R32 pattern 一致。資料源 consumer 在 `lib.rs::render_prometheus` 端。
+
+    #[test]
+    fn quota_history_csv_mtime_at_returns_none_when_file_missing() {
+        // first-run 契約：CSV 還沒被 OpenAB 寫過 → caller 端不出 sample line，
+        // 避免把「檔案根本不存在」誤判成「剛剛 mtime=now → age=0」。
+        let dir = tempfile_dir();
+        let missing = dir.join("nope-quota-history.csv");
+        let r = quota_history_csv_mtime_at(&missing);
+        assert!(
+            matches!(r, Ok(None)),
+            "missing file 應回 Ok(None)（first-run 契約，非 silent-fail），實際: {r:?}"
+        );
+    }
+
+    #[test]
+    fn quota_history_csv_mtime_at_returns_some_for_existing_file() {
+        // 正常情況：write 完檔案 → mtime 應 Some 且 ≤ now。容忍極小 clock skew，
+        // 不直接 assert 等於 now，鎖住「最近寫過」語意即可。
+        let dir = tempfile_dir();
+        let path = dir.join("quota-history.csv");
+        std::fs::write(&path, b"1700000000,cicx,42\n").expect("write csv");
+        let r = quota_history_csv_mtime_at(&path);
+        match r {
+            Ok(Some(mtime)) => {
+                let elapsed = SystemTime::now().duration_since(mtime).unwrap_or_default();
+                // mtime 應該在過去（剛寫完），不該是未來；容許 60s clock skew 防偶發
+                assert!(
+                    elapsed.as_secs() <= 60,
+                    "剛寫的 CSV mtime 應 ≤ now 60s 容差，實際 elapsed={}s",
+                    elapsed.as_secs()
+                );
+            }
+            other => panic!("existing file 應回 Ok(Some(mtime))，實際: {other:?}"),
+        }
+    }
+
+    /// K21 test 共用 helper：建一個 tmpdir 給 unit test 用，跑完 OS 自動回收。
+    /// 對齊 R32 + R35 既有 tmpdir 風格（不引入 `tempfile` crate，零依賴）。
+    fn tempfile_dir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("lobsterpulse-k21-{pid}-{n}"));
+        std::fs::create_dir_all(&dir).expect("create tmpdir");
+        dir
     }
 }

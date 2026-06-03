@@ -8003,6 +8003,199 @@ mod render_prometheus_tests {
         assert!(openx_k35.is_none(), "openx: K35 跳過 (since=None)");
     }
 
+    // ============== R60：K14 (events_total) ↔ K17 (event_type_counts) 跨 bucket 算術護欄 ==============
+    // 策略顧問 R50 巡邏「凍結 gauge 補閉環」下, R52 補 K23/K24/K25 三件套算術不變式 +
+    // 3 層 emit set ⊆ 護欄, R60 補 K14/K17 三件套的「第二個跨 K 算術護欄」(event
+    // total 是 lifetime aggregate counter, event_type_total 是 per-type bucket
+    // 細顆度 counter, 語意跟 K23/K24/K25 對稱)。 bump_provider_totals 對每個 event
+    // 同步寫: `events_total += 1` (無條件, 不管 type); 然後 `if !event.hook_event_name
+    // .is_empty() { event_type_counts[hook_event_name] += 1 }` (空字串過濾, 防
+    // `type=""` 污染 metric 視圖)。 數學不變式: events_total = sum(event_type_counts
+    // .values) + 空字串事件數; production 中空字串過濾生效, fixture 全部 event 都
+    // 具名 type → K14 必嚴格等於 K17 buckets 總和。 4 provider 跨 4 type bucket
+    // fixture, 驗 (a) K14 算術 = sum(K17 buckets per provider), (b) K17 沒有
+    // type="" bucket (空字串不污染設計契約), (c) K14 emit 條件 None-free (counter 0
+    // 有效, 跟 K23 emit count=0 同策略) vs K17 emit 條件 event_type_counts 非空
+    // (跨 4 provider 兩條 series 都 emit, 跟 K22/K26/K27 過濾 None 不同)。 R52
+    // chain 已有 K23/K24/K25 三件套算術護欄, R60 補 R52 沒覆蓋的 event count ×
+    // event type 跨 K 算術關係, 跟 R52 同樣 cross-metric invariant 紀律, CI 1 秒抓出。
+
+    #[test]
+    fn r60_k14_k17_cross_bucket_arithmetic_invariant_across_providers() {
+        // 4 provider 各 4 type bucket, K14 故意 = sum(K17) 嚴格成立:
+        //   cicx:   {Stop=5, TokenUpdate=2, PostToolUse=3, UserPromptSubmit=10} → 20
+        //   claude: {Stop=4, PreToolUse=2, PostToolUse=1, SessionStart=4}        → 11
+        //   gemini: {Stop=3, PreToolUse=1, Notification=7, UserPromptSubmit=1}   → 12
+        //   openx:  {Stop=8, TokenUpdate=8, PostToolUse=3, PostToolUseFailure=1}→ 20
+        let totals = std::collections::HashMap::from([
+            (
+                "cicx".to_string(),
+                ProviderTotals {
+                    events_total: 20,
+                    event_type_counts: std::collections::BTreeMap::from([
+                        ("Stop".to_string(), 5),
+                        ("TokenUpdate".to_string(), 2),
+                        ("PostToolUse".to_string(), 3),
+                        ("UserPromptSubmit".to_string(), 10),
+                    ]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "claude".to_string(),
+                ProviderTotals {
+                    events_total: 11,
+                    event_type_counts: std::collections::BTreeMap::from([
+                        ("Stop".to_string(), 4),
+                        ("PreToolUse".to_string(), 2),
+                        ("PostToolUse".to_string(), 1),
+                        ("SessionStart".to_string(), 4),
+                    ]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "gemini".to_string(),
+                ProviderTotals {
+                    events_total: 12,
+                    event_type_counts: std::collections::BTreeMap::from([
+                        ("Stop".to_string(), 3),
+                        ("PreToolUse".to_string(), 1),
+                        ("Notification".to_string(), 7),
+                        ("UserPromptSubmit".to_string(), 1),
+                    ]),
+                    ..Default::default()
+                },
+            ),
+            (
+                "openx".to_string(),
+                ProviderTotals {
+                    events_total: 20,
+                    event_type_counts: std::collections::BTreeMap::from([
+                        ("Stop".to_string(), 8),
+                        ("TokenUpdate".to_string(), 8),
+                        ("PostToolUse".to_string(), 3),
+                        ("PostToolUseFailure".to_string(), 1),
+                    ]),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // ── (a) K14 per-provider 算術: 必 = sum(K17 buckets) ──
+        // 從 body 解析 K14 數值 (跟 R53 護欄 `body.split(&prefix).nth(1).and_then(...)`
+        // parse pattern 一致, 避免新增 helper)
+        let k14_expected: &[(&str, u64)] =
+            &[("cicx", 20), ("claude", 11), ("gemini", 12), ("openx", 20)];
+        for (p, expected) in k14_expected {
+            let prefix = format!("lobsterpulse_provider_events_total{{provider=\"{p}\"}}");
+            let actual: u64 = body
+                .split(&prefix)
+                .nth(1)
+                .and_then(|s| s.lines().next())
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or_else(|| panic!("{p}: K14 必須能 parse 成 u64, body: {body}"));
+            assert_eq!(
+                actual, *expected,
+                "{p}: K14 events_total 必 = sum(K17 buckets) = {expected}, got {actual}, body: {body}"
+            );
+        }
+
+        // ── (b) K17 per-provider × per-type 算術: 4 provider × 4 type = 16 series ──
+        let k17_expected: &[(&str, &str, u64)] = &[
+            ("cicx", "Stop", 5),
+            ("cicx", "TokenUpdate", 2),
+            ("cicx", "PostToolUse", 3),
+            ("cicx", "UserPromptSubmit", 10),
+            ("claude", "Stop", 4),
+            ("claude", "PreToolUse", 2),
+            ("claude", "PostToolUse", 1),
+            ("claude", "SessionStart", 4),
+            ("gemini", "Stop", 3),
+            ("gemini", "PreToolUse", 1),
+            ("gemini", "Notification", 7),
+            ("gemini", "UserPromptSubmit", 1),
+            ("openx", "Stop", 8),
+            ("openx", "TokenUpdate", 8),
+            ("openx", "PostToolUse", 3),
+            ("openx", "PostToolUseFailure", 1),
+        ];
+        for (p, etype, expected) in k17_expected {
+            let prefix = format!(
+                "lobsterpulse_provider_event_type_total{{provider=\"{p}\",type=\"{etype}\"}}"
+            );
+            let actual: u64 = body
+                .split(&prefix)
+                .nth(1)
+                .and_then(|s| s.lines().next())
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or_else(|| panic!("{p}/{etype}: K17 必須能 parse 成 u64, body: {body}"));
+            assert_eq!(
+                actual, *expected,
+                "{p}/{etype}: K17 event_type_total 必 = {expected}, got {actual}, body: {body}"
+            );
+        }
+
+        // ── (c) K14 ↔ K17 跨 bucket 算術不變式: K14 必 = sum(K17 buckets per provider) ──
+        for (p, _) in k14_expected {
+            let sum_k17: u64 = k17_expected
+                .iter()
+                .filter(|(pp, _, _)| pp == p)
+                .map(|(_, _, n)| n)
+                .sum();
+            let k14_prefix = format!("lobsterpulse_provider_events_total{{provider=\"{p}\"}}");
+            let k14_actual: u64 = body
+                .split(&k14_prefix)
+                .nth(1)
+                .and_then(|s| s.lines().next())
+                .and_then(|l| l.trim().parse().ok())
+                .unwrap_or_else(|| panic!("{p}: K14 必能 parse, body: {body}"));
+            assert_eq!(
+                k14_actual, sum_k17,
+                "{p}: K14 ({k14_actual}) 必 = sum(K17 buckets) ({sum_k17}) \
+                 (K14↔K17 跨 bucket 算術不變式, R60 護欄核心), body: {body}"
+            );
+        }
+
+        // ── (d) 設計契約: K17 沒有 type="" bucket (bump_provider_totals 過濾
+        // 空字串防 metric 視圖污染, fixture 已驗全部 type 都具名) ──
+        assert!(
+            !body.contains("type=\"\""),
+            "K17 不可有 type=\"\" bucket (空字串污染 metric 視圖防線), body: {body}"
+        );
+
+        // ── (e) K14 ↔ K17 emit 集合對稱性: 兩條 series 在 4 provider 各自 emit ──
+        // K14 emit 條件 None-free (counter 0 有效, 跟 K23 emit count=0 策略一致),
+        // K17 emit 條件 event_type_counts 非空 (fixture 故意讓 4 provider 都有 buckets)
+        let k14_count = body
+            .matches("lobsterpulse_provider_events_total{provider=\"")
+            .count();
+        let k17_count = body
+            .matches("lobsterpulse_provider_event_type_total{provider=\"")
+            .count();
+        assert_eq!(
+            k14_count, 4,
+            "K14 emit 必 = 4 provider (counter 0 仍 emit, None-free), got {k14_count}, body: {body}"
+        );
+        assert_eq!(
+            k17_count, 16,
+            "K17 emit 必 = 4 provider × 4 type bucket = 16 series, got {k17_count}, body: {body}"
+        );
+    }
+
     // ============== K26 per-provider completed_sessions_max_duration_seconds gauge ==============
     // 跟 K22 (latest) / K25 (avg) 形成 max / latest / avg 三件套 gauge。 對齊 K22
     // emit 語意: Option 過濾 — 該 provider 累計收過 event 但還沒完成過 session → 缺

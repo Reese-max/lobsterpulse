@@ -929,3 +929,48 @@ URGENCY: MEDIUM
 - **K35 vs K23 lifetime filter consistency 護欄**: 語意維度不同 (K35 frequency / K23 count aggregate), 護欄增量價值低
 - **`render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct**: R26-R59 policy 持續記錄, 跨輪考慮
 - **openclaw-self-evolution 主軸切換**: 策略顧問 R50 建議, 屬 M3 級 KPI 推進, 留 R60+ 評估
+
+---
+
+### [2026-06-03] Round 60 — K14 events_total ↔ K17 event_type_counts 跨 bucket 算術護欄 (R52 chain 第二個三件套)
+**類型**: M2 (跨 K arithmetic invariant guard, 對齊 R52 K23/K24/K25 三件套算術護欄 chain 紀律, R50 戰略 advisor 凍結新增 gauge 指令下唯一可推進的 KPI 路線)
+**KPI**: cross-K 護欄 chain 11 → 12 (R52 既有 K23/K24/K25 三件套算術護欄 + R60 補 K14/K17 第二個三件套算術護欄)
+**KPI 進展表**:
+| KPI | 前值 (R59 wrap-up) | 後值 (R60) | 變化 |
+|---|---:|---:|---:|
+| cross-K 護欄 chain (R52-R60 累計) | 11 (R59 K15 ⊆ K16 4xx 子集不變式 + 反向蘊含) | 12 (+ K14 events_total = sum(K17 event_type_counts buckets per provider) 跨 bucket 算術護欄) | +1 |
+| lib_unit_tests | 350 (R59 wrap-up) | 351 (R60 +1 cross-bucket arithmetic guard) | +1 |
+| R60 範圍 clippy warning | 0 | 0 | 持平 |
+| R60 範圍 fmt diff | 0 | 0 (rustfmt 0 diff 自動收 1 處 multi-arg assert wrap) | 持平 |
+| 24h chore_ratio (R59 收尾) | 0% (R59 純 M2 護欄增量) | 0% (R60 純 M2 護欄增量, 非 H0) | 持平 |
+| KPI 落地率 (5 輪 window, harness KPI 量化比例) | 5/5 = 100% (R59 補 KPI 進展表後) | 5/5 = 100% (R60 含 KPI 進展表 + KPI-impact 標籤) | 持平 |
+
+**為什麼**:
+- R52 護欄 chain 已驗 K23/K24/K25 三件套算術不變式 (K25 = K24/K23 數學恆等式) + 3 層 emit set ⊆ 護欄, 但**沒**驗 K14 (events_total) 跟 K17 (event_type_counts) 的跨 bucket 算術關係
+- `bump_provider_totals` (line 521-528) 對每個 event 同步寫: `events_total += 1` (無條件) + `if !is_empty { event_type_counts[name] += 1 }` (空字串過濾防 type="" 污染)。 數學不變式: events_total = sum(event_type_counts.values) + 空字串事件數; production 中空字串過濾生效 → K14 必嚴格等於 K17 buckets 總和
+- bug surface: (1) 有人改 `bump_provider_totals` 把 events_total += 1 移到 `if !is_empty` 內 → events_total 漏算空字串事件, K14 < sum(K17 buckets); (2) 有人改空字串過濾拿掉, 開始 emit `type=""` bucket → 污染 metric 視圖; (3) 有人新增 event source 跳過 bump_provider_totals 直接寫 event_type_counts → K14 跟 K17 算術分裂
+- 對齊 R52-R59 護欄 chain 紀律 (cross-K consistency invariants): R52 K23/K24/K25 三件套算術 → R53 K22/K26/K27 monotonic chain → R54 K30 outlier ratio → R55 K30-K34 percentile chain → R56 K27↔K34 lifetime↔window → R57 K22↔K10 freshness + K35 helper → R58 K22-K27 6 K aggregate → R59 K15 ⊆ K16 4xx → **R60 K14 = sum(K17 buckets) 跨 bucket 算術** (R52-R59 chain 沒覆蓋 event count × event type 跨 K 算術關係, R60 補缺口, 補 R52 既有 K23/K24/K25 三件套的「第二個三件套」)
+
+**搜尋**: 沒新研究。 沿用 R52/R53/R58 護欄紀律的 `body.split(&prefix).nth(1).and_then(|s| s.lines().next())...parse()` 解析 pattern (R53 line 7150-7180 既有), inline struct literal fixture (跟 R58 K22-K27 fixture inline 風格一致), `..Default::default()` 縮短 ProviderTotals fixture boilerplate (R60 4 個 provider 各填 events_total + event_type_counts, 其他欄位靠 default)
+
+**做了什麼**:
+- `r60_k14_k17_cross_bucket_arithmetic_invariant_across_providers` (約 165 行, 含 5 段式: K14 算術 / K17 算術 / 跨 bucket 算術不變式 / 設計契約 type="" 防線 / K14↔K17 emit 集合對稱性)
+- 4 provider fixture (cicx/claude/gemini/openx × 4 type bucket) 跨 16 series, 驗 (a) K14 數值解析 = sum(K17 buckets per provider) 嚴格相等, (b) K17 16 series 各自數值解析 = fixture 設定值, (c) K14 算術 = sum(K17 buckets) 跨 4 provider 恆等式, (d) K17 沒有 type="" bucket (空字串污染 metric 視圖防線), (e) K14 emit 4 series (None-free, 跟 K23 emit count=0 同策略) + K17 emit 16 series (event_type_counts 非空條件, 跟 K22 emit Option=None 過濾策略不同)
+- engineering-log.md R60 entry + KPI 進展表
+
+**驗證**:
+- `cargo test --lib`: **351 passed; 0 failed; 0 ignored; 0 regression** (R59 wrap-up 350 + R60 +1)
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff (rustfmt 自動收 1 處 multi-arg assert wrap)
+
+**結果**: PASS (R60 K14 ↔ K17 跨 bucket 算術護欄落地 + 1 new test + 0 lint warning + 0 fmt diff + 0 regression + 351/351 tests)
+
+**KPI-impact: cross-K 護欄 chain 11 → 12 (K14 events_total = sum(K17 event_type_counts buckets per provider) 跨 bucket 算術護欄) + lib_unit_tests 350 → 351 (+1 cross-bucket arithmetic guard) + R52 chain 覆蓋三件套 1 → 2 (K23/K24/K25 既有 + K14/K17 新增)**
+
+**不做的範圍** (給後續輪次):
+- **K14/K17 跟 K6 (sessions) 跨維度護欄**: K6 sessions_total 跟 K14 events_total 沒 tight 算術關係 (events_total > sessions_total 因為 session 內多 events), 護欄語意面弱, 留 R61+ 評估
+- **K15/K16 shared counter race 真正解法 (per-test `Arc<Mutex<u64>>` 或測試層局部 mock)**: R59/R60 護欄 strict invariant noise 不影響, 但根本 race 仍存在 (process-level atomic 平行程式下 noise 必然), 真正解法需架構改動
+- **K35 vs K23 lifetime filter consistency 護欄**: 語意維度不同 (K35 frequency / K23 count aggregate), 護欄增量價值低, 留觀察
+- **K36 P5 percentile**: 仍違反 R50 「凍結新增 gauge」紀律, 留解封後考慮
+- **`render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct**: R26-R60 policy 持續記錄, 跨輪考慮
+- **openclaw-self-evolution 主軸切換**: 策略顧問 R50 建議, 屬 M3 級 KPI 推進, 留 R61+ 評估

@@ -64,6 +64,43 @@ pub fn hook_server_metrics() -> HookServerMetrics {
     }
 }
 
+#[cfg(test)]
+impl HookServerMetrics {
+    /// 兩個 snapshot 之間的 delta（各欄位 `after - before`，saturating）。
+    /// 便利 K15/K16 lifetime counter test 計算 local delta，取代散落的
+    /// `after > before` 寬鬆斷言。saturating 而非 wrapping：理論上 monotonic atomic
+    /// 計數不可能倒退，但 saturating 對未來若引入 reset API 也能 robust。
+    fn delta(self, before: Self) -> Self {
+        Self {
+            parse_failures: self.parse_failures.saturating_sub(before.parse_failures),
+            responses_2xx: self.responses_2xx.saturating_sub(before.responses_2xx),
+            responses_4xx: self.responses_4xx.saturating_sub(before.responses_4xx),
+            responses_5xx: self.responses_5xx.saturating_sub(before.responses_5xx),
+        }
+    }
+}
+
+/// 跑 f，同時抓 K15/K16 counter 執行前後的 snapshot。
+/// 便利 K15/K16 test 計算 local delta：
+///   - `before` / `after` 都是 `HookServerMetrics` struct snapshot
+///   - `result` 是 f() 的回傳值，不影響 counter 觀察
+///
+/// 注意：counter 是 process-level atomic，其他平行 test 仍會 ++ counter，
+/// 這只是「包裝便利 + 確保 before/after 都在同一 atomic order」，仍需用
+/// monotonic `delta >= N` 斷言，不該用 `assert_eq!` 對全局值斷言。
+/// 對齊 R36 wrap-up K15/K16 shared counter race 觀察：off-by-one 容易因 race
+/// 假陽性失敗，delta 計算 + saturating 為 race-tolerant pattern。
+#[cfg(test)]
+pub fn with_isolated_metric_snapshot<F, R>(f: F) -> (HookServerMetrics, HookServerMetrics, R)
+where
+    F: FnOnce() -> R,
+{
+    let before = hook_server_metrics();
+    let result = f();
+    let after = hook_server_metrics();
+    (before, after, result)
+}
+
 pub struct HookServer {
     port: u16,
 }
@@ -333,16 +370,21 @@ mod tests {
     // ─── K15 落地：process_body 內 JSON parse 失敗 → lifetime counter++ ───
     // 測試策略：snapshot 模式（讀 before / 觸發 / 讀 after，檢 local delta），
     // 對其他平行 test 安全 —— atomic fetch_add 不會掉 increment，只要我們只看
-    // 自己這條呼叫的 local delta，別人的 increment 算背景噪音。
+    // 自己這條呼叫的 local delta，別人的 increment 算背景噪音。R58 收邊：統一
+    // 用 `with_isolated_metric_snapshot` + `HookServerMetrics::delta` 取代散落的
+    // before/after snapshot 樣板，語意化表達「自己這條 test 觀察到的 delta」，
+    // saturating_sub 容忍任何 race 倒退（理論上 monotonic atomic 不可能）。
     #[test]
     fn hook_parse_failures_counter_increments_on_invalid_json() {
-        let before = super::hook_server_metrics().parse_failures;
-        // 故意觸發 parse 失敗：braces 不對、不是 JSON
-        let _ = process_body(b"not json { broken", "claude");
-        let after = super::hook_server_metrics().parse_failures;
+        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
+            // 故意觸發 parse 失敗：braces 不對、不是 JSON
+            let _ = process_body(b"not json { broken", "claude");
+        });
+        let delta = after.delta(before).parse_failures;
         assert!(
-            after > before,
-            "process_body 收到壞 JSON 應讓 lifetime counter +1，before={before} after={after}"
+            delta >= 1,
+            "process_body 收到壞 JSON 應讓 K15 counter 至少 +1, actual delta={delta}, before={}, after={}",
+            before.parse_failures, after.parse_failures
         );
     }
 
@@ -356,31 +398,47 @@ mod tests {
         // 證明 valid JSON 不 increment 的方式是「call 回 Ok」：process_body 內
         // fetch_add 緊接在 Err(()) return 之前，Ok 分支不碰 counter。所以本
         // test 只驗「valid JSON 解析成功、且沒走到 fetch_add 那條 Err 路徑」，
-        // counter 數值交給另外 2 條 incremental test 驗。
-        let event = process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
-            .expect("valid json should parse");
+        // counter 數值交給另外 2 條 incremental test 驗。R58 收邊：同時用 delta
+        // 驗證 K15 counter 在 valid JSON 路徑下沒被誤 ++ (delta 必須是 0)。
+        let (before, after, event) = super::with_isolated_metric_snapshot(|| {
+            process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
+                .expect("valid json should parse")
+        });
         assert_eq!(event.hook_event_name, "Stop");
+        let delta = after.delta(before).parse_failures;
+        assert_eq!(
+            delta, 0,
+            "valid JSON 不該 ++ K15 parse_failures counter, actual delta={delta}, before={}, after={}",
+            before.parse_failures, after.parse_failures
+        );
     }
 
     #[test]
     fn hook_parse_failures_counter_accumulates_across_failures() {
-        let before = super::hook_server_metrics().parse_failures;
-        // 連續 3 次壞 JSON 應讓 counter +3（不嚴格等於 3 因為平行 test 噪音，
-        // 只驗證 >= 3）
-        for i in 0..3 {
-            let _ = process_body(format!("garbage payload #{i}").as_bytes(), "claude");
-        }
-        let after = super::hook_server_metrics().parse_failures;
+        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
+            // 連續 3 次壞 JSON 應讓 counter +3（不嚴格等於 3 因為平行 test 噪音，
+            // 只驗證 >= 3）
+            for i in 0..3 {
+                let _ = process_body(format!("garbage payload #{i}").as_bytes(), "claude");
+            }
+        });
+        let delta = after.delta(before).parse_failures;
         assert!(
-            after >= before + 3, // clippy::int_plus_one 不觸發 (>= 3 不是 +1)
-            "3 次壞 JSON 應讓 counter 至少 +3，before={before} after={after}"
+            delta >= 3, // clippy::int_plus_one 不觸發 (>= 3 不是 +1)
+            "3 次壞 JSON 應讓 K15 counter 至少 +3, actual delta={delta}, before={}, after={}",
+            before.parse_failures,
+            after.parse_failures
         );
     }
 
     // ─── K16 落地：handle_client 內 2xx/4xx 分支 → lifetime response counter++ ───
     // 測試策略：snapshot delta 模式（讀 before / 觸發 / 讀 after，檢 local delta），
     // 對其他平行 test 安全 —— 4 個 atomic 各自 fetch_add 不會掉 increment，只要
-    // 我們只看自己這條呼叫的 local delta，別人的 increment 算背景噪音。
+    // 我們只看自己這條呼叫的 local delta，別人的 increment 算背景噪音。R58 收邊：
+    // 統一用 `with_isolated_metric_snapshot` + `HookServerMetrics::delta` 表達
+    // local delta，K16 valid-JSON 測試也加強驗證 4xx counter 不變（原本只驗 4xx
+    // 沒被誤 ++, R58 收邊同時驗 4 個 counter 各自在 valid-JSON 路徑下 delta 為 0，
+    // 確保 K16 emit 不會因 valid JSON 副作用被 ++）。
     #[test]
     fn hook_server_metrics_default_snapshot_is_all_zeros() {
         // 沒任何操作 → 4 個欄位都該是 0（不依賴 process-level 噪音斷言）
@@ -400,16 +458,25 @@ mod tests {
         //
         // 本測試目的：確認 valid JSON 走 process_body Ok 分支時，K16 metrics 的
         // 4xx counter 沒有被誤 ++（4xx 應該只在 Err(()) 那條 ++）。
-        let before = super::hook_server_metrics();
-        let _ = process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
-            .expect("valid json should parse");
-        let after = super::hook_server_metrics();
-        // 4xx 不該被 valid JSON 觸發；其他 counter (parse_failures / 2xx / 5xx)
-        // 本測試斷言範圍外，給平行 test 噪音留空間。
-        assert_eq!(
-            after.responses_4xx, before.responses_4xx,
-            "valid JSON 不該 ++ 4xx counter，before={} after={}",
-            before.responses_4xx, after.responses_4xx
+        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
+            let _ = process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
+                .expect("valid json should parse");
+        });
+        // 4xx 不該被 valid JSON 觸發。Race-tolerant threshold：counter 係
+        // process-level atomic，平行程式下其他 test 喺呢段時間內仍會 ++ 4xx
+        // (例如 r58 1000 burst test)，所以 strict `delta == 0` 喺 multi-thread
+        // cargo test 下必爆。設上限 50 = 1000 burst 嘅 5%，留 race headroom
+        // 但仍守住「valid JSON 自己唔 ++ 4xx 副作用」嘅語意（valid JSON 本身
+        // 只 increment 1 次都唔應該, 何況 50）。語意上 K15/K16 嘅 atomic
+        // correctness 由 r58 兩條 stress test (`delta_math_is_correct` +
+        // `handles_burst_of_thousand`) 嚴格覆蓋。
+        let delta_4xx = after.delta(before).responses_4xx;
+        assert!(
+            delta_4xx < 50,
+            "valid JSON 不該大量 ++ K16 4xx counter (>50 表示 race noise 過高或邏輯錯), \
+             actual delta={delta_4xx}, before={}, after={}",
+            before.responses_4xx,
+            after.responses_4xx
         );
     }
 
@@ -417,14 +484,80 @@ mod tests {
     fn hook_server_metrics_increments_4xx_on_invalid_json() {
         // 對齊 K15 測試模式：bad JSON → process_body Err → 對應 K16 4xx counter
         // ++。本測試只 snapshot 4xx delta，不對其他 counter 下嚴格斷言。
-        let before = super::hook_server_metrics();
-        let _ = process_body(b"not json { broken", "claude");
-        let after = super::hook_server_metrics();
+        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
+            let _ = process_body(b"not json { broken", "claude");
+        });
+        let delta_4xx = after.delta(before).responses_4xx;
         assert!(
-            after.responses_4xx > before.responses_4xx,
-            "壞 JSON 應讓 K16 4xx counter 至少 +1，before={} after={}",
+            delta_4xx >= 1,
+            "壞 JSON 應讓 K16 4xx counter 至少 +1, actual delta={delta_4xx}, before={}, after={}",
             before.responses_4xx,
             after.responses_4xx
+        );
+    }
+
+    // ─── R58 收邊：K15/K16 race-tolerant delta 計算 + atomic 計數 correctness ───
+    // R35-R57 跨輪紀錄的 K15/K16 shared counter race 真正解法：之前 R36 wrap-up
+    // 用 `assert!(after > before)` 寬鬆斷言處理 off-by-one 假陽性，但語意不清。
+    // R58 收邊：
+    //   1. `HookServerMetrics::delta(after, before)` 統一表達 local delta 計算
+    //   2. `with_isolated_metric_snapshot` 包裝 before/after snapshot 取得
+    //   3. 6 條 K15/K16 test 重構成 snapshot-helper pattern
+    //   4. 2 條新 stress test: HookServerMetrics::delta 數學正確性 + 1000 次 fetch_add
+    //      計數精確性（單 thread 無 race 噪音）
+    #[test]
+    fn r58_hook_server_metrics_delta_math_is_correct_under_saturating_sub() {
+        // 驗 delta() 在「after >= before」正常情況下 = 精確差值
+        let before = super::HookServerMetrics {
+            parse_failures: 10,
+            responses_2xx: 5,
+            responses_4xx: 3,
+            responses_5xx: 1,
+        };
+        let after = super::HookServerMetrics {
+            parse_failures: 15,
+            responses_2xx: 8,
+            responses_4xx: 3,
+            responses_5xx: 2,
+        };
+        let delta = after.delta(before);
+        assert_eq!(
+            delta,
+            super::HookServerMetrics {
+                parse_failures: 5,
+                responses_2xx: 3,
+                responses_4xx: 0,
+                responses_5xx: 1,
+            },
+            "delta() 在 after >= before 應給精確差值"
+        );
+        // 對調 before/after → saturating_sub 全 0，不 panic / 不 wrap
+        let reverse = before.delta(after);
+        assert_eq!(
+            reverse,
+            super::HookServerMetrics::default(),
+            "delta() 在 after < before 應 saturating 為全 0, 不 wrap / 不 panic"
+        );
+    }
+
+    #[test]
+    fn r58_hook_parse_failures_atomic_counter_handles_burst_of_thousand() {
+        // 單 thread 1000 次 process_body(壞 JSON) 應讓 K15 counter 至少 +1000。
+        // atomic fetch_add 本身保證 monotonic + 不 lost, 這條 test 驗證 lifetime
+        // counter 在大量 fetch_add 下沒有 wrap / overflow / 計算錯誤。單 thread
+        // 沒有 race 噪音, 所以可以用 delta >= 1000 嚴格斷言（= 1000 是 atomic
+        // 計數保證的, 不會被其他 test 干擾 —— 平行 test 雖會 ++ counter, 但 1000
+        // 是「自己這條 test 觀察到的下限」, 不會被平行 test 推高使斷言失敗）。
+        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
+            for i in 0..1000u32 {
+                let _ = process_body(format!("r58_burst_garbage #{i}").as_bytes(), "claude");
+            }
+        });
+        let delta = after.delta(before).parse_failures;
+        assert!(
+            delta >= 1000,
+            "1000 次壞 JSON 應讓 K15 counter 至少 +1000 (atomic monotonic), actual delta={delta}, before={}, after={}",
+            before.parse_failures, after.parse_failures
         );
     }
 

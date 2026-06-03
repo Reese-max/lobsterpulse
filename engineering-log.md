@@ -974,3 +974,45 @@ URGENCY: MEDIUM
 - **K36 P5 percentile**: 仍違反 R50 「凍結新增 gauge」紀律, 留解封後考慮
 - **`render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct**: R26-R60 policy 持續記錄, 跨輪考慮
 - **openclaw-self-evolution 主軸切換**: 策略顧問 R50 建議, 屬 M3 級 KPI 推進, 留 R61+ 評估
+
+---
+
+### [2026-06-03] Round 61 — K19 sessions_by_state ↔ K40 provider_sessions 跨 live 切片算術護欄 (R52 chain 第一個 live 切片三件套)
+**類型**: M2 (跨 K arithmetic invariant guard, 對齊 R52-R60 護欄 chain 紀律, R50 戰略 advisor 凍結新增 gauge 指令下唯一可推進的 KPI 路線)
+**KPI**: cross-K 護欄 chain 12 → 13 (R52-R60 累計 12 條 + R61 補 K19↔K40 live 切片算術護欄, 第一次跨進 live sessions slice 維度, R52-R60 全在 lifetime aggregate 範圍)
+**KPI 進展表**:
+| KPI | 前值 (R60 wrap-up) | 後值 (R61) | 變化 |
+|---|---:|---:|---:|
+| cross-K 護欄 chain (R52-R61 累計) | 12 (R60 K14 = sum(K17 buckets) 跨 bucket 算術) | 13 (+ K19 sum by(provider) == K40 跨 live 切片算術) | +1 |
+| lib_unit_tests | 351 (R60 +1) | 352 (R61 +1 live-slice arithmetic guard) | +1 |
+| R61 範圍 clippy warning | 0 | 0 | 持平 |
+| R61 範圍 fmt diff | 0 | 0 (rustfmt 收 1 處 prefix format string 跨行) | 持平 |
+| 24h chore_ratio (R60 收尾) | 0% (R60 純 M2 護欄增量) | 0% (R61 純 M2 護欄增量, 非 H0) | 持平 |
+| KPI 落地率 (5 輪 window) | 5/5 = 100% | 5/5 = 100% (R61 含 KPI 進展表 + KPI-impact 標籤) | 持平 |
+
+**為什麼**:
+- R52-R60 護欄 chain 全在 lifetime aggregate 範圍 (K22-K35 為主, K14/K17 lifetime event counter), **沒**碰 live sessions slice 維度
+- `lib.rs:2259-2260` docstring 已寫死 `sum by(provider)(lobsterpulse_provider_sessions_by_state) == lobsterpulse_provider_sessions` 不變式但無護欄: 同一個 `for s in sessions` 迴圈 (line 1576-1590) 對 `provider_counts` (K40) 跟 `provider_sessions_by_state` (K19) 同步 +1, 算術必嚴格相等
+- bug surface: (a) 有人把 K19 抽到獨立迴圈過濾 is_active (跟 K18 max_session_age 一致) → K19 變「active only」, K40 仍算全部, 算術分裂; (b) 有人加 new state enum variant (K19 4 → 5 label) 但 K40 不動 → K19 多 bucket 跟 K40 算術分裂; (c) 有人把 `for s in sessions` 拆兩段, 兩段 sessions 切片語意變 → 算術分裂; (d) 有人改 K40 emit 加 `if c > 0` 過濾 → 0/0 邊界算術分裂
+- 對齊 R52-R60 護欄 chain 紀律 (cross-K consistency invariants): R52 K23/K24/K25 → R53 K22/K26/K27 monotonic → R54 K30 outlier → R55 K30-K34 percentile chain → R56 K27↔K34 lifetime↔window → R57 K22↔K10 freshness + K35 helper → R58 K22-K27 6 K aggregate → R59 K15 ⊆ K16 4xx → R60 K14 = sum(K17 buckets) → **R61 K19 sum by(provider) == K40 跨 live 切片算術** (R52-R60 沒覆蓋 live sessions slice 跨 K 算術關係, R61 補 R52 chain 第一個 live 切片三件套, 補 R60 chain 沒碰的 live 維度)
+- 順手解 R60 wrap-up 「不做的範圍」留的 R61+ 評估項: K14↔K17 + K19↔K40 兩條護欄一起補完, R52-R61 chain 累計 13 條
+
+**搜尋**: 沿用 R60 K14↔K17 test 風格 (4 provider fixture, 1 new test, 算術不變式核心驗證 + emit 條件 None-free vs filtered 雙路徑); K19 既有 `provider_sessions_by_state_counts_each_state_separately` (line 5929) 已驗 K19 per-state emit 但無 K40 算術對齊, R61 補 K19↔K40 算術不變式 + `info_with_state` fixture 跨 4 state 切面 (沿用 K19 既有 helper, line 3238)。
+
+**做了什麼**:
+- 1 new test (r61_k19_k40_sum_by_provider_arithmetic_invariant_across_mixed_states): 4 provider × 4 state 跨 23 sessions fixture (cicx 8 + claude 7 + gemini 6 + openx 2), 驗 (a) K19 per (provider, state) emit 11 條正確, (b) K19 不 emit 0 bucket (設計契約, gemini 缺 working/stale + openx 缺 idle/waiting), (c) K40 per provider emit 4 條正確, (d) 算術核心 sum by(provider)(K19) == K40 嚴格成立跨 4 provider
+- 算術驗證用 inline parser (從 body lines 抓 K19 prefix, sum 該 provider 所有 state bucket, 跟 K40 emit value 比對), 跨 4 provider 全 assert_eq!
+- engineering-log.md 追加 R61 entry (KPI 進展表 + 為什麼/搜尋/做了什麼/結果 + 不做範圍)
+
+**結果**: PASS (R61 K19↔K40 跨 live 切片算術護欄落地 + 1 new test + 0 lint warning + 0 fmt diff (rustfmt 自動收 1 處 prefix format string 跨行) + 0 regression + 352/352 tests)
+
+**KPI-impact: cross-K 護欄 chain 12→13 + lib_unit_tests 351→352 + R52 chain 覆蓋維度 2→3 (新增 live 切片算術) + R60 chain 留 R61+ 評估項 1→0 (K19↔K40 補完)**
+
+**不做的範圍** (給後續輪次):
+- **K15/K16 shared counter race 真正解法 (per-test `Arc<Mutex<u64>>` 或測試層局部 mock)**: R59-R61 護欄 strict invariant noise 不影響, 但根本 race 仍存在, 真正解法需架構改動
+- **K35 vs K23 lifetime filter consistency 護欄**: 語意維度不同 (K35 frequency / K23 count aggregate), 護欄增量價值低, 留觀察
+- **K36 P5 percentile**: 仍違反 R50 「凍結新增 gauge」紀律, 留解封後考慮
+- **K36 = K8/K10 算術護欄**: 同質性太高 (跟 R60 K25=K24/K23, K29=K43/K23, K35=K10/K23 同一族), 護欄增量價值低
+- **K19 ↔ K41 (provider_active) 跨 K 不變式**: K19 跟 K41 都從 `is_active` 算, 算術不變式簡單 (K19 sum == K41), 跟 K19↔K40 同質, 留觀察
+- **`render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct**: R26-R61 policy 持續記錄, 跨輪考慮
+- **openclaw-self-evolution 主軸切換**: 策略顧問 R50 建議, 屬 M3 級 KPI 推進, 留 R62+ 評估

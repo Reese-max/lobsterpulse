@@ -8003,6 +8003,187 @@ mod render_prometheus_tests {
         assert!(openx_k35.is_none(), "openx: K35 跳過 (since=None)");
     }
 
+    // ============== R61：K19 (sessions_by_state) ↔ K40 (provider_sessions) 跨 K 算術不變式護欄 ==============
+    // 策略顧問 R50 巡邏「凍結 gauge 補閉環」下, R52 補 K23/K24/K25 三件套算術不變式,
+    // R60 補 K14/K17 第二個三件套, R61 補 K19/K40 「跨 live 切片 × per-state 切面」
+    // 算術不變式 (R52-R60 chain 全在 lifetime aggregate 範圍, R61 第一次跨進 live
+    // sessions slice 維度)。 lib.rs:2259-2260 docstring 已寫死
+    // `sum by(provider)(lobsterpulse_provider_sessions_by_state) ==
+    // lobsterpulse_provider_sessions` 不變式但無護欄: 同一個 `for s in sessions`
+    // 迴圈 (line 1576-1590) 對 `provider_counts` (K40) 跟 `provider_sessions_by_state`
+    // (K19) 同步 +1, 算術必嚴格相等。 bug surface: (a) 有人把 K19 抽到獨立迴圈
+    // 過濾 is_active (跟 K18 max_session_age 一致) → K19 變「active only」, K40
+    // 仍算全部, 算術分裂; (b) 有人加 new state enum variant (K19 4 → 5 label) 但
+    // K40 不動 → K19 多 bucket 跟 K40 算術分裂; (c) 有人把 `for s in sessions`
+    // 拆兩段, 兩段 sessions 切片語意變 (e.g. 一段加 filter) → 算術分裂; (d) 有人
+    // 改 K40 emit 條件加 `if c > 0` 過濾, K19 仍 emit 0 → 0/0 邊界算術分裂。
+    // 對齊 R52-R60 護欄 chain 紀律: R52 K23/K24/K25 → R53 K22/K26/K27 → R54 K30
+    // → R55 K30-K34 percentile → R56 K27↔K34 → R57 K22↔K10 + K35 helper → R58
+    // K22-K27 6 K → R59 K15 ⊆ K16 4xx → R60 K14 = sum(K17 buckets) → R61 K19 sum
+    // by(provider) == K40 跨 live 切片算術 (R52-R60 沒覆蓋 live sessions slice
+    // 算術關係, R61 補缺口)。 4 provider × 4 state 跨 13 sessions fixture, 驗
+    // (a) K19 per (provider, state) emit 正確, (b) K40 per provider emit 正確,
+    // (c) sum by(provider)(K19) == K40 嚴格成立, (d) K40 emit 條件 None-free
+    // (counter 0 有效, 跟 K14 emit count=0 同策略) vs K19 emit 條件 (provider,
+    // state) 對非零才 emit (4 state 切面設計契約, 不 emit 0 bucket)。
+
+    #[test]
+    fn r61_k19_k40_sum_by_provider_arithmetic_invariant_across_mixed_states() {
+        // 4 provider × 4 state 跨 13 sessions fixture, K19 跟 K40 算術必嚴格相等:
+        //   cicx:   5 working + 2 idle + 1 stale         = 8   (K19: 3 buckets)
+        //   claude: 3 working + 1 waiting + 2 stale + 1 idle = 7 (K19: 4 buckets 全 state)
+        //   gemini: 2 idle + 4 waiting                    = 6   (K19: 2 buckets, 無 working/stale)
+        //   openx:  1 stale + 1 working                   = 2   (K19: 2 buckets, 無 idle/waiting)
+        //   總 sessions = 8+7+6+2 = 23; K19 buckets = 3+4+2+2 = 11; K40 series = 4
+        let sessions = vec![
+            // cicx: 8 sessions
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Idle),
+            info_with_state("cicx", true, SessionState::Idle),
+            info_with_state("cicx", true, SessionState::Stale),
+            // claude: 7 sessions (4 state 全到位)
+            info_with_state("claude", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::WaitingForUser),
+            info_with_state("claude", true, SessionState::Stale),
+            info_with_state("claude", true, SessionState::Stale),
+            info_with_state("claude", true, SessionState::Idle),
+            // gemini: 6 sessions (idle + waiting, 故意缺 working/stale 驗 K19 emit 不補 0 bucket)
+            info_with_state("gemini", true, SessionState::Idle),
+            info_with_state("gemini", true, SessionState::Idle),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            // openx: 2 sessions (stale + working, 故意缺 idle/waiting 驗 K19 emit 不補 0 bucket)
+            info_with_state("openx", true, SessionState::Stale),
+            info_with_state("openx", true, SessionState::Working),
+        ];
+        let body = render_prometheus_body(
+            &sessions,
+            sessions.len() as u64,
+            sessions.len() as u64,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // (a) K19 per (provider, state) emit 正確: 11 條 (cicx 3 + claude 4 + gemini 2 + openx 2)
+        let k19_expected = [
+            // cicx: working=5, idle=2, stale=1, 無 waiting
+            "lobsterpulse_provider_sessions_by_state{provider=\"cicx\",state=\"working\"} 5\n",
+            "lobsterpulse_provider_sessions_by_state{provider=\"cicx\",state=\"idle\"} 2\n",
+            "lobsterpulse_provider_sessions_by_state{provider=\"cicx\",state=\"stale\"} 1\n",
+            // claude: 4 state 全到位
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"working\"} 3\n",
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"waiting_for_user\"} 1\n",
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"stale\"} 2\n",
+            "lobsterpulse_provider_sessions_by_state{provider=\"claude\",state=\"idle\"} 1\n",
+            // gemini: idle=2, waiting=4, 缺 working/stale (K19 不 emit 0 bucket)
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"idle\"} 2\n",
+            "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"waiting_for_user\"} 4\n",
+            // openx: stale=1, working=1, 缺 idle/waiting (K19 不 emit 0 bucket)
+            "lobsterpulse_provider_sessions_by_state{provider=\"openx\",state=\"stale\"} 1\n",
+            "lobsterpulse_provider_sessions_by_state{provider=\"openx\",state=\"working\"} 1\n",
+        ];
+        for needle in &k19_expected {
+            assert!(
+                body.contains(needle),
+                "K19 應 emit `{needle}` 但 body 找不到 — 算術 / 計數 / 排序 任一錯"
+            );
+        }
+        // gemini 缺 working/stale: K19 emit 不補 0 bucket (設計契約)
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"working\"}"
+            ),
+            "K19 設計契約: state 計數 = 0 不 emit 0 bucket (gemini 無 working)"
+        );
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_sessions_by_state{provider=\"gemini\",state=\"stale\"}"
+            ),
+            "K19 設計契約: state 計數 = 0 不 emit 0 bucket (gemini 無 stale)"
+        );
+        // openx 缺 idle/waiting: 同設計契約
+        assert!(
+            !body.contains(
+                "lobsterpulse_provider_sessions_by_state{provider=\"openx\",state=\"idle\"}"
+            ),
+            "K19 設計契約: state 計數 = 0 不 emit 0 bucket (openx 無 idle)"
+        );
+        assert!(
+            !body.contains("lobsterpulse_provider_sessions_by_state{provider=\"openx\",state=\"waiting_for_user\"}"),
+            "K19 設計契約: state 計數 = 0 不 emit 0 bucket (openx 無 waiting_for_user)"
+        );
+
+        // (b) K40 per provider emit 正確: 4 條
+        let k40_expected = [
+            "lobsterpulse_provider_sessions{provider=\"cicx\"} 8\n",
+            "lobsterpulse_provider_sessions{provider=\"claude\"} 7\n",
+            "lobsterpulse_provider_sessions{provider=\"gemini\"} 6\n",
+            "lobsterpulse_provider_sessions{provider=\"openx\"} 2\n",
+        ];
+        for needle in &k40_expected {
+            assert!(
+                body.contains(needle),
+                "K40 應 emit `{needle}` 但 body 找不到 — provider 計數錯"
+            );
+        }
+
+        // (c) 算術不變式核心: sum by(provider)(K19) == K40, 4 provider 全驗
+        // 從 body parse 出 K19 per-provider sum, 跟 K40 emit value 比對
+        for (provider, k40_value) in &[
+            ("cicx", 8u64),
+            ("claude", 7u64),
+            ("gemini", 6u64),
+            ("openx", 2u64),
+        ] {
+            // parse 該 provider 對應所有 K19 bucket, sum
+            let prefix = format!(
+                "lobsterpulse_provider_sessions_by_state{{provider=\"{provider}\",state=\""
+            );
+            let mut k19_sum: u64 = 0;
+            let mut found_any = false;
+            for line in body.lines() {
+                if let Some(rest) = line.strip_prefix(&prefix) {
+                    // rest = e.g. `working"} 5\n` 找 `"` 結尾, 然後 ` 5\n`
+                    if let Some(close_q) = rest.find('"') {
+                        // 跳過 `state="..."` 後取 ` N` 結尾
+                        let after_state = &rest[close_q + 1..];
+                        // after_state = `} 5\n` or `} 5`
+                        if let Some(num_part) = after_state.strip_prefix("} ") {
+                            let n: u64 = num_part
+                                .trim()
+                                .parse()
+                                .unwrap_or_else(|_| panic!("K19 value parse fail: {line}"));
+                            k19_sum += n;
+                            found_any = true;
+                        }
+                    }
+                }
+            }
+            assert!(
+                found_any,
+                "{provider}: K19 該 provider 至少要有 1 個 state bucket emit"
+            );
+            assert_eq!(
+                k19_sum, *k40_value,
+                "{provider}: K19 sum by(provider) ({k19_sum}) 必須 == K40 ({k40_value})"
+            );
+        }
+    }
+
     // ============== R60：K14 (events_total) ↔ K17 (event_type_counts) 跨 bucket 算術護欄 ==============
     // 策略顧問 R50 巡邏「凍結 gauge 補閉環」下, R52 補 K23/K24/K25 三件套算術不變式 +
     // 3 層 emit set ⊆ 護欄, R60 補 K14/K17 三件套的「第二個跨 K 算術護欄」(event

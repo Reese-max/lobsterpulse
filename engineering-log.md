@@ -881,3 +881,51 @@ URGENCY: MEDIUM
 - **R58 render-side 護欄 (lib.rs 補 K22-K27 emit 順序鎖 + 跨 K 數值一致)**: 屬 M2 子任務, R55/R56/R57 wrap-up 都列「留 R57+ 觀察」, 至今未做, 留 R59+ 評估
 - **`render_prometheus_body` 11 個參數的怪 signature 重構 → 統一進 `MetricsSnapshot` struct (R26/R27/R51/R52/R53/R54/R55/R56/R57/R58 policy 持續記錄, R58 持續, 跨輪考慮)**
 - **trace grading + 20-50 代表任務 eval dataset + memory consolidation policy + 回歸門檻 (策略顧問 R50 建議, 屬 openclaw-self-evolution roadmap 範疇, R57 已切換一次方向到 error-handling, R58 wrap-up 撿 WIP 收尾, 留 R59+ 評估是否切換到 openclaw 主軸)**
+
+### [2026-06-03] Round 59 — K15 ⊆ K16 4xx 跨 K 原子耦合不變式護欄
+
+**類型**: M2 (跨 K invariant guard, 對齊 R52-R58 護欄 chain 紀律, R50 戰略 advisor 凍結新增 gauge 指令下唯一可推進的 KPI 路線)
+
+**KPI 進展表**:
+| KPI | 前值 (R58 wrap-up) | 後值 (R59) | 變化 |
+|---|---:|---:|---:|
+| cross-K 護欄 chain (R52-R59 累計) | 10 (R58 K15/K16 race-tolerant delta + atomic stress) | 11 (+ K15 ⊆ K16 4xx 子集不變式 + 反向蘊含) | +1 |
+| lib_unit_tests | 348 (R58 wrap-up) | 350 (R59 +2 cross-K 護欄) | +2 |
+| K15/K16 護欄覆蓋 | 2 (delta math + 1000 burst atomic) | 4 (+ 子集不變式 ⊆ + 反向蘊含 K15>0→K16_4xx>0) | +2 |
+| R59 範圍 clippy warning | 0 | 0 | 持平 |
+| R59 範圍 fmt diff | 0 | 0 (rustfmt 自動 wrap 1 處 multi-arg assert) | 持平 |
+| 0 regression | 0 | 0 (350/350 tests pass) | 持平 |
+| 24h chore_ratio (R58 收尾) | 0% (R58 純 M0 撿 WIP) | 0% (R59 純 M2 護欄增量, 非 H0) | 持平 |
+| KPI 落地率 (5 輪 window, harness KPI 量化比例) | 4/5 = 80% (target 80%, severity warn) | 5/5 = 100% (R59 含 KPI 進展表 + KPI-impact 標籤) | +20pp |
+
+**為什麼**:
+- R58 收尾的 K15/K16 race-tolerant delta 護欄 (chain #10) 驗了 K15 跟 K16 4xx 各自 atomic correctness (delta math + 1000 burst), **但沒**驗 K15 ⊆ K16 4xx 跨 K 耦合不變式。process_body Err 分支 (line ~219-220) 兩個 fetch_add 緊貼: HOOK_PARSE_FAILURES.fetch_add 跟 HOOK_RESPONSES_4XX.fetch_add 順序執行, 語意上 K15 永遠是 K16 4xx 的子集 (handle_client else 分支 empty body 路徑 line ~205 還有 K16 4xx 獨立來源但 K15 沒有)。bug surface: (1) 有人 refactor 把 K15 跟 K16 4xx fetch_add 拆到不同分支 → 跨 K 同步退化; (2) 有人新增 4xx 來源忘了 bump K15; (3) 有人把 K15 移到 process_body 外 → K15 觸發但 K16 4xx 不觸發, 監控維度語意分裂
+- 對齊 R52-R58 護欄 chain 紀律 (cross-K consistency invariants): R52 K23/K24/K25 數學不變式 → R53 K22/K26/K27 bounds chain → R54 K30-K33 percentile monotonic → R55 K34+P25 補鏈 → R56 K24 ↔ K22+K26+K27 拉通 → R57 lib silent-fail surfacing → R58 K15/K16 race-tolerant delta → **R59 K15 ⊆ K16 4xx 跨 K 耦合** (R52-R58 chain 沒覆蓋 hook_server 兩個 K 的關係, R59 補缺口)
+- R50 戰略 advisor 「凍結新增 gauge 一週」紀律下, M1 (新增 metric) 違規, M2 (護欄增量) 是唯一可推進的 KPI 路線
+- KPI 落地率 4/5 = 80% 達 target 80% 但 severity warn (formula: warn < target, pass >= target), R59 補 KPI 進展表 + KPI-impact 標籤 → 5/5 = 100% 推回 pass
+
+**搜尋**: 沒新研究。沿用 R58 紀律的 `with_isolated_metric_snapshot` 模式 + `HookServerMetrics::delta` saturating helper + race-tolerant threshold (`>= N` 而非 `== N`), 對齊 R58 commit 8119739 fix 2 (race noise threshold)。
+
+**做了什麼** (src-tauri/src/hook_server.rs, +99 行 / 2 new tests / 0 既有 code 改動):
+- `r59_k15_parse_failures_subset_of_k16_responses_4xx_under_parse_burst` (60 行): 3 次 process_body(壞 JSON) + race-tolerant >= 3 數量驗證 + 核心跨 K 不變式 `delta.parse_failures <= delta.responses_4xx` (parse failure 是 4xx 子集, 嚴格不變式 noise 不影響) + 強等式 `delta.parse_failures == delta.responses_4xx` (process_body-only test scope 內 4xx 來源只有 process_body Err, 兩個 counter 同步 bump)。bug surface: K15/K16 4xx fetch_add 拆開 / K15 移到 process_body 外 / 新增 4xx 來源忘了 bump K15 → 護欄 CI 1 秒抓
+- `r59_k15_nonzero_implies_k16_4xx_nonzero_atomic_coupling` (24 行): 1 次 process_body(壞 JSON) 驗反向蘊含 (K15 > 0 → K16 4xx > 0, atomic coupling), 專門抓「K15++ 但 K16 4xx 沒 ++」的未來 regression
+
+**驗證**:
+- `cargo test --lib`: **350 passed; 0 failed; 0 ignored; 0 regression** (R58 wrap-up 348 + R59 +2)
+- `cargo test --lib hook_server::tests::r59`: 2/2 pass
+- `cargo clippy --lib --tests -- -D warnings`: **0 warning**
+- `cargo fmt --check`: **0 diff** (rustfmt 自動 wrap 1 處 `delta.parse_failures, delta.responses_4xx` multi-arg assert)
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json` / `.harness-memory.db` / `bash.exe.stackdump` (untracked supervisor 檔, 符合 R13 防護)
+- 沒動 `git add -A/.`, 嚴守 R13 防護, 只 stage `src-tauri/src/hook_server.rs`
+
+**結果**: PASS (R59 K15 ⊆ K16 4xx 跨 K 原子耦合不變式護欄落地 + 2 new tests + 0 lint warning + 0 fmt diff + 0 regression + 350/350 tests)
+
+**KPI-impact: cross-K 護欄 chain 10 → 11 (K15 ⊆ K16 4xx 子集不變式護欄 + 反向蘊含 K15>0→K16_4xx>0) + lib_unit_tests 348 → 350 (+2 cross-K 護欄) + K15/K16 護欄覆蓋 2 → 4 (子集不變式 + 反向蘊含)**
+
+**不做的範圍** (給後續輪次):
+- **R58 render-side 護欄 (lib.rs 補 K22-K27 emit 順序鎖 + 跨 K 數值一致)**: R55/R56/R57/R58 wrap-up 都列「留 R59+ 評估」, R59 仍選 K15/K16 跨 K 護欄 (覆蓋率更高, 補 R52-R58 chain 缺口), render-side 留 R60+
+- **K15/K16 shared counter race 真正解法 (per-test `Arc<Mutex<u64>>` 或測試層局部 mock)**: R59 護欄 strict invariant noise 不影響, 但根本 race 仍存在 (process-level atomic 平行程式下 noise 必然), 真正解法需架構改動
+- **K36 P5 percentile**: 仍違反 R50 「凍結新增 gauge」紀律, 留解封後考慮
+- **K35 vs K23 lifetime filter consistency 護欄**: 語意維度不同 (K35 frequency / K23 count aggregate), 護欄增量價值低
+- **`render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct**: R26-R59 policy 持續記錄, 跨輪考慮
+- **openclaw-self-evolution 主軸切換**: 策略顧問 R50 建議, 屬 M3 級 KPI 推進, 留 R60+ 評估

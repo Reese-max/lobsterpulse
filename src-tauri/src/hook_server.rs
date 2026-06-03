@@ -561,6 +561,105 @@ mod tests {
         );
     }
 
+    // ─── R59 護欄：K15 (parse_failures) ⊆ K16 4xx (responses_4xx) 跨 K 原子耦合不變式 ───
+    // R58 收尾護欄鏈延伸：R58 已驗 K15 跟 K16 4xx 各自 atomic correctness (delta math +
+    // 1000 burst), 但**沒**驗 K15 ⊆ K16 4xx 子集關係。process_body Err 分支 (line ~219)
+    // 同時 fetch_add 兩個 counter (K15++ 跟 K16 4xx++ 緊貼), 語意上 K15 永遠是 K16 4xx 的
+    // 子集 (K16 4xx 還有其他來源: empty body / oversized body 在 handle_client else 分支
+    // 單獨 ++, K15 不 ++)。這個跨 K 護欄 R58 之後 R59 補, 對齊 R52-R58 護欄 chain
+    // 紀律: future refactor 若把 K15 跟 K16 4xx 拆開 increment, 或新增 4xx 來源沒對應
+    // K15++, 都會被這條 CI 1 秒抓。語意: K15 delta ≤ K16 4xx delta 永遠成立; 在只有
+    // process_body 觸發的 scope 內 (本測試 N 次 process_body 呼叫), K15 delta == K16
+    // 4xx delta 因為 4xx 來源只有 process_body Err。
+    #[test]
+    fn r59_k15_parse_failures_subset_of_k16_responses_4xx_under_parse_burst() {
+        // 3 次 process_body(壞 JSON) + race-tolerant threshold 對齊 R58 紀律
+        // (atomic counter 平行程式下 noise 必然 bump, strict == 不可靠)。Process
+        // 內部 monotonic atomic 保證本 test 自己至少 +3, noise 只會推高。
+        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
+            for i in 0..3 {
+                let _ = process_body(format!("r59_garbage #{i}").as_bytes(), "claude");
+            }
+        });
+        let delta = after.delta(before);
+        // Race-tolerant 下限: 3 次自己觸發必到, noise 推高不算 fail。
+        assert!(
+            delta.parse_failures >= 3,
+            "R59 跨 K 不變式前提: 3 次壞 JSON 應讓 K15 counter 至少 +3 (atomic monotonic), \
+             actual delta={}",
+            delta.parse_failures
+        );
+        assert!(
+            delta.responses_4xx >= 3,
+            "R59 跨 K 不變式前提: 3 次壞 JSON 應讓 K16 4xx counter 至少 +3 (process_body 是 \
+             這 scope 唯一 4xx 來源, 跟 K15 同步), actual delta={}",
+            delta.responses_4xx
+        );
+        // 核心跨 K 不變式: K15 delta ≤ K16 4xx delta (parse failure 是 4xx 子集)。
+        // 這條 strict invariant 不受 race noise 影響 — noise 來自其他 test 也走
+        // process_body Err, 兩個 counter 同步 +1, 不變式永遠成立。bug surface:
+        // 1. K15 跟 K16 4xx fetch_add 拆開 (one fires without the other)
+        // 2. K15++ 但 K16 4xx 沒 ++ (K15 delta > K16 4xx delta, 違反子集)
+        // 3. process_body Err 分支被改寫, K15 移到別處
+        assert!(
+            delta.parse_failures <= delta.responses_4xx,
+            "R59 核心跨 K 不變式被破壞: K15 parse_failures delta={} 應 <= K16 4xx \
+             responses_4xx delta={} (K15 必須是 K16 4xx 子集 — 每次 K15 觸發都在 \
+             process_body Err 緊貼 fetch_add K16 4xx, K16 4xx 還有其他來源但 K15 沒有)",
+            delta.parse_failures,
+            delta.responses_4xx
+        );
+        // 強等式 (process_body-only test scope 內): K15 delta 應 == K16 4xx delta,
+        // 因為 4xx 來源只有 process_body Err (handle_client else 分支 empty body
+        // 路徑沒被任何 test 直接觸發, grep 確認), 兩個 counter 同步 bump。
+        // 未來若新增 test 觸發 handle_client else, 這條會 fail → 提醒改用
+        // `<=` 寬鬆式子集不變式 (K15 ⊆ K16 4xx)。Race noise 對這條不影響
+        // 因為 noise 來源也只走 process_body Err 同步 +1。
+        assert_eq!(
+            delta.parse_failures, delta.responses_4xx,
+            "R59 強等式: process_body-only test scope 內 K15 delta 應 == K16 4xx delta \
+             (兩個 counter 在 process_body Err 分支緊貼 fetch_add, 4xx 來源只有這條), \
+             K15={} K16_4xx={}",
+            delta.parse_failures, delta.responses_4xx
+        );
+    }
+
+    #[test]
+    fn r59_k15_nonzero_implies_k16_4xx_nonzero_atomic_coupling() {
+        // 跨 K 反向蘊含: 任何 K15 parse failure 都必須伴隨 K16 4xx。單次 process_body
+        // 壞 JSON 應讓兩個 counter 從 0 進到 ≥1, 反向蘊含自動成立 (K15==0 → K16_4xx
+        // 可以 0 或 >0, 但 K15>0 → K16_4xx 必須 >0)。這條護欄專門抓「K15++ 但
+        // K16 4xx 沒 ++」的未來 regression (例如有人 refactor 把 K15 fetch_add 移出
+        // process_body Err 分支到外面, K16 4xx 留在分支內, K15 觸發 K16 4xx 不再
+        // 跟著觸發 → K15 > K16 4xx, 子集不變式破壞)。
+        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
+            // 1 次壞 JSON, 嚴格 single shot, race 噪音影響最小 (delta 為 1 or 2)
+            let _ = process_body(b"r59_single_garbage { not json", "claude");
+        });
+        let delta = after.delta(before);
+        // K15 至少 1 (3 個 strict eq 條件之一), 強不等式成立條件
+        assert!(
+            delta.parse_failures >= 1,
+            "1 次壞 JSON 應讓 K15 counter 至少 +1, actual={}",
+            delta.parse_failures
+        );
+        // 核心反向蘊含: K15 > 0 → K16 4xx > 0 (同 fetch_add 緊貼)
+        assert!(
+            delta.responses_4xx >= delta.parse_failures,
+            "R59 反向蘊含被破壞: K15 > 0 時 K16 4xx 必須 > 0 (atomic coupling), \
+             K15={} K16_4xx={}",
+            delta.parse_failures,
+            delta.responses_4xx
+        );
+        // 進一步: 既然 single shot, K16 4xx 至少 1
+        assert!(
+            delta.responses_4xx >= 1,
+            "1 次壞 JSON 應讓 K16 4xx counter 至少 +1 (process_body Err 緊貼 fetch_add), \
+             actual={}",
+            delta.responses_4xx
+        );
+    }
+
     #[test]
     fn process_body_defaults_session_id_when_missing() {
         let body = br#"{"hook_event_name":"Stop"}"#;

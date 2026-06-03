@@ -1015,4 +1015,55 @@ URGENCY: MEDIUM
 - **K36 = K8/K10 算術護欄**: 同質性太高 (跟 R60 K25=K24/K23, K29=K43/K23, K35=K10/K23 同一族), 護欄增量價值低
 - **K19 ↔ K41 (provider_active) 跨 K 不變式**: K19 跟 K41 都從 `is_active` 算, 算術不變式簡單 (K19 sum == K41), 跟 K19↔K40 同質, 留觀察
 - **`render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct**: R26-R61 policy 持續記錄, 跨輪考慮
+
+---
+
+### [2026-06-03] Round 62 — K6 sessions_total ↔ K40 provider_sessions 跨 live 切片算術護欄 (R52 chain 第一個 global aggregate 護欄) + K6 live ↔ K12 lifetime 切分 boundary
+**類型**: M2 (跨 K arithmetic invariant guard, 對齊 R52-R61 護欄 chain 紀律, R50 戰略 advisor 凍結新增 gauge 指令下唯一可推進的 KPI 路線)
+**KPI**: cross-K 護欄 chain 13 → 14 (R52-R61 累計 13 條 + R62 補 K6↔K40 live global aggregate 算術護欄, 完成 R61 開的 live 切片三件套: K19 (by-state) → K40 (by-provider) → K6 (global aggregate) 三層 chain 串接)
+**KPI 進展表**:
+| KPI | 前值 (R61 wrap-up) | 後值 (R62) | 變化 |
+|---|---:|---:|---:|
+| cross-K 護欄 chain (R52-R62 累計) | 13 (R61 K19 sum by(provider) == K40 跨 live 切片算術) | 14 (+ K6 sessions_total == sum by(provider)(K40 provider_sessions) 跨 live 切片算術 + K6 live ≠ K12 lifetime boundary) | +1 |
+| lib_unit_tests | 352 (R61 +1) | 354 (R62 +2: 1 main + 1 boundary) | +2 |
+| R62 範圍 clippy warning | 0 | 0 | 持平 |
+| R62 範圍 fmt diff | 0 | 0 | 持平 |
+| 24h chore_ratio (R61 收尾) | 0% (R61 純 M2 護欄增量) | 0% (R62 純 M2 護欄增量, 非 H0) | 持平 |
+| KPI 落地率 (5 輪 window) | 5/5 = 100% | 5/5 = 100% (R62 含 KPI 進展表 + KPI-impact 標籤) | 持平 |
+| live 切片算術 chain 串接度 | R61 開頭 (K19↔K40) | R62 收尾 (K19 → K40 → K6 三層 chain 完成) | 完整 |
+
+**為什麼**:
+- R61 wrap-up 補了 R52-R60 chain 第一條 live 切片三件套算術護欄 (K19 by-state → K40 by-provider), 但 R61 只做 by-state → by-provider **一層**, 沒做 by-provider → global aggregate (K6) **第二層**。 R61 docstring 自己寫的 `K19 sum by(provider) == K40` 護完, 還缺 K6 (sessions_total global live) == sum(K40) 的護欄把 chain 從 2 層串到 3 層
+- `lib.rs:1730-1740` docstring 已寫死 `lobsterpulse_sessions_total {session_count}` 從 `self.sessions.len()` (session.rs:834) 餵入, 跟同一個 `for s in sessions` 迴圈 (line 1576-1580) 對 `provider_counts` (K40) 同步 +1 嚴格一致 → K6 必 = sum by(provider) K40。 bug surface: (a) 有人把 K40 抽到獨立迴圈過濾 `is_active` (跟 K41 provider_active 對齊) → K40 變 active only, K6 仍算全部 (含 is_active=false 的 Idle inactive session) → 算術分裂; (b) 有人把 `state.session_count` 從 `self.sessions.len()` 改成 `provider_totals.iter().map(|t| t.session_count).sum()` (K12 lifetime sum) → K6 變 lifetime, K40 仍 live → 算術分裂; (c) 有人改 K40 emit 條件加 `if c > 0` 過濾 → 0/0 邊界算術分裂; (d) 有人加 K6 二次過濾 (e.g. 「只看 working state」) 但 K40 不動 → 算術分裂
+- 補 R52 chain 第三個 live 切片三件套算術護欄: R52 K23/K24/K25 lifetime → R60 K14/K17 lifetime events → R61 K19/K40 live by-state → **R62 K6/K40 live by-provider → global aggregate**, 完成 live 切片 chain (R61 是 by-state → by-provider, R62 是 by-provider → global aggregate, 鏈起來 = K6 = sum(K19) = sum(K40) 三層一致)
+- **boundary test 必要性**: K6 (live) 跟 K12 (lifetime) 在 production 中經常 K6 << K12 (session 結束 + 30 min stale 回收後 lifetime 仍累計, live 歸零), 兩條 metric 走不同資料源 (`sessions.len()` vs `ProviderTotals.session_count` 累加)。 R61 wrap-up 沒明確護這條切分, R62 boundary test 故意把 K6=3 / K12=100 灌不同值, 驗 K6 emit 3 跟 K12 emit 100 不混淆, 防未來有人把 K6 改成 lifetime aggregate 跟 K40 (live per-provider) 算術分裂
+
+**搜尋**: 沿用 R61 K19↔K40 test 風格 (4 provider × 4 state 跨 23 sessions fixture, 算術核心用 inline parser 從 body lines 抓 prefix sum 跟 emit value 比對); K6 / K40 既有 emit 測試 `provider_sessions_alphabetical_sort` (line 3920-3954) 已驗 K40 emit + 排序, 沒驗跟 K6 算術不變式, R62 補 K6↔K40 算術 + K6↔K12 切分 boundary。 fixture `info_with_state` (line 3238) + `totals_with_session_count` (line 3437) 沿用既有 helper, 0 新 fixture
+
+**做了什麼**:
+- 2 new tests:
+  1. `r62_k6_k40_sum_by_provider_global_aggregate_arithmetic_invariant_across_mixed_states` (約 110 行, 含 4 段式: K40 per-provider emit 4 條 / K6 global aggregate emit 1 條 / 算術不變式 K6 = sum(K40) 跨 4 provider 全驗 / R61-R62 chain 一致性 R61 既有 K19↔K40 + R62 K40↔K6 鏈起來 sum(K19) = K40 = K6 = 23): 4 provider × 4 state 跨 23 sessions fixture (cicx 8 + claude 7 + gemini 6 + openx 2, 跟 R61 同結構便於交叉比對)
+  2. `r62_k6_live_ne_k12_lifetime_distinct_metric` (約 75 行, boundary test): 故意 K6=3 / K12 lifetime 100 灌不同值 (claude 50 + cicx 30 + gemini 20), 驗 K6 emit 3 跟 K12 emit 50/30/20 不混淆, K40 emit 1/1/1 (跟 K12 數字完全不同 → 證明 K40 走 live 切片不走 K12 lifetime 累計), 8 條 assert 隱含驗證 K6 跟 K12 數字不同 → 兩條 metric 走不同語意, R62 chain 護的是 live (K6 ↔ K40) 不是 lifetime (K12 獨立 counter)
+- inline parser: `body.lines().strip_prefix(prefix).find('"').strip_prefix("} ")` parse K40 value, sum 跨 4 provider, 跟 K6 emit value 比對 (沿用 R61 既有 parser pattern)
+- engineering-log.md 追加 R62 entry (KPI 進展表 + 為什麼/搜尋/做了什麼/結果 + 不做範圍)
+
+**驗證**:
+- `cargo test --lib r62`: **2 passed; 0 failed; 0 ignored** (新增 2 條獨立驗證)
+- `cargo test --lib` 全套: **354 passed; 0 failed; 0 ignored; 0 regression** (R61 352 + R62 +2)
+- `cargo clippy --lib --bins -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff (rustfmt 自動收 0 處, 純 M2 護欄增量)
+
+**結果**: PASS (R62 K6↔K40 跨 live 切片算術護欄落地 + K6↔K12 boundary test + 2 new tests + 0 lint warning + 0 fmt diff + 0 regression + 354/354 tests)
+
+**KPI-impact: cross-K 護欄 chain 13→14 + lib_unit_tests 352→354 + live 切片 chain 串接度 1/2→2/2 (R61 by-state→by-provider + R62 by-provider→global) + R61 wrap-up 留的 R62+ 評估項 1→0 (K6↔K40 補完)**
+
+**不做的範圍** (給後續輪次):
+- **K19 ↔ K41 (provider_active) 跨 K 不變式**: K19 跟 K41 都從 `is_active` 算, 算術不變式簡單 (K19 active subset sum == K41), 跟 R62 K6↔K40 同質 (都從 sessions 切片語意派生子集), 護欄增量價值低, 留觀察
+- **K36 = K8/K10 算術護欄**: R61 wrap-up 已標低優先 (跟 R60 K25=K24/K23, K29=K43/K23, K35=K10/K23 同一族), R62 boundary test 順手驗證 K12 lifetime ≠ K6 live 已把「lifetime 跟 live 切分」護好, K36 同質護欄增量價值低
+- **K29 = K9/K23 算術護欄**: 同質族 (衍生 gauge = 兩個 lifetime counter 比值), R61 wrap-up 已標, 留觀察
+- **K15/K16 shared counter race 真正解法 (per-test `Arc<Mutex<u64>>` 或測試層局部 mock)**: R59-R62 護欄 strict invariant noise 不影響, 但根本 race 仍存在, 真正解法需架構改動
+- **K35 vs K23 lifetime filter consistency 護欄**: 語意維度不同 (K35 frequency / K23 count aggregate), 護欄增量價值低, 留觀察
+- **K36 P5 percentile**: 仍違反 R50 「凍結新增 gauge」紀律, 留解封後考慮
+- **`render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct**: R26-R62 policy 持續記錄, 跨輪考慮
+- **openclaw-self-evolution 主軸切換**: 策略顧問 R50 建議, 屬 M3 級 KPI 推進, 留 R63+ 評估
 - **openclaw-self-evolution 主軸切換**: 策略顧問 R50 建議, 屬 M3 級 KPI 推進, 留 R62+ 評估

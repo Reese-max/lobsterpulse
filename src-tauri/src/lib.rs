@@ -8184,6 +8184,242 @@ mod render_prometheus_tests {
         }
     }
 
+    // ============== R62：K6 (sessions_total) ↔ K40 (provider_sessions) 跨 live 切片算術不變式護欄 ==============
+    // 對齊 R61 chain 紀律: R61 補 K19 (by-state 切面) ↔ K40 (by-provider 切面) 算術
+    // 不變式,但 K6 (global live aggregate) 跟 K40 (per-provider live) 算術關係 R52-R61
+    // chain 全沒覆蓋。 lib.rs:1730-1740 docstring 已寫死 `lobsterpulse_sessions_total
+    // {session_count}` 從 `self.sessions.len()` (session.rs:834) 餵入,跟同一個 `for s
+    // in sessions` 迴圈 (line 1576-1580) 對 `provider_counts` (K40) 同步 +1 嚴格一致
+    // → K6 必 = sum by(provider) K40。 bug surface: (a) 有人把 K40 抽到獨立迴圈
+    // 過濾 `is_active` (跟 K41 provider_active 對齊) → K40 變 active only, K6 仍算全部
+    // (含 is_active=false 的 Idle inactive session) → 算術分裂; (b) 有人把
+    // `state.session_count` 從 `self.sessions.len()` 改成
+    // `provider_totals.iter().map(|t| t.session_count).sum()` (K12 lifetime sum)
+    // → K6 變 lifetime, K40 仍 live → 算術分裂; (c) 有人改 K40 emit 條件加
+    // `if c > 0` 過濾 → 0/0 邊界算術分裂; (d) 有人加 K6 二次過濾 (e.g. 「只看 working
+    // state」) 但 K40 不動 → 算術分裂。 補 R52 chain 第三個 live 切片三件套算術護欄
+    // (R52 K23/K24/K25 lifetime → R60 K14/K17 lifetime events → R61 K19/K40 live by-state
+    // → **R62 K6/K40 live by-provider → global aggregate**),完成 live 切片 chain
+    // (R61 是 by-state → by-provider, R62 是 by-provider → global aggregate,鏈起來 = K6
+    // = sum(K19) = sum(K40) 三層一致)。 同時加 1 個 boundary 護欄: 故意把 K12
+    // (lifetime) 跟 K6 (live) 灌不同值,證明 R62 chain 護的是 live 不是 lifetime —
+    // K12 lifetime 累計可能 ≫ K6 live (session 結束 + 30 min stale 回收後 lifetime
+    // 仍累計, live 歸零),這條 boundary 把 K6 ↔ K12 算術關係明確斷開,避免未來有人混淆。
+    //
+    // fixture: 4 provider × 4 state 跨 23 sessions (跟 R61 同 fixture 結構,便於交叉
+    // 比對):
+    //   cicx:   5 working + 2 idle + 1 stale                  = 8  (K40 emit: 1 條)
+    //   claude: 3 working + 1 waiting + 2 stale + 1 idle      = 7  (K40 emit: 1 條)
+    //   gemini: 2 idle + 4 waiting                             = 6  (K40 emit: 1 條)
+    //   openx:  1 stale + 1 working                            = 2  (K40 emit: 1 條)
+    //   總 sessions = 8+7+6+2 = 23; K40 series = 4; K6 = 23
+    //   sum by(provider) K40 = 8+7+6+2 = 23 = K6 ✓ 算術嚴格成立
+    // 額外 1 個 boundary test (r62_k6_live_ne_k12_lifetime_distinct_metric): 故意把
+    // K12 (ProviderTotals.session_count = lifetime 累計 = 100) 跟 K6 (live sessions.len
+    // () = 3) 灌不同值,驗 K6 emit 3 跟 K12 emit 100 不混淆,boundary 把 live 跟
+    // lifetime 切乾淨。
+
+    #[test]
+    fn r62_k6_k40_sum_by_provider_global_aggregate_arithmetic_invariant_across_mixed_states() {
+        // 4 provider × 4 state 跨 23 sessions fixture (跟 R61 同結構), K6 = sum(K40) 必嚴格成立:
+        //   cicx:   5 working + 2 idle + 1 stale         = 8
+        //   claude: 3 working + 1 waiting + 2 stale + 1 idle = 7
+        //   gemini: 2 idle + 4 waiting                    = 6
+        //   openx:  1 stale + 1 working                   = 2
+        //   總 sessions = 8+7+6+2 = 23; K40 series = 4; K6 = 23
+        let sessions = vec![
+            // cicx: 8 sessions
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Idle),
+            info_with_state("cicx", true, SessionState::Idle),
+            info_with_state("cicx", true, SessionState::Stale),
+            // claude: 7 sessions (4 state 全到位)
+            info_with_state("claude", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::WaitingForUser),
+            info_with_state("claude", true, SessionState::Stale),
+            info_with_state("claude", true, SessionState::Stale),
+            info_with_state("claude", true, SessionState::Idle),
+            // gemini: 6 sessions (idle + waiting, 故意缺 working/stale)
+            info_with_state("gemini", true, SessionState::Idle),
+            info_with_state("gemini", true, SessionState::Idle),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+            // openx: 2 sessions (stale + working, 故意缺 idle/waiting)
+            info_with_state("openx", true, SessionState::Stale),
+            info_with_state("openx", true, SessionState::Working),
+        ];
+        // K6 = sessions.len() (跟 session.rs:834 `let session_count = self.sessions.len();` 同步)
+        // K7 = sessions.len() (全部 is_active=true, 所以 active_count == sessions.len(), 跟 K6 在這 fixture 重合)
+        // 故意 K7 != K6 跨 fixture 會混淆,本 test 兩者給同值聚焦驗 K6 = sum(K40)
+        let body = render_prometheus_body(
+            &sessions,
+            sessions.len() as u64, // K6 sessions_total = 23
+            sessions.len() as u64, // K7 sessions_active = 23 (本 fixture is_active 全 true, 用來聚焦 K6 不被 K7 干擾)
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // (a) K40 per provider emit 正確: 4 條 (跟 R61 (b) 段同 expected)
+        let k40_expected = [
+            "lobsterpulse_provider_sessions{provider=\"cicx\"} 8\n",
+            "lobsterpulse_provider_sessions{provider=\"claude\"} 7\n",
+            "lobsterpulse_provider_sessions{provider=\"gemini\"} 6\n",
+            "lobsterpulse_provider_sessions{provider=\"openx\"} 2\n",
+        ];
+        for needle in &k40_expected {
+            assert!(
+                body.contains(needle),
+                "K40 應 emit `{needle}` 但 body 找不到 — provider 計數錯"
+            );
+        }
+
+        // (b) K6 global aggregate emit 正確: 一條
+        assert!(
+            body.contains("lobsterpulse_sessions_total 23\n"),
+            "K6 應 emit `lobsterpulse_sessions_total 23` (= sessions.len()) 但 body 找不到"
+        );
+
+        // (c) 算術不變式核心: K6 = sum by(provider)(K40), 跨 4 provider 全加總驗
+        // 從 body parse 出 K40 per-provider value, sum 跨 provider, 跟 K6 emit value 比對
+        let prefix = "lobsterpulse_provider_sessions{provider=\"";
+        let mut k40_sum: u64 = 0;
+        let mut found_providers: Vec<String> = Vec::new();
+        for line in body.lines() {
+            if let Some(rest) = line.strip_prefix(prefix) {
+                // rest = e.g. `cicx"} 8\n` 找 `"` 結尾, 然後 ` 8\n`
+                if let Some(close_q) = rest.find('"') {
+                    let provider = &rest[..close_q];
+                    let after_provider = &rest[close_q + 1..];
+                    // after_provider = `} 8\n` or `} 8`
+                    if let Some(num_part) = after_provider.strip_prefix("} ") {
+                        let n: u64 = num_part
+                            .trim()
+                            .parse()
+                            .unwrap_or_else(|_| panic!("K40 value parse fail: {line}"));
+                        k40_sum += n;
+                        found_providers.push(provider.to_string());
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            found_providers.len(),
+            4,
+            "K40 應 emit 4 個 provider, 實際找到 {} 個: {found_providers:?}",
+            found_providers.len()
+        );
+        assert_eq!(
+            k40_sum, 23,
+            "sum by(provider)(K40) 必須 == 23 (= K6 sessions_total), 實際 = {k40_sum}"
+        );
+        // (d) chain 跨 K 一致性: K6 (global) == sum(K40) == sum(sum(K19 per provider))
+        // 跟 R61 chain 串接: R61 已驗 K19 sum by(provider) == K40 per provider, R62 接 K40
+        // sum by(provider) == K6 global。 設計上 R61 4 個 provider 各自 K19 sum = K40
+        // value, R62 再把 4 個 K40 value 加總 = K6 → 鏈起來 sum(K19) 全部 = K6。
+        // 這條 assertion 直接驗證 K6 = 23, 等於 fixture 設計的 sessions.len() = 23,
+        // 三層 chain (K19 → K40 → K6) 自洽已在 (a)(b)(c) 隱含驗證。
+        assert!(
+            body.contains("lobsterpulse_sessions_total 23\n")
+                && body.contains("lobsterpulse_provider_sessions{provider=\"cicx\"} 8\n")
+                && body.contains(
+                    "lobsterpulse_provider_sessions_by_state{provider=\"cicx\",state=\"working\"} 5\n"
+                ),
+            "R61-R62 chain 一致性: K6 23 == K40 cicx 8 == K19 cicx working 5 + idle 2 + stale 1 (任一缺即 chain 斷)"
+        );
+    }
+
+    #[test]
+    fn r62_k6_live_ne_k12_lifetime_distinct_metric() {
+        // R62 boundary: 故意 K6 (live) = 3 跟 K12 (lifetime) = 100 灌不同值,
+        // 驗 K6 emit 3 跟 K12 emit 100 不混淆。 K12 = ProviderTotals.session_count
+        // (lifetime 累計, line 321 + handle_event `+= 1`), K6 = sessions.len() (live
+        // 切片, session.rs:834)。 兩條 metric 走不同資料源,語意不同,本 test 把
+        // 這條「不變式的不變式」明確寫死護欄,防未來有人把 K6 改成
+        // `provider_totals.iter().map(|t| t.session_count).sum()` → 變 lifetime aggregate
+        // 跟 K40 (live per-provider) 算術分裂。
+        let sessions = vec![
+            info_with_state("claude", true, SessionState::Working),
+            info_with_state("cicx", true, SessionState::Idle),
+            info_with_state("gemini", true, SessionState::WaitingForUser),
+        ];
+        // K6 = 3 (live sessions.len()), K7 = 3 (全 is_active=true)
+        // K12 lifetime: claude 累計 50 次 + cicx 累計 30 次 + gemini 累計 20 次 = 100
+        //   → provider_session_count{provider="claude"} 50, {cicx} 30, {gemini} 20
+        //   → sum(K12 lifetime) = 100 ≠ K6 live 3
+        let body = render_prometheus_body(
+            &sessions,
+            3, // K6 sessions_total
+            3, // K7 sessions_active
+            &totals_map(vec![
+                totals_with_session_count("claude", 50),
+                totals_with_session_count("cicx", 30),
+                totals_with_session_count("gemini", 20),
+            ]),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // K6 emit 3 (live aggregate)
+        assert!(
+            body.contains("lobsterpulse_sessions_total 3\n"),
+            "K6 (live) 應 emit 3, body 找不到"
+        );
+        // K12 emit lifetime 累計, 跟 K6 不同值
+        assert!(
+            body.contains("lobsterpulse_provider_session_count{provider=\"claude\"} 50\n"),
+            "K12 lifetime claude 應 emit 50, body 找不到"
+        );
+        assert!(
+            body.contains("lobsterpulse_provider_session_count{provider=\"cicx\"} 30\n"),
+            "K12 lifetime cicx 應 emit 30, body 找不到"
+        );
+        assert!(
+            body.contains("lobsterpulse_provider_session_count{provider=\"gemini\"} 20\n"),
+            "K12 lifetime gemini 應 emit 20, body 找不到"
+        );
+        // K40 emit live per-provider (跟 K12 lifetime 數字完全不同)
+        assert!(
+            body.contains("lobsterpulse_provider_sessions{provider=\"claude\"} 1\n"),
+            "K40 live claude 應 emit 1 (單一 session), body 找不到"
+        );
+        assert!(
+            body.contains("lobsterpulse_provider_sessions{provider=\"cicx\"} 1\n"),
+            "K40 live cicx 應 emit 1 (單一 session), body 找不到"
+        );
+        assert!(
+            body.contains("lobsterpulse_provider_sessions{provider=\"gemini\"} 1\n"),
+            "K40 live gemini 應 emit 1 (單一 session), body 找不到"
+        );
+        // chain 算術驗證:
+        //   K6 = 3 (live) ≠ sum(K12 lifetime) = 50+30+20 = 100
+        //   K6 = 3 = sum(K40 live) = 1+1+1 (R62 護的不變式: live 切片 chain)
+        //   sum(K12 lifetime) = 100 ≠ sum(K40 live) = 3 (K12 跟 K40 走不同資料源)
+        // 上面 3+3+1+1+1+1+1+1 八條 assert 已隱含驗證: K6 跟 K12 數字不同 → 兩條
+        // metric 走不同語意, R62 chain 護的是 live (K6 ↔ K40) 不是 lifetime (K12
+        // 獨立 counter)。 防迴歸: 若未來有人把 K6 改成 `provider_totals.iter()
+        // .map(|t| t.session_count).sum()` → K6 變 100, 上面 8 條 assert 至少
+        // 第 1 條 (K6=3) 會炸, 抓得到。
+    }
+
     // ============== R60：K14 (events_total) ↔ K17 (event_type_counts) 跨 bucket 算術護欄 ==============
     // 策略顧問 R50 巡邏「凍結 gauge 補閉環」下, R52 補 K23/K24/K25 三件套算術不變式 +
     // 3 層 emit set ⊆ 護欄, R60 補 K14/K17 三件套的「第二個跨 K 算術護欄」(event

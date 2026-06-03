@@ -171,6 +171,20 @@ async fn handle_client(
 
     let data = &buf[..n];
 
+    // R63: `/healthz` early-dispatch — operator probe 流量不該污染 K15/K16 counter,
+    // 也不該走 `parse_provider` fallback (會 parse 成 "claude" + 無 body → 400, log
+    // 變成「JSON parse failed for provider=claude body=...」誤導). 早 return 隔離.
+    if is_healthz_get_request(data) {
+        let body = build_healthz_body();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body,
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        return;
+    }
+
     // Parse provider from URL path
     let provider = parse_provider(data);
 
@@ -264,6 +278,43 @@ fn parse_provider(data: &[u8]) -> String {
 
     // Fallback: /hook without provider = claude (backward compat)
     "claude".to_string()
+}
+
+/// R63: `GET /healthz` operator-facing liveness probe。
+///
+/// 對齊「LobsterPulse v5.1 mission: 桌面監控膠囊 + 9 provider hook」的可觀察性閉環——
+/// 之前的 hook_server 只對外暴露 `/hook/{provider}` POST 端點, 沒有任何
+/// GET-friendly 的 health check 端點, 部署到 k8s / docker-compose / 監控系統
+/// (Prometheus blackbox exporter / Grafana health check / curl smoke test) 時
+/// 沒有辦法用「TCP 連得到 ≠ server 健康」去驗證 listener 還在 accept 連線 + provider
+/// dispatch 沒卡死。/healthz 補這條缺口, 純 GET + 200 OK + JSON body, 對接
+/// livenessProbe / blackbox exporter 都是零摩擦。
+///
+/// 純 fn 設計: 不接 `&self`、不讀 global state、不觸發 K15/K16 counter, 純字串比對。
+/// 呼叫端 (`handle_client`) 在 `parse_provider` 之前 early-dispatch, 把 operator
+/// 流量和真實 hook 流量徹底分流——`/healthz` 不算 hook 事件, 不該污染 K15/K16 計數。
+///
+/// 嚴格匹配 `GET /healthz HTTP/1.1`: 不接受 query string / trailing slash / 其他
+/// method, 避免「看起來像 healthz 但其實是奇怪的 hook 流量」被誤導成 200。
+fn is_healthz_get_request(data: &[u8]) -> bool {
+    let request_line = data
+        .split(|&b| b == b'\r' || b == b'\n')
+        .next()
+        .unwrap_or(b"");
+    let line = String::from_utf8_lossy(request_line);
+    line.trim() == "GET /healthz HTTP/1.1"
+}
+
+/// R63: `/healthz` response body。手寫 JSON 不引 serde derive, 對齊 hook_server
+/// 「純 fn 端 + 輕依賴」風格 (`process_body` 用 serde_json 解傳入, 自己 emit 端靠
+/// `format!`)。內容:
+///   - `status`: `"ok"` — operator probe 直接 grep
+///   - `version`: `CARGO_PKG_VERSION` — 部署時版本確認
+fn build_healthz_body() -> String {
+    format!(
+        r#"{{"status":"ok","version":"{}"}}"#,
+        env!("CARGO_PKG_VERSION"),
+    )
 }
 
 /// Normalize different CLI event names to a common set
@@ -679,6 +730,70 @@ mod tests {
         let body = br#"{"hook_event_name":"PostToolUse","session_id":"s1","tool_status":"failed"}"#;
         let event = process_body(body, "openx").expect("valid json should parse");
         assert_eq!(event.hook_event_name, "PostToolUseFailure");
+    }
+
+    /// R63: `/healthz` 純 fn 路由辨識。
+    /// 對齊 K1-K16 護欄鏈的「單元測試覆蓋」紀律 — 純 fn 端先把路由分流語意鎖住,
+    /// `handle_client` 的 early-dispatch 才是可信任的. 5 條: canonical / 拒 method /
+    /// 拒 path 變體 / body shape / JSON parse-ability.
+    #[test]
+    fn r63_is_healthz_get_request_recognizes_canonical_get() {
+        assert!(super::is_healthz_get_request(b"GET /healthz HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn r63_is_healthz_get_request_rejects_post_method() {
+        // POST /healthz 不是合法 probe — k8s livenessProbe / blackbox exporter
+        // 都送 GET, POST 進來應視為「不是 healthz」, 落到既有 /hook/* dispatch
+        // (會回 400 因為沒 body, 不算 silent fail).
+        assert!(!super::is_healthz_get_request(
+            b"POST /healthz HTTP/1.1\r\n"
+        ));
+    }
+
+    #[test]
+    fn r63_is_healthz_get_request_rejects_path_variants() {
+        // 拒絕 query string / trailing slash / 完全不相干的 path, 避免
+        // 「看起來像 healthz 但其實是奇怪 hook 流量」被誤導成 200.
+        assert!(!super::is_healthz_get_request(b"GET / HTTP/1.1\r\n"));
+        assert!(!super::is_healthz_get_request(
+            b"GET /healthz/ HTTP/1.1\r\n"
+        ));
+        assert!(!super::is_healthz_get_request(
+            b"GET /healthz?foo=bar HTTP/1.1\r\n"
+        ));
+        assert!(!super::is_healthz_get_request(
+            b"GET /hook/claude HTTP/1.1\r\n"
+        ));
+        assert!(!super::is_healthz_get_request(b"GET /metrics HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn r63_build_healthz_body_contains_status_ok_and_version() {
+        // operator probe grep 友善: 必有 "status":"ok" + 非空 version 欄位.
+        let body = super::build_healthz_body();
+        assert!(
+            body.contains(r#""status":"ok""#),
+            "body 應含 status:ok, body={body}"
+        );
+        assert!(
+            body.contains(r#""version":""#) && body.ends_with("\"}"),
+            "body 應以 version 欄位收尾 (合法 JSON 物件), body={body}"
+        );
+    }
+
+    #[test]
+    fn r63_build_healthz_body_is_valid_json_with_nonempty_version() {
+        // 反向驗證: hook_server 已 dep serde_json, 直接 parse 驗證 JSON 合法 +
+        // 欄位語意, 比純字串 contains 嚴謹.
+        let body = super::build_healthz_body();
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("body 必須是合法 JSON");
+        assert_eq!(parsed["status"], "ok");
+        let version = parsed["version"].as_str().expect("version 應為字串");
+        assert!(
+            !version.is_empty(),
+            "version 不應為空 (env! macro 必給出 Cargo.toml version), got empty"
+        );
     }
 
     /// 9-provider smoke matrix：每家走完 `parse_provider` + `process_body` 完整路徑。

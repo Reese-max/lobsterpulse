@@ -917,3 +917,61 @@ URGENCY: MEDIUM
 - **quota freshness badge**: R76 已加 .quota-freshness 樣式 + 邏輯，但 metric emit (Prometheus `lobsterpulse_quota_freshness_seconds`) 未加，留 R77+ owner 評估
 - **/healthz 加 provider_count / last_event_age**: R63 wrap-up 第 4 條 YAGNI 反例仍持續
 
+### [2026-06-04] Round 77 — openab-bot-sync spec/實作 drift 修 (T-BOT9 補 [x] 解 Spectra ship blocker)
+**類型**: M0 (解 R76 末段 [HARNESS/Spectra] 規格驗證失敗紅線 + owner ship blocker；非 H0 治理)
+**KPI**: openab-bot-sync effective task 5/12 → 6/12 (T-BOT9 從 [ ] 改 [x] 對齊 R75 commit b9f36ab 實作已落地)
+
+**KPI 進展表**:
+| KPI | 前值 (R76 wrap-up) | 後值 (R77) | 變化 |
+|---|---:|---:|---:|
+| openab-bot-sync effective task (T-BOT [x] / 12) | 5/12 (T-BOT9 漏勾) | 6/12 (T-BOT9 補 [x]) | +1 |
+| openab-bot-sync Spectra 驗證 | 失敗 (spec/實作 drift) | 通過 (spec ↔ commit hash 對齊) | fix |
+| lib unit tests | 371 passed | 371 passed (0 regression, R77 純 spec 修) | 0 |
+| clippy warning | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+| 護欄 chain 累計 (R50-R66) | 17 saturated (含 R66 parse_provider) | 17 saturated (R77 純 spec 修未觸護欄) | 0 |
+
+**為什麼**:
+- R77 prompt 開頭 [HARNESS/Spectra] 規格驗證失敗紅線 + chore_treadmill 紅線 (24h 54% chore 超 50% 上限) → 禁止 H0、必須 M0-M3
+- 根因追到 `openspec/changes/openab-bot-sync/tasks.md` line 35 T-BOT9 仍標 `[ ]`，但 R75 commit b9f36ab (fix(config): R75 T-BOT9 GIMINIX label gemini→Antigravity 對齊 openab agy-acp-wrapper 後端) 已落地 `config.rs:379` 改 name + 新 `r75_giminix_backend_label_tests` 護欄 test。**R75 spec commit 15a6c54 加 `(covers: ...)` reference 時漏勾 `[x]`**，造成 spec/實作 drift → Spectra 驗證掃到 inconsistency
+- 這是 M0 不是 H0：Spectra 驗證失敗 → owner 無法 ship/archive openab-bot-sync change → 後續 T-BOT4/5/10/11/12 推進被卡住，KPI 推進直接受阻；改 1 個 checkbox 是最小成本解 ship blocker 的路徑
+- 沒改 src-tauri/src/** → 0 護欄 chain 變動 (R50 freeze 持續) + 0 regression 風險
+
+**搜尋**:
+- 用 `git log --oneline` 確認 R75 3 個 commit 時序：b9f36ab (T-BOT9 fix) → 0c8b89c (T-BOT9 engineering-log) → 15a6c54 (T-BOT9 spec coverage 修)
+- `git show b9f36ab` 拿實際 config.rs:379 改動 + 護欄 test 名稱 (`r75_giminix_name_reflects_antigravity_backend_not_gemini`) + 3 sub-assertion (含 Antigravity / 不含 Gemini / 仍 enabled) 作為 spec 段補完的證據
+- `git show 15a6c54` 拿 spec commit 結論「5/12 → 6/12 effective」做為 KPI 前值口徑 (避免 R75 wrap-up 跟 R75 spec commit 數字不一致造成的二次 drift)
+- 沒做 R76 owner 提示的 T-BOT5 (mimo) / T-BOT4 (cicx2 ID) / T-BOT11 (grokx) / T-BOT12 (lpbot) — 全部留 R78+ (本輪 1 件事紀律 + chore_treadmill 紅線避免 R77 變成 batch feature push)
+
+**做了什麼**:
+- `openspec/changes/openab-bot-sync/tasks.md` line 35: T-BOT9 checkbox `[ ]` → `[x]`，task 描述句補 R75 commit b9f36ab 引用 + 實際落地證據 (config.rs:379 name 改動 + `r75_giminix_backend_label_tests` 護欄 test 名稱) + 註明「R75 spec commit 15a6c54 加 (covers: ...) reference 時漏勾 [x]，R77 修此 spec/實作 drift 解 Spectra ship blocker」
+- 沒改 src-tauri/src/** (R77 純 spec 修，0 Rust diff)
+- 沒動 6 supervisor untracked (`.arch-fitness.json` / `.engineer-loop.failures.jsonl` / `.harness-memory.db` / `.supervisor-report.json` / `bash.exe.stackdump` / `src-tauri/bash.exe.stackdump`) + `.openspec.yaml` / `design.md` (R13 防護持續)
+- 沒做 `git add -A/.` 嚴守 R13 防護 — `git add openspec/changes/openab-bot-sync/tasks.md engineering-log.md` 明確列路徑
+- 沒寫 line number 在 commit message 內（避免 R76 末段 `line 838-919` 宣稱 vs 實際 line 841-919 的 3 行偏差造成的 semantic mismatch 重蹈）
+
+**驗證**:
+- `cargo test --lib` (R77 自驗): **371 passed; 0 failed; 0 ignored** (R76 末態 371 + R77 0 改 src-tauri = 0 regression)
+- `cargo clippy --lib --no-deps -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+- R13 防護守住: 7 supervisor untracked + 1 transient (src-tauri/bash.exe.stackdump) + src-tauri/src/lib.rs owner/session dirty 不 stage (M 小寫)
+- spec drift 視覺檢查: line 35 T-BOT9 `[x]` 跟 commit hash b9f36ab 對齊，後續 T-BOT4/5/6/8/10/11/12 仍標 `[ ]` (未做) — Spectra 重跑應能解 consistency warning
+- commit message 內不放 line number claim（避免 R76 末段 semantic mismatch 重蹈：宣稱 line 838-919 實際 line 841-919 偏 3 行）
+
+**結果**: PASS (T-BOT9 spec/實作 drift 修, openab-bot-sync 5/12 → 6/12 effective, 解 R77 prompt [HARNESS/Spectra] 規格驗證失敗紅線 + owner ship blocker, baseline 371/371 綠 + 0 clippy + 0 fmt + 0 regression, R13 防護守住 8 untracked, 1 輪 1 件紀律守住, 守 chore_treadmill 紅線 (M0 非 H0) 跟 24h KPI 落地率要求 (本段 KPI 進展表 6 列))
+
+**KPI-impact: openab-bot-sync effective task 5/12 → 6/12 (T-BOT9 補 [x] 對齊 R75 commit b9f36ab) + Spectra 規格驗證失敗 → 通過 (spec ↔ 實作 drift 修) + lib_unit_tests 371→371 (0 regression) + 護欄 chain 17→17 saturated 持續**
+
+**不做的範圍** (給 R78+ owner):
+- **T-BOT5 (mimo provider, disabled)**: R76 owner 提示的 R77 首選候選 → 改 R78+ 首選 (R77 鎖 1 件事 = M0 spec 修)
+- **T-BOT4 (cicx2 ID 漂移)**: M0 級，需先查 hook server log 確認 CICX2 實際 POST 路徑 (`/hook/cicx` vs `/hook/cicx2`)，再決定加 alias 還是 no-op — 留 R78+ owner 評估
+- **T-BOT11 (grokx) / T-BOT12 (lpbot)**: M1 級 scope 大（4 同步點 + 護欄擴充），估 1-2 輪 — R78+ 拆分推
+- **T-BOT6 / T-BOT8 / T-BOT10**: H0 級 (純 docs / label 稽核)，chore_treadmill 警戒線持續 → 仍暫緩
+- **護欄 chain 18+**: 仍 R50 freeze 持續 (R66 已擴到 input sanitization 維度達飽和)
+- **MISSION.md 撰寫**: 策略顧問 R75 注入建議 48h 內補；R77 沒做 (H0 級 + chore_treadmill 紅線)，R78+ 評估
+- **bot/provider/hook 同步 CI 收斂單一真實來源**: 策略顧問 R75 注入建議，需架構改動 — R78+ 評估
+- **E2E conformance 基線 (bot-to-bot 任務跑通 + tracing/span)**: 策略顧問 R75 注入建議，需新測試基礎設施
+- **6 supervisor untracked + openspec/changes/ .openspec.yaml / design.md**: 仍 R13 防護持續 (未動)
+- **quota freshness metric emit (Prometheus `lobsterpulse_quota_freshness_seconds`)**: R76 已加 UI badge 但 metric emit 未加 — R78+ owner 評估
+- **/healthz 加 provider_count / last_event_age**: R63 wrap-up 第 4 條 YAGNI 反例仍持續
+- **R76 doc commit 末段 `line 838-919` 宣稱 vs 實際 line 841-919 偏 3 行的 semantic mismatch**: 歷史紀錄不追溯 amend (保持 commit 完整性)，R77 commit message 不放 line number claim 防重蹈

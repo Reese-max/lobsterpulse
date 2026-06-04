@@ -10621,3 +10621,78 @@ mod lib_warn_msg_tests {
         assert!(m4.contains("metrics_http_response_write"));
     }
 }
+
+#[cfg(test)]
+mod r74_play_sound_file_fallback_tests {
+    use super::*;
+
+    /// R74 T-BOT3 spec 收尾驗證：spec 寫「刪掉 irisx 音效檔，IRISX 事件進來不
+    /// 崩、用 default」。實作側的「default」採最簡解讀 = silent no-op (不 panic、
+    /// 不 thread spawn、不產聲音)，對應 `play_sound_file` lib.rs:202-204 早 return
+    /// 路徑 `if !path.exists() { return; }`。這條 test 把「缺檔 → 安全靜默」這條
+    /// invariant 從 commit-time 直覺變成 CI 守護：未來有人把早 return 拿掉、改成
+    /// `.unwrap()` 或 `panic!` 一定會被這條 test 抓到（call 直接 panic → test fail）
+    #[test]
+    fn r74_play_sound_file_safe_when_file_missing() {
+        // 用極不可能存在於 sounds_dir 的檔名, 確保走到缺檔分支
+        let fake_name = "__r74_definitely_missing_xxxxx_9999.mp3";
+        // 不應 panic, 不應 thread spawn (因 `if !path.exists() { return; }` 早 return)
+        // 若未來有人改壞這條早 return, call 點會直接 panic (rodio::File::open 對
+        // 不存在檔案) → test 自動 fail
+        play_sound_file(fake_name.to_string());
+        // 走到這行 = 早 return 路徑生效, 通過
+    }
+
+    /// R74 T-BOT3 spec 第二條：seed 必須 idempotent, 不能每次啟動覆寫 user 改過
+    /// 的音效檔；同時確認 irisx_bot 兩個 placeholder 都會被 seeded 進目標 dir。
+    /// 用 tempdir 隔離避免污染 `~/.lobsterpulse/sounds/`
+    #[test]
+    fn r74_seed_default_sounds_is_idempotent_and_seeds_irisx_bot() {
+        let tmp = std::env::temp_dir().join("r74_seed_default_sounds_test");
+        let _ = std::fs::remove_dir_all(&tmp); // 清乾淨避免前次 run 殘留
+        std::fs::create_dir_all(&tmp).expect("tempdir 應可建");
+
+        seed_default_sounds(&tmp);
+        let after_first: Vec<String> = std::fs::read_dir(&tmp)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        // 再 seed 一次, 檔案數應不變 (idempotent — `if !path.exists()` 守住)
+        seed_default_sounds(&tmp);
+        let after_second: Vec<String> = std::fs::read_dir(&tmp)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        assert_eq!(
+            after_first.len(),
+            after_second.len(),
+            "seed_default_sounds 應 idempotent, 第一次 = {after_first:?}, 第二次 = {after_second:?}"
+        );
+
+        // R71 T-BOT3 補的 irisx_bot 兩個 placeholder 必須都 seeded 進 tmp
+        assert!(
+            tmp.join("irisx_bot.mp3").exists(),
+            "irisx_bot.mp3 應被 seed (R71 T-BOT3)"
+        );
+        assert!(
+            tmp.join("irisx_bot-waiting.mp3").exists(),
+            "irisx_bot-waiting.mp3 應被 seed (R71 T-BOT3)"
+        );
+
+        // 既有 5 OpenAB bot × 2 sound + irisx_bot × 2 = 12 個 mp3 應都 seeded
+        // (cicx/gitx/giminix/codex/openx/irisx_bot 各 .mp3 + -waiting.mp3)
+        assert_eq!(
+            after_first.len(),
+            12,
+            "應 seeded 12 個 mp3 (6 OpenAB bot × 2), 實際 {} 個, 列表: {after_first:?}",
+            after_first.len()
+        );
+
+        // cleanup
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}

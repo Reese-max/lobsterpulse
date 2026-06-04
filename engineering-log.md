@@ -645,3 +645,60 @@ URGENCY: MEDIUM
 - 任何 MISSION.md 撰寫 (留 owner)
 - 任何 H0 (24h chore_ratio 警戒, 本輪 M0 紀律守住)
 - 任何 6 supervisor untracked 檔 + openspec/changes/ 動 (R13 防護持續)
+
+---
+
+### [2026-06-04] Round 74 — T-BOT3 spec 收尾守護測試: play_sound_file 缺檔不 panic + seed_default_sounds idempotent + irisx_bot 雙 placeholder 確認 seeded
+**類型**: M2 (KPI 量測補強 — 既有 T-BOT3 程式碼缺 deterministic 驗證, spec 寫「刪掉 irisx 音效檔，IRISX 事件進來不崩、用 default」但無 test 守護, R74 補上)
+
+**KPI**: spec openab-bot-sync 推進 3/12 → 3/12 (Phase 1 全 3 條 T-BOT 落地 + 護欄), T-BOT3 從 [ ] 改 [x] 反映 R71 work + R74 test, lib_unit_tests 365 → 367 (+2), 護欄 chain 17 saturated 維持
+
+**KPI 進展表**:
+| KPI | 前值 (R73) | 後值 (R74) | 變化 |
+|---|---:|---:|---:|
+| lib_unit_tests | 365 | 367 | +2 |
+| 護欄 chain 條數 | 17 | 17 | 0 (saturated, R50 freeze 持續) |
+| spec openab-bot-sync 推進 | 3/12 (T-BOT1+T-BOT2+T-BOT3 程式碼, T-BOT3 spec 待收) | 3/12 (T-BOT3 spec 收尾) | 0 計數 (但 T-BOT3 從 [ ] 改 [x], Phase 1 完整收) |
+| clippy warnings | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+
+**為什麼**:
+- senior 紀律: R72 wrap-up 已明示 T-BOT3 已 R71 程式碼落地但 spec 仍 [ ], R73 M0 mission 衝突決策落地 (KNOWN_PROVIDERS 9→10) 後, R74 該補 T-BOT3 spec 收尾
+- T-BOT3 spec 收尾有兩塊: (1) 規格文件 tasks.md T-BOT3 從 [ ] 改 [x] 反映 R71 work 實際狀態 (1 行 + 驗證描述); (2) deterministic 化 — 既有 T-BOT3 程式碼路徑 (lib.rs:202-204 早 return) 沒 CI 守護, 未來 refactor 拿掉早 return 沒人會抓到
+- (2) 是真 M2 (KPI 量測補強), 不是 H0: 護欄 chain saturated 16 條都圍在 metrics/K 算術, 沒守過「operator-facing 基礎設施的 fallback path」這條; T-BOT3 是 LP 唯一對 IRISX 缺檔的 silent fail 防線, 拉一條 test 比光靠 commit-time 直覺穩
+- 規格一致性: .openspec.yaml phase 1/5 → 2/5 (Phase 1 全 3 條 T-BOT 落地), kpi_alignment 維持指向 lobsters_pulse_v5_1_hook_server_9_to_10_providers (R73 已升級的 KPI, 仍是本 change 的根本 KPI)
+- chore_ratio 警戒 46% > 30%: 本輪 type = test (M2), 不會拉高 chore 比例; 守住「H0 cap 警戒下 (24h chore_ratio_pure 46% > 30%) → 嚴格挑 M-push」紀律
+- 嚴守 R13 防護: spec 文件改動留 untracked (openspec/changes/ 是 6 supervisor untracked 之一, R70-R73 全部 untracked, 不在 loop commit 範圍), 本輪只 commit src-tauri/src/lib.rs
+
+**搜尋**:
+- lib.rs:200-221 `play_sound_file` 早 return 路徑 `if !path.exists() { return; }` — 是 T-BOT3 fallback 的實作核心
+- lib.rs:114-172 `seed_default_sounds` 用 `if !path.exists()` 守 idempotent — 是 T-BOT3 雙 placeholder (irisx_bot.mp3 / irisx_bot-waiting.mp3) 落地的 runtime 入口
+- R71 commit body 寫 T-BOT3 補檔: ffmpeg 1.5s/1.0s silent placeholder, libmp3lame 對齊既有 8 個 mp3 設定
+- R67 護欄 chain 16 `r67_provider_registration_three_way_consistency` 自動接住 irisx_bot 註冊對稱, 不需 R74 擴
+
+**做了什麼**:
+1. `src-tauri/src/lib.rs:10625-10688` 新增 `r74_play_sound_file_fallback_tests` 測試模組, 2 條 test:
+   - `r74_play_sound_file_safe_when_file_missing`: 給保證不存在的 fake 檔名 `__r74_definitely_missing_xxxxx_9999.mp3` 呼叫 `play_sound_file`, 走到 lib.rs:202-204 早 return 沒 panic 即通過; 對應 T-BOT3 spec 第一條「缺檔不崩」
+   - `r74_seed_default_sounds_is_idempotent_and_seeds_irisx_bot`: tempdir 隔離 (避免污染 `~/.lobsterpulse/sounds/`), 連 seed 兩次, 確認 file count 相同 (idempotent) + irisx_bot.mp3 跟 irisx_bot-waiting.mp3 都存在 + 12 個 mp3 數對齊 (6 OpenAB bot × 2)
+2. `openspec/changes/openab-bot-sync/tasks.md` T-BOT3 [ ] → [x] + 驗證描述改為 R71 + R74 雙路徑 (留 untracked per R13)
+3. `openspec/changes/openab-bot-sync/.openspec.yaml` phase 1/5 → 2/5 (Phase 1 完整收) + kpi_alignment 維持 + 加註解說明 (留 untracked per R13)
+4. 0 production logic 改動, 純補測試 + 規格文件對齊
+
+**驗證**:
+- `cargo test --lib r74_` = 2 passed (新增 2 條), 0 regression
+- `cargo test --lib` = **367 passed; 0 failed; 0 ignored** (R73 365 + R74 +2)
+- `cargo clippy --lib --tests --no-deps -- -D warnings` = 0 warning
+- `cargo fmt --check` = 0 diff
+- R13 防護守住: `git add 明確列 src-tauri/src/lib.rs engineering-log.md`, **未動** 6 supervisor untracked (.arch-fitness.json / .supervisor-report.json / .harness-memory.db / bash.exe.stackdump / .engineer-loop.failures.jsonl) + openspec/changes/ (留 untracked)
+- spec 變更 (tasks.md / .openspec.yaml) 留 working tree, 不 commit, 對齊 R70-R73 既有模式 (spec 文件全部 untracked)
+
+**KPI-impact**: T-BOT3 spec 從 [ ] 收尾為 [x] (Phase 1 完整 3/3), 護欄從 0 拉到 2 條 deterministic 守護 (fallback 早 return + seed idempotent), lib_unit_tests 365→367
+
+**不做的範圍** (給後續輪次):
+- T-BOT4 (cicx2 ID 漂移調查) / T-BOT5 (mimo provider) / T-BOT6 (SOP doc) / T-BOT8 (docs bot inventory) / T-BOT9-T-BOT12 推進: 留 owner, mission 衝突決策後再 batch 推
+- MISSION.md 撰寫: 留 owner
+- 護欄 chain 18+ (R50 freeze 持續)
+- 任何 hook_server.rs 進階改動 (護欄 chain 15 + 17 對 10-provider 持續 invariant)
+- 任何 6 supervisor untracked 檔 + openspec/changes/ commit (R13 防護持續)
+- R74 T-BOT3 test 沒守護「user 刪 ~/.lobsterpulse/sounds/irisx_bot.mp3 後 seed_default_sounds 自動重 seed」這條 (R71 的 `if !path.exists()` 邏輯不涵蓋「使用者中途刪檔」場景) — 屬進階 seed 行為, YAGNI, 留真需求再說
+

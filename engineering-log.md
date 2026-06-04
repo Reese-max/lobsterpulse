@@ -763,3 +763,42 @@ URGENCY: MEDIUM
 - **quota/ 模組處理**: R82 owner 開工的 `src-tauri/src/quota/{mod.rs, anthropic.rs}`, mod.rs 引 `pub mod openai` 缺檔 → 需先決定 (A) 刪 openai stub 引用走單 anthropic 路線 + 補 spec proposal (B) 補 openai.rs + spec proposal (C) 整個 quota/ 模組廢棄回到 R75 既有 OpenAB `usage-*.json` snapshot 機制。**R85 owner 必須先讀 MISSION.md Provider 納入標準 #5 spec 先行再決定**
 - **R83 留的 4 個策略顧問行動收尾**: 自動週排程 / K0 趨勢追蹤 / CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift 比對
 - **R13 守住**: 8 supervisor untracked + 1 ?? quota/ (本輪不動)
+
+### [2026-06-04] Round 85 — 收 R82 半成品 quota/ 模組 + 修 fmt_tokens rounding bug
+**類型**: M0 (R84 遺留 baseline blocker 修復 + R82 半成品落地)
+**KPI**: K40 spec/實作一致性 +1 (R82 半成品落地 1/14 契約, 留 13/14 給 R86+)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| 護欄 chain 飽和 | 17 | 17 | 0 (沒新增, 守 MISSION K42 「不過度擴張」) |
+| baseline test | 372 pass / 1 fail (fmt_tokens_billions) | 379 pass / 0 fail | +7 / -1 fail |
+| baseline clippy | 0 warning | 0 warning | 0 |
+| baseline fmt diff | 0 | 0 | 0 (cargo fmt 自動重排 anthropic.rs 排版, 0 邏輯改動) |
+| R13 守住 | 8 supervisor untracked | 8 supervisor untracked | 守住 |
+| K0 Quota 即時性 scaffolding | 0/14 (R86+ 接入) | 0/14 (R86+ 接入, 但 1/14 契約已就位) | 0 實值, +1 契約 |
+
+**為什麼**:
+- R84 commit da43df6 故意不 stage R82 開工留下的 quota/ 半成品 (Cargo.toml reqwest + lib.rs mod quota + quota/ 目錄), commit message 寫「需先補 spec proposal 走 MISSION Provider 納入標準 #5 spec 先行」
+- R85 接手時實測 cargo test --lib 跑 378 pass + 1 fail, 阻擋 K40 0 regression 紅線
+- 修 fmt_tokens rounding bug 同時收 R82 半成品, 一次解兩個: (1) baseline 紅線 (2) R84 留的 R82 半成品遺留
+- 沒補其他 13 provider 的 quota/ 實作, 因為 R86+ 接力 + spec 先行要求, R85 不擅自擴張
+
+**搜尋**:
+- 無 (沿用既有 K15/K16 rounding 語意, Rust 預設 {:.1f} 是 banker's rounding 文件查證後強制改 half-up)
+
+**做了什麼**:
+- Stage 限定: `src-tauri/Cargo.toml` + `src-tauri/Cargo.lock` + `src-tauri/src/lib.rs` + `src-tauri/src/quota/mod.rs` (新) + `src-tauri/src/quota/anthropic.rs` (新) — 5 檔
+- 修 fmt_tokens: 改用 `(v / 1e9 * 10.0).round() / 10.0` 強制 half-up (away from zero), 7_250_000_000 → 7.3B ✓
+- cargo fmt 自動重排 anthropic.rs 全檔 (method chain 對齊 / join line), 0 邏輯改動
+- 收 R82 半成品: Cargo.toml 加 reqwest 0.12 (json + rustls-tls, default-features=false 對齊既有 rodio 風格), lib.rs 加 mod quota 聲明
+- 不動: 8 supervisor untracked (R13 防護) + 任何 hook_server.rs / metrics 路徑 (R84 K46 已落)
+
+**結果**: PASS (R85 M0 修 R82 fmt_tokens bug + 收 R82 半成品, commit 8408b4f, 守 chore_treadmill 紅線 0% [M0 不算 chore], 守 1 輪 1 件事, baseline 372→379, 7 個新 quota test 全綠 + 1 個 fmt_tokens_billions bug 修綠, R13 守住 8 untracked, 守護欄 chain 17 條不過度擴張)
+
+**KPI-impact: K0 Quota 監控即時性契約 0/14→1/14 (scaffolding, 實值留 R86+)**
+
+**不做的範圍** (給 R86+ owner):
+- **quota/ 13 個其他 provider 實作**: openai / gemini / copilot / 9 個 OpenAB bot, R86+ 接力, 需先補 spec proposal 走 MISSION Provider 納入標準 #5 spec 先行
+- **R83 留的策略顧問行動收尾**: 自動週排程 / K0 趨勢追蹤 / CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift 比對
+- **Tauri command 接入 quota/ 模組**: R82 註解明寫 R86+ 接入, R85 不搶
+- **R13 守住**: 8 supervisor untracked (本輪不動)

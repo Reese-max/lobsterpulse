@@ -746,3 +746,41 @@ URGENCY: MEDIUM
 - R66 護欄用 set 收斂 (純函式級 in hook_server.rs test mod), 不做 integration test 起 hook_server 接 socket 跑 (scope 大, 留 R67+ 評估)
 - `KNOWN_PROVIDERS` 改用 `&[ProviderId]` enum 強型別: 純 enum 重構, 護欄算術無差, 留真要廢除 string-based provider routing 再重構
 - H0 housekeeping: R66 沒做, 持續找無對齊 KPI 推進的合理項, 不強做
+
+### [2026-06-04] Round 67 — T-BOT7 drift 守護測試 — 跨 3 同步點的 provider 一致性護欄 chain 第 16 條 (commit ff4b0cb)
+**類型**: M1 (對齊 openspec/changes/openab-bot-sync/ T-BOT7, 推進 v5.1 mission「9 provider 完整監控」drift 防護)
+**KPI**: 護欄 chain 15→16 (新類型 cross-config invariant, 解封 R50 凍結) + lib_unit_tests 363→364 (+1) + 對齊 v5.1 mission「9 provider 完整性」
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| 護欄 chain 條數 | 15 | 16 | +1 |
+| lib_unit_tests 總數 | 363 | 364 | +1 |
+| provider_registration_guard_tests 子集 | 0 | 1 | +1 |
+| clippy warnings | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+
+**為什麼**: R65 戰略顧問 patrol verdict 提「hook_server hardening 是 platform support, 主線是 openclaw-self-evolution Phase 2-4」, 但 R66/R67 重新對齊 — LobsterPulse v5.1 mission (CLAUDE.md 頂部段) = 「hook_server 收 9 provider 事件 + Prometheus exporter + 桌面膠囊」, openspec/changes/openab-bot-sync/ 12 task 全 [ ] = 真實未對齊的 OpenAB bot 清單, 是 v5.1 mission 本身 (非 platform support)。T-BOT7 是 12 項中最低風險 / 最高護欄價值 (純 test, 護衛即將落地的 T-BOT1/2/5/11/12) / 非衍生 (cross-config invariant 新類型, 解 R50 凍結), 適合 R67 單輪一條落地。
+
+**搜尋**: 既有護欄測試風格 (R52-R62 跨 K 算術 + R66 parse_provider set 收斂), 既有兩個 config.rs test module (save_config_at_tests / load_config_at_tests) — 採同樣 TmpDir + Drop 風格但本 test 不需 tmpdir (純函式級), 採更輕量風格。
+
+**做了什麼**: src-tauri/src/config.rs append 1 個 `#[cfg(test)] mod provider_registration_guard_tests` (89 行, 0 行 production code 改動) + 1 個 test function `r67_provider_registration_three_way_consistency`, 5 條 sub-assertion:
+- (a) sounds keys ⊆ providers keys
+- (b) waiting_sounds keys ⊆ providers keys
+- (c) sounds 與 waiting_sounds 集合對稱
+- (d) enabled OpenAB bot (🤖 前綴) ≥ 5 隻 (對齊 v5.1 mission + openspec drift table)
+- (e) 所有 provider name 必須有 🤖/💻 前綴 (對齊 T-BOT6 SOP + CLAUDE.md naming convention)
+
+**驗證**:
+1. cargo test --lib = 364/364 綠 (363→364, +1)
+2. cargo clippy --lib --no-deps -- -D warnings = 0 warning
+3. cargo fmt --check = 0 diff
+4. 破壞性驗證: inject orphan_bot 進 sounds maps → (a) 立即 fail with 清晰診斷 (`orphan_bot 不在 default_providers() 內, 觀察 providers keys = [...]`), 還原後 test 重回 1/1 通過 — 護欄真會咬
+
+**結果**: PASS
+
+**不做的範圍** (給後續輪次):
+- 第 4 同步點 (usage poller 迴圈 lib.rs line 547 hardcode 5 bot_id) 抽常數屬 refactor 範疇, 留 R67+ 評估 (openspec 標 deferred)
+- 撞 id 守護子項: 5 條 sub-assertion 已含 (a)(b)(c) 防 sounds 撞 providers, 但「多個 openab enabled bot 映射到同一 LP provider id」需抽 OPENAB_BOT_IDS const 才能驗, 屬 T-BOT11 範疇, 留 R67+ 落地
+- openspec 剩 11 task (T-BOT1/2/3/4/5/6/8/9/10/11/12) 持續往後輪次推進, R67 只做 T-BOT7 (護欄先到位, 推 provider 註冊更安全)
+- R65 patrol verdict 提的 openclaw-self-evolution Phase 2-4 pivot: 不在本專案 scope, 持續供 owner 決定

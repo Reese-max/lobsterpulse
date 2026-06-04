@@ -975,3 +975,75 @@ URGENCY: MEDIUM
 - **quota freshness metric emit (Prometheus `lobsterpulse_quota_freshness_seconds`)**: R76 已加 UI badge 但 metric emit 未加 — R78+ owner 評估
 - **/healthz 加 provider_count / last_event_age**: R63 wrap-up 第 4 條 YAGNI 反例仍持續
 - **R76 doc commit 末段 `line 838-919` 宣稱 vs 實際 line 841-919 偏 3 行的 semantic mismatch**: 歷史紀錄不追溯 amend (保持 commit 完整性)，R77 commit message 不放 line number claim 防重蹈
+
+### [2026-06-04] Round 78 — T-BOT11 GROKX 拆獨立 provider + T-BOT8 docs 收尾 + 暗藏 test 隔離修
+**類型**: M0 (T-BOT11 解 ship 阻斷 + 監控盲區) + M1 (T-BOT8 docs 收尾) + 修 (8c70612 內含 R36 shared counter race test 隔離修, commit message 漏述)
+**KPI**: openab-bot-sync 5/12 → 7/12 (T-BOT8 + T-BOT11 落地); hook_server 防 race 假陽; README 監控清單 0→10 provider 結構
+
+**為什麼**:
+- **T-BOT11 (M0)**: openab operator 2026-06-04 修 openab config-copilot-native.toml GROKX 原與 GITX 共用 `bot_id="gitx"` 撞 id，事件被解析到同一個 bucket 破壞 K40 metric 算術 + 視覺混淆；operator 拆成 `bot_id="grokx"`，LP 端須補 4 同步點跟上，否則 POST `/hook/grokx` 會被 hook_server 解析成「未知 provider」丟掉（KNOWN_PROVIDERS 10 個白名單，grokx 不在內）。LP 純同步落地（openab 端 source of truth 已修）
+- **T-BOT8 (M1)**: R76 收完 irisx_bot 4 同步點（R70/R73 chain 補完），但 README.md 仍停留在 AgentPulse fork 原始 4 CLI 描述，docs/實作 drift。T-BOT8 spec 驗證條件「docs 列出 IRISX + hermes 後端」未達標。R78 補 1 段「監控清單（v5.1+）」章節把 10 provider 結構落地 docs + 標 2 條已知後端對齊
+- **8c70612 暗藏 test 修**: commit message 開頭寫「docs:」+ 行內寫「未動 src-tauri/src/hook_server.rs」, 但實際 diff 內含 `k15_4xx_implication` test refactor — `with_isolated_metric_snapshot` (走 process-level default_metrics()) 改成自持 `super::new_metrics()` instance 隔離平行 test 的 shared counter 噪音；R36 shared counter race 復發 (4 個 atomic load 跨 process_body race window → K15 delta > K16_4xx delta 假陽 fail)。**這是 commit message 漏述真實 diff 的 semantic mismatch** (R77 末段警示的同類 anti-pattern)
+- **chain #16 (f) 護欄擴充**: 既有 (a-e) 守 set membership / 前綴 / ≥5 enabled count, R78 加 (f) 守「enabled 🤖 OpenAB bot name 『· OpenAB X』後段 X 集合兩兩不同」, 防「撞後端視覺標籤」drift (GROKX 原與 GITX 案例)。Rust HashMap key 唯一由 type system 編譯期保證, 故 runtime 層「撞 id」表達不可能 — (f) 是撞**後端視覺標籤**的 runtime 補強, 與 type system 編譯期擋撞 id 互補
+
+**KPI 進展表**:
+| KPI | 前值 (R77 wrap-up) | 後值 (R78) | 變化 |
+|---|---:|---:|---:|
+| openab-bot-sync effective task (T-BOT [x] / 12) | 6/12 (T-BOT9) | 7/12 (T-BOT8+T-BOT11) | +1 (T-BOT8) → 7/12 (T-BOT11) |
+| OpenAB bot provider (hook_server KNOWN_PROVIDERS) | 6 (cicx/gitx/giminix/codex_bot/openx/irisx_bot) | 7 (+ grokx) | +1 |
+| hook_server 防 race 假陽 (K15↔K16_4xx 嚴格 eq) | ≥1 (loose, 平行 test 干擾可漂) | ==1 (strict, 隔離 instance) | 嚴格化 |
+| README 監控清單章節 | 0 (AgentPulse 原始 4 CLI) | 1 (10 provider + 後端對齊 + R67 SOP 引用) | +1 |
+| 護欄 chain #16 子項 | (a)(b)(c)(d)(e) | (a)(b)(c)(d)(e)(f) | +1 sub-assertion |
+| lib unit tests | 368 passed | 368 passed (0 regression, T-BOT11 是既有 test 加 case, 8c70612 test 改 assert 嚴格化) | 0 |
+| clippy warning | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+
+**搜尋**:
+- 用 `git show --stat <hash>` 拿 2 個 R78 commit 的真實 diff, 不只看 commit message (避 R76/R77 警示的「commit message claim vs 實際 diff」drift)
+- 用 `git show 8c70612 -- src-tauri/src/hook_server.rs` 抓 test 隔離修的真相, 對齊 R36/R65 shared counter race 歷史脈絡
+- R67 chain #16 既有 sub-assertion (a-e) 拿來評估是否觸發既有 invariant — T-BOT11 加 grokx 仍守住 (a) set membership / (b) 前綴 / (c) enabled count / (d)(e) 命名 convention, 故 (a-e) 自動通過; (f) 是新規 sub-assertion 擴充
+- 本機 CLI provider (claude/codex/copilot/gemini key) 維持不變, R78 只動 OpenAB bot 維度
+
+**做了什麼**:
+- **8c70612 commit (T-BOT8 docs + 暗藏 test 修, 2 檔)**:
+  - `README.md` +28 行 (「## 監控清單（v5.1+）」章節, 列 OpenAB 6 bot + 本機 CLI 4 共 10 provider, 標 IRISX/hermes + GIMINIX/Antigravity 後端對齊, 呼應 R67 護欄 4 同步點守護 SOP)
+  - `src-tauri/src/hook_server.rs` test 隔離修 (commit message 漏述): `k15_4xx_implication` test 改用 `super::new_metrics()` 自持 MetricsArc, 從自己的 atomic 讀, 平行 test 完全無關; assert 從 `>= 1` 嚴格化為 `== 1`, 防 shared counter race 假陽
+- **29bc7c0 commit (T-BOT11 GROKX, 6 檔)**:
+  - `src-tauri/src/config.rs` +45 行: `default_providers` 加 grokx (name "🤖 GROKX · OpenAB Grok", enabled=true, line ~420); `default_provider_sounds` + `default_provider_waiting_sounds` 各加 grokx entry (line ~340 / ~356); 護欄 chain #16 (f) 擴充 (line ~942) — enabled 🤖 OpenAB bot name 後段 X 集合兩兩不同
+  - `src-tauri/src/hook_server.rs` +22/-15: KNOWN_PROVIDERS 10→11 (line ~328, 加 grokx); `parse_provider` 護欄 test 案例加 grokx + size 10→11
+  - `src-tauri/src/lib.rs` +17/-X: `seed_default_sounds` 內嵌 grokx.mp3 + grokx-waiting.mp3 兩條; r74 mp3 seeded 12→14 護欄
+  - `sounds/grokx.mp3` (9596 B silent 1.5s) + `sounds/grokx-waiting.mp3` (6572 B silent 1.0s) — 沿 R71 irisx_bot silent mp3 模式
+  - `openspec/changes/openab-bot-sync/tasks.md` T-BOT11 [ ] → [x] + 4 同步點落地證據 + (f) 護欄 line 號 + line 44 撞 id 守護文字修正 (留 R79 觀察輪再收斂)
+- 沒動 `src-tauri/src/quota/` (WIP, mod.rs 缺 openai.rs 整個未接入 lib.rs, commit 會 break build, 保持 untracked per R13)
+- 沒動 6 supervisor untracked (`.arch-fitness.json` / `.engineer-loop.failures.jsonl` / `.harness-memory.db` / `.supervisor-report.json` / `bash.exe.stackdump` × 2) + `openspec/changes/openab-bot-sync/.openspec.yaml` + `design.md` (R13 防護持續)
+- 沒做 `git add -A/.` 嚴守 R13 防護 — 8c70612 精準 add 2 檔 (README.md + hook_server.rs), 29bc7c0 精準 add 6 檔
+
+**驗證**:
+- `cargo test --lib` (R78 自驗): **368 passed; 0 failed; 0 ignored** (T-BOT11 是既有 test 加 case / (f) 護欄是既有 test 加 sub-assertion, 8c70612 test 改 assert 嚴格化, 故 test count 不變)
+- `cargo clippy --lib --no-deps -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+- 8c70612 test 隔離修: 改 strict `== 1` 後 `k15_4xx_implication` 仍 PASS, 證明隔離 instance 設計正確
+- T-BOT11 KNOWN_PROVIDERS 護欄 size 11 守住 + parse_provider grokx 案例 PASS
+- T-BOT11 r74 mp3 seeded 14 護欄 PASS (grokx 兩 mp3 都 seeded)
+- 沒動 R13 8 untracked — `git status` 仍顯示 8 untracked + 0 modified
+- 8c70612 commit message 漏述 hook_server.rs test 修: 已在 engineering-log 誠實記載 (不追溯 amend, 守 R77 紀律); 給 R79+ 提示: future commit message 寫「M 無 diff」前先跑 `git diff --stat` 對齊實際變更
+
+**結果**: PASS (T-BOT11 GROKX 4 同步點 + (f) 護欄 + T-BOT8 docs 收尾 + 8c70612 暗藏 test 隔離修, openab-bot-sync 6/12→7/12 effective, KNOWN_PROVIDERS 10→11, README 監控清單 0→1, baseline 368/368 綠 + 0 clippy + 0 fmt + 0 regression, R13 防護守住 8 untracked, 1 輪 2 個 commit 收 T-BOT8 + T-BOT11 chain 連續性)
+
+**KPI-impact: openab-bot-sync 6/12→7/12 effective (T-BOT11 done) + KNOWN_PROVIDERS 10→11 (OpenAB bot 6→7) + 護欄 chain #16 (a-e)→(a-f) +1 sub-assertion + README 監控清單章節 0→1 (10 provider 結構 + 後端對齊 + R67 SOP) + K15↔K16_4xx strict eq 化 (防 shared counter race 假陽) + lib_unit_tests 368→368 (0 regression)**
+
+**不做的範圍** (給 R79+ owner):
+- **T-BOT5 (mimo provider, disabled)**: R76 owner 提示的 M1 小 feature, 1 輪可推完, R79+ 首選候選
+- **T-BOT4 (cicx2 ID 漂移)**: M0 級, 需先查 hook server log 確認 CICX2 實際 POST 路徑 (`/hook/cicx` vs `/hook/cicx2`), 再決定加 alias 還是 no-op
+- **T-BOT12 (lpbot provider)**: M1 級, 4 同步點 + spec 同步, 沿 R78 T-BOT11 grokx 模式可 1 輪推完
+- **T-BOT6 (SOP doc)**: H0 級 (純 docs checklist), chore_treadmill 警戒線持續 → 暫緩
+- **T-BOT10 (全 bot 後端標籤稽核)**: H0 級, 7 條 provider name 對齊 audit, chore_treadmill 警戒線 → 暫緩
+- **護欄 chain 17+**: R50 freeze 持續 (R66 擴到 input sanitization, R78 擴 (f) 撞標籤守護, chain #16 達 6 sub-assertion)
+- **T-BOT11 line 44 撞 id 文字收斂**: R78 spec commit 內已標「R79 觀察輪可考慮把 line 44 文字收斂成『撞 id 由 type system 擋 + (f) 擋撞標籤』」— R79 觀察輪若無更優先 item 可順手收
+- **8c70612 commit message 漏述 test 修追溯 amend**: 不追溯 (守 R77 紀律: 保持 commit 完整性), engineering-log 已誠實記載差異
+- **MISSION.md 撰寫**: 策略顧問 R75 注入建議 48h 內補；R78 沒做 (H0 級 + chore_treadmill 紅線) — R79+ 評估
+- **bot/provider/hook 同步 CI 收斂單一真實來源**: 策略顧問 R75 注入建議, 需架構改動 — R79+ 評估
+- **E2E conformance 基線 (bot-to-bot 任務跑通 + tracing/span)**: 策略顧問 R75 注入建議, 需新測試基礎設施
+- **quota freshness metric emit (Prometheus `lobsterpulse_quota_freshness_seconds`)**: R76 已加 UI badge 但 metric emit 未加 — R79+ 評估
+- **/healthz 加 provider_count / last_event_age**: R63 wrap-up 第 4 條 YAGNI 反例仍持續
+- **`src-tauri/src/quota/` 模組拆分**: 仍 WIP (mod.rs 缺 openai.rs, 未接入 lib.rs, 整個 untracked) — R79+ owner 評估是否要落地或撤掉

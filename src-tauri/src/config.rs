@@ -376,7 +376,12 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
         "giminix".into(),
         ProviderConfig {
             enabled: true,
-            name: "🤖 GIMINIX · OpenAB Gemini".into(),
+            // R75 T-BOT9: GIMINIX 後端已從 gemini 換成 agy-acp-wrapper (Antigravity),
+            // 見 openab/config-gemini.toml 第 1 行「後端: agy-acp-wrapper (Antigravity)」。
+            // bot_id 維持 giminix 不變 (T-BOT11 才拆 grokx 那條),
+            // 本機 gemini CLI provider (line 436/580, `gemini` key) 仍保留,
+            // 護欄測試 r75_giminix_name_reflects_antigravity_backend_not_gemini 守此字串。
+            name: "🤖 GIMINIX · OpenAB Antigravity".into(),
             settings_path: None,
         },
     );
@@ -916,5 +921,61 @@ mod provider_registration_guard_tests {
                 p.name
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod r75_giminix_backend_label_tests {
+    //! R75 T-BOT9 fallback 守護測試 — GIMINIX label gemini → Antigravity。
+    //!
+    //! 對齊 `openspec/changes/openab-bot-sync/tasks.md` T-BOT9:
+    //! GIMINIX bot 後端已從 gemini 換成 agy-acp-wrapper (Antigravity,
+    //! 見 openab/config-gemini.toml 第 1 行「後端: agy-acp-wrapper (Antigravity)」),
+    //! 但 config.rs 內 name 仍標 `"OpenAB Gemini"` 屬 stale label drift。
+    //!
+    //! 改為 `"OpenAB Antigravity"` 後, 本 test 守:
+    //! 1. `giminix` provider 確實存在於 `default_providers()` (sanity, 防 key 漂移)
+    //! 2. name 含 "Antigravity" 字樣 (後端字樣對齊 openab 真實後端)
+    //! 3. name 不含 "Gemini" 字樣 (防 refactor 退回 + 防跟本機 gemini CLI provider
+    //!    `gemini` key 視覺混淆 — 本機 `gemini` CLI 在 line 436/580, 仍是 gemini)
+    //!
+    //! 不開新護欄 chain (R50 freeze 持續, R75 test 屬該改動的 deterministic 守護,
+    //! 跟 R74 `r74_play_sound_file_safe_when_file_missing` 同模式: 該改動的 fallback
+    //! 守護, 非 invariant chain 擴展)。
+    use super::*;
+
+    #[test]
+    fn r75_giminix_name_reflects_antigravity_backend_not_gemini() {
+        let providers = default_providers();
+        let giminix_cfg = providers.get("giminix").expect(
+            "R75: giminix provider 應在 default_providers() 內, \
+                     若此 fail 表示 key 漂移, 需檢查 R67 護欄 chain 16 與 \
+                     openab config-*.toml 對齊狀態",
+        );
+
+        // 守 (1) name 含 Antigravity 字樣
+        assert!(
+            giminix_cfg.name.contains("Antigravity"),
+            "R75 T-BOT9 fail: giminix name {:?} 應含 'Antigravity' (openab 後端: agy-acp-wrapper), \
+             退回舊值就是 R70 spec drift 半成品, 對齊 R75 commit 還原"
+            ,
+            giminix_cfg.name
+        );
+
+        // 守 (2) name 不含 Gemini 字樣 — 防 refactor 退回 + 防跟本機 gemini CLI 視覺混淆
+        assert!(
+            !giminix_cfg.name.contains("Gemini"),
+            "R75 T-BOT9 fail: giminix name {:?} 不應含 'Gemini', \
+             後端已換 agy-acp-wrapper; 含 'Gemini' = R70 spec drift 退回, \
+             也會跟本機 `gemini` CLI provider (line 436/580) 視覺混淆",
+            giminix_cfg.name
+        );
+
+        // 守 (3) giminix 仍 enabled — 防誤 disable
+        assert!(
+            giminix_cfg.enabled,
+            "R75 T-BOT9 fail: giminix 應保持 enabled, R70 升 6 隻 OpenAB bot 設計選擇, \
+             退回 disabled = 監控盲區, R67 護欄 chain 16 (d) `>= 5` 不會抓單隻 disable"
+        );
     }
 }

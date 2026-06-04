@@ -1069,7 +1069,7 @@ mod r75_giminix_backend_label_tests {
             ("openx", "OpenCode"),
             ("irisx_bot", "Hermes"),
             ("grokx", "Grok"),
-            ("lpbot", "Claude"),       // quota 監控，後端同 cicx
+            ("lpbot", "Claude"), // quota 監控，後端同 cicx
             ("mimo", "MIMO"),
         ];
 

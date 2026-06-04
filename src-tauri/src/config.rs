@@ -343,6 +343,8 @@ fn default_provider_sounds() -> HashMap<String, String> {
         // R78 T-BOT12: LPBOT 納管（quota 監控用，operator 2026-06-04 在 openab
         // config-lpbot.toml 加 [lobsterpulse] bot_id="lpbot" enabled=true）
         ("lpbot".into(), "lpbot.mp3".into()),
+        // R78 T-BOT5: MIMO provider（disabled，對應 openab config-mimo.toml）
+        ("mimo".into(), "mimo.mp3".into()),
     ])
 }
 
@@ -360,6 +362,8 @@ fn default_provider_waiting_sounds() -> HashMap<String, String> {
         ("grokx".into(), "grokx-waiting.mp3".into()),
         // R78 T-BOT12: LPBOT waiting 音效（對稱 default_provider_sounds）
         ("lpbot".into(), "lpbot-waiting.mp3".into()),
+        // R78 T-BOT5: MIMO waiting 音效（對稱 default_provider_sounds）
+        ("mimo".into(), "mimo-waiting.mp3".into()),
     ])
 }
 
@@ -441,6 +445,16 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
         ProviderConfig {
             enabled: true,
             name: "🤖 LPBOT · OpenAB Claude（quota 監控）".into(),
+            settings_path: None,
+        },
+    );
+    // R78 T-BOT5: MIMO provider（disabled，對應 openab config-mimo.toml）
+    // 預設不啟用，operator 可從 tray menu 手動開啟
+    m.insert(
+        "mimo".into(),
+        ProviderConfig {
+            enabled: false,
+            name: "🤖 MIMO · OpenAB MIMO".into(),
             settings_path: None,
         },
     );

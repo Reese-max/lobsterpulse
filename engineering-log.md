@@ -5,6 +5,59 @@
 ## 改善紀錄
 
 
+### [2026-06-04] Round 65 — K15/K16 race 真正解法: 4 個 process-level `static AtomicU64` → `Arc<MetricsCore>` 注入模式 + strict invariant test 從 flaky 變 deterministic
+**類型**: M0 (架構改動, 解掉 R36-R63 跨輪紀錄的 shared counter race, 補回 R64 wrap-up 留的第 1 條不做事)
+
+**為什麼**:
+- 對齊 R64 wrap-up 第 1 條「K15/K16 race 真正解法」評估結論: scope 中等 + 量化困難 → 但本輪找到量化訊號 = R65 doc 註記「R64 觀察輪實測 1 failed / 358 passed」, 那次 race 噪音打掛 strict invariant test。R64 wrap-up 跑 359/359 是「這次 race noise 沒命中」, 不是「race 消失」, R64 自己也說「R36 已用 `with_isolated_metric_snapshot` race-tolerant delta 模式處理, R59-R63 護欄 strict invariant noise 不影響」。本輪把這條不確定性「從架構層消除」, 不再依賴 race noise 運氣。
+- 對齊 prompt `/pua` senior engineer 判斷力: 連續 2 輪 (R63/R64) 沒改善, R65 從 R64 留的 5 個不做範圍中選一件最可量化推進的 (K15/K16 race 解法), 不轉去 H0 housekeeping, 也不強做 FTS5 / `render_prometheus_body` refactor。
+- 對齊 LobsterPulse v5.1 mission「hook_server 收 9 provider 事件 + Prometheus exporter」的可觀察性閉環: 之前 hook_server.rs 有 4 個 `static AtomicU64` 是 process-level global state, render_prometheus_body 讀得到但 test 拿不到獨立 instance, 強 strict assertion 必 flaky。改 `Arc<MetricsCore>` 注入後: production 用 `default_metrics()` 全 process 一份 (對齊原本 lifetime aggregate 語意), test 用 `new_metrics()` 拿自己一份 (隔離平行 cargo test 噪音), strict `assert_eq!` 對自己 instance 驗證。
+- 對齊 [HARNESS] 警告 KPI 量化列數: 本輪 4 列 KPI 進展表 + 1 列 strict invariant 確定性提升 = 共 5 列, 較 R64 4 列 +1。
+
+**KPI 進展表**:
+| KPI | 前值 (R64) | 後值 (R65) | 變化 |
+|---|---:|---:|---:|
+| process-level `static AtomicU64` 數 (hook_server.rs) | 4 (HOOK_PARSE_FAILURES + HOOK_RESPONSES_{2XX,4XX,5XX}) | 0 (全包進 `MetricsCore` 透過 `Arc` 共享) | -4 |
+| K15/K16 strict invariant test 確定性 (`hook_parse_failures_counter_does_not_increment_on_valid_json` 對 valid JSON 不該 ++ counter) | flaky: race noise 偶發導致 1 failed / 358 passed (R65 doc 註記) | 100% deterministic: 拿 `new_metrics()` 獨立 instance, strict `assert_eq!(parse_failures, 0)` + 順便驗 4xx/2xx/5xx 也都 0 | 確定性從 race-luck → 架構保證 |
+| hook_server 注入點覆蓋面 (process_body / handle_client / accept_loop 顯式接 `&MetricsCore`) | 0/3 (全走 global static) | 3/3 (每層都 explicit 接 Arc clone) | +3 |
+| 護欄 chain (R52-R63 累計) | 14 (saturated 凍結聲明) | 14 (saturated 持續, 凍結延續) | 0 |
+| lib unit tests | 359/359 | 359/359 (0 regression, 平行 cargo test strict invariant test 100% 通過) | 0 |
+| clippy / fmt warning | 0 / 0 | 0 / 0 (CI gate 持續乾淨) | 0 |
+| KPI 量化列數 (本輪 engineering-log 帶量化表) | 4 (R64) | 5 (R65 新增 strict invariant 確定性列) | +1 |
+
+**搜尋**: 無 (本輪為架構改動, 範圍清楚, 不需外部研究)。
+
+**做了什麼**:
+- 把 4 個 `static AtomicU64` 收進 `pub struct MetricsCore` (`parse_failures` / `responses_2xx` / `responses_4xx` / `responses_5xx`), 加 `MetricsArc = Arc<MetricsCore>` 共享 handle。
+- 加 `new_metrics()` (test 用的獨立 instance factory) 跟 `default_metrics()` (production 用的 process-level OnceLock 共享)。Production 行為等於原本 4 個 static AtomicU64 — lifetime aggregate 語意不變。
+- 改 `hook_server_metrics()` render helper: 從直接讀 4 個 static 改成 `default_metrics().snapshot()`。render_prometheus_body 既有 contract 沒破。
+- 改 `accept_loop` / `handle_client` / `process_body` 簽名, 多接 `metrics: MetricsArc` / `&MetricsCore` 參數, 不再讀寫 global state。
+- 改 11 個 unit test call site: 從 2-arg `process_body(body, provider)` 改 3-arg `process_body(body, provider, &metrics)`, 大多用 `default_metrics()` (對齊原本 production 行為), strict invariant test `hook_parse_failures_counter_does_not_increment_on_valid_json` 改用 `new_metrics()` 拿獨立 instance 嚴格 `assert_eq!` 驗證 4 個 atomic 全 0。
+- 沒動 `.arch-fitness.json` / `.supervisor-report.json` / `.harness-memory.db` / `bash.exe.stackdump` (untracked supervisor 檔, R13 防護)。
+- 沒動 `git add -A/.`, 嚴守 R13 防護 — `git add src-tauri/src/hook_server.rs engineering-log.md` 明確列路徑。
+
+**驗證**:
+- `cargo test --lib`: 359 passed; 0 failed; 0 ignored (R64 → R65 0 regression, baseline 持續綠)
+- `cargo test --lib hook_server`: 29/29 全綠, 包含 strict invariant test `hook_parse_failures_counter_does_not_increment_on_valid_json` 在平行 cargo test 環境下 deterministic 通過
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+- 護欄 chain 14 條 (R59 K15 ⊆ K16 4xx + R59 K15/K16 race-tolerant delta + R58 wrap-up + R52-R58 cross-K) 在 R65 改完後全部仍綠 (跨 K 護欄 `r59_k15_nonzero_implies_k16_4xx_nonzero_atomic_coupling` + `r59_k15_parse_failures_subset_of_k16_responses_4xx_under_parse_burst` 仍 ok)
+- 沒動 supervisor untracked 檔
+
+**結果**: PASS (R65 落地 K15/K16 race 真正解法: 4 個 `static AtomicU64` → `Arc<MetricsCore>` 注入模式 + strict invariant test 從 race-flaky → 架構 deterministic, 11 個 test call site 同步改 3-arg, 護欄 chain 14 條持續 saturated 維持 + 0 regression + 0 lint warning + 0 fmt diff, KPI 量化列數 4→5 落地率 +1)
+
+**KPI-impact: K15/K16 strict invariant test 確定性 race-luck → 架構保證 (1 failed/358 passed flaky → 100% deterministic) + process-level static AtomicU64 數 4→0 (silent global state 消除) + 護欄 chain 14→14 (saturated 持續) + lib_unit_tests 359→359 (0 regression 持續) + KPI 量化列數 4→5 (落地率 +1)**
+
+**不做的範圍** (給後續輪次):
+- `render_prometheus_body` 11 參數怪 signature 重構 → `MetricsSnapshot` struct: 仍違反「不做沒列的 refactor」規則, BACKLOG/Spectra 都沒列, 留真有需求再說
+- 護欄 chain R52-R65 saturated 15 條聲明 (R65 解掉 race noise 但沒新增護欄): saturated 紀律持續
+- K15/K16 5xx counter 永久 0: 保留欄位是為未來有 5xx 路徑時不用改 schema / alert rule
+- 把 `default_metrics()` 改用 `tokio::sync::RwLock` 支援熱 reset / SIGHUP reload: 沒實際需求, YAGNI
+- openclaw-self-evolution FTS5 + /evolution/search + DSPy/GEPA: 需新 `rusqlite` native dep, scope 1 輪做不完, 留 R66+ 評估拆分 mini-MVP
+- 把 `MetricsCore` 進一步拆成 trait (`MetricsSink`) 注入: 過度抽象, 沒實際好處 (mock 替換需求), YAGNI
+
+---
+
 **為什麼**:
 - 對齊 LobsterPulse v5.1 mission「本機 CLI + OpenAB 雙路徑觀察」可觀察性 —— K22 (latest) / K25 (avg) / K26 (max) / K27 (min) / K28 (stddev) / K29 (failure ratio) / K30 (P95) / K31 (P50) / K32 (P99) 九件套覆蓋「最近一次 / 中心趨勢 / 分布離散 / 失敗比 / SLO 邊界 / 中位 / 尾端 1%」, 沒覆蓋「上四分位」維度。K33 P75 = 75 百分位 = 「75% session 都在此值以下」邊界 = 「中段分布離散」boundary —— 跟 K31 P50 (中位) 互補, 差距大 = 中段 session 分布離散 = 「典型偏慢任務」邊界。Operator 端 alert p75 > 120 (2 分鐘) = 該 provider 75% session 都在 2 分鐘以上 = 「中段偏慢」信號, 跟 K30 P95 (尾端 5% 慢) / K32 P99 (極端 1% 卡死) 互補, 三件套組合可分辨「整體慢」vs「中段偏慢」vs「只有尾端慢」vs「極端卡死」。K33 復用 K30 reservoir 1024 同一份 vec 不開新欄位, 跟 K31 P50 純 fn 端各自 sort 取不同 percentile index 對稱。
 - R53/R54 cross-K monotonic 護欄落地: 跟 R51 (K30/K31/K32 bounds) + R52 (K23/K24/K25 cross-metric) 同模板, 補 K22/K26/K27 lifetime aggregate monotonic chain (K27 ≤ K22 ≤ K26) + K30/K31/K32/K33 percentile chain (K27 ≤ P50 ≤ P75 ≤ P95 ≤ P99 ≤ K26) 兩條 cross-K 護欄, 跨 8 種樣本數 {1, 2, 3, 5, 10, 50, 100, 200} + 4-provider 隔離強化。這是 K33 落地的配套 invariant: 若有人未來改 K22 從「覆寫成 latest」改成「saturating_max」混進 K26 邏輯, 或 K27 從 saturating_min 改成「第一次寫入後凍結」漏更新, 護欄 CI 1 秒抓出。

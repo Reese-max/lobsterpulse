@@ -685,3 +685,18 @@ URGENCY: HIGH
 - H0 housekeeping (archive / sensor / log rotate / DRY): R65 沒做 (M2 收邊優先), 找無對齊 KPI 推進的合理項, 不強做
 - 把 `MetricsCore` 進一步抽象成 generic `AtomicBundle<T>` 模板: 過度設計 YAGNI, 留真有多個 metrics bundle 重複 pattern 再抽
 - `MetricsCore` snapshot 改成 `parking_lot::Mutex<HookServerMetrics>` cache 避免 4 次 atomic load: 4 個 atomic load 對 Prometheus render 1 次 / scrape 周期可忽略, 不優化
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### 2026-06-04 R65 — 🧠 策略顧問巡邏
+**判定**: DRIFTING (MEDIUM)
+PATROL_VERDICT: DRIFTING
+URGENCY: MEDIUM
+- 🎯 方向：目前最近 10 個 commit 幾乎全部在 `hook_server` 的計數器耦合、`/healthz`、不變式測試與 metrics 穩定化，這是平台硬化，不是 `openclaw-self-evolution` 規格的 Phase 2～4 主線；`MISSION.md` 又是空的，所以現況不是「對齊」，而是「沒有明寫 mission 下的旁支擴張」。
+- ⚠️ 過時風險：有。`GEPA` 本身沒過時，DSPy 官方現在仍把 `dspy.GEPA` 當主推 optimizer 之一（https://dspy.ai/）；但 2026-03 的 VISTA 指出 reflective APO 容易黑箱失敗，2026-04 的 JTPRO 在多工具 agent 上已可比 GEPA 再高 5%～20% OSR（https://arxiv.org/abs/2603.18388、https://arxiv.org/abs/2604.19821）。另外 `SQLite FTS5` 依然可用（https://www.sqlite.org/fts5.html），但業界 agent memory 明顯往「持久化 store + semantic search / hybrid retrieval」走，不再只靠 keyword FTS（https://docs.langchain.com/oss/javascript/langgraph/memory）；observability 方向也更偏向 traces／metrics／logs 共用語意慣例，而不是專案內自造 counter taxonomy（https://opentelemetry.io/docs/concepts/semantic-conventions/）。
+- 🔍 盲點：你們現在沒有在做的關鍵是「自進化效果的評測閉環」, 也就是 skill 生成／記憶檢索／prompt 演化各自對成功率、成本、延遲到底提升多少，還沒有一套可持續驗證的 benchmark 與回滾門檻。
+- 💣 風險：照現在速度，最可能踩到的坑是把大量工程能量燒在 `hook_server` 護欄飽和與指標算術正確性，最後主規格真正要的記憶索引、skill reuse、GEPA 演化遲遲沒上線，形成「監控很完整，但自進化沒有產品化」。
+- 📋 建議行動：
+  1. 本週補一份 `MISSION.md`，直接寫清楚「主線是 openclaw-self-evolution，hook_server hardening 只是配套」，並給每條支線退出條件；沒有這個，後面還會繼續漂。
+  2. Phase 2 不要把 retrieval 介面綁死在純 FTS5；先做 `FTS5 + 可插拔 semantic rerank` 抽象，至少保留升級到 hybrid memory 的路，不然很快要重拆。
+  3. 在進 Phase 3 前先落地一套離線 eval：固定任務集、skill reuse rate、task success、token/latency、回歸門檻；沒有這套，GEPA／VISTA／JTPRO 換哪個都只是研究感，不是工程閉環。

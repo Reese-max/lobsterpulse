@@ -300,6 +300,30 @@ fn process_body(body: &[u8], provider: &str, metrics: &MetricsCore) -> Result<Ho
     Ok(event)
 }
 
+/// R66: LobsterPulse v5.1 mission 鎖 9 個 known provider (4 本機 CLI + 5 OpenAB bot)。
+/// HTTP path `/hook/{provider}` 收到的字串必須落進這份白名單才被視為合法 dispatch target；
+/// 不在白名單 → log warn + fallback `"claude"` (向後相容舊 hook config, 但 K40 算術護欄
+/// 不會被任意字串撐成 N bucket)。`"bot"` 保留 legacy alias → `"openx"` rewrite (R19 既有
+/// 行為, 不在白名單檢查之後, 不會被誤判成 unknown)。
+///
+/// 護欄 chain R66 新加：`r66_k40_provider_sessions_limited_to_nine_known_providers` 鎖
+/// 「送 9 known + 3 unknown + 1 bot legacy → K40 hashmap 最終只有 9 個 known provider」
+/// (legacy bot 折成 openx, unknown 全 fallback claude 共用 bucket, 跟原本 K40 護欄 K19
+/// sum-by-provider == K40 跨 live 切片算術相容, K6 sessions_total 不受污染)。
+const KNOWN_PROVIDERS: &[&str] = &[
+    // 4 本機 CLI
+    "claude",
+    "codex",
+    "copilot",
+    "gemini",
+    // 5 OpenAB bot
+    "cicx",
+    "gitx",
+    "giminix",
+    "codex_bot",
+    "openx",
+];
+
 /// Parse provider from HTTP request line: "POST /hook/claude HTTP/1.1"
 fn parse_provider(data: &[u8]) -> String {
     let request_line = data
@@ -322,7 +346,22 @@ fn parse_provider(data: &[u8]) -> String {
         if raw == "bot" {
             return "openx".to_string();
         }
-        return raw;
+        // R66: 白名單過濾 — 9 known provider 原樣回, 任意字串 (含路徑 injection、
+        // typo、未來廢棄的 provider 名) → log warn + fallback "claude"。
+        // 向後相容舊 hook config (R19 以前任意 provider 都會被接受), 但 K40
+        // `lobsterpulse_provider_sessions` 不會被撐成 N 個 bucket 破壞 R61/R62
+        // 護欄 chain 算術。fallback 走 "claude" 共用 bucket, 跟 R19 之前 unknown
+        // provider 全被計入 "claude" 的隱性語意一致。
+        if KNOWN_PROVIDERS.contains(&raw.as_str()) {
+            return raw;
+        }
+        warn!(
+            "[hook_server] parse_provider: unknown provider {:?} — \
+             falling back to \"claude\" (known 9: claude/codex/copilot/gemini/\
+             cicx/gitx/giminix/codex_bot/openx; check hook config for typos)",
+            raw
+        );
+        return "claude".to_string();
     }
 
     // Fallback: /hook without provider = claude (backward compat)
@@ -418,7 +457,7 @@ fn normalize_event_name(event: &mut HookEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_event_name, process_body};
+    use super::{normalize_event_name, parse_provider, process_body, KNOWN_PROVIDERS};
     use crate::hook_event::HookEvent;
     use std::sync::atomic::Ordering;
 
@@ -467,6 +506,141 @@ mod tests {
     fn process_body_returns_err_on_invalid_json() {
         let body = b"not json { broken";
         assert!(process_body(body, "claude", &super::default_metrics()).is_err());
+    }
+
+    // ─── R66: parse_provider 9-provider 白名單落地 + 3 條 unit test ───
+    // 對齊 LobsterPulse v5.1 mission: hook_server 收 9 provider 事件 + Prometheus
+    // exporter 算術護欄 chain (R52-R62) 可觀察性閉環。白名單確保 K40
+    // `lobsterpulse_provider_sessions{provider="..."}` 不會被任意字串撐成 N bucket
+    // 破壞 R61 `K19 sum by(provider) == K40` 跨 live 切片算術 + R62 `K6 sessions_total
+    // == sum by(provider)(K40)` 跨 live 切片算術。
+    #[test]
+    fn parse_provider_known_nine_providers_returned_as_is() {
+        // 4 本機 CLI + 5 OpenAB bot 全 9 個 known provider → 原樣回傳
+        let known = [
+            "claude",
+            "codex",
+            "copilot",
+            "gemini",
+            "cicx",
+            "gitx",
+            "giminix",
+            "codex_bot",
+            "openx",
+        ];
+        for p in &known {
+            let req = format!("POST /hook/{p} HTTP/1.1\r\n");
+            let got = parse_provider(req.as_bytes());
+            assert_eq!(got, *p, "known provider {p:?} 應原樣回傳, actual={got:?}");
+        }
+        // 白名單常數跟測試清單必須同步 (9 個) — 防未來加 provider 忘了更新測試
+        assert_eq!(
+            KNOWN_PROVIDERS.len(),
+            9,
+            "KNOWN_PROVIDERS 應有 9 個 (4 本機 + 5 OpenAB)"
+        );
+        for p in &known {
+            assert!(KNOWN_PROVIDERS.contains(p), "KNOWN_PROVIDERS 應含 {p:?}");
+        }
+    }
+
+    #[test]
+    fn parse_provider_unknown_falls_back_to_claude() {
+        // 任意字串 (typo / 路徑 injection / 廢棄 provider 名) → fallback "claude"
+        // + log warn (log 走 test env 預設 stderr, 不擋測試通過)。fallback 走
+        // "claude" 共用 bucket, 跟 R19 之前 unknown provider 全被計入 "claude"
+        // 的隱性語意一致, 護欄 chain 算術不受污染。
+        for unknown in &[
+            "claude_typo",
+            "my-custom-bot",
+            "../../etc/passwd",
+            "Claude", // case-sensitive, 大寫不該過
+            "",
+        ] {
+            let req = format!("POST /hook/{unknown} HTTP/1.1\r\n");
+            let got = parse_provider(req.as_bytes());
+            assert_eq!(
+                got, "claude",
+                "unknown provider {unknown:?} 應 fallback 到 \"claude\", actual={got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_provider_bot_legacy_alias_still_rewrites_to_openx() {
+        // OpenAB BackendType::Other HTTP path 寫 `/hook/bot` → rewrite 成 `openx`
+        // (R19 既有行為, R66 保留向後相容, 不在白名單檢查之後)。
+        let req = b"POST /hook/bot HTTP/1.1\r\n";
+        let got = parse_provider(req.as_slice());
+        assert_eq!(got, "openx", "/hook/bot 應 rewrite 成 openx legacy alias");
+    }
+
+    // ─── R66 護欄 chain (R52-R62 第 15 條): parse_provider 輸出 provider 集合 ⊆ 9 known ───
+    // 對齊 R52-R62 cross-K arithmetic guard 紀律: 純函式級護欄, 鎖「任意輸入 (含攻擊
+    // payload / 廢棄 provider 名) 走完 parse_provider 收斂後, 落進 K40
+    // `lobsterpulse_provider_sessions` hashmap 的 provider 集合 ⊆ 9 known provider
+    // ∪ {"claude" fallback 共用 bucket}」, 不會被撐成 N bucket 破壞 R61/R62 護欄
+    // (K19 sum by(provider) == K40 + K6 sessions_total == sum by(provider)(K40)) 算術。
+    //
+    // 設計選擇: 護欄用 set 收斂 (而不是 fixture 對齊 lib.rs render_prometheus_body 端),
+    // 因為 (a) parse_provider 是純函式, 在 hook_server.rs test 模組直接驗最便宜;
+    // (b) 攻擊面是 HTTP path 注入, 真實 chain 驗證要在 integration test 起 hook_server
+    // 接 socket 跑, scope 大, 留 R67+ 評估; (c) parse_provider 護欄過了, K40 bucket 數
+    // 上限就鎖死, lib.rs 端 K6/K40 算術護欄 chain 14 條自動繼承此護欄。
+    #[test]
+    fn r66_parse_provider_output_set_subset_of_nine_known_under_adversarial_input() {
+        // 9 known + 4 unknown (含路徑 injection / typo / 廢棄 provider / case 大寫)
+        // + 1 bot legacy → 14 條 input, 收斂後應 ≤ 9 個 distinct value
+        let adversarial_inputs = [
+            // 9 known
+            "claude",
+            "codex",
+            "copilot",
+            "gemini",
+            "cicx",
+            "gitx",
+            "giminix",
+            "codex_bot",
+            "openx",
+            // 4 unknown
+            "claude_typo",
+            "my-custom-bot",
+            "../../etc/passwd",
+            "Claude",
+            // 1 bot legacy alias
+            "bot",
+        ];
+        let mut observed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for raw in &adversarial_inputs {
+            let req = format!("POST /hook/{raw} HTTP/1.1\r\n");
+            observed.insert(parse_provider(req.as_bytes()));
+        }
+        // (a) 收斂後 distinct provider 集合 ⊆ 9 known (legacy bot 折入 openx, unknown
+        // 全 fallback "claude" 共用 bucket → 集合 ≤ 9)
+        let known: std::collections::HashSet<&str> = KNOWN_PROVIDERS.iter().copied().collect();
+        for p in &observed {
+            assert!(
+                known.contains(p.as_str()),
+                "R66 護欄破: 觀察到非白名單 provider {p:?}, 9 known = {known:?}"
+            );
+        }
+        // (b) 集合大小 ≤ 9 (legacy 折入 + unknown 全部 collapse 到 claude 共用 bucket)
+        assert!(
+            observed.len() <= 9,
+            "R66 護欄破: parse_provider 輸出 {} 個 distinct provider, 上限應 ≤ 9, 觀察 = {observed:?}",
+            observed.len()
+        );
+        // (c) unknown input 至少 1 個 fallback 到 "claude" (4 unknown 全會走這條, 所以
+        // "claude" 一定在集合內)
+        assert!(
+            observed.contains("claude"),
+            "R66 護欄破: 觀察不到 \"claude\" bucket, 4 個 unknown 應 fallback 進 claude, 觀察 = {observed:?}"
+        );
+        // (d) bot legacy 折入 "openx" 而非新 bucket (R19 既有語意保留)
+        assert!(
+            observed.contains("openx"),
+            "R66 護欄破: bot legacy 應折入 openx bucket, 觀察 = {observed:?}"
+        );
     }
 
     // ─── K15 落地：process_body 內 JSON parse 失敗 → lifetime counter++ ───

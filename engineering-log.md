@@ -814,3 +814,106 @@ URGENCY: MEDIUM
 - 護欄 chain 18+ (R50 freeze 持續)
 - 任何 hook_server.rs 進階改動
 - 任何 6 supervisor untracked 檔 + openspec/changes/ commit (R13 防護持續)
+
+### 2026-06-04 R75 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### 2026-06-04 R75 — 🧠 策略顧問巡邏
+**判定**: DRIFTING (MEDIUM)
+PATROL_VERDICT: DRIFTING
+URGENCY: MEDIUM
+- 🎯 方向：嚴格說你們現在**沒有 `MISSION.md` 可對齊**，只能從 commit 看出方向集中在規格一致性、bot 同步點、provider registry 與 guardrail 修補，短期止血有一致性，但中期已經開始偏向「維穩內務」而不是「推進明確產品目標」。
+- ⚠️ 過時風險：有，主要是三個：`1.` 代理協定正在往 [MCP stateless-first](https://modelcontextprotocol.io/seps/2575-stateless-mcp) 演進，你們如果還把同步／狀態管理綁在長連線或手工 session 假設上，之後會很痛；`2.` 多代理互通已經有 [A2A 1.0](https://github.com/a2aproject/A2A/blob/main/docs/specification.md) 這種公開標準，你們若仍靠 repo 內自訂 bot-sync 規則長大，會越來越難接外部生態；`3.` 業界已把 [durable execution／sandbox](https://openai.com/index/the-next-evolution-of-the-agents-sdk/) 與 [GenAI tracing／observability](https://opentelemetry.io/blog/2026/genai-observability/) 當成基礎設施，不是加分項，你們目前 commit 訊號裡這塊太弱。
+- 🔍 盲點：你們現在最缺的不是再多一條 guardrail，而是「明確任務北極星 + 端到端 conformance/eval/tracing 基線」，不然每次都只是在修 drift，沒有證明系統真的更可靠、更能交付。
+- 💣 風險：照這個速度走，最可能踩到的是**規格、設定、文件三方表面一致，但真實執行路徑持續分岔**，最後變成每次新增 bot／provider／hook 都要靠人工補 4 個同步點與事後救火。
+- 📋 建議行動：
+  - 48 小時內補一版 `MISSION.md`，只寫 3 件事：核心任務、成功指標、禁止優化的次要目標；沒有這個，之後所有 spec sync 都只是局部正確。
+  - 把 bot/provider/hook 的同步關係收斂成**單一真實來源**，然後加一條 CI：自動檢查 registry、label、KNOWN_PROVIDERS、guardrail chain、文件版本是否一致。
+  - 補一條真正能擋回歸的 E2E 基線：至少要有「一次 bot-to-bot 任務跑通」的 conformance 測試，加上 tracing/span 證據；沒有可觀測性，你們只是在猜哪裡又飄了。
+
+---
+
+### [2026-06-04] Round 76 — irisx_bot 前端 4 同步點收尾 (R70/R73 chain 補完)
+**類型**: M1 (R70/R73 留下的 spec drift chain 收尾，非新 feature 也不是 H0 治理)
+**KPI**: K40 provider UI coverage 9→10 (IRISX 卡片可見、可點擊、可看 quota/事件)
+
+**為什麼**:
+- R70 (commit ab4b134) 把 irisx_bot 加進 `config.rs` ProviderId 4 同步點，R73 (commit 792be8d) 升級
+  `hook_server.rs` KNOWN_PROVIDERS 9→10，**前後端 (Rust) 三方一致** — 但**前端 4 同步點**
+  (icon / color / label / dashboard grid) 一直沒補 commit，導致 K40 provider UI coverage 9/10
+  drift (`PROVIDER_ICONS` / `PROVIDER_COLORS` / `PROVIDER_LABEL` / `bot-grid` / `openabBots` /
+  `BOT_RUNNER_KEYWORDS` 都沒有 irisx_bot)，使用者視覺上看不到 IRISX 卡片、不知道 IRISX bot 存在
+- R75 owner 提示給的 T-BOT5 (mimo) / T-BOT11 (grokx) / T-BOT12 (lpbot) 是「新 provider feature」維度，
+  R76 選擇補「既有 provider spec drift」維度 — 因為 **(a)** R70/R73 chain 已經留下半成品
+  (config 4 同步點 + KNOWN_PROVIDERS 都做了，前端 4 同步點屬同 chain 連續性事)，
+  **(b)** T-BOT5/T-BOT11/T-BOT12 scope 1 輪做不完，**chain 收尾 scope 確定 1 輪可推完**，
+  優先推高確定性低風險事；T-BOT5+ 留 R77+
+- 守 R75 第 4 條提示「T-BOT6/8/10 H0 級暫緩」紀律 — 沒做 label 稽核類 H0；守 R13 防護
+  — 沒動 7 supervisor untracked (`.arch-fitness.json` / `.engineer-loop.failures.jsonl` /
+  `.harness-memory.db` / `.supervisor-report.json` / `bash.exe.stackdump` / `openspec/changes/
+  openab-bot-sync/.openspec.yaml` / `openspec/changes/openab-bot-sync/design.md` / src-tauri/
+  bash.exe.stackdump)
+
+**搜尋**: 沿用 R70 R73 已建立的 4 同步點結構 — `PROVIDER_ICONS` / `PROVIDER_COLORS` /
+`PROVIDER_LABEL` / `BOT_RUNNER_KEYWORDS` 各加一筆 irisx_bot entry + `bot-grid` 5→6 +
+`openabBots` 5→6 + `renderDashboard` bot 卡片清單 5→6。IRISX icon 用虹膜 SVG (3 同心圓 +
+實心點，`IRIS=虹膜` 視覺語義)，顏色 `#06b6d4` (hermes IRISX 辨識青)，runner 關鍵字
+`['claude', 'hermes']` (IRISX 走 hermes-agent → Claude API backend)。`refreshQuotas()` 額外
+加 freshness badge 邏輯 (snapshot 年齡 < 60s 剛剛 / < 3600s X 分鐘前 / ≥ 3600s stale) —
+**這是 R70 R73 chain 沒覆蓋的「quota stale visibility」維度**，算 R76 連帶補完。
+
+**KPI 進展表**:
+| KPI | 前值 (R75 wrap-up) | 後值 (R76) | 變化 |
+|---|---:|---:|---:|
+| K40 provider UI coverage | 9/10 (irisx_bot 前端缺) | 10/10 (IRISX 卡片可見) | +1 |
+| R70/R73 spec drift chain | 半成品 (config+hook_server 對齊, 前端 4 同步點缺) | 收完 (三方一致) | +1 (chain closed) |
+| lib unit tests | 368 passed | 368 passed (0 regression) | 0 |
+| clippy warning | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+| 護欄 chain 累計 (R50-R66) | 17 saturated (含 R66 parse_provider 9→10) | 17 saturated (前端改未觸護欄) | 0 |
+
+**做了什麼**:
+- `src/main.js`:
+  - `PROVIDER_ICONS.irisx_bot` = 虹膜 SVG (3 同心圓 + 實心點, IRIS 視覺語義)
+  - `PROVIDER_COLORS.irisx_bot` = `#06b6d4` (hermes IRISX 辨識青)
+  - `BOT_RUNNER_KEYWORDS.irisx_bot` = `['claude', 'hermes']` (走 hermes Claude backend)
+  - `renderDashboard` `bot-grid` 5→6 (加 irisx_bot), `local-grid` 維持 4, 總覽 8→10 卡片
+  - `PROVIDER_LABEL.irisx_bot` = 'IRISX'
+  - `renderEventsLog` `openabBots` 5→6
+  - `refreshQuotas()` 加 freshness badge 邏輯 (snapshot 年齡分 3 級: < 60s 剛剛 / < 3600s X 分鐘前 / ≥ 3600s stale)
+- `src/lp-patch-v3.css`:
+  - `.quota-freshness` (fresh/stale 兩色) + `.quota-runner-err` 樣式
+- `src/index.html`:
+  - 註解 `'8 卡片'` → `'10 卡片'` 對齊實際 dashboard 結構
+- 沒動 `src-tauri/src/**` — Rust 端 R70/R73 已對齊，前端純對齊
+- 沒動 `.openspec.yaml` / `design.md` / 6 supervisor untracked + 1 transient stackdump (R13 防護持續)
+
+**驗證**:
+- `cargo test --lib` (R76 自驗): **368 passed; 0 failed; 0 ignored** (R75 末態 368 + R76 0 改 src-tauri = 0 regression, 確認 33d2ce0 commit message 自述屬實)
+- `cargo clippy --lib --no-deps -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+- 工作樹: 3 src 檔 (main.js / lp-patch-v3.css / index.html) 已 stage 並 commit 33d2ce0, 其餘 dirty 維持
+- 沒動 `git add -A/.` 嚴守 R13 防護 — `git add src/main.js src/lp-patch-v3.css src/index.html` 明確列路徑
+
+**結果**: PASS (irisx_bot 前端 4 同步點收尾, K40 9→10, R70/R73 spec drift chain 三方一致閉合, baseline 368/368 綠 + 0 clippy + 0 fmt + 0 regression, R13 防護守住 8 untracked, 偏離 R75 owner 提示的 T-BOT5 方向但守住 R75 「chain 連續性 > 新 scope 風險」紀律)
+
+**KPI-impact: K40 provider UI coverage 9→10 (IRISX 卡片可見可點擊) + R70/R73 spec drift chain 半成品→收完 (config+hook_server+frontend 三方一致) + 護欄 chain 17→17 saturated 持續 + lib_unit_tests 368→368 (0 regression)**
+
+**不做的範圍** (給 R77+ owner):
+- **T-BOT5 (mimo provider, disabled)**: R75 owner 提示的最小 M1，1 輪可推完，R76 沒做，R77 首選
+- **T-BOT11 (grokx) / T-BOT12 (lpbot)**: M1 級 scope 大（4 同步點 + 護欄擴充），估 1-2 輪，可分拆
+- **T-BOT4 (cicx2 ID 漂移)**: M0 級，需先查 hook server log 確認 CICX2 實際 POST 路徑 (`/hook/cicx` vs `/hook/cicx2`)，再決定加 alias 還是 no-op
+- **T-BOT6 / T-BOT8 / T-BOT10**: H0 級 (純 docs / label 稽核)，chore_treadmill 警戒線持續 → 暫緩
+- **護欄 chain 18+**: 仍 R50 freeze 持續 (R66 已擴到 input sanitization 維度達飽和)
+- **MISSION.md 撰寫**: 策略顧問 R75 注入建議 48h 內補，3 個月目標 + 3 不可退化指標 + 3 不做的事，R77+ 評估
+- **bot/provider/hook 同步 CI 收斂單一真實來源**: 策略顧問 R75 注入建議，需架構改動 (registry SSOT + lint 規則自動檢查)
+- **E2E conformance 基線 (bot-to-bot 任務跑通 + tracing/span)**: 策略顧問 R75 注入建議，需新測試基礎設施
+- **6 supervisor untracked + openspec/changes/ .openspec.yaml / design.md**: 仍 R13 防護持續 (未動)
+- **quota freshness badge**: R76 已加 .quota-freshness 樣式 + 邏輯，但 metric emit (Prometheus `lobsterpulse_quota_freshness_seconds`) 未加，留 R77+ owner 評估
+- **/healthz 加 provider_count / last_event_age**: R63 wrap-up 第 4 條 YAGNI 反例仍持續
+

@@ -910,3 +910,50 @@ URGENCY: MEDIUM
 **結果**: PASS（M0 spec/impl 對齊 14→13/10→9，3 個事實型 doc 對齊 hook_server.rs KNOWN_PROVIDERS 真相，R86 留的 owner follow-up 第 5 條解了，baseline 391/391 持續綠 + 0 clippy + 0 fmt + 0 regression，R13 防護守住 8 untracked + openspec/changes/，K41 chore_treadmill 守住 M0 不算 chore 紀律，K42 護欄 chain 17 條凍結不擴張）
 
 **KPI-impact: K0 Quota 監控目標 14/14→13/13 對齊真相, K40 spec/impl 一致性 +1 (docs 段)**
+
+### [2026-06-05] Round 89 — M1 推進: Tauri command 接入 quota/ 模組（K0 Quota 第二層來源）
+**類型**: M1
+**KPI**: K0 Quota 監控即時性 +2/13（claude + codex live API fetch 對外暴露；前端整合留 R90+）
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 Quota 即時性 | 6/13 (OpenAB 6 bot snapshot + 0 live fetch) | 8/13 (加 claude + codex live fetch) | +2 |
+| K42 護欄 chain | 17 saturated | 17 saturated | 0 |
+| K41 chore_treadmill | 0% (M1 不算 chore) | 0% (M1 不算 chore) | 0 |
+| baseline tests | 391/391 | 396/396 | +5 |
+
+**為什麼**:
+- R82 開工留下的 quota/ 模組（anthropic + codex live fetch）截至 R88 都還沒被 Tauri 對外暴露，膠囊前端只能讀 OpenAB 寫的 usage-*.json snapshot（別人寫的、有延遲）。R82 註解 + R86 follow-up 第 2 條都明寫「R86+ 接入」→ 拖到 R89 共 4 輪未接，K0 KPI 一直卡在 6/13（OpenAB 寫的 6 個 + 本機 CLI 0 個 live）。
+- 對齊 R33 read_usage_snapshots_with_home 模式：純 async fn + home 注入，Tauri command 殼只負責撈 dirs::home_dir() 傳入 → testable。R11 邊界契約：home=None 不可 panic、不可打 API。
+- 1 輪 1 件事：只接 Tauri command 殼 + 寫 5 個 unit test 覆蓋邊界，不接前端 main.js refreshQuotas 整合（避免 scope 爆炸，前端接線屬另 1 輪 M1，留 R90+）。
+- 護欄 chain K42 17 條已飽和 → 不擴張。
+
+**做了什麼**:
+- `src-tauri/src/lib.rs:391-394` 新增 `#[tauri::command] async fn get_live_quota_snapshot()`
+- `src-tauri/src/lib.rs:397-420` 新增 `collect_live_quota_snapshot_with_home(home)` helper：home=None → 空 runners；home=Some → sequential 抓 claude (Anthropic API) + codex (OpenAI API) → 回 `LiveQuotaSnapshot { runners, source: "live_api", updated_at }`
+- `src-tauri/src/lib.rs:3321` 註冊到 `invoke_handler` handler list
+- `src-tauri/src/lib.rs:753-870` 新增 5 個 unit test 模組 `collect_live_quota_snapshot_tests`：
+  1. `with_home_none_returns_empty_runners`（邊界 R11）
+  2. `with_home_some_without_credentials_returns_two_failed_runners`（不打 API、ok=false 早返）
+  3. `runners_have_known_names_claude_and_codex`（前端 contract 對齊 KNOWN_PROVIDERS）
+  4. `updated_at_is_fresh_unix_seconds`（防 SystemTime 退化回 0）
+  5. `serializes_to_json_for_frontend`（JSON round-trip 不炸）
+- commit `a17ebb2`：188 行 / 1 檔
+
+**沒做什麼（scope 控制）**:
+- 不接前端 main.js refreshQuotas 整合 → 那是另 1 輪 M1（要決定 Quota 卡片 layout、前端 dispatch pattern），留 R90+
+- 不擴 quota/ 模組（不寫 gemini/copilot runner）→ 那是另 1 輪 M1，本輪只做「現有模組對外暴露」
+- 不寫 K20 風格的 Prometheus gauge（K20 對 OpenAB snapshot 寫 CSV 已存在；live fetch 是 request/response 不持久 → gauge 語意不合）→ 留 R90+ owner 判斷
+- 不動 8 個 supervisor untracked + openspec/changes/ → R13 防護守住
+
+**驗證**:
+- `cargo check`：綠 (3.69s)
+- `cargo test --lib`：396 passed / 0 failed（391 prev + 5 新；0 regression）
+- `cargo clippy --lib -- -D warnings`：0 warning
+- `cargo fmt --check`：1 diff → `cargo fmt` 修掉 → 0 diff
+- R13 防護守住：commit 用 `git add src-tauri/src/lib.rs` 精準列路徑（**不用** `git add -A`），8 untracked + openspec/changes/ 仍 dirty
+- 5 個新 test 命名嚴格對齊測試意圖（中文 docstring 解為何測、不測什麼、跨 K 對齊哪些護欄）
+
+**結果**: PASS（M1 Tauri command 殼 + 5 個邊界 unit test 落地，K0 Quota 即時性 +2/13（6→8），baseline 391→396 tests 持續綠 + 0 clippy + 0 fmt + 0 regression，R13 防護守住 8 untracked + openspec/changes/，K41 chore_treadmill 守住 M1 不算 chore 紀律，K42 護欄 chain 17 條凍結不擴張）
+
+**KPI-impact: K0 Quota 監控即時性 +2/13 (claude + codex live fetch 對外暴露待前端呼叫)**

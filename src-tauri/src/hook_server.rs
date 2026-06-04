@@ -30,6 +30,11 @@ pub struct MetricsCore {
     pub responses_4xx: AtomicU64,
     /// K16：lifetime 5xx Server Error responses（目前永遠 0，保留供未來）
     pub responses_5xx: AtomicU64,
+    /// K46：lifetime unknown provider fallbacks（白名單沒命中 → 折入 "claude"）
+    /// 對齊 K15 模式：counter + rate() = throughput。值 > 0 通常代表 hook config typo
+    /// 或 CLI 升版改了 provider id，operator 端 `rate(lobsterpulse_hook_unknown_provider_fallbacks_total[5m]) > 0`
+    /// 即可 alert。R82 補：原本只有 log::warn，沒辦法 query aggregate。
+    pub unknown_provider_fallbacks: AtomicU64,
 }
 
 impl MetricsCore {
@@ -39,17 +44,19 @@ impl MetricsCore {
             responses_2xx: AtomicU64::new(0),
             responses_4xx: AtomicU64::new(0),
             responses_5xx: AtomicU64::new(0),
+            unknown_provider_fallbacks: AtomicU64::new(0),
         }
     }
 
-    /// 一次讀 4 個 atomic 給 Prometheus render 用。3 個 K16 counter 各自獨立 load,
-    /// render 端不持任何鎖跨越 string 構造（對齊 K14 K15 render 端約束）。
+    /// 一次讀 5 個 atomic 給 Prometheus render 用。4 個 K16/K46 counter 各自獨立
+    /// load, render 端不持任何鎖跨越 string 構造（對齊 K14 K15 render 端約束）。
     pub fn snapshot(&self) -> HookServerMetrics {
         HookServerMetrics {
             parse_failures: self.parse_failures.load(Ordering::Relaxed),
             responses_2xx: self.responses_2xx.load(Ordering::Relaxed),
             responses_4xx: self.responses_4xx.load(Ordering::Relaxed),
             responses_5xx: self.responses_5xx.load(Ordering::Relaxed),
+            unknown_provider_fallbacks: self.unknown_provider_fallbacks.load(Ordering::Relaxed),
         }
     }
 }
@@ -87,6 +94,8 @@ pub struct HookServerMetrics {
     pub responses_4xx: u64,
     /// K16：lifetime 5xx Server Error responses（目前永遠 0，保留供未來）
     pub responses_5xx: u64,
+    /// K46：lifetime unknown provider fallbacks
+    pub unknown_provider_fallbacks: u64,
 }
 
 /// 一次讀 4 個 atomic 給 Prometheus render 用。3 個 K16 counter 各自獨立 load，
@@ -110,6 +119,9 @@ impl HookServerMetrics {
             responses_2xx: self.responses_2xx.saturating_sub(before.responses_2xx),
             responses_4xx: self.responses_4xx.saturating_sub(before.responses_4xx),
             responses_5xx: self.responses_5xx.saturating_sub(before.responses_5xx),
+            unknown_provider_fallbacks: self
+                .unknown_provider_fallbacks
+                .saturating_sub(before.unknown_provider_fallbacks),
         }
     }
 }
@@ -231,7 +243,7 @@ async fn handle_client(
     }
 
     // Parse provider from URL path
-    let provider = parse_provider(data);
+    let provider = parse_provider(data, &metrics);
 
     let response = if let Some(body_start) = find_body_start(data) {
         let body = &data[body_start..];
@@ -340,7 +352,7 @@ const KNOWN_PROVIDERS: &[&str] = &[
 ];
 
 /// Parse provider from HTTP request line: "POST /hook/claude HTTP/1.1"
-fn parse_provider(data: &[u8]) -> String {
+fn parse_provider(data: &[u8], metrics: &MetricsCore) -> String {
     let request_line = data
         .split(|&b| b == b'\r' || b == b'\n')
         .next()
@@ -378,11 +390,20 @@ fn parse_provider(data: &[u8]) -> String {
         if KNOWN_PROVIDERS.contains(&raw.as_str()) {
             return raw;
         }
+        // R82: 動態組成 known list — 之前 hardcode "known 10" + 漏列 grokx/lpbot/mimo,
+        // operator 看到誤導訊息會誤判「這 3 個 provider 不在白名單」開 ticket。改成
+        // 從 `KNOWN_PROVIDERS` 動態 join, 唯一 source of truth, 加 provider 自動同步。
+        // K46: 同步 ++ unknown_provider_fallbacks counter, 跟 log warn 配對,
+        // Prometheus 端可以 alert `rate(...[5m]) > 0` 偵測 hook config drift。
+        metrics
+            .unknown_provider_fallbacks
+            .fetch_add(1, Ordering::Relaxed);
         warn!(
             "[hook_server] parse_provider: unknown provider {:?} — \
-             falling back to \"claude\" (known 10: claude/codex/copilot/gemini/\
-             cicx/gitx/giminix/codex_bot/openx/irisx_bot; check hook config for typos)",
-            raw
+             falling back to \"claude\" (known {}: {}; check hook config for typos)",
+            raw,
+            KNOWN_PROVIDERS.len(),
+            KNOWN_PROVIDERS.join("/")
         );
         return "claude".to_string();
     }
@@ -480,7 +501,7 @@ fn normalize_event_name(event: &mut HookEvent) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_event_name, parse_provider, process_body, KNOWN_PROVIDERS};
+    use super::{new_metrics, normalize_event_name, parse_provider, process_body, KNOWN_PROVIDERS};
     use crate::hook_event::HookEvent;
     use std::sync::atomic::Ordering;
 
@@ -563,7 +584,7 @@ mod tests {
         ];
         for p in &known {
             let req = format!("POST /hook/{p} HTTP/1.1\r\n");
-            let got = parse_provider(req.as_bytes());
+            let got = parse_provider(req.as_bytes(), &new_metrics());
             assert_eq!(got, *p, "known provider {p:?} 應原樣回傳, actual={got:?}");
         }
         // 白名單常數跟測試清單必須同步 (13 個) — 防未來加 provider 忘了更新測試
@@ -592,7 +613,7 @@ mod tests {
             "",
         ] {
             let req = format!("POST /hook/{unknown} HTTP/1.1\r\n");
-            let got = parse_provider(req.as_bytes());
+            let got = parse_provider(req.as_bytes(), &new_metrics());
             assert_eq!(
                 got, "claude",
                 "unknown provider {unknown:?} 應 fallback 到 \"claude\", actual={got:?}"
@@ -600,12 +621,51 @@ mod tests {
         }
     }
 
+    /// R82 K46 護欄: parse_provider 對 unknown provider 每次呼叫都 ++
+    /// `unknown_provider_fallbacks` counter, operator 端 Prometheus 看到 rate > 0
+    /// 即可 alert。對齊 R58 K22-K27 cross-metric 風格: strict assertion
+    /// (R65 隔離 new_metrics() 平行噪音, 這條 test 安全 assert_eq)。
+    #[test]
+    fn r82_parse_provider_unknown_increments_k46_counter_per_call() {
+        let metrics = new_metrics();
+        let before = metrics.snapshot().unknown_provider_fallbacks;
+        for _ in 0..3 {
+            let req = b"POST /hook/typo-bot HTTP/1.1\r\n";
+            let got = parse_provider(req, &metrics);
+            assert_eq!(got, "claude", "unknown 應 fallback claude");
+        }
+        let after = metrics.snapshot().unknown_provider_fallbacks;
+        assert_eq!(
+            after.saturating_sub(before),
+            3,
+            "K46 counter 應 ++ 3 次 (3 次 unknown 呼叫)"
+        );
+    }
+
+    /// R82 K46 護欄 #2: known provider 呼叫**不該**++ counter, 護住「白名單內
+    /// 流量不污染 fallback 統計」不變量。
+    #[test]
+    fn r82_parse_provider_known_does_not_increment_k46_counter() {
+        let metrics = new_metrics();
+        let before = metrics.snapshot().unknown_provider_fallbacks;
+        for p in &["claude", "grokx", "lpbot", "mimo"] {
+            let req = format!("POST /hook/{p} HTTP/1.1\r\n");
+            let got = parse_provider(req.as_bytes(), &metrics);
+            assert_eq!(got, *p);
+        }
+        let after = metrics.snapshot().unknown_provider_fallbacks;
+        assert_eq!(
+            after, before,
+            "K46 counter 在 known provider 呼叫後應不變 (before={before}, after={after})"
+        );
+    }
+
     #[test]
     fn parse_provider_bot_legacy_alias_still_rewrites_to_openx() {
         // OpenAB BackendType::Other HTTP path 寫 `/hook/bot` → rewrite 成 `openx`
         // (R19 既有行為, R66 保留向後相容, 不在白名單檢查之後)。
         let req = b"POST /hook/bot HTTP/1.1\r\n";
-        let got = parse_provider(req.as_slice());
+        let got = parse_provider(req.as_slice(), &new_metrics());
         assert_eq!(got, "openx", "/hook/bot 應 rewrite 成 openx legacy alias");
     }
 
@@ -614,11 +674,11 @@ mod tests {
         // openab config-cicx2.toml 宣告 bot_id="cicx2"，加 alias 確保 POST /hook/cicx2
         // 正確路由到 cicx bucket（比照 bot → openx 模式）。
         let req = b"POST /hook/cicx2 HTTP/1.1\r\n";
-        let got = parse_provider(req.as_slice());
+        let got = parse_provider(req.as_slice(), &new_metrics());
         assert_eq!(got, "cicx", "/hook/cicx2 應 rewrite 成 cicx alias");
         // 確認原始 cicx 不受影響
         let req2 = b"POST /hook/cicx HTTP/1.1\r\n";
-        let got2 = parse_provider(req2.as_slice());
+        let got2 = parse_provider(req2.as_slice(), &new_metrics());
         assert_eq!(got2, "cicx", "/hook/cicx 應原樣回傳");
     }
 
@@ -663,7 +723,7 @@ mod tests {
         let mut observed: std::collections::HashSet<String> = std::collections::HashSet::new();
         for raw in &adversarial_inputs {
             let req = format!("POST /hook/{raw} HTTP/1.1\r\n");
-            observed.insert(parse_provider(req.as_bytes()));
+            observed.insert(parse_provider(req.as_bytes(), &new_metrics()));
         }
         // (a) 收斂後 distinct provider 集合 ⊆ 10 known (legacy bot 折入 openx, unknown
         // 全 fallback "claude" 共用 bucket → 集合 ≤ 10)
@@ -703,7 +763,7 @@ mod tests {
     fn r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback() {
         // 對齊 openab/config-hermes.toml `[lobsterpulse] bot_id = "irisx_bot"`
         let req = b"POST /hook/irisx_bot HTTP/1.1\r\n";
-        let got = parse_provider(req);
+        let got = parse_provider(req, &new_metrics());
         assert_eq!(
             got, "irisx_bot",
             "R73 護欄破: IRISX 事件 parse_provider 應回 \"irisx_bot\" 而非 fallback \
@@ -901,12 +961,14 @@ mod tests {
             responses_2xx: 5,
             responses_4xx: 3,
             responses_5xx: 1,
+            unknown_provider_fallbacks: 0,
         };
         let after = super::HookServerMetrics {
             parse_failures: 15,
             responses_2xx: 8,
             responses_4xx: 3,
             responses_5xx: 2,
+            unknown_provider_fallbacks: 0,
         };
         let delta = after.delta(before);
         assert_eq!(
@@ -916,6 +978,7 @@ mod tests {
                 responses_2xx: 3,
                 responses_4xx: 0,
                 responses_5xx: 1,
+                unknown_provider_fallbacks: 0,
             },
             "delta() 在 after >= before 應給精確差值"
         );
@@ -1269,7 +1332,7 @@ mod tests {
         );
 
         for (idx, fixture) in fixtures.iter().enumerate() {
-            let provider = super::parse_provider(fixture.http);
+            let provider = super::parse_provider(fixture.http, &super::new_metrics());
             assert_eq!(
                 provider.as_str(),
                 fixture.expected_provider,

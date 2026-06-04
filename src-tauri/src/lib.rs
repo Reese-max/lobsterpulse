@@ -2412,6 +2412,19 @@ fn render_prometheus_body(
         "lobsterpulse_hook_responses_total{{class=\"5xx\"}} {}\n",
         hook_metrics.responses_5xx
     ));
+    // K46 落地：parse_provider 白名單沒命中 → fallback "claude" 的 lifetime 累計。
+    // 對齊 K15/K16 模式：counter + rate() = throughput。與 K16 4xx 的差別：
+    //   - K16 4xx 計「server wire-level 對外回了 4xx」分類（包含 body 缺失 +
+    //     JSON parse 失敗等所有 4xx 原因）
+    //   - K46 計「單一語意：provider id 不在白名單」單一原因
+    // 同一個 4xx 不一定 ++ K46（只有 provider 解析階段失敗才會），兩個 metric
+    // 維度不同，operator 依需求選用。`rate(...[5m]) > 0` 通常代表 hook config
+    // 有 typo 或 CLI 升版改了 provider id — 跟 log warn 配對方便定位。
+    out.push_str("# HELP lobsterpulse_hook_unknown_provider_fallbacks_total Lifetime count of hook_server parse_provider falling back to \"claude\" because provider id was not in the known whitelist (counter; rate() for throughput)\n# TYPE lobsterpulse_hook_unknown_provider_fallbacks_total counter\n");
+    out.push_str(&format!(
+        "lobsterpulse_hook_unknown_provider_fallbacks_total {}\n",
+        hook_metrics.unknown_provider_fallbacks
+    ));
     out
 }
 
@@ -3889,6 +3902,10 @@ mod render_prometheus_tests {
         );
         // K15 落地：lifetime parse failures counter
         assert!(body.contains("lobsterpulse_hook_parse_failures_total 0\n"));
+        // K46 落地：lifetime unknown provider fallbacks counter（default_metrics()
+        // 第一次 snapshot 一定是 0, 但必須 emit sample line, operator 端 Prometheus
+        // scrape 才抓得到 metric 名, 才有 rate() 算 throughput）
+        assert!(body.contains("lobsterpulse_hook_unknown_provider_fallbacks_total 0\n"));
         // K16 落地：3 條 HTTP response status class counter (default 0)
         assert!(body.contains("lobsterpulse_hook_responses_total{class=\"2xx\"} 0\n"));
         assert!(body.contains("lobsterpulse_hook_responses_total{class=\"4xx\"} 0\n"));

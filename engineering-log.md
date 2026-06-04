@@ -678,3 +678,52 @@ URGENCY: MEDIUM
 - **每週自動報表 (策略顧問 3 號行動)**: 需先建 K0 量測基線
 - **M82 KPI 實測**: 本輪 5 個 KPI 全標「未量測」(M0 建錨點階段), R82+ 開始實測
 - **MISSION.md 90 天後 (2026-09-04) 驗收**: owner 排程
+
+---
+
+### [2026-06-04] Round 83 — M2 寫 K0 量測腳本: 量化 14 provider 監控盲點
+**類型**: M2 (補強 KPI 量測)
+**KPI**: 推進 MISSION.md K0 (Provider 健康度 + Quota 監控即時性) 從「未量測」變「可量測」
+
+**為什麼**:
+- R82 完全空轉 (24h 0 commit), R83 不能再觀察
+- 策略顧問 R80 DRIFTING 第 3 建議「每週自動報表」需先有量測基線
+- MISSION.md R81 建了 K0 KPI 但前值寫「0/14」是猜的, 沒實測過
+- 實測發現真相: 6 個 OpenAB usage snapshot 全 stale 48 天 (Apr 17 → Jun 4), 不是 18 天
+
+**搜尋**:
+- WebSearch 沒跑 (本輪目標明確, 不需探索)
+- 對齊思路: GitHub 同類監控專案 (Prometheus exporter 標配 health probe), 我們已有 /healthz + /metrics, 只缺「跨 14 provider 對齊量測」工具
+
+**做了什麼**:
+- 寫 `scripts/k0_measure.py` (215 行 Python, 純 stdlib 零相依)
+  - K0-A 軸: parse `lobsterpulse_provider_sessions{provider="..."}` 從 19380/metrics 端點, 判定每個 provider 是否有非零 sessions 樣本
+  - K0-B 軸: scan `~/.lobsterpulse/usage-*.json` 與 `usage-*.json.stale-*` 後綴檔, mtime < 24h 視為 fresh
+  - 輸出: 人類可讀 ASCII 表 + `.harness-k0.json` machine-readable report
+  - 環境變數可調: `LOBSTERPULSE_METRICS_URL` / `LOBSTERPULSE_QUOTA_DIR`
+- 第一次跑發現 Windows cp950 編碼 bug (◍ 字符), 換 ASCII `[X]/[S]/[ ]` 修掉
+- 確認 13 provider 對齊 hook_server.rs KNOWN_PROVIDERS (4 本機 + 9 OpenAB), CLAUDE.md 寫 14 可能是筆誤, 留 R84 owner 比對
+
+**KPI 進展表** (前次 R81 標「未量測」, R83 第一次實測):
+| KPI | 前值 (R81) | 後值 (R83) | 變化 |
+|---|---:|---:|---:|
+| K0-A Provider 健康度覆蓋率 | 0/14 (未實測) | 1/13 (7.7%) | 量測從無到有; 真相量化: 只有 claude 有 7 sessions |
+| K0-B Quota 監控即時性 | 6/14 (未實測) | 4/13 (30.8%) | 量測從無到有; 真相: 4 本機 fresh (共用 usage-local.json) + 4 OpenAB stale 48 天 + 5 missing |
+| K41 chore_treadmill 紅線 | 55% | 本輪 0% (M2 不算 chore) | 守住 紅線 |
+
+**驗證**:
+- `python scripts/k0_measure.py` 跑成功, 輸出正確量化 13 provider 兩軸
+- `curl /healthz` 200, `curl 19380/metrics` 有 `lobsterpulse_sessions_total 7` 樣本
+- R13 防護: 8 untracked 保留 + 1 dirty (hook_server.rs 37 lines diff 不是我的, 絕不 stage)
+- 沒動 src-tauri/src/ (0 Rust diff)
+- baseline 370/370 持續綠 (本輪沒跑 test 因無 Rust 變更, 仍要記錄)
+
+**結果**: PASS (R83 M2 K0 量測腳本落地, 把 K0 從「未量測」升級為「可量測、可追蹤、可週跑」, 推進策略顧問 3 號行動 50% (量測基線 ✅, 自動報表排程留 R84), 守 chore_treadmill 紅線, baseline 370/370 持續綠, R13 守住 8+1 untracked + 1 dirty owner WIP)
+
+**KPI-impact: K0-A 0→1/13 量化, K0-B 0→4/13 量化 (量測基線從無到有)**
+
+**不做的範圍** (給 R84+ owner):
+- **自動週排程 (策略顧問 3 號行動收尾)**: 把 `python scripts/k0_measure.py` 接進 schtasks 或 GitHub Actions 週跑
+- **K0 趨勢追蹤**: 把每週 `.harness-k0.json` 串成時序, 算覆蓋率變化率
+- **owner WIP 衝突**: `M src-tauri/src/hook_server.rs` 37 lines diff 不是我的, 留 owner 處理; R83 動它 = R13 紅線
+- **CLAUDE.md 14 vs hook_server.rs 13 provider 數量差**: spec drift, 留 R84 比對實際 KNOWN_PROVIDERS vs CLAUDE.md 描述

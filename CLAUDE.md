@@ -6,9 +6,9 @@
 
 **本質**：桌面膠囊指示器，同時監控**兩條路徑**——
 1. **本機 CLI**（直接 hook）：`claude` / `codex` / `copilot` / `gemini`，CLI 呼叫 `lobster-pulse-hook.exe` sidecar
-2. **OpenAB bot**（push 事件）：`cicx` / `gitx` / `giminix` / `codex_bot` / `openx` / `irisx_bot`，OpenAB process 直接 HTTP POST `/hook/{bot_id}`
+2. **OpenAB bot**（push 事件）：`cicx` / `gitx` / `giminix` / `codex_bot` / `openx` / `irisx_bot` / `grokx` / `lpbot` / `mimo`，OpenAB process 直接 HTTP POST `/hook/{bot_id}`
 
-共 10 provider（🤖 OpenAB 6 + 💻 本機 4）。R73 補 R70 半成品 — R70 加 irisx_bot 到 config.rs 4 同步點但漏 hook_server `KNOWN_PROVIDERS` 白名單，R73 補齊，IRISX 監控完整。
+共 14 provider（🤖 OpenAB 10 + 💻 本機 4）。R78 補齊 grokx（T-BOT11 從 gitx 拆獨立 id）、lpbot（T-BOT12 quota 監控納管）、mimo（T-BOT5 disabled）。
 
 ## 關鍵端點
 
@@ -45,8 +45,8 @@
 
 1. **膠囊**（常駐 300×46）：active provider icons + project_name + state + time + count + 失敗紅點（近 10 min PostToolUseFailure 數）
 2. **展開面板**：filter-bar / session list (compact/展開) / chat-bar (claude_chat_quick) / quota bar (runtime totals + OpenAB snapshot 去重)
-3. **Bot 總覽**：☁️ OpenAB Bot 5 卡 + 💻 本機 CLI 4 卡（每卡 quota 按 `BOT_RUNNER_KEYWORDS` 過濾只顯示自己 backend）
-4. **事件診斷**：11 filter tabs（全部/❌失敗/5 OpenAB/4 本機動態隱藏）+ 2s auto-refresh
+3. **Bot 總覽**：☁️ OpenAB Bot 9 卡 + 💻 本機 CLI 4 卡（每卡 quota 按 `BOT_RUNNER_KEYWORDS` 過濾只顯示自己 backend）
+4. **事件診斷**：14 filter tabs（全部/❌失敗/9 OpenAB/4 本機動態隱藏）+ 2s auto-refresh
 5. **設定**：助手 / 音效 / 外觀 三 tab
 
 ## 關鍵設計決策

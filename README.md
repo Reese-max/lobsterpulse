@@ -30,9 +30,9 @@
 
 ## 監控清單（v5.1+）
 
-LobsterPulse v5.1 同時監控兩條路徑，共 **10 provider**（🤖 OpenAB 6 + 💻 本機 4）。
+LobsterPulse v5.1 同時監控兩條路徑，共 **14 provider**（🤖 OpenAB 10 + 💻 本機 4）。
 
-### 🤖 OpenAB 6 bot
+### 🤖 OpenAB 10 bot
 
 OpenAB process 直接 HTTP POST `/hook/{bot_id}`，bot_id 以 openab `config-*.toml` 為 source of truth：
 
@@ -42,6 +42,9 @@ OpenAB process 直接 HTTP POST `/hook/{bot_id}`，bot_id 以 openab `config-*.t
 - `codex_bot` → 🤖 CODEX · OpenAB Codex（codex-acp）
 - `openx` → 🤖 OPENX · OpenAB OpenCode（opencode）
 - `irisx_bot` → 🤖 IRISX · OpenAB **Hermes**（hermes -p irisx → gpt-5.5；openclaw→hermes 遷移，R70 T-BOT1）
+- `grokx` → 🤖 GROKX · OpenAB Grok（hermes -p grokx；R78 T-BOT11 從 gitx 拆獨立 id）
+- `lpbot` → 🤖 LPBOT · OpenAB Claude（quota 監控；R78 T-BOT12 納管）
+- `mimo` → 🤖 MIMO · OpenAB MIMO（R78 T-BOT5 新增，預設 disabled）
 
 ### 💻 本機 CLI 4
 

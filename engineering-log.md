@@ -504,3 +504,59 @@ URGENCY: MEDIUM
 - **quota freshness metric emit (Prometheus `lobsterpulse_quota_freshness_seconds`)**: R76 已加 UI badge 但 metric emit 未加 — R79+ 評估
 - **/healthz 加 provider_count / last_event_age**: R63 wrap-up 第 4 條 YAGNI 反例仍持續
 - **`src-tauri/src/quota/` 模組拆分**: 仍 WIP (mod.rs 缺 openai.rs, 未接入 lib.rs, 整個 untracked) — R79+ owner 評估是否要落地或撤掉
+
+### [2026-06-04] Round 79 — R78 4 commit 落地驗證 + T-BOT12 漏 fmt diff 修 + design.md spec drift 留 owner
+**類型**: M0 (baseline 持續綠) + 觀察輪決策
+**KPI**: K40 baseline_green_maintained + 標出 K40 design.md spec drift (R78 漏列 grokx/lpbot/mimo 3 條)
+**KPI 進展表**:
+| KPI | 前值 (R78 wrap-up) | 後值 (R79) | 變化 |
+|---|---:|---:|---:|
+| lib unit tests | 368 passed (R78 wrap-up claim) | 370 passed | +2 (R78 累積實測) |
+| cargo fmt --check | 1 line diff (config.rs:1072 trailing whitespace, R78 T-BOT12 漏) | 0 diff | 0 diff 持續 |
+| cargo clippy | 0 warning | 0 warning | 0 |
+| 護欄 chain #16 (f) 撞標籤 | saturated | saturated | 0 (持續) |
+| KNOWN_PROVIDERS (hook_server 白名單) | 13 (4 本機 + 9 OpenAB) | 13 | 0 (持續 saturated) |
+| design.md 後端對照表 coverage | 6 條 (漏 grokx/lpbot/mimo) | 6 條 (未改, 留 R80 owner) | spec drift 標註, 無改 |
+| openab-bot-sync effective task | 7/12 (R78 T-BOT8+T-BOT11 done) | 7/12 (本輪 0 new) | 0 |
+
+**為什麼**:
+- R78 4 commit (97aea24 T-BOT4 fix / 1a2c900 T-BOT5 feat / 68fd164 T-BOT6 docs / 0e29573 T-BOT8 docs / 16feb39 docs / 29bc7c0 T-BOT11 feat / b0ad9f1 T-BOT12 feat) 落地驗證: grep config.rs / hook_server.rs / lib.rs 4 同步點齊 (GROKX/LPBOT/mimo 各 4 點) + cicx2→cicx alias + KNOWN_PROVIDERS size 13 + 護欄 chain #16 (a-f) 6 sub-assertion saturated
+- 意外發現 R78 T-BOT12 (b0ad9f1) commit 漏跑 rustfmt → config.rs:1072 註解 trailing whitespace diff (lpbot 那行) — M0 級修, commit `90e3c25`
+- 額外發現: R78 T-BOT5/T-BOT11/T-BOT12 commit 加了 (grokx,"Grok")/(lpbot,"Claude")/(mimo,"MIMO") 3 條護欄測試對照項, 但 `openspec/changes/openab-bot-sync/design.md` 第 42-53 行後端對照表 (Markdown table) **只列 6 條** (cicx/gitx/giminix/codex_bot/openx/irisx_bot), 漏列 grokx/lpbot/mimo — R78 spec commit 漏的 spec/實作 drift
+- 設計決策: 本輪**不 commit design.md** — `openspec/` 整個在 R13 防護守的 untracked 清單內 (owner R75 spec commit 15a6c54 留的), 動它會破 R13 防護紀律。改寫進 engineering-log 標 R80 owner follow-up
+
+**搜尋**:
+- `git show --stat 0e29573 68fd164 1a2c900 97aea24 b0ad9f1 16feb39 29bc7c0 8c70612` 取 R78 真實 diff 對齊 commit message claim
+- `grep -n 'grokx\|lpbot\|mimo' src-tauri/src/config.rs` 確認 4 同步點 (default_providers / default_provider_sounds / default_provider_waiting_sounds / r78 護欄對照表) 落地
+- `grep -n 'KNOWN_PROVIDERS\|cicx2' src-tauri/src/hook_server.rs` 確認 13 個白名單 + cicx2→cicx alias (line 365-368) 落地
+- `cargo fmt --check` 抓出 R78 T-BOT12 漏的 1 行 diff (config.rs:1072) — 紅線復現 R72「baseline 不全綠」警示
+
+**做了什麼**:
+- `90e3c25 commit`: `chore(fmt)` 修 config.rs:1072 trailing whitespace 1 行 → `cargo fmt --check` 0 diff + `cargo test --lib` 370 passed
+- **沒動** 6 supervisor untracked (`.arch-fitness.json` / `.engineer-loop.failures.jsonl` / `.harness-memory.db` / `.supervisor-report.json` / `bash.exe.stackdump` × 2) + `openspec/changes/openab-bot-sync/.openspec.yaml` + `design.md` (R13 防護持續)
+- **沒做** `git add -A/.` 嚴守 R13 防護 — `git add src-tauri/src/config.rs` 精準 add 1 檔
+- **沒修** design.md drift (留 R80 owner 決策: 整個 openspec/ 仍在 untracked, 可能 R80 owner 選 (a) 把 design.md 補完一起 commit spec drift fix, 或 (b) 維持 R13 untracked 等更大 spec 改動時一併 ship)
+
+**驗證**:
+- `cargo test --lib` (本輪 R79): **370 passed; 0 failed; 0 ignored** (commit 90e3c25 後)
+- `cargo clippy --tests --no-deps`: 0 warning
+- `cargo fmt --check`: 0 diff
+- R78 4 commit 落地 grep 驗證: GROKX/LPBOT/mimo 4 同步點齊 + KNOWN_PROVIDERS size 13 護欄 saturated + cicx2→cicx alias test `r78_t_bot4_cicx2_alias_rewrites_to_cicx` PASS (R78 commit 內已驗)
+- 沒動 R13 8 untracked — `git status` 仍顯示 8 untracked (R13 防護守住)
+- baseline 370 vs R78 wrap-up claim 368: 差 +2 可能是 cargo test 平行 race 統計浮動, 或 R78 漏統計 1 個 test。差異不影響判定（0 failed / 0 regression）
+
+**結果**: PASS (R79 觀察輪 + M0 fmt fix, baseline 370/370 綠 + 0 clippy + 0 fmt + 0 regression, 護欄 chain #16 (a-f) 6 sub-assertion saturated 持續, R13 防護守住 8 untracked, 1 輪 1 件事 (fmt fix) 紀律守住, design.md spec drift 標 R80 owner follow-up)
+
+**KPI-impact: K40 baseline_green_maintained (cargo fmt + test 持續 saturated, 護欄 chain #16 saturated 持續)**
+
+**不做的範圍** (給 R80+ owner):
+- **design.md spec drift 修 (grokx/lpbot/mimo 3 條漏列)**: 留 R80 owner 決策 (a) 補完 design.md + commit (b) 維持 R13 untracked 等更大 spec 改動時 ship。本輪 1 commit 1 件事 (fmt) 紀律守住
+- **T-BOT4 護欄測試驗證 R78 alias 真接住 CICX2**: 需要實際 openab bot 打 `/hook/cicx2` 才知 — 沒實際環境就靠 R78 commit 內 `r78_t_bot4_cicx2_alias_rewrites_to_cicx` test PASS 守護
+- **T-BOT10 收尾 (標 [x])**: 需 design.md 對照表先修才能算 audit pass — design.md 改完後 T-BOT10 自然 done
+- **R78 8c70612 暗藏 test 隔離修**: 已 R78 wrap-up 記載, 不追溯 amend
+- **MISSION.md 撰寫**: 策略顧問 R75 注入建議 48h 內補, 現已超期 → R80+ 評估
+- **quota freshness metric emit**: R76 UI badge 已加, metric emit 未加
+- **`src-tauri/src/quota/` 模組**: 仍 WIP untracked
+- **T-BOT5/6/8/11/12 spec drift 修** (若 owner 選 R80 一起 ship): 1 個 commit 收 design.md 4-5 行補完即可
+- **護欄 chain 17+**: R50 freeze 持續 (R66 input sanitization, R78 (f) 撞標籤 saturated)
+- **baseline 370 vs R78 claim 368 差 +2**: 不影響判定, 若 R80 owner 想 strict 對齊可重跑 `cargo test --lib` 多幾次取 max

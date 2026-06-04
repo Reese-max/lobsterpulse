@@ -634,3 +634,54 @@ URGENCY: HIGH
 - Spectra change: openclaw-self-evolution 主軸切換 (FTS5 + /evolution/search + DSPy/GEPA bake-off): 需新 `rusqlite` native dep, scope 1 輪做不完, 留 R65+ 評估拆分 mini-MVP
 - H0 housekeeping (archive / sensor / log rotate / DRY): 找無對齊 KPI 推進的合理項, 不強做
 - R57 lib silent-fail 收邊 剩餘小 silent-fail (R57 wrap-up 已記) + 跨 5 條 `let _ =` hooks_configurator (R37 wrap-up 已記): scope 微小, 無 KPI 量化價值
+
+---
+
+### [2026-06-03] Round 65 — K15/K16 counter bundle 改 Arc<MetricsCore> 注入, 收掉 R64 strict invariant test race noise (commit 775b316)
+**類型**: M2 (test determinism KPI 收邊, 對齊 R64 觀察輪留的「K15/K16 race 真正解法」不做清單第 1 條)
+
+**為什麼**:
+- R64 觀察輪實測 **1 failed / 358 passed**, 唯一失敗是 strict invariant test `hook_parse_failures_counter_does_not_increment_on_valid_json` — 根因 4 個 process-level `static AtomicU64` 共一份, 平行 cargo test 期間任何 `process_body(壞 JSON)` 都會污染其他 test 的 `assert_eq!(delta, 0)` 斷言。R64 wrap-up 評估為「over-engineering」走 race-tolerant delta 寬鬆斷言
+- R65 重新評估後採輕量方案: 4 個 atomic 包成 `MetricsCore` struct + `Arc<MetricsCore>` 注入, **不破壞 production lifetime aggregate 語意** (`OnceLock default_metrics()` 全 process 共一份, 對齊 K15/K16 原本設計), 但 unit test 拿 `new_metrics()` 拿獨立 instance 隔離平行噪音 → strict `assert_eq!` 直接對自己 instance 驗證
+- 對齊 M2 KPI 量測紀律: 護欄本身要能跑, 不能 flaky — flaky 護欄沒 KPI 量化價值 (今天過明天掛)。R64 留的 strict invariant test 之前被當「可容忍 race noise」, R65 真正解掉根本 race, 護欄 chain 14 條 saturated 之後每條都應該 stable
+- 對齊 prompt 規則「1 輪沒有改善 → 找 M0-3 推進」: R64 observation 沒改善, R65 反向走「R64 評估為不做的小型架構改動, 改採更小 scope 重做」找到改善路徑
+
+**KPI 進展表**:
+| KPI | 前值 (R64) | 後值 (R65) | 變化 |
+|---|---:|---:|---:|
+| 護欄 chain (R52-R64 累計) | 14 (saturated 持續) | 14 (saturated 持續, strict test 從 flaky 變 stable, chain 隱性 reliability 提升) | 0 (新護欄 0, 既有護欄 reliability 收邊) |
+| lib unit tests | 359/359 | 359/359 (0 regression, strict test 從 R64 flaky 變 3/3 stable) | 0 |
+| clippy / fmt warning | 0 / 0 | 0 / 0 (CI gate 持續乾淨) | 0 |
+| hook_server 子集 tests | 29/29 (R63 wrap) | 29/29 (0 regression, 含 1 條 R65 重寫 strict test) | 0 |
+| strict invariant test 穩定度 | R64 1 failed / 358 passed (1x 失敗) | 3/3 重跑全 PASS (stable) | race noise 根除 |
+
+**搜尋**: 無 (R65 為 R64 觀察輪留的「K15/K16 race 解法」輕量重做, 技術路徑明確, 沒新研究需求)
+
+**做了什麼**:
+- 新增 `pub struct MetricsCore` 內含 4 個 `AtomicU64` (parse_failures / responses_2xx/4xx/5xx) + `snapshot()` 一次讀 4 個 atomic 給 Prometheus render
+- 新增 `MetricsArc = Arc<MetricsCore>` cheap-to-clone handle
+- 新增 `new_metrics()` 工廠 (test 專用, 每次拿獨立 instance, strict `assert_eq!` 安全)
+- 新增 `default_metrics()` + `static DEFAULT_METRICS: OnceLock<MetricsArc>` (production 專用, lazy init 一次, clone Arc)
+- 改 `hook_server_metrics()` snapshot 函式從 `default_metrics().snapshot()` 讀, 不再直接觸碰 4 個 static
+- 改 `accept_loop` / `handle_client` / `process_body` 簽名全部接受 `metrics: &MetricsCore` / `MetricsArc`, 移除直接 static 觸碰, 沒 silent global state
+- 重寫 `hook_parse_failures_counter_does_not_increment_on_valid_json` strict invariant test: 改用 `new_metrics()` 拿獨立 instance, 嚴格 `assert_eq!` 驗 4 個 atomic 全部 0 (K15 parse_failures + K16 4xx + 順帶 K16 2xx/5xx coverage), 順便擴 K16 2xx/5xx 副作用斷言
+- 同步 11 處既有 test call site 全部加 `&super::default_metrics()` 參數
+
+**驗證**:
+- `cargo test --lib`: **359 passed; 0 failed; 0 ignored** (0 regression, R64 baseline 持續)
+- `hook_server` 子集: 29/29 綠
+- strict invariant test `hook_parse_failures_counter_does_not_increment_on_valid_json` 3x 重跑全部 PASS (R64 1 failed / 358 passed → R65 3/3 stable)
+- `cargo clippy --lib --no-deps`: 0 warning
+- `cargo fmt --check`: 0 diff
+- R13 防護: 沒動 untracked supervisor 檔 (.arch-fitness.json / .supervisor-report.json / .harness-memory.db / bash.exe.stackdump) + 沒動 openspec/changes/, `git add` 明確列 `src-tauri/src/hook_server.rs`
+
+**結果**: PASS (R65 K15/K16 counter bundle 改 `Arc<MetricsCore>` 注入, 收掉 R64 strict invariant test race noise, 359/359 綠 + 29/29 hook_server 子集綠 + strict test 3/3 stable + 0 lint warning + 0 fmt diff + 0 regression + 護欄 chain 14 saturated 持續維持, commit 775b316)
+
+**KPI-impact: strict invariant test 穩定度 R64 1 failed / 358 passed → R65 3/3 stable (race noise 根除, 護欄 chain reliability 隱性提升) + lib_unit_tests 359→359 (0 regression) + hook_server 子集 29→29 (0 regression) + clippy/fmt 0/0 持續 (CI gate 持續乾淨)**
+
+**不做的範圍** (給後續輪次):
+- R64 wrap-up 5 個不做範圍持續 (`render_prometheus_body` refactor / FTS5 / `/healthz` 加維度 / 雙格式), R65 收掉 K15/K16 race 解法 (R64 第 1 條), 剩 4 條
+- Spectra change: openclaw-self-evolution 主軸切換 (FTS5 + /evolution/search + DSPy/GEPA bake-off): 需新 `rusqlite` native dep, scope 1 輪做不完, 留 R66+ 評估拆分 mini-MVP
+- H0 housekeeping (archive / sensor / log rotate / DRY): R65 沒做 (M2 收邊優先), 找無對齊 KPI 推進的合理項, 不強做
+- 把 `MetricsCore` 進一步抽象成 generic `AtomicBundle<T>` 模板: 過度設計 YAGNI, 留真有多個 metrics bundle 重複 pattern 再抽
+- `MetricsCore` snapshot 改成 `parking_lot::Mutex<HookServerMetrics>` cache 避免 4 次 atomic load: 4 個 atomic load 對 Prometheus render 1 次 / scrape 周期可忽略, 不優化

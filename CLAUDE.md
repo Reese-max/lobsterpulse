@@ -68,7 +68,7 @@
 
 # AgentPulse upstream（以下為原始 fork 文件，僅供架構參考）
 
-> ⚠️ **READER NOTE**：下方為 fork 自 AgentPulse 的原始 CLAUDE.md，保留做架構參考用。**以頂部 LobsterPulse v5.1 章節為準**，下方凡與頂部衝突（例如 config 路徑 `~/.config/agentpulse/` vs LobsterPulse 的 `AppData\Roaming\lobsterpulse\`、port file `~/.agentpulse/port` vs `~/.lobsterpulse/port`、provider 數量、migration 流程、integration 結構等），一律**以頂部為準**。下方文字**不保證同步**，僅說明 Tauri/Rust/hook 基礎架構設計脈絡。
+> ⚠️ **READER NOTE**：下方為 fork 自 AgentPulse 的原始 CLAUDE.md，保留做架構參考用。**以頂部 LobsterPulse v5.1 章節為準**，下方路徑已統一更新為 LobsterPulse 格式（`~/.config/lobsterpulse/`、`~/.lobsterpulse/port`、`lobster-pulse-hook`）。下方文字**不保證同步**，僅說明 Tauri/Rust/hook 基礎架構設計脈絡。
 
 Dynamic Island-style floating status indicator for AI coding CLIs (Claude Code,
 Gemini CLI, Codex CLI, GitHub Copilot CLI). Tauri v2 cross-platform fork of the
@@ -96,13 +96,13 @@ src-tauri/src/
   hook_server.rs            # tokio HTTP listener, provider routing, event-name mapping
   hooks_configurator.rs     # per-provider hook install/remove — writes sidecar invocations
   bin/
-    agent-pulse-hook.rs     # standalone sidecar binary CLIs invoke via hook config
+    lobster-pulse-hook.rs   # standalone sidecar binary CLIs invoke via hook config
 src/
   index.html  main.js  styles.css   # webview frontend (embedded at build time)
-sounds/                     # 8 bundled TTS clips: {provider}.mp3 + {provider}-waiting.mp3
+sounds/                     # 14 bundled TTS clips: {provider}.mp3 + {provider}-waiting.mp3
 docs/                       # GitHub Pages landing site
   index.html  styles.css
-  demo-app/                 # in-iframe interactive AgentPulse with a mock Tauri shim
+  demo-app/                 # in-iframe interactive LobsterPulse with a mock Tauri shim
 assets/                     # screenshots + demo.gif/mp4 referenced by README + landing
 .github/workflows/
   build.yml                 # push-to-main build check on all 3 OSes (--no-bundle)
@@ -128,8 +128,8 @@ server unless you use `cargo tauri dev`.
 Frontend files are embedded at build time. Any `src/*` change needs a rebuild
 unless you're in `watch.sh` mode.
 
-All scripts use `pkill -9 -x agent-pulse` (exact match) — earlier versions used
-`-f "agent-pulse"` which could match `agent-pulse-hook` or the invoking shell.
+All scripts use `pkill -9 -x lobster-pulse` (exact match) — earlier versions used
+`-f "lobster-pulse"` which could match `lobster-pulse-hook` or the invoking shell.
 
 ## Hook architecture — sidecar binary, not bash
 
@@ -174,8 +174,8 @@ Different CLIs use different field names for the same thing:
 - **Codex** — `~/.codex/hooks.json` + enables `codex_hooks = true` in `~/.codex/config.toml`
 - **Copilot** — `~/.copilot/config.json`: uses `bash` field (not `command`)
 
-Install process **auto-removes** any existing AgentPulse hooks before writing
-new ones (identified by `agentpulse` substring in the command/bash field).
+Install process **auto-removes** any existing LobsterPulse hooks before writing
+new ones (identified by `lobsterpulse` substring in the command/bash field).
 
 All providers default to `enabled: false`. User explicitly toggles each one
 on — that flips the config *and* writes the hook. Previously Claude defaulted
@@ -321,14 +321,14 @@ page. Per-OS buttons (Linux / macOS arm64 / macOS Intel / Windows) with an
 gh run list --limit 3                       # recent CI runs
 gh run watch <id>                           # live CI log
 gh release list --limit 3                   # releases
-cat ~/.config/agentpulse/config.json        # inspect saved state
+cat ~/.config/lobsterpulse/config.json      # inspect saved state
 
 # Exercise the sidecar directly (replace path with your build output)
 echo '{"hook_event_name":"UserPromptSubmit","session_id":"test","cwd":"/tmp"}' \
-  | ./src-tauri/target/release/agent-pulse-hook claude
+  | ./src-tauri/target/release/lobster-pulse-hook claude
 
 # Raw HTTP smoke test (same thing the sidecar does internally)
-curl -X POST localhost:$(cat ~/.agentpulse/port)/hook/claude \
+curl -X POST localhost:$(cat ~/.lobsterpulse/port)/hook/claude \
   -H 'Content-Type: application/json' \
   -d '{"hook_event_name":"UserPromptSubmit","session_id":"test","cwd":"/tmp"}'
 ```

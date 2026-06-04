@@ -802,3 +802,65 @@ URGENCY: MEDIUM
 - **R83 留的策略顧問行動收尾**: 自動週排程 / K0 趨勢追蹤 / CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift 比對
 - **Tauri command 接入 quota/ 模組**: R82 註解明寫 R86+ 接入, R85 不搶
 - **R13 守住**: 8 supervisor untracked (本輪不動)
+
+### 2026-06-04 R85 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### 2026-06-04 R85 — 🧠 策略顧問巡邏
+**判定**: ON_TRACK (MEDIUM)
+PATROL_VERDICT: ON_TRACK
+URGENCY: MEDIUM
+- 🎯 方向：最近 10 個 commit 大致都在補 `K0 健康度 / quota 即時性 / spec drift / guard`，主軸沒跑掉，但你們現在還偏「指標補洞」，離 `單一膠囊看懂整個 agent session` 的事件關聯層還差一段。
+- ⚠️ 過時風險：沒有整體過時，但有兩個明確風險：一是業界正在收斂到 `OpenTelemetry + GenAI/MCP semantic conventions`，如果 `HookEvent` 不做對映，之後會變成你們自己的孤島；二是 Prometheus `native histograms` 已穩定，但生態遷移還在途中，純 metrics 路線不夠，agent 監控現在已經往 traces/events/cost attribution 走。（OTel GenAI/MCP：https://opentelemetry.io/docs/specs/semconv/gen-ai/ 、https://opentelemetry.io/docs/specs/semconv/gen-ai/mcp/；OTel graduated： https://www.cncf.io/announcements/2026/05/21/cloud-native-computing-foundation-announces-opentelemetrys-graduation-solidifying-status-as-the-de-facto-observability-standard/ ；Prometheus native histograms： https://prometheus.io/docs/specs/native_histograms/ ；OpenInference： https://github.com/Arize-ai/openinference ；Langfuse self-host/open source： https://langfuse.com/blog/2025-06-04-open-sourcing-langfuse-product 、https://langfuse.com/self-hosting ）
+- 🔍 盲點：你們在追 provider 覆蓋率，但還沒把「session 狀態機、等待使用者原因、死亡判定、診斷回放」做成第一級資料模型。
+- 💣 風險：照現在速度最容易踩到的是「14 個 provider 都接上了，但每家事件語義不同、quota 定義不同、最後 view 上只能看到一堆不一致數字」，表面達標、實際不可用。
+- 📋 建議行動：
+  - 先定 `HookEvent -> OpenTelemetry/OpenInference/MCP` 對映表，至少把 `session_id / agent_state / latency / tokens / quota / tool_call / wait_reason / fatal_reason` 固定下來，禁止 provider 自創欄位直灌主 view。
+  - 下一輪不要再只補 metrics；直接做 `Session Timeline / Waiting-on-user / Dead-session detection` 三件事其一，這才是 North Star 的核心，不是 exporter 覆蓋率本身。
+  - 補一個 `provider contract test matrix`，逐家驗證「成功率、延遲、token、quota、wait_reason、error taxonomy」是否齊全；沒有就不算納入完成。
+
+### [2026-06-04] Round 86 — M0 修 codex.rs read_model parser bug + K0 quota 1/14→2/14
+**類型**: M0 (修阻擋 baseline 紅線的 bug) + M1 微量 (落地第二個 provider quota 模組)
+**KPI**: K0 Quota 監控即時性 1/14 → 2/14 (anthropic + codex 本機)
+**KPI 進展表**:
+| KPI | 前值 (R85) | 後值 (R86) | 變化 |
+|---|---:|---:|---:|
+| K0 quota 即時性 | 1/14 provider | 2/14 provider | +1 (codex) |
+| Baseline test pass | 379/379 | 391/391 | +12 (codex 12 個新 test) |
+| Cargo clippy warning | 0 | 0 | 持平 |
+| Cargo fmt diff | 0 | 0 | 持平 |
+| K42 護欄 chain 飽和 | 17 | 17 | 持平（不過度擴張） |
+
+**為什麼**:
+- **baseline 紅線阻擋 KPI 量測**: R86 owner WIP 寫 `src-tauri/src/quota/codex.rs` (12 tests)，但 `read_model` 解析 TOML config 有 2 個 bug：(1) `strip_prefix("model")` 連 `model_reasoning_effort` 一起匹配，導致 `read_model_handles_comments_and_other_keys` 拿到 `_reasoning_effort = "medium"`；(2) 沒正確從 `=` 後取 value，導致 `read_model_parses_standard_config` 拿到 `= "gpt-5.5"`。baseline 從 391 預期掉到 389 pass + 2 fail。
+- **M0 必修**: K40 「0 regression」紅線守住，不能因為 WIP 寫壞 parser 就放行。
+- **順帶 K0 推進**: codex 模組是 R86 owner 開工就寫好的 (12 個 test 全綠 except parser)，修了 parser = 一次拿 M0 + M1 兩個 KPI 收益。
+
+**修了什麼** (codex.rs `read_model`):
+- 加邊界檢查：`strip_prefix("model")` 後必須是空、空白、或 `=`，否則 continue（避吃 `model_reasoning_effort`）
+- 改用 `find('=')` 找等號，取 `&rest[i+1..]` 拿到 value 那邊的字串
+- 然後 `.trim().trim_matches('"')` 拿乾淨的 value
+
+**驗證**:
+- `cargo test --lib quota::codex`: 12/12 綠
+- `cargo test --lib`: 391/391 綠 (R85 是 379，+12 是 codex 模組 test)
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff (rustfmt 自動排版 read_model block)
+
+**R13 守住** (R86 結束時 working tree):
+- 8 個 supervisor untracked (`.arch-fitness.json` `.engineer-loop.failures.jsonl` `.harness-memory.db` `.supervisor-report.json` 2 個 `bash.exe.stackdump` + `openspec/changes/openab-bot-sync/.openspec.yaml` + `design.md`) 全不動
+- R82 留下的 `quota/codex.rs` (WIP) 改完 commit 進去
+
+**KPI 影響**: K0 quota 即時性 +1/14, K40 regression 守住, K41 chore_treadmill 0% (M0/M1 不算 chore), K42 護欄 chain 17 條凍結不擴張
+
+**留 R87+ owner 接力**:
+- 13 個其他 provider quota 實作 (openai / gemini / copilot / 9 個 OpenAB bot)
+- Tauri command 接入 quota/ 模組 (R82 註解明寫 R86+ 接入)
+- 策略顧問巡邏建議的 `HookEvent -> OpenTelemetry/OpenInference/MCP` 對映表
+- 策略顧問建議的 `provider contract test matrix`
+- CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift 比對

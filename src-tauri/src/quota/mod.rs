@@ -1,8 +1,10 @@
 // R82 半成品: K0 Quota 監控即時性 contract。
 // RunnerQuota / LiveQuotaSnapshot 為聚合 14 provider 的設計，R86+ Tauri command 接入。
+// R86: 加 `codex` 模組,本機 OpenAI 體系 CLI quota fetch 實作。
 #![allow(dead_code)]
 
 pub mod anthropic;
+pub mod codex;
 
 use serde::{Deserialize, Serialize};
 

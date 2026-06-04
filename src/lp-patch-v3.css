@@ -408,3 +408,38 @@
   color: #d97757;
   transform: translateY(-1px);
 }
+
+/* =============================================================
+   10. Quota freshness badge — snapshot 年齡指示
+   ============================================================= */
+.quota-freshness{
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  background: rgba(138,134,128,0.10);
+  color: #8a8680;
+}
+.quota-freshness.fresh{
+  background: rgba(78,166,119,0.10);
+  color: #4ea677;
+}
+.quota-freshness.stale{
+  background: rgba(192,74,62,0.10);
+  color: #c04a3e;
+}
+
+/* =============================================================
+   11. Quota runner error badge — 失敗 runner 圖示
+   ============================================================= */
+.quota-runner-err{
+  margin-left: 4px;
+  font-size: 10px;
+  color: #c04a3e;
+  vertical-align: middle;
+}

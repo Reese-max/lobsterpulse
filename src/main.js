@@ -17,6 +17,8 @@ PROVIDER_ICONS.giminix = PROVIDER_ICONS.gemini;
 PROVIDER_ICONS.codex_bot = PROVIDER_ICONS.codex;
 // OPENX 專屬 icon：terminal 風格（矩形 + 尖括號 prompt + 底線），辨識 OpenCode = polymorphic CLI
 PROVIDER_ICONS.openx = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><polyline points="7 10 10 12 7 14"/><line x1="12" y1="14" x2="18" y2="14"/></svg>`;
+// IRISX 專屬 icon：虹膜/眼睛（IRIS = 虹膜），辨識 IRISX = 經由 hermes 的 Claude API
+PROVIDER_ICONS.irisx_bot = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>`;
 
 const PROVIDER_COLORS = {
   claude: "#d97757",
@@ -29,6 +31,7 @@ const PROVIDER_COLORS = {
   giminix: "#3b82f6",   // GIMINIX 藍
   codex_bot: "#22c55e", // CODEX bot 亮綠
   openx: "#f472b6",     // OPENX 粉紅（OpenCode 辨識色）
+  irisx_bot: "#06b6d4", // IRISX 青（hermes IRISX 辨識色）
 };
 
 const APP_NAME = "龍蝦監控";
@@ -825,6 +828,8 @@ const BOT_RUNNER_KEYWORDS = {
   // 不等於那 4 個基礎 CLI runner 的 aggregate → 跳過 snapshot，只顯示 runtime totals
   // 預備：OpenAB 未來加 OpenCode quota runner（e.g. Zen API）時自動接上，不用改 code
   openx: ["opencode", "zen"],
+  // IRISX (hermes-agent) 接 Claude backend，顯示 claude runner 用量
+  irisx_bot: ["claude", "hermes"],
 };
 
 function filterRunnersForBot(botId, runners) {
@@ -977,7 +982,7 @@ async function systemNotify(title, body, opts = {}) {
   }
 }
 
-// ─── Dashboard (OpenAB bot + 本機 CLI 雙區塊) ───
+// ─── Dashboard (OpenAB bot 6 + 本機 CLI 4 = 10 卡片) ───
 // 以 bot 為單位聚合所有 session 資訊，即使沒 active session 也能看到 quota / 最近活動
 function formatRelativeTime(secs) {
   if (secs < 0) return "剛剛";
@@ -989,7 +994,7 @@ function formatRelativeTime(secs) {
 
 function renderDashboard(st) {
   const sessions = st?.sessions || [];
-  renderDashboardGrid("bot-grid", ["cicx", "gitx", "giminix", "codex_bot", "openx"], sessions);
+  renderDashboardGrid("bot-grid", ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot"], sessions);
   renderDashboardGrid("local-grid", ["claude", "codex", "copilot", "gemini"], sessions);
   renderTrendGrid();
 }
@@ -1328,6 +1333,7 @@ const PROVIDER_LABEL = {
   giminix: "GIMINIX",
   codex_bot: "CODEX",
   openx: "OPENX",
+  irisx_bot: "IRISX",
   claude: "claude",
   codex: "codex",
   copilot: "copilot",
@@ -1355,7 +1361,7 @@ async function renderEventsLog() {
     // OpenAB bot 永遠顯示（即使 count=0，讓用戶知道 bot 存在但尚無事件）；
     // 本機 CLI 只在有事件時顯示，避免 tab 列過長。
     // 「errors」專 tab 匯集所有 provider 的 PostToolUseFailure
-    const openabBots = ["cicx", "gitx", "giminix", "codex_bot", "openx"];
+    const openabBots = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot"];
     const localClis = ["claude", "codex", "copilot", "gemini"];
     const counts = {};
     for (const e of events) counts[e.provider] = (counts[e.provider] || 0) + 1;
@@ -1471,11 +1477,26 @@ async function refreshQuotas() {
     // 全域額度區——**LobsterPulse 自跑的 local runner 優先**，若無才用 OpenAB snapshot
     const localSnap = snapshots.__local__;
     const representativeSnap = localSnap || snapshots.cicx || snapshots.gitx || snapshots.giminix || snapshots.codex_bot;
-    const globalRunners = representativeSnap?.runners || [];
     const sectionTitle = localSnap ? "💻 本機額度" : "☁️ OpenAB 額度";
+
+    // freshness badge: 計算 snapshot 年齡
+    let freshnessBadge = "";
+    const snapTs = representativeSnap?.updated_at;
+    if (snapTs) {
+      const ageSec = Math.max(0, Math.floor(Date.now() / 1000 - snapTs));
+      const ageText = ageSec < 60 ? "剛剛"
+        : ageSec < 3600 ? `${Math.floor(ageSec / 60)} 分鐘前`
+        : ageSec < 86400 ? `${Math.floor(ageSec / 3600)} 小時前`
+        : `${Math.floor(ageSec / 86400)} 天前`;
+      const freshCls = ageSec < 300 ? "fresh" : ageSec < 3600 ? "" : "stale";
+      freshnessBadge = `<span class="quota-freshness ${freshCls}" title="snapshot 更新時間">${ageText}</span>`;
+    }
+
+    // 本機 runner 需要各自獨立顯示（每個 runner 有獨立 ring + 狀態）
+    const globalRunners = representativeSnap?.runners || [];
     const globalRow = globalRunners.length > 0
       ? `<div class="quota-row-global">
-        <div class="quota-section-title">${sectionTitle}</div>
+        <div class="quota-section-title">${sectionTitle}${freshnessBadge}</div>
         ${globalRunners.map(r => {
           let cls = r.ok === false ? "quota-runner err" : "quota-runner";
           const pct = runnerPct(r);
@@ -1486,7 +1507,9 @@ async function refreshQuotas() {
           const ring = pct !== null ? `<span class="percent-value">${pct}</span>` : "";
           const style = pct !== null ? ` style="--pct:${pct}"` : "";
           const text = (r.text || "").replace(/\*\*/g, "").replace(/`/g, "");
-          return `<div class="${cls}" data-provider="${esc(r.name || "")}"${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}</span><span class="quota-runner-text">${esc(text)}</span></div>`;
+          // 失敗 runner 顯示錯誤圖示
+          const errBadge = r.ok === false ? `<span class="quota-runner-err" title="Runner 執行失敗">⚠</span>` : "";
+          return `<div class="${cls}" data-provider="${esc(r.name || "")}"${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}${errBadge}</span><span class="quota-runner-text">${esc(text)}</span></div>`;
         }).join("")}
       </div>`
       : "";
@@ -1511,7 +1534,7 @@ async function refreshQuotas() {
 
 // ─── Providers in settings ───
 // OpenAB bot 優先顯示，本機 CLI 接在後面。codex_bot=OpenAB CODEX，codex=本機 CLI（獨立 id）。
-const PROVIDER_ORDER = ["cicx", "gitx", "giminix", "codex_bot", "openx", "claude", "codex", "copilot", "gemini"];
+const PROVIDER_ORDER = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "claude", "codex", "copilot", "gemini"];
 
 async function renderProviders() {
   const detected = await invoke("detect_installed_providers");

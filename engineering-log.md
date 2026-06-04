@@ -4,6 +4,67 @@
 
 ## 改善紀錄
 
+### [2026-06-04] Round 75 — openab-bot-sync 規格一致性修（M0 解 ship blocker）
+**類型**: M0（解 ship blocker，非 H0 治理）
+**KPI**: openab-bot-sync 從「Spectra 驗證失敗」變「0 findings 可 archive」
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| Spectra validate openab-bot-sync | ✗ fail (specs 缺漏 + 1 warning) | ✓ valid | +1 |
+| Spectra analyze (Coverage/Consistency/Ambiguity/Gaps) | 1 warning | 4/4 Clean | +1 |
+| openab-bot-sync 有效 done/total | 4/12 (T-BOT9 修正後) | 5/12 (T-BOT9 落地 + spec 規範化) | +1 |
+| 護欄 chain 數 | 17 saturated | 17 saturated | 0 (規格修未觸) |
+| lib_unit_tests | 368 passed | 368 passed | 0 (未動 src) |
+
+**為什麼**: 規格驗證失敗是 openab-bot-sync ship 的硬阻塞 — owner 無法 archive。
+T-BOT9 雖 R75 落地（b9f36ab 修 giminix label），但 change 整體仍卡在 Spectra
+驗證失敗（缺 specs/ 檔案、proposal 缺 Capabilities、tasks 沒對應 requirement
+名 reference、design「後端對照表」段未被 tasks 引用）。不解就等於 T-BOT9 修了
+半個 change、其餘 T-BOT4/5/10/11/12 推進都會被 Spectra 持續擋下。
+
+**搜尋**: `spectra validate` / `spectra analyze` / `spectra instructions` 確認
+spec-driven schema 要求：(1) specs/<capability>/spec.md 含 ## ADDED Requirements
++ 每個 Requirement 至少 1 個 #### Scenario（4 hashtags）、(2) proposal.md 要有
+Capabilities section 列 capability 名（kebab-case）、(3) tasks.md 每個 task 要
+reference requirement 完整名稱（不是縮寫）。
+
+**做了什麼**:
+1. 新建 `openspec/changes/openab-bot-sync/specs/openab-bot-registry/spec.md`：
+   5 個 ADDED Requirements（OpenAB bot registration is a 4-point sync / Provider
+   id alias resolves legacy / drift ids / Drift guard prevents silent provider
+   re-drift / Missing sound file MUST NOT panic playback / Backend label
+   reflects actual backend engine）+ 11 個 #### Scenario（WHEN/THEN 格式）+ 用
+   SHALL/MUST 規範詞（避 should/may/might）+ 場景均 4 hashtags
+2. `openspec/changes/openab-bot-sync/proposal.md` 補「## Capabilities」section
+   列出 `openab-bot-registry` capability（避 path doubling — Spectra 把
+   `specs/<capability>/spec.md` 解析為相對 change dir，重寫時拆掉路徑前綴）
+3. `openspec/changes/openab-bot-sync/tasks.md` 為每個 T-BOTX 加 (covers: <req 名>)
+   reference、12 task 對齊 5 requirement；T-BOT10 加 design.md「後端對照表」段
+   引用解 Consistency warning
+4. 規格修未動 src-tauri/ — 0 clippy warning / 0 fmt diff 維持
+5. R13 防護守住：只 `git add openspec/changes/openab-bot-sync/{proposal,tasks,specs/openab-bot-registry/spec}.md` 3 個明確路徑，未動
+   6 supervisor untracked + .openspec.yaml + design.md（owner 留 untracked）
+
+**結果**: PASS
+- `spectra validate --changes openab-bot-sync` = ✓ valid
+- `spectra analyze openab-bot-sync` = ✓ No issues found（Coverage / Consistency
+  / Ambiguity / Gaps 4 軸全 Clean）
+- `cd src-tauri && cargo test --lib` = 368 passed; 0 failed（baseline 維持）
+- commit `15a6c54 docs(spec): R75 openab-bot-sync 規格一致性修 — 解 Spectra 驗證失敗`
+
+**下輪推進方向**（給 R76+ owner）:
+- **T-BOT5 (mimo provider, disabled)**：最小 M1 feature，scope = 1 provider +
+  2 sound entries + usage poller 1 行，估 1 輪可推完
+- **T-BOT4 (cicx2 ID 漂移)**：M0 級，需先查 hook server log 確認 CICX2 實際
+  POST 路徑（`/hook/cicx` vs `/hook/cicx2`），再決定加 alias 還是 no-op
+- **T-BOT11 (grokx) / T-BOT12 (lpbot)**：M1 級，scope 大（4 同步點 + 護欄擴充），
+  估 1-2 輪，可分拆
+- **T-BOT6 / T-BOT8 / T-BOT10**：H0 級（純 docs / label 稽核），chore_treadmill
+  警戒線（24h 9/18 = 50% > 30%）持續 → 暫緩
+- 護欄 chain 18+ 仍 R50 freeze 持續
+- 任何 6 supervisor untracked 檔 + openspec/changes/ .openspec.yaml / design.md
+  仍 R13 防護持續（未動）
+
 - 📋 建議行動：
   1. 直接凍結一小段 KPI 護欄擴寫，先交付最小可用的 Phase 2：`exec-trace.jsonl -> conversations.db(FTS5) -> /evolution/search -> 任務前自動檢索`。
   2. 立刻補一個離線評測集與 4 個硬指標：`recall@k`、`skill reuse hit rate`、`task success delta`、`search latency`，先比較 `FTS5-only`、`FTS5+trigram`，再決定要不要升級到 hybrid memory。

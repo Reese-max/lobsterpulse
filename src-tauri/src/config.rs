@@ -810,3 +810,92 @@ mod load_config_at_tests {
         assert!(!loaded.setup_done);
     }
 }
+
+#[cfg(test)]
+mod provider_registration_guard_tests {
+    //! R67 護欄 chain 第 16 條（接 R66 護欄 chain 第 15 條
+    //! `r66_parse_provider_output_set_subset_of_nine_known_under_adversarial_input`）
+    //!
+    //! 對齊 `openspec/changes/openab-bot-sync/` T-BOT7:
+    //! 「加 test 斷言 default_providers() 內部 / 跨 4 同步點的一致性,
+    //!  故意移除一個 provider → 該 test fail; 既有 baseline 維持」
+    //!
+    //! 4 個同步點（design.md 列）:
+    //!   1. `default_providers()` 本身 (line 351)
+    //!   2. `default_provider_sounds()` (line 329)
+    //!   3. `default_provider_waiting_sounds()` (line 340)
+    //!   4. usage poller 迴圈 (lib.rs / detect_providers line 547)
+    //!
+    //! 本 test 守護前 3 點（純函式級, 無需 lib.rs impl 細節）;
+    //! 第 4 點在 `detect_providers()` 內 hardcode 5 bot_id, 抽常數屬 refactor
+    //! 範疇, 留 R67+ 評估（openspec 已標 deferred）。
+    //!
+    //! 設計紀律: 對齊 R52-R62 護欄 chain 風格 — 純函式級 set 收斂斷言, 故意破壞
+    //! 任一條 sub-assertion 必須 fail, 護欄才能真正咬住「未來新增/移除 provider
+    //! 漏同步 4 點之一」。
+    use super::*;
+
+    /// R67 護欄: `default_providers()` / `default_provider_sounds()` /
+    /// `default_provider_waiting_sounds()` 三同步點一致性 + 撞 id 守護 +
+    /// 命名 convention 守護。
+    #[test]
+    fn r67_provider_registration_three_way_consistency() {
+        let providers = default_providers();
+        let sounds = default_provider_sounds();
+        let waiting_sounds = default_provider_waiting_sounds();
+
+        // (a) sounds keys ⊆ providers keys — 沒在 providers 註冊的 id 不該有 sound entry
+        for sound_key in sounds.keys() {
+            assert!(
+                providers.contains_key(sound_key),
+                "R67 護欄破 (a): sounds 內含 {sound_key:?} 不在 default_providers() 內, \
+                 觀察 providers keys = {:?}",
+                providers.keys().collect::<Vec<_>>()
+            );
+        }
+
+        // (b) waiting_sounds keys ⊆ providers keys — 同 (a) 對稱
+        for ws_key in waiting_sounds.keys() {
+            assert!(
+                providers.contains_key(ws_key),
+                "R67 護欄破 (b): waiting_sounds 內含 {ws_key:?} 不在 default_providers() 內, \
+                 觀察 providers keys = {:?}",
+                providers.keys().collect::<Vec<_>>()
+            );
+        }
+
+        // (c) sounds 與 waiting_sounds 集合對稱 — 有 sound 必有 waiting_sound (反之亦然)
+        //     防「只加 sound 忘 waiting」或反向
+        let sound_keys: std::collections::HashSet<&String> = sounds.keys().collect();
+        let waiting_keys: std::collections::HashSet<&String> = waiting_sounds.keys().collect();
+        assert_eq!(
+            sound_keys, waiting_keys,
+            "R67 護欄破 (c): sounds 與 waiting_sounds 集合應對稱, \
+             sounds={sound_keys:?}, waiting_sounds={waiting_keys:?}"
+        );
+
+        // (d) enabled OpenAB bot（🤖 前綴）≥ 5 隻 — 對齊 v5.1 mission
+        //     「9 provider 完整監控」+ 對齊 openspec drift table 已知 5 隻 enabled
+        //     OpenAB bot (cicx / gitx / giminix / codex_bot / openx) 防未來有人默默改
+        //     disabled 導致監控盲區
+        let openab_bot_count = providers
+            .values()
+            .filter(|p| p.enabled && p.name.starts_with("🤖"))
+            .count();
+        assert!(
+            openab_bot_count >= 5,
+            "R67 護欄破 (d): enabled OpenAB bot (🤖 前綴) 應 ≥ 5, 觀察 = {openab_bot_count} 個, \
+             all providers = {providers:?}"
+        );
+
+        // (e) 所有 provider name 必須有 🤖 (OpenAB) 或 💻 (本機 CLI) 前綴
+        //     對齊 T-BOT6 SOP + CLAUDE.md naming convention, 防新增 bot 漏前綴導致 UI 歧義
+        for (id, p) in &providers {
+            assert!(
+                p.name.starts_with("🤖 ") || p.name.starts_with("💻 "),
+                "R67 護欄破 (e): provider {id:?} name {:?} 缺 🤖/💻 前綴",
+                p.name
+            );
+        }
+    }
+}

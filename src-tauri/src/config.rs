@@ -337,6 +337,9 @@ fn default_provider_sounds() -> HashMap<String, String> {
         // R70 T-BOT1+T-BOT2: hermes agent / IRISX — 補 openclaw→hermes 遷移後新 bot
         // 音效檔暫缺，T-BOT3 R71 補缺檔 fallback
         ("irisx_bot".into(), "irisx_bot.mp3".into()),
+        // R78 T-BOT11: GROKX 已於 2026-06-04 由 openab operator 拆獨立 `bot_id="grokx"`
+        // （原與 GITX 撞 `gitx`，見 openab/config-copilot-native.toml），補 4 同步點之一
+        ("grokx".into(), "grokx.mp3".into()),
     ])
 }
 
@@ -350,6 +353,8 @@ fn default_provider_waiting_sounds() -> HashMap<String, String> {
         ("openx".into(), "openx-waiting.mp3".into()),
         // R70 T-BOT1+T-BOT2: hermes agent / IRISX — 補 waiting 音效
         ("irisx_bot".into(), "irisx_bot-waiting.mp3".into()),
+        // R78 T-BOT11: GROKX waiting 音效（對稱 default_provider_sounds）
+        ("grokx".into(), "grokx-waiting.mp3".into()),
     ])
 }
 
@@ -409,6 +414,18 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
         ProviderConfig {
             enabled: true,
             name: "🤖 IRISX · OpenAB Hermes".into(),
+            settings_path: None,
+        },
+    );
+    // R78 T-BOT11: GROKX 拆獨立 id（後端 hermes -p grokx）
+    // 對齊 openab/config-copilot-native.toml `[lobsterpulse] bot_id = "grokx"`
+    // operator 2026-06-04 修：原 `bot_id="gitx"` 與 GITX 撞 id，事件會被解析到
+    // 同一個 bucket 破壞 K40 metric 算術；拆成 grokx 後屬獨立 provider
+    m.insert(
+        "grokx".into(),
+        ProviderConfig {
+            enabled: true,
+            name: "🤖 GROKX · OpenAB Grok".into(),
             settings_path: None,
         },
     );
@@ -921,6 +938,34 @@ mod provider_registration_guard_tests {
                 p.name
             );
         }
+
+        // (f) R78 T-BOT11 擴充: enabled OpenAB bot (🤖 前綴) 的「後端關鍵字」
+        //     必須兩兩不同 (e.g. "CICX · OpenAB Claude" 取 "Claude"，
+        //     "GROKX · OpenAB Grok" 取 "Grok")。防「撞後端標籤」: GROKX 原
+        //     與 GITX 在 openab 端共用 `bot_id="gitx"`，operator 2026-06-04
+        //     拆成 `bot_id="grokx"` 後，LP 端若有人把 grokx 標成 "Grok" 但同時
+        //     有另一支 bot 也叫 "Grok" 標籤 → UI/膠囊/K40 metric 視覺混淆。
+        //     規則: enabled 🤖 provider name 取「· OpenAB X」後段 X，集合兩兩不同。
+        let mut openab_backends: Vec<String> = providers
+            .values()
+            .filter(|p| p.enabled && p.name.starts_with("🤖 "))
+            .filter_map(|p| {
+                p.name
+                    .split("· OpenAB ")
+                    .nth(1)
+                    .map(|s| s.trim().to_string())
+            })
+            .collect();
+        let openab_backend_count = openab_backends.len();
+        openab_backends.sort();
+        let unique_backends: std::collections::HashSet<&String> = openab_backends.iter().collect();
+        assert_eq!(
+            unique_backends.len(),
+            openab_backend_count,
+            "R78 T-BOT11 護欄破 (f): enabled OpenAB bot 後端關鍵字集合應兩兩不同 \
+             (防撞標籤 drift, 案例: GROKX 原與 GITX 在 openab 端共用 bot_id), \
+             backends = {openab_backends:?}"
+        );
     }
 }
 

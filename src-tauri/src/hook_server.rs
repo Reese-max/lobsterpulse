@@ -326,13 +326,14 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "codex",
     "copilot",
     "gemini",
-    // 6 OpenAB bot (R73: irisx_bot 由 R70 加)
+    // 7 OpenAB bot (R73: irisx_bot 由 R70 加；R78 T-BOT11: grokx 拆獨立 id)
     "cicx",
     "gitx",
     "giminix",
     "codex_bot",
     "openx",
     "irisx_bot",
+    "grokx",
 ];
 
 /// Parse provider from HTTP request line: "POST /hook/claude HTTP/1.1"
@@ -546,17 +547,21 @@ mod tests {
             // R73: irisx_bot（hermes agent / IRISX, 對齊 openab/config-hermes.toml
             // `[lobsterpulse] bot_id = "irisx_bot"`）
             "irisx_bot",
+            // R78 T-BOT11: grokx（hermes -p grokx, 對齊 openab/config-copilot-native.toml
+            // operator 2026-06-04 拆獨立 `bot_id="grokx"`，原與 gitx 撞 id）
+            "grokx",
         ];
         for p in &known {
             let req = format!("POST /hook/{p} HTTP/1.1\r\n");
             let got = parse_provider(req.as_bytes());
             assert_eq!(got, *p, "known provider {p:?} 應原樣回傳, actual={got:?}");
         }
-        // 白名單常數跟測試清單必須同步 (10 個) — 防未來加 provider 忘了更新測試
+        // 白名單常數跟測試清單必須同步 (11 個) — 防未來加 provider 忘了更新測試
         assert_eq!(
             KNOWN_PROVIDERS.len(),
-            10,
-            "KNOWN_PROVIDERS 應有 10 個 (4 本機 + 6 OpenAB, R73 加 irisx_bot)"
+            11,
+            "KNOWN_PROVIDERS 應有 11 個 (4 本機 + 7 OpenAB: cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx, \
+             R78 T-BOT11 加 grokx)"
         );
         for p in &known {
             assert!(KNOWN_PROVIDERS.contains(p), "KNOWN_PROVIDERS 應含 {p:?}");
@@ -690,12 +695,13 @@ mod tests {
             KNOWN_PROVIDERS.contains(&"irisx_bot"),
             "R73 護欄破: KNOWN_PROVIDERS 必須含 \"irisx_bot\" (R70 spec drift 修)"
         );
-        // 集合 size 10 確認 (4 本機 + 6 OpenAB, 包含 irisx_bot)
+        // 集合 size 11 確認 (4 本機 + 7 OpenAB, 包含 irisx_bot + grokx)
+        // R78 T-BOT11: 10 → 11 (加 grokx)
         assert_eq!(
             KNOWN_PROVIDERS.len(),
-            10,
-            "R73 護欄破: KNOWN_PROVIDERS 應有 10 個 (4 本機 + 6 OpenAB: cicx/gitx/\
-             giminix/codex_bot/openx/irisx_bot), actual={}",
+            11,
+            "R73 護欄破: KNOWN_PROVIDERS 應有 11 個 (4 本機 + 7 OpenAB: cicx/gitx/\
+             giminix/codex_bot/openx/irisx_bot/grokx, R78 T-BOT11 加 grokx), actual={}",
             KNOWN_PROVIDERS.len()
         );
     }

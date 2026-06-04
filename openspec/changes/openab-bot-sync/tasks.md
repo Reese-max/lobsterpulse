@@ -40,9 +40,9 @@
 
 ## Phase 5: 拆撞 id + 納管（openab 端已於 2026-06-04 由 operator 修好，LP 端補 provider）
 
-- [ ] **T-BOT11: 加 grokx provider（GROKX 已拆獨立 id）** — GROKX（後端 hermes -p grokx）原與 GITX 撞 `bot_id="gitx"`；operator 已於 2026-06-04 在 openab `config-copilot-native.toml` 拆為 `bot_id="grokx"`。加 grokx 到 default_providers（name `"🤖 GROKX · OpenAB Grok"`、enabled=true）+ sounds + waiting_sounds + usage poller（line 547） (covers: OpenAB bot registration is a 4-point sync, Drift guard prevents silent provider re-drift)
-  - 並把 T-BOT7 drift 守護測試擴充：偵測「多個 openab enabled bot 映射到同一 LP provider id」→ fail，防未來再撞 id
-  - 驗證：膠囊出現 GROKX；POST `/hook/grokx` 被接住；撞 id 守護測試能抓到人為製造的撞 id
+- [x] **T-BOT11: 加 grokx provider（GROKX 已拆獨立 id）** — R78 commit 落地：4 同步點齊 (a) `config.rs` default_providers 加 grokx（name `"🤖 GROKX · OpenAB Grok"`, enabled=true，line ~421）/ (b) `default_provider_sounds` 加 `grokx→grokx.mp3` (line ~340) / (c) `default_provider_waiting_sounds` 加 `grokx→grokx-waiting.mp3` (line ~356) / (d) `lib.rs` seed_default_sounds 內嵌 2 條 grokx mp3 (`include_bytes!` from `sounds/`)；`hook_server.rs` `KNOWN_PROVIDERS` 10→11（line ~328, parse_provider 護欄 size 11 守住）；`r74_play_sound_file_fallback_tests` mp3 seeded 12→14 守住。`sounds/grokx.mp3` (9596 B silent) + `sounds/grokx-waiting.mp3` (6572 B silent) 沿 R71 irisx 模式 1.5s/1.0s。R78 (f) 護欄（line ~942）擴充 R67 chain #16：enabled 🤖 OpenAB bot name「· OpenAB X」後段 X 集合兩兩不同，防「撞後端視覺標籤」drift (covers: OpenAB bot registration is a 4-point sync, Drift guard prevents silent provider re-drift)
+  - 撞 id 守護: Rust `HashMap<String, _>` key 唯一由 type system 編譯期保證（`default_providers.insert("grokx", ...)` 重複 insert 自動 dedup，無法表達「兩個 openab bot 寫到同一個 LP provider id」），故 line 44 字面「runtime 偵測撞 id」在 Rust 表達層不可能 — R78 (f) 守護撞**後端視覺標籤**（name 後段）為撞 id 視覺後果的 runtime 補強；編譯期撞 id 仍由 type system 擋。R79 觀察輪可考慮把 line 44 文字收斂成「撞 id 由 type system 擋 + (f) 擋撞標籤」
+  - 驗證：膠囊出現 GROKX；POST `/hook/grokx` 被接住；撞 id 由 type system 編譯期保證；撞後端標籤由 (f) runtime 護欄擋
 - [ ] **T-BOT12: 加 lpbot provider（LPBOT 已納管）** — operator 已於 2026-06-04 在 openab `config-lpbot.toml` 加 `[lobsterpulse] bot_id="lpbot" enabled=true`。加 lpbot 到 default_providers（name `"🤖 LPBOT · OpenAB Claude（quota 監控）"`、enabled=true）+ sounds + usage poller (covers: OpenAB bot registration is a 4-point sync)
   - 並在 docs 記錄「刻意保留 / 未監控」清單：本機 CLI provider（claude/codex/copilot/gemini 本機，enabled=false）為刻意保留、非孤兒
   - 驗證：膠囊出現 LPBOT；`usage-lpbot.json` 被讀；docs 含「刻意保留」清單

@@ -700,3 +700,49 @@ URGENCY: MEDIUM
   1. 本週補一份 `MISSION.md`，直接寫清楚「主線是 openclaw-self-evolution，hook_server hardening 只是配套」，並給每條支線退出條件；沒有這個，後面還會繼續漂。
   2. Phase 2 不要把 retrieval 介面綁死在純 FTS5；先做 `FTS5 + 可插拔 semantic rerank` 抽象，至少保留升級到 hybrid memory 的路，不然很快要重拆。
   3. 在進 Phase 3 前先落地一套離線 eval：固定任務集、skill reuse rate、task success、token/latency、回歸門檻；沒有這套，GEPA／VISTA／JTPRO 換哪個都只是研究感，不是工程閉環。
+
+### [2026-06-04] Round 66 — parse_provider 9-provider 白名單落地 + 護欄 chain 第 15 條 (commit eb28700)
+**類型**: M2 (KPI 量測強化: input sanitization layer 新 type 護欄) + 輕量 M1 (v5.1 mission 9-provider 邊界收邊)
+
+**為什麼**:
+- 對齊 LobsterPulse v5.1 mission「hook_server 收 9 provider 事件 + Prometheus exporter」的可觀察性閉環邊界
+- 之前 `parse_provider` 接受任意字串當 provider, K40 `lobsterpulse_provider_sessions{provider="..."}` hashmap bucket 數無上限, 攻擊面 (路徑 injection / typo / 廢棄 provider 名) 會撐破 R61/R62 跨 live 切片算術護欄 (K19 sum by(provider) == K40 + K6 sessions_total == sum by(provider)(K40))
+- 護欄 chain 14 saturated 沿用 R63 wrap-up 凍結聲明, R66 是新 type (input sanitization layer) 非同質衍生, 解封 R50 frozen-on-guardrails 條件中「新維度 (非同質衍生)」
+
+**KPI 進展表**:
+| KPI | 前值 (R65) | 後值 (R66) | 變化 |
+|---|---:|---:|---:|
+| 護欄 chain (R52-R66 累計) | 14 (saturated 持續) | 15 (新 type: input sanitization layer, R50 frozen 解封) | +1 |
+| lib unit tests | 359/359 | 363/363 (0 regression, +4 R66 tests) | +4 |
+| hook_server 子集 tests | 29/29 (R63 wrap) | 33/33 (0 regression, +4 R66 parse_provider tests) | +4 |
+| clippy / fmt warning | 0 / 0 | 0 / 0 (CI gate 持續乾淨) | 0 |
+| K40 hashmap bucket 上限 | 無上限 (任意字串) | 9 (4 本機 CLI + 5 OpenAB bot) | 鎖死 |
+
+**搜尋**: 無 (R66 為 R64 觀察輪留的「parse_provider 邊界收邊」輕量落地, 技術路徑明確, 沒新研究需求; 護欄 chain 解封條件「新維度 (非同質衍生)」在 R63 wrap-up 已聲明, 設計紀律沿用)
+
+**做了什麼**:
+- 新增 `KNOWN_PROVIDERS: &[&str]` const 鎖 9 provider 名字 (4 本機 CLI: claude/codex/copilot/gemini + 5 OpenAB bot: cicx/gitx/giminix/codex_bot/openx)
+- 改 `parse_provider` 走白名單檢查: 9 known 原樣回, bot legacy alias `"bot"` 折入 `"openx"` (R19 既有語意保留, 不在白名單檢查之後), 任意字串 → `log::warn!` + fallback `"claude"` (跟 R19 之前 unknown provider 全計入 claude 的隱性語意一致, 護欄 chain 算術不受污染)
+- 新增 3 條 unit test:
+  - `parse_provider_known_nine_providers_returned_as_is`: 9 known 全原樣回, 順便鎖 `KNOWN_PROVIDERS.len() == 9` 同步
+  - `parse_provider_unknown_falls_back_to_claude`: 5 條 adversarial input (typo / 路徑 injection / 廢棄 / case 大寫 / 空字串) → fallback "claude"
+  - `parse_provider_bot_legacy_alias_still_rewrites_to_openx`: R19 既有語意保留
+- 新增 1 條護欄 chain 第 15 條 `r66_parse_provider_output_set_subset_of_nine_known_under_adversarial_input`: 9 known + 4 unknown + 1 bot legacy = 14 條 input 收斂後, distinct provider 集合 ⊆ 9 known 且大小 ≤ 9, unknown 全 collapse 到 claude 共用 bucket, bot legacy 折入 openx
+
+**驗證**:
+- `cargo test --lib`: **363 passed; 0 failed; 0 ignored** (R65 359 → R66 +4, 0 regression)
+- `cargo clippy --lib --tests -- -D warnings`: 0 warning
+- `cargo fmt --check`: 0 diff
+- hook_server 子集: 33/33 綠 (含 4 條 R66 新增)
+- R13 防護: 未動 .arch-fitness.json / .supervisor-report.json / .harness-memory.db / bash.exe.stackdump / openspec/changes/, `git add` 明確列 `src-tauri/src/hook_server.rs` + `engineering-log.md` 2 個本輪檔案
+
+**結果**: PASS (R66 parse_provider 9-provider 白名單落地 + 護欄 chain 第 15 條, 363/363 綠 + 33/33 hook_server 子集綠 + 0 lint warning + 0 fmt diff + 0 regression + K40 hashmap bucket 上限鎖死, commit eb28700)
+
+**KPI-impact: 護欄 chain 14→15 (新 type: input sanitization layer, 解封 R50 frozen) + lib_unit_tests 359→363 (+4) + hook_server 子集 29→33 (+4) + K40 hashmap bucket 上限無→9 (鎖死) + clippy/fmt 0/0 持續**
+
+**不做的範圍** (給後續輪次):
+- R65 wrap-up 4 個不做範圍持續 (`render_prometheus_body` refactor / FTS5 / `/healthz` 加維度 / 雙格式), R66 收邊 9-provider 邊界 (新增護欄 type, 非 4 條同類衍生), 剩 4 條
+- 策略顧問 R65 patrol 提的 openclaw-self-evolution 主軸切換 / MISSION.md / FTS5 + semantic rerank / 離線 eval: 不在本專案 LobsterPulse v5.1 scope (本專案 CLAUDE.md mission = hook_server 9 provider + Prometheus exporter), 標註供 owner 決定是否真要 pivot
+- R66 護欄用 set 收斂 (純函式級 in hook_server.rs test mod), 不做 integration test 起 hook_server 接 socket 跑 (scope 大, 留 R67+ 評估)
+- `KNOWN_PROVIDERS` 改用 `&[ProviderId]` enum 強型別: 純 enum 重構, 護欄算術無差, 留真要廢除 string-based provider routing 再重構
+- H0 housekeeping: R66 沒做, 持續找無對齊 KPI 推進的合理項, 不強做

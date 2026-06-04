@@ -504,3 +504,44 @@ URGENCY: MEDIUM
 - OTel 觀測升級 (scope 較大, 戰略層決策)
 - 護欄 chain 17+ (R50 freeze 持續, 戰略層決策後再解封)
 - 任何 hook_server.rs 改動 (R66 護欄 chain 15 對 9-provider 持續 invariant)
+
+### [2026-06-04] Round 72 — 觀察輪: R70+R71 落地驗證 + spec drift 半成品留 owner 決策
+**類型**: 觀察 (對齊 R62/R64/R69 觀察輪同模式)
+**KPI**: 0 M0-3 強烈可推進, 護欄 chain 16 saturated 持續維持, baseline 364/364 綠 + 0 clippy warning + 0 fmt diff
+**KPI 進展表**:
+| KPI | 前值 (R71) | 後值 (R72) | 變化 |
+|---|---:|---:|---:|
+| lib_unit_tests | 364 | 364 | 0 |
+| 護欄 chain 條數 | 16 | 16 | 0 (R50 freeze 持續) |
+| OpenAB bot 音效完整 | 6/6 | 6/6 | 0 (R71 已 saturate) |
+| spec openab-bot-sync 推進 | 3/12 (T-BOT1+T-BOT2+T-BOT3) | 3/12 | 0 (mission 衝突未解, owner gate) |
+| clippy warnings | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+| 24h commit | 1 (c7f76b6 chore+embed) | 0 (本輪觀察無 commit) | -1 |
+
+**為什麼觀察 (不動工)**: R70+R71 已連續 2 輪 M1 推進 (T-BOT1+T-BOT2 4 同步點 + T-BOT3 mp3 embed), spec openab-bot-sync 從 2/12 推到 3/12. 繼續推 T-BOT4 需先解 R70 spec drift 半成品: config.rs default_providers 10 provider (含 irisx_bot) 但 hook_server.rs KNOWN_PROVIDERS 仍 9 (4+5, 缺 irisx_bot) → IRISX 事件 POST /hook/irisx_bot 進 parse_provider 仍會 log warn + collapse to "claude" (R19 fallback 語意保留) → K40 provider_sessions hashmap 仍 9 bucket, IRISX 事件計入 claude bucket → claude 數字被污染. 真正解 = (a) 撤回 R70 守 mission 9=9 / (b) 升級 hook_server 9→10 + mission version bump → 超出 M1 範疇, 屬 owner 戰略決策 (mission 9=9 vs 10=10 衝突). 對齊 R62/R64/R69 觀察輪同模式: 「無 M0-3 強烈可推進, 護欄 chain saturated, 留 owner 決策」.
+
+**做了什麼 (觀察動作)**:
+1. **baseline 驗證**: `cargo test --lib` = 364/364 綠 (7.55s), `cargo clippy --lib --no-deps -- -D warnings` = 0 warning (3.03s), `cargo fmt --check` = 0 diff. R67 護欄 `r67_provider_registration_three_way_consistency` 自動接住 T-BOT3 mp3 embed, (a)(b)(c) 三向一致 ✓
+2. **R13 防護確認**: 6 supervisor untracked files (.arch-fitness.json / .supervisor-report.json / .harness-memory.db / bash.exe.stackdump / .engineer-loop.failures.jsonl / openspec/changes/) 維持 untracked, 本輪觀察無 git add 動作 → 0 dirty 風險
+3. **R70 4 同步點落地驗證**: config.rs 內 irisx_bot 已落 4 同步點 (line 339 default_provider_sounds / line 352 default_provider_waiting_sounds / line 403 default_providers / line 563 test fixture) → spec drift 半成品 = config 10 vs hook_server 9 不對齊, 留 owner
+4. **24h chore_ratio 警戒**: 24h 內 1 commit (c7f76b6) = chore log rotate (517 deletions) + 夾帶 T-BOT3 mp3 embed (M1) + lib.rs 14 行改動 → 嚴格說是 chore + M1 mixed, 純 chore_ratio 不適用警戒 (>30%). H0 cap 警戒下: 本輪觀察輪符合「無 M0-3 強烈可推進 → 觀察輪」紀律
+
+**結果**: PASS (R72 觀察輪, baseline 364/364 持續綠 + 護欄 chain 16 saturated 持續凍結 + 0 lint warning + 0 fmt diff + 0 regression + 0 M0-3 強烈可推進項, R70 spec drift 半成品留 R73+ owner 決策)
+
+**R73+ 規劃建議 (給 owner 參考, 不在本輪處理)**:
+1. **mission 衝突決策 (P0 gate)**: 選 (a) 撤回 R70 config.rs irisx_bot 4 同步點復位 mission 9=9 / 選 (b) 升級 hook_server.rs KNOWN_PROVIDERS 9→10 + R66 護欄 chain 15 fixture 同步 + 護欄 (d) ≥ 5 → ≥ 6 + CLAUDE.md mission 9=9 → 10=10 version bump → 決定後再啟 T-BOT4
+2. **MISSION.md 撰寫**: 1 頁 3 個月目標 + 3 不可退化指標 + 3 不做的事, 對齊戰略顧問 R70 verdict 終結「靠 commit 慣性前進」批評
+3. **T-BOT4+ 推進順序** (mission 解後): T-BOT4 (usage snapshot 5→6) / T-BOT5 (smoke matrix 9→10) / T-BOT11 (grokx) / T-BOT12 (lpbot) — 都需 mission 衝突先解
+4. **可回放 failure suite**: 對齊戰略顧問建議, 護欄 chain 17+ 從 invariant 護欄升級到 replay-based 護欄 (duplicate event / out-of-order event / provider mismatch / retry after partial commit)
+5. **OTel 統一觀測**: request_id / session_id / provider / fallback_reason 統一欄位, 評估 OTel Metrics Beta Rust 實作
+
+**不做的範圍** (給後續輪次, 守住 senior 紀律):
+- mission 9=9 vs 10 衝突決策 (留 owner, P0 gate)
+- T-BOT4+ / T-BOT11+ / T-BOT12 推進 (mission gate)
+- MISSION.md 撰寫 (留 owner 決策後)
+- OTel 觀測升級 (scope 較大, 戰略層)
+- 護欄 chain 17+ (R50 freeze 持續, 戰略層)
+- 任何 hook_server.rs 改動 (R66 護欄 chain 15 對 9-provider 持續 invariant)
+- 任何 config.rs 改動 (R70 4 同步點已落, 等 owner mission gate 決策再動)
+- 任何 H0 (24h chore_ratio 警戒下, 本輪觀察輪已守住紀律)

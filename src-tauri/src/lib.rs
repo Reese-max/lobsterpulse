@@ -5,6 +5,7 @@ mod hook_event;
 mod hook_server;
 mod hooks_configurator;
 mod openab_bridge;
+mod quota;
 mod quota_history;
 mod session;
 

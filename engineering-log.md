@@ -702,3 +702,54 @@ URGENCY: MEDIUM
 - 任何 6 supervisor untracked 檔 + openspec/changes/ commit (R13 防護持續)
 - R74 T-BOT3 test 沒守護「user 刪 ~/.lobsterpulse/sounds/irisx_bot.mp3 後 seed_default_sounds 自動重 seed」這條 (R71 的 `if !path.exists()` 邏輯不涵蓋「使用者中途刪檔」場景) — 屬進階 seed 行為, YAGNI, 留真需求再說
 
+
+### [2026-06-04] Round 75 — T-BOT9 GIMINIX label gemini→Antigravity 對齊 openab agy-acp-wrapper 後端
+**類型**: fix (M1, 修既有 spec drift, 對齊 openab config 端真實後端)
+
+**KPI**: spec openab-bot-sync 推進 3/12 → 4/12 (T-BOT9 從 [ ] 改 [x]), lib_unit_tests 367 → 368 (+1), 護欄 chain 17 saturated 維持 (R50 freeze 持續, R75 test 屬該改動 deterministic 守護, 不開新 chain)
+
+**KPI 進展表**:
+| KPI | 前值 (R74) | 後值 (R75) | 變化 |
+|---|---:|---:|---:|
+| lib_unit_tests | 367 | 368 | +1 |
+| 護欄 chain 條數 | 17 | 17 | 0 (saturated, R50 freeze 持續) |
+| spec openab-bot-sync 推進 | 3/12 (T-BOT1+T-BOT2+T-BOT3) | 4/12 (+T-BOT9) | +1 |
+| clippy warnings | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+
+**為什麼**:
+- 既有 drift: GIMINIX bot 實際後端已從 gemini 換成 agy-acp-wrapper (Antigravity), 見 openab/config-gemini.toml 第 1 行「後端: agy-acp-wrapper (Antigravity)」, 但 config.rs:379 仍標 "🤖 GIMINIX · OpenAB Gemini" = stale label
+- 用戶可見影響: 膠囊 / 展開面板 / Bot 總覽的 GIMINIX provider 顯示 "OpenAB Gemini" 誤導, 跟實際後端 agy-acp-wrapper 不符; 對齊 R70 T-BOT1/T-BOT2 irisx_bot 模式: 對齊 openab config-*.toml 為 source of truth
+- senior 紀律: R74 wrap-up 已明示 T-BOT4-T-BOT12 留 owner batch 推, 但 T-BOT9 是「純 LP 端 string 修正 + 護欄 chain 16 不觸發 + 範圍最小」單點 (不像 T-BOT11 grokx 需拆 4 同步點 + 擴 R67 護欄撞 id 邏輯), 適合 R75 落地
+- T-BOT10 (全 bot 後端標籤稽核) 仍留 owner, R75 只解 giminix 單點, 不 batch 推 cicx / gitx / grokx / codex_bot / openx / irisx_bot / lpbot 7 條
+- chore_ratio 警戒持續: 本輪 type = fix, 不會拉高 chore 比例; 守住「H0 cap 警戒下 (24h chore_ratio_pure 46% > 30%) → 嚴格挑 M-push」紀律
+- 嚴守 R13 防護: spec 文件改動留 untracked (openspec/changes/ 是 6 supervisor untracked 之一, R70-R75 全部 untracked, 不在 loop commit 範圍), 本輪只 commit src-tauri/src/config.rs
+
+**搜尋**:
+- config.rs:375-382 GIMINIX 4 同步點之一的 name field, 其餘 3 點 (sounds line 333 / waiting_sounds line 347 / usage poller line 563 lib.rs) 不含後端字樣, 不需動
+- R67 護欄 chain 16 (a-e) 守的是 set membership / 前綴 / ≥5 enabled count, 不守 name 字串內容, 改 name 不觸發既有 invariant
+- 本機 gemini CLI provider (line 436/580, `gemini` key) 仍保留 gemini, spec T-BOT9 註解已提醒「勿動」
+
+**做了什麼**:
+1. `src-tauri/src/config.rs:375-388` GIMINIX name 改 `"🤖 GIMINIX · OpenAB Gemini"` → `"🤖 GIMINIX · OpenAB Antigravity"`, 加註解標 R75 T-BOT9 + openab config-gemini.toml 第 1 行 source of truth + 提醒本機 gemini CLI 不受影響
+2. `src-tauri/src/config.rs:927-980` 新 mod `r75_giminix_backend_label_tests` + 1 條 test `r75_giminix_name_reflects_antigravity_backend_not_gemini` (3 sub-assertion: 含 Antigravity / 不含 Gemini / 仍 enabled)
+3. `openspec/changes/openab-bot-sync/tasks.md` T-BOT9 [ ] → [x] + 驗證描述 (留 untracked per R13)
+4. 0 hook_server.rs / lib.rs / 其他檔 改動, 純 config.rs 1 檔
+
+**驗證**:
+- `cargo test --lib r75_` = 1 passed (新 1 條), 0 regression
+- `cargo test --lib` = **368 passed; 0 failed; 0 ignored** (R74 367 + R75 +1)
+- `cargo clippy --lib --tests --no-deps -- -D warnings` = 0 warning
+- `cargo fmt --check` = 0 diff
+- R67 護欄 chain 16 (a-e) 全部仍過, giminix 改 name 不觸發既有 invariant
+- R13 防護守住: `git add src-tauri/src/config.rs` 明確列 1 檔, **未動** 6 supervisor untracked + openspec/changes/
+
+**KPI-impact**: spec openab-bot-sync 推進 3/12 → 4/12 (T-BOT9 從 [ ] 改 [x], 4/12 = 33%), lib_unit_tests 367→368, 護欄 chain 維持 17 saturated
+
+**不做的範圍** (給後續輪次):
+- T-BOT10 (全 bot 後端標籤稽核 7 條) / T-BOT11 (grokx 加 provider + 4 同步點 + 護欄撞 id 擴充) / T-BOT12 (lpbot 加 provider) — 仍留 owner, R75 單點解
+- T-BOT4 (cicx2 ID 漂移需先確認 openab 端再動) / T-BOT5 (mimo disabled) / T-BOT6 (SOP doc) / T-BOT8 (docs bot inventory) — 留 owner
+- MISSION.md 撰寫: 留 owner
+- 護欄 chain 18+ (R50 freeze 持續)
+- 任何 hook_server.rs 進階改動
+- 任何 6 supervisor untracked 檔 + openspec/changes/ commit (R13 防護持續)

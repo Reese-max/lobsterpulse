@@ -579,3 +579,69 @@ URGENCY: MEDIUM
 - 任何 H0 (24h chore_ratio 警戒, 觀察 #2 守住紀律)
 - T-BOT4+ 推進 (mission gate, 留 owner)
 - MISSION.md 撰寫 (留 owner)
+
+### [2026-06-04] Round 73 — M0 mission 衝突決策落地: 升級 hook_server KNOWN_PROVIDERS 9→10 + mission version bump + 護欄 chain 第 17 條
+**類型**: M0 (mission conflict 阻斷 KPI 量測的 spec drift 修補)
+**KPI**: mission 9=9 vs 10=10 衝突解 (選 path b), KNOWN_PROVIDERS 9→10, IRISX 事件 parse_provider fallback "claude" → 原樣 "irisx_bot", 護欄 chain 16 → 17, baseline 365/365 持續綠
+**KPI 進展表**:
+| KPI | 前值 (R72 #2) | 後值 (R73) | 變化 |
+|---|---:|---:|---|
+| mission 9=9 vs 10=10 衝突 | 未解 (owner 探索半成品, R70 spec drift) | **已解 (path b: 升級 hook_server + version bump)** | 衝突消除 |
+| KNOWN_PROVIDERS 條數 | 9 (4 本機 + 5 OpenAB) | **10 (4 本機 + 6 OpenAB, 含 irisx_bot)** | +1 (R70 spec drift 半成品補齊) |
+| IRISX 事件 parse_provider 行為 | fallback "claude" (R19 隱性語意, K40 看不到 irisx_bot bucket) | **原樣回 "irisx_bot" (K40 `lobsterpulse_provider_sessions{provider="irisx_bot"}` 進獨立 bucket)** | 修前 IRISX 監控不完整 → 修後完整 |
+| 護欄 chain 條數 | 16 (R50 freeze) | **17** (+1: `r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback`) | +1 (chain 飽和聲明解除, 但屬 spec drift 修補護欄, 非新方向護欄) |
+| 護欄 chain #16 (d) `>= 5` enabled OpenAB bot 閘值 | 6 >= 5 過 (R70 落地後) | 6 >= 5 仍過 (owner 設計選擇保留 5 為下限, 6 隻上限給未來 disable 留空間) | 0 (設計決定) |
+| 護欄 chain #15 R66 9→10 同步 | 9 (adversarial fixture 9 known + 1 legacy + 4 unknown) | **10** (adversarial fixture 10 known + 1 legacy + 4 unknown, 集合 ⊆ 10 已知) | 對稱升級 |
+| lib_unit_tests | 365 (含 owner 半成品 R73 test) | 365 (正式落地) | 0 (owner 測試轉正) |
+| spec openab-bot-sync 推進 | 3/12 (T-BOT1+T-BOT2+T-BOT3) | 3/12 (R73 不算 T-BOT 編號內, 是 mission gate 解) | 0 (T-BOT 編號不動) |
+| enabled OpenAB 🤖 bot | 6 (R70 升 6) | 6 | 0 |
+| CLAUDE.md mission 9=9 → 10=10 | owner 已改未 commit | **正式落地** | version bump 轉正 |
+| clippy warnings | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+| 24h commit 計入 R73 | 0 (R72 觀察無 commit) | 1 (本輪) | +1 |
+| 24h chore_ratio (純 H0, 排除 M0/M1) | 0% | 0% (本輪 M0 mission 修) | 0 (低於 30% 警戒線) |
+
+**為什麼 (對齊 MISSION 判斷)**: R70 spec drift 是 mission 衝突半成品 (config.rs 10 provider vs hook_server 9, IRISX 事件被 parse_provider 折進 "claude" 共用 bucket → K40 看不到 irisx_bot → IRISX 監控不完整 → mission「9 provider 完整監控」實質破功, 但 mission 文字寫 9=9 變 fragile hard fact)。R70 戰略顧問 patrol verdict「無 MISSION.md 靠 commit 慣性前進」+ R72 #2 owner 走 path b 升級 hook_server 9→10 + mission version bump 9→10 是 mission 衝突最乾淨解。pua 模式 bug + 安全優先 → mission drift 是 P0 KPI 阻斷 (K40 metric 對 IRISX provider 永為 0, 等於 IRISX 監控不存在), 屬 M0 不是 H0。R50 freeze 護欄 chain 16 saturated 對新方向護欄仍凍結, 但本輪 +1 是「修既有 chain 的 spec drift」非新方向, 不破 R50 紀律。
+
+**搜尋**:
+- openab/config-hermes.toml `[lobsterpulse] bot_id = "irisx_bot"` 是 R70 proposal.md 標的 source of truth
+- R66 護欄 chain 15 設計文件: parse_provider 純函式級護欄, 鎖「任意輸入收斂後落 K40 provider 集合 ⊆ known union {'claude' fallback}」, 升級 9→10 是 fixture 對稱擴寫, 不破 R52-R62 cross-K arithmetic guard 紀律
+- R67 護欄 chain 16 (config.rs line 891 `>= 5` 設的設計意圖): 5 隻 OpenAB bot 是 v5.1 mission「9=9 = 4+5」的下限, R70 升 6 隻後 6 >= 5 仍過, owner 設計選擇保留 5 為下限給未來 disable 留彈性 (若升 `>= 6` 變硬約束, 任何暫時 disable 1 隻都會破護欄)
+
+**做了什麼**:
+1. **git status / git diff --stat 確認 owner 3 個 dirty 檔範圍** (read-only 確認 = R72 #2 觀察結論)
+2. **驗證 baseline** (M0 必修閘):
+   - `cargo test --lib` = **365/365 綠** (8.04s) — owner 半成品 hook_server.rs 編譯綠, 新 R73 test `r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback` 跑過, 既有 test 全綠, 0 regression
+   - `cargo clippy --lib --no-deps -- -D warnings` = **0 warning**
+   - `cargo fmt --check` = **0 diff**
+3. **commit owner R73 mid-work** (`git add` 明列 4 檔, R13 防護守住):
+   - `CLAUDE.md` — mission 9=9 → 10=10 version bump
+   - `src-tauri/src/config.rs` — 護欄 chain #16 line 891 註解對齊 9→10
+   - `src-tauri/src/hook_server.rs` — KNOWN_PROVIDERS 9→10 + parse_provider warn 改 10 known + R66 護欄 chain 15 fixture 9→10 + 新 R73 護欄 chain 17 `r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback` + smoke test rename
+   - `engineering-log.md` — 本 entry
+4. **R13 防護確認守住**: 6 supervisor untracked (`.arch-fitness.json` / `.supervisor-report.json` / `.harness-memory.db` / `bash.exe.stackdump` / `.engineer-loop.failures.jsonl` / `openspec/changes/`) 維持 untracked, **未動**
+
+**驗證** (M0 mission 修補必須有 zero-regression + 行為反轉證據):
+1. **編譯/測試閘**: `cargo test --lib` 365/365, clippy 0, fmt 0 (見上) — 對齊 R72 #2 觀察結論, owner 半成品轉正
+2. **R66 護欄 chain 15 對稱升級**: 9 → 10, fixture `r66_parse_provider_output_set_subset_of_ten_known_under_adversarial_input` 15 條 input 收斂後 ⊆ 10 known, 集合 ≤ 10 — 證明升級不破 R52-R62 cross-K arithmetic guard
+3. **新 R73 護欄 chain 17 行為反轉證據**: `r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback` — 修前: `parse_provider("POST /hook/irisx_bot")` 回 "claude" (R19 fallback); 修後: 回 "irisx_bot" — 行為反轉 = mission「9 provider 完整監控」實質修好
+4. **K40 metric 預期行為**: IRISX 事件 POST `/hook/irisx_bot` 走完 parse_provider → HookEvent.provider = "irisx_bot" → SessionManager 計入 irisx_bot bucket → K40 `lobsterpulse_provider_sessions{provider="irisx_bot"}` 從 0 變可觀察, 不再污染 claude bucket
+5. **mission 文字對齊**: CLAUDE.md「9=9」 → 「10=10」, 跟 source code 實際行為一致, fragile hard fact 消除
+
+**結果**: PASS (R73 M0 mission 衝突決策落地, path b 升級 hook_server.rs KNOWN_PROVIDERS 9→10 + CLAUDE.md mission version bump + 新 R73 護欄 chain 17 正式落地, baseline 365/365 持續綠 + 0 lint warning + 0 fmt diff + 0 regression, R13 防護守住 6 supervisor untracked + openspec/changes/)
+
+**對齊 R70 戰略顧問 patrol verdict 觀察**: R70 patrol 提「無 MISSION.md 靠 commit 慣性前進」「未把 failure mode 升級成正式 SLO / 重放測試 / 冪等保證 / 降級策略 / canary 規則」 — R73 解 mission conflict 是「把 fragile hard fact 9=9 升級成可觀察 mission 10=10」, 部分對齊 verdict「不再靠 commit 慣性」建議, 但 MISSION.md 撰寫 + OTel 統一觀測 + 可回放 failure suite 仍留 R74+ owner 戰略決策
+
+**R74+ 觀察 (留 owner, 不在本輪處理)**:
+- T-BOT4 (cicx2 ID 漂移) / T-BOT5 (mimo disabled) / T-BOT9 (GIMINIX gemini→Antigravity label) / T-BOT10 (bot label audit) / T-BOT11 (grokx) / T-BOT12 (lpbot) — 全部 spec openab-bot-sync 待推進 (3/12 → 4/12+)
+- MISSION.md 撰寫 (對齊 R70 戰略顧問 verdict, 1 頁 3 個月目標 + 3 不可退化指標 + 3 不做的事)
+- 護欄 chain 17+ 從 invariant 升級到 replay-based (duplicate / out-of-order / provider mismatch / retry after partial commit) — 對齊戰略顧問建議
+- OTel 統一觀測 (request_id / session_id / provider / fallback_reason) — 戰略層決策
+
+**不做的範圍** (守住 senior 紀律):
+- 任何 config.rs 護欄 chain #16 (d) `>= 5` 升級 `>= 6` (owner 設計選擇保留彈性, R73 不改)
+- 任何 hook_server.rs 進階改動 (護欄 chain 15 fixture 已對稱, 不擴寫新方向)
+- 任何 T-BOT4-T-BOT12 推進 (留 owner, mission gate 解完不等於 T-BOT 解)
+- 任何 MISSION.md 撰寫 (留 owner)
+- 任何 H0 (24h chore_ratio 警戒, 本輪 M0 紀律守住)
+- 任何 6 supervisor untracked 檔 + openspec/changes/ 動 (R13 防護持續)

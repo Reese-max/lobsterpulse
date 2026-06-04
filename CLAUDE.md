@@ -6,9 +6,9 @@
 
 **本質**：桌面膠囊指示器，同時監控**兩條路徑**——
 1. **本機 CLI**（直接 hook）：`claude` / `codex` / `copilot` / `gemini`，CLI 呼叫 `lobster-pulse-hook.exe` sidecar
-2. **OpenAB bot**（push 事件）：`cicx` / `gitx` / `giminix` / `codex_bot` / `openx`，OpenAB process 直接 HTTP POST `/hook/{bot_id}`
+2. **OpenAB bot**（push 事件）：`cicx` / `gitx` / `giminix` / `codex_bot` / `openx` / `irisx_bot`，OpenAB process 直接 HTTP POST `/hook/{bot_id}`
 
-共 9 provider（🤖 OpenAB 5 + 💻 本機 4）。
+共 10 provider（🤖 OpenAB 6 + 💻 本機 4）。R73 補 R70 半成品 — R70 加 irisx_bot 到 config.rs 4 同步點但漏 hook_server `KNOWN_PROVIDERS` 白名單，R73 補齊，IRISX 監控完整。
 
 ## 關鍵端點
 

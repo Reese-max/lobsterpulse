@@ -310,18 +310,29 @@ fn process_body(body: &[u8], provider: &str, metrics: &MetricsCore) -> Result<Ho
 /// 「送 9 known + 3 unknown + 1 bot legacy → K40 hashmap 最終只有 9 個 known provider」
 /// (legacy bot 折成 openx, unknown 全 fallback claude 共用 bucket, 跟原本 K40 護欄 K19
 /// sum-by-provider == K40 跨 live 切片算術相容, K6 sessions_total 不受污染)。
+///
+/// R73 補 R70 半成品：R70 T-BOT1+T-BOT2 加 `irisx_bot` 到 config.rs 4 同步點
+/// (`default_providers` / `default_provider_sounds` / `default_provider_waiting_sounds`
+/// / `detect_providers`), 但漏了第 5 同步點 `hook_server::KNOWN_PROVIDERS` 白名單
+/// → IRISX 事件 POST `/hook/irisx_bot` 走完 parse_provider fallback "claude",
+/// `HookEvent.provider` 變 "claude" 而不是 "irisx_bot", K40 metric
+/// `lobsterpulse_provider_sessions{provider="irisx_bot"}` 永遠 0, IRISX 監控
+/// 不完整 (R70 commit 自以為修好, 實際只救回「事件不被吞」, 沒救回「provider 名
+/// 正確歸入獨立 bucket」)。R73 把 irisx_bot 加進白名單, 護欄 chain 升級為
+/// 10 known, R67 護欄 chain #16 (d) `>= 5` 還過 (6 >= 5)。
 const KNOWN_PROVIDERS: &[&str] = &[
     // 4 本機 CLI
     "claude",
     "codex",
     "copilot",
     "gemini",
-    // 5 OpenAB bot
+    // 6 OpenAB bot (R73: irisx_bot 由 R70 加)
     "cicx",
     "gitx",
     "giminix",
     "codex_bot",
     "openx",
+    "irisx_bot",
 ];
 
 /// Parse provider from HTTP request line: "POST /hook/claude HTTP/1.1"
@@ -346,19 +357,20 @@ fn parse_provider(data: &[u8]) -> String {
         if raw == "bot" {
             return "openx".to_string();
         }
-        // R66: 白名單過濾 — 9 known provider 原樣回, 任意字串 (含路徑 injection、
+        // R66: 白名單過濾 — 10 known provider 原樣回, 任意字串 (含路徑 injection、
         // typo、未來廢棄的 provider 名) → log warn + fallback "claude"。
         // 向後相容舊 hook config (R19 以前任意 provider 都會被接受), 但 K40
         // `lobsterpulse_provider_sessions` 不會被撐成 N 個 bucket 破壞 R61/R62
         // 護欄 chain 算術。fallback 走 "claude" 共用 bucket, 跟 R19 之前 unknown
         // provider 全被計入 "claude" 的隱性語意一致。
+        // R73: 白名單 9 → 10, 加 irisx_bot 對齊 config.rs (R70 T-BOT1+T-BOT2)。
         if KNOWN_PROVIDERS.contains(&raw.as_str()) {
             return raw;
         }
         warn!(
             "[hook_server] parse_provider: unknown provider {:?} — \
-             falling back to \"claude\" (known 9: claude/codex/copilot/gemini/\
-             cicx/gitx/giminix/codex_bot/openx; check hook config for typos)",
+             falling back to \"claude\" (known 10: claude/codex/copilot/gemini/\
+             cicx/gitx/giminix/codex_bot/openx/irisx_bot; check hook config for typos)",
             raw
         );
         return "claude".to_string();
@@ -514,9 +526,13 @@ mod tests {
     // `lobsterpulse_provider_sessions{provider="..."}` 不會被任意字串撐成 N bucket
     // 破壞 R61 `K19 sum by(provider) == K40` 跨 live 切片算術 + R62 `K6 sessions_total
     // == sum by(provider)(K40)` 跨 live 切片算術。
+    //
+    // R73 補 R70 半成品：白名單 9 → 10 (加 irisx_bot)，對齊 config.rs 4 同步點已
+    // 收 irisx_bot (R70 T-BOT1+T-BOT2)。修「IRISX 事件走 parse_provider fallback
+    // "claude" → K40 看不到 irisx_bot bucket」drift。
     #[test]
-    fn parse_provider_known_nine_providers_returned_as_is() {
-        // 4 本機 CLI + 5 OpenAB bot 全 9 個 known provider → 原樣回傳
+    fn parse_provider_known_ten_providers_returned_as_is() {
+        // 4 本機 CLI + 6 OpenAB bot 全 10 個 known provider → 原樣回傳
         let known = [
             "claude",
             "codex",
@@ -527,17 +543,20 @@ mod tests {
             "giminix",
             "codex_bot",
             "openx",
+            // R73: irisx_bot（hermes agent / IRISX, 對齊 openab/config-hermes.toml
+            // `[lobsterpulse] bot_id = "irisx_bot"`）
+            "irisx_bot",
         ];
         for p in &known {
             let req = format!("POST /hook/{p} HTTP/1.1\r\n");
             let got = parse_provider(req.as_bytes());
             assert_eq!(got, *p, "known provider {p:?} 應原樣回傳, actual={got:?}");
         }
-        // 白名單常數跟測試清單必須同步 (9 個) — 防未來加 provider 忘了更新測試
+        // 白名單常數跟測試清單必須同步 (10 個) — 防未來加 provider 忘了更新測試
         assert_eq!(
             KNOWN_PROVIDERS.len(),
-            9,
-            "KNOWN_PROVIDERS 應有 9 個 (4 本機 + 5 OpenAB)"
+            10,
+            "KNOWN_PROVIDERS 應有 10 個 (4 本機 + 6 OpenAB, R73 加 irisx_bot)"
         );
         for p in &known {
             assert!(KNOWN_PROVIDERS.contains(p), "KNOWN_PROVIDERS 應含 {p:?}");
@@ -575,12 +594,14 @@ mod tests {
         assert_eq!(got, "openx", "/hook/bot 應 rewrite 成 openx legacy alias");
     }
 
-    // ─── R66 護欄 chain (R52-R62 第 15 條): parse_provider 輸出 provider 集合 ⊆ 9 known ───
+    // ─── R66 護欄 chain (R52-R62 第 15 條): parse_provider 輸出 provider 集合 ⊆ 10 known ───
     // 對齊 R52-R62 cross-K arithmetic guard 紀律: 純函式級護欄, 鎖「任意輸入 (含攻擊
     // payload / 廢棄 provider 名) 走完 parse_provider 收斂後, 落進 K40
-    // `lobsterpulse_provider_sessions` hashmap 的 provider 集合 ⊆ 9 known provider
+    // `lobsterpulse_provider_sessions` hashmap 的 provider 集合 ⊆ 10 known provider
     // ∪ {"claude" fallback 共用 bucket}」, 不會被撐成 N bucket 破壞 R61/R62 護欄
     // (K19 sum by(provider) == K40 + K6 sessions_total == sum by(provider)(K40)) 算術。
+    //
+    // R73 補 R70 半成品: 9 → 10, 加 irisx_bot 對齊 config.rs 4 同步點已收。
     //
     // 設計選擇: 護欄用 set 收斂 (而不是 fixture 對齊 lib.rs render_prometheus_body 端),
     // 因為 (a) parse_provider 是純函式, 在 hook_server.rs test 模組直接驗最便宜;
@@ -588,11 +609,11 @@ mod tests {
     // 接 socket 跑, scope 大, 留 R67+ 評估; (c) parse_provider 護欄過了, K40 bucket 數
     // 上限就鎖死, lib.rs 端 K6/K40 算術護欄 chain 14 條自動繼承此護欄。
     #[test]
-    fn r66_parse_provider_output_set_subset_of_nine_known_under_adversarial_input() {
-        // 9 known + 4 unknown (含路徑 injection / typo / 廢棄 provider / case 大寫)
-        // + 1 bot legacy → 14 條 input, 收斂後應 ≤ 9 個 distinct value
+    fn r66_parse_provider_output_set_subset_of_ten_known_under_adversarial_input() {
+        // 10 known + 4 unknown (含路徑 injection / typo / 廢棄 provider / case 大寫)
+        // + 1 bot legacy → 15 條 input, 收斂後應 ≤ 10 個 distinct value
         let adversarial_inputs = [
-            // 9 known
+            // 10 known (R73: 加 irisx_bot)
             "claude",
             "codex",
             "copilot",
@@ -602,6 +623,7 @@ mod tests {
             "giminix",
             "codex_bot",
             "openx",
+            "irisx_bot",
             // 4 unknown
             "claude_typo",
             "my-custom-bot",
@@ -615,19 +637,19 @@ mod tests {
             let req = format!("POST /hook/{raw} HTTP/1.1\r\n");
             observed.insert(parse_provider(req.as_bytes()));
         }
-        // (a) 收斂後 distinct provider 集合 ⊆ 9 known (legacy bot 折入 openx, unknown
-        // 全 fallback "claude" 共用 bucket → 集合 ≤ 9)
+        // (a) 收斂後 distinct provider 集合 ⊆ 10 known (legacy bot 折入 openx, unknown
+        // 全 fallback "claude" 共用 bucket → 集合 ≤ 10)
         let known: std::collections::HashSet<&str> = KNOWN_PROVIDERS.iter().copied().collect();
         for p in &observed {
             assert!(
                 known.contains(p.as_str()),
-                "R66 護欄破: 觀察到非白名單 provider {p:?}, 9 known = {known:?}"
+                "R66 護欄破: 觀察到非白名單 provider {p:?}, 10 known = {known:?}"
             );
         }
-        // (b) 集合大小 ≤ 9 (legacy 折入 + unknown 全部 collapse 到 claude 共用 bucket)
+        // (b) 集合大小 ≤ 10 (legacy 折入 + unknown 全部 collapse 到 claude 共用 bucket)
         assert!(
-            observed.len() <= 9,
-            "R66 護欄破: parse_provider 輸出 {} 個 distinct provider, 上限應 ≤ 9, 觀察 = {observed:?}",
+            observed.len() <= 10,
+            "R66 護欄破: parse_provider 輸出 {} 個 distinct provider, 上限應 ≤ 10, 觀察 = {observed:?}",
             observed.len()
         );
         // (c) unknown input 至少 1 個 fallback 到 "claude" (4 unknown 全會走這條, 所以
@@ -640,6 +662,41 @@ mod tests {
         assert!(
             observed.contains("openx"),
             "R66 護欄破: bot legacy 應折入 openx bucket, 觀察 = {observed:?}"
+        );
+    }
+
+    // ─── R73: 補 R70 spec drift 防回歸 ───
+    // 鎖住「IRISX 事件 POST /hook/irisx_bot 必須回 "irisx_bot" 而非 fallback "claude"」。
+    // 修前 (R70 commit 後) irisx_bot 沒在 KNOWN_PROVIDERS → 走 fallback "claude" → K40
+    // metric `lobsterpulse_provider_sessions{provider="irisx_bot"}` 永遠 0, IRISX 監控
+    // 不完整 (R70 commit 自以為修好, 實際只救回「事件不被吞」, 沒救回「provider 名
+    // 正確歸入獨立 bucket」)。R73 把 irisx_bot 加進白名單, 本 test 是對應的護欄。
+    #[test]
+    fn r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback() {
+        // 對齊 openab/config-hermes.toml `[lobsterpulse] bot_id = "irisx_bot"`
+        let req = b"POST /hook/irisx_bot HTTP/1.1\r\n";
+        let got = parse_provider(req);
+        assert_eq!(
+            got, "irisx_bot",
+            "R73 護欄破: IRISX 事件 parse_provider 應回 \"irisx_bot\" 而非 fallback \
+             \"claude\" (R70 spec drift 半成品修). 修前: KNOWN_PROVIDERS 沒 irisx_bot → \
+             parse_provider 走 fallback, HookEvent.provider = \"claude\" → K40 看不到 \
+             irisx_bot bucket. 修後: KNOWN_PROVIDERS[9] = \"irisx_bot\" → 原樣回傳. \
+             actual={got:?}"
+        );
+        // 反向驗證: 白名單常數確實含 irisx_bot, 防未來有人手滑移掉 (R66 護欄 chain
+        // 鎖 KNOWN_PROVIDERS 集合對稱, 但這條專門盯 irisx_bot 單一 id)
+        assert!(
+            KNOWN_PROVIDERS.contains(&"irisx_bot"),
+            "R73 護欄破: KNOWN_PROVIDERS 必須含 \"irisx_bot\" (R70 spec drift 修)"
+        );
+        // 集合 size 10 確認 (4 本機 + 6 OpenAB, 包含 irisx_bot)
+        assert_eq!(
+            KNOWN_PROVIDERS.len(),
+            10,
+            "R73 護欄破: KNOWN_PROVIDERS 應有 10 個 (4 本機 + 6 OpenAB: cicx/gitx/\
+             giminix/codex_bot/openx/irisx_bot), actual={}",
+            KNOWN_PROVIDERS.len()
         );
     }
 
@@ -1062,11 +1119,12 @@ mod tests {
         );
     }
 
-    /// 9-provider smoke matrix：每家走完 `parse_provider` + `process_body` 完整路徑。
+    /// 10-provider smoke matrix：每家走完 `parse_provider` + `process_body` 完整路徑。
     /// 任一 provider 改壞了 normalize/field-alias/event-name 規則，這條就會 fail 並指出哪家。
-    /// 這就是 K3 smoke pass 的量化基準：1/9 → 加 provider × N → 1/N。
+    /// 這就是 K3 smoke pass 的量化基準：1/10 → 加 provider × N → 1/N。
+    /// R73 補 R70 半成品: 9 → 10, 加 irisx_bot fixture。
     #[test]
-    fn smoke_test_all_9_providers_event_flow() {
+    fn smoke_test_all_10_providers_event_flow() {
         struct Fixture {
             http: &'static [u8],
             body: &'static [u8],
@@ -1150,12 +1208,28 @@ mod tests {
                 expected_event: "Stop",
                 field_check: Box::new(|e| assert_eq!(e.session_id, "s-openx-1", "openx: session_id")),
             },
+            // 10. irisx_bot (R73 補 R70 半成品) — OpenAB hermes agent / IRISX
+            //     後端 hermes -p irisx → gpt-5.5, 對齊 openab/config-hermes.toml
+            //     `[lobsterpulse] bot_id = "irisx_bot"` enabled=true
+            //     R70 已加進 config.rs 4 同步點, R73 加進 hook_server KNOWN_PROVIDERS
+            //     白名單 (修「事件被 parse_provider fallback 折成 claude → K40 看不到
+            //     irisx_bot bucket」drift)
+            Fixture {
+                http: b"POST /hook/irisx_bot HTTP/1.1\r\n",
+                body: br#"{"hook_event_name":"token_update","session_id":"s-irisx-1","inputTokens":300,"outputTokens":150}"#,
+                expected_provider: "irisx_bot",
+                expected_event: "TokenUpdate",
+                field_check: Box::new(|e| {
+                    assert_eq!(e.tokens_input, Some(300), "irisx_bot: inputTokens alias");
+                    assert_eq!(e.tokens_output, Some(150), "irisx_bot: outputTokens alias");
+                }),
+            },
         ];
 
         assert_eq!(
             fixtures.len(),
-            9,
-            "smoke matrix 必須 9 個 provider，加 provider 就要加 fixture"
+            10,
+            "smoke matrix 必須 10 個 provider，加 provider 就要加 fixture"
         );
 
         for (idx, fixture) in fixtures.iter().enumerate() {

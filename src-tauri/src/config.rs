@@ -891,9 +891,12 @@ mod provider_registration_guard_tests {
         );
 
         // (d) enabled OpenAB bot（🤖 前綴）≥ 5 隻 — 對齊 v5.1 mission
-        //     「9 provider 完整監控」+ 對齊 openspec drift table 已知 5 隻 enabled
-        //     OpenAB bot (cicx / gitx / giminix / codex_bot / openx) 防未來有人默默改
-        //     disabled 導致監控盲區
+        //     「10 provider 完整監控」(R73 9→10) + 對齊 openspec drift table 已知 6 隻
+        //     enabled OpenAB bot (cicx / gitx / giminix / codex_bot / openx / irisx_bot)
+        //     防未來有人默默改 disabled 導致監控盲區。R73 補 R70 半成品: R70 加了
+        //     irisx_bot 到 default_providers() 但漏 hook_server KNOWN_PROVIDERS, 護欄
+        //     chain #16 (d) 設 `>= 5` 沒抓到 (因為 6 >= 5 過), 屬護欄 chain 已知盲點;
+        //     R73 同時把 hook_server 白名單 9→10, 雙邊對齊。
         let openab_bot_count = providers
             .values()
             .filter(|p| p.enabled && p.name.starts_with("🤖"))

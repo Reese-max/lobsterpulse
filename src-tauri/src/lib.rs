@@ -383,6 +383,42 @@ fn read_usage_snapshots() -> std::collections::HashMap<String, Option<serde_json
     read_usage_snapshots_with_home(&dirs::home_dir())
 }
 
+/// R89 接入：R82 開工留下的 quota/ 模組 (`anthropic` / `codex`) 對外暴露點。
+/// 聚合兩個本機 CLI runner 的 live API fetch 結果回前端，補 K0 Quota 即時性
+/// 第二層來源（OpenAB snapshot 是「別人寫的」,這條是「自己即時抓的」）。
+/// `home = None`（無 HOME env 罕見）→ 回空 runners[] 對齊 R11 邊界契約。
+#[tauri::command]
+async fn get_live_quota_snapshot() -> quota::LiveQuotaSnapshot {
+    collect_live_quota_snapshot_with_home(dirs::home_dir().as_deref()).await
+}
+
+/// 對齊 R33 `read_usage_snapshots_with_home` 模式：純 async fn + home 注入，
+/// Tauri command 殼只負責撈 `dirs::home_dir()` 傳入，testable。
+pub(crate) async fn collect_live_quota_snapshot_with_home(
+    home: Option<&std::path::Path>,
+) -> quota::LiveQuotaSnapshot {
+    let updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let Some(home) = home else {
+        return quota::LiveQuotaSnapshot {
+            runners: Vec::new(),
+            source: "live_api".to_string(),
+            updated_at,
+        };
+    };
+    // 兩個 fetch 各自打不同 API endpoint（Anthropic + OpenAI），
+    // 即使平行也省不到一半（網路 RTT 為主），這裡採 sequential 簡化。
+    let claude = quota::anthropic::fetch(home).await;
+    let codex = quota::codex::fetch(home).await;
+    quota::LiveQuotaSnapshot {
+        runners: vec![claude, codex],
+        source: "live_api".to_string(),
+        updated_at,
+    }
+}
+
 /// 讀取 OpenAB 5 個 bot 的 snapshot + LobsterPulse 自建 local snapshot。
 /// 路徑：~/.lobsterpulse/usage-{bot_id}.json + usage-local.json。
 /// 前端 refreshQuotas 會優先用 __local__（LobsterPulse 自跑的）作全域 quota 來源。
@@ -707,6 +743,157 @@ mod read_usage_snapshot_tests {
                 out.get(key).map(|v| v.is_none()).unwrap_or(false),
                 "{key} 不寫檔時應為 None"
             );
+        }
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
+#[cfg(test)]
+mod collect_live_quota_snapshot_tests {
+    //! R89 Tauri command 接線：對 `collect_live_quota_snapshot_with_home` 的測試。
+    //!
+    //! 對齊 R33 `read_usage_snapshots_with_home` 風格：注入 home 變數測邊界，
+    //! 兩 fetch 在 home 為空時不 panic / 不打 API（read_credentials Err 早返）。
+    //!
+    //! 跨平台 IO / 網路錯在 CI 環境難重現,只測：
+    //! - home = None → runners=[] + source="live_api" + updated_at>0
+    //! - home = Some(空) → 兩 runner (claude + codex) + 兩 fetch graceful fail (ok=false)
+    //! - runner name 嚴格是 "claude" 與 "codex"（前端 contract 對齊）
+    //! - snapshot JSON round-trip（前端 deserialize 不能炸）
+    //!
+    //! 故意不測：rate-limit header 解析 / 成功 fetch 路徑（要打真的 API,CI 環境
+    //! 無網路或會污染真實 quota 計數,留 smoke / manual 測）。
+    use super::*;
+
+    /// 為每個 test 製造獨立 tmp home（避免 parallel test 互踩）。
+    fn tmp_home(tag: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("lp-live-quota-{tag}-{nonce}"))
+    }
+
+    /// 對齊 lib.rs 既有 pattern（line 2696/2937）手動建 Runtime + block_on，
+    /// 不引 `#[tokio::test]`（避免 Cargo.toml 加 rt-multi-thread feature）。
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Runtime::new().unwrap().block_on(f)
+    }
+
+    #[test]
+    fn collect_live_quota_snapshot_with_home_none_returns_empty_runners() {
+        // 邊界:home = None（罕見但要保證不 crash）。對齊 R33 6 label 全 None 契約,
+        // 這裡 runners 為空 vec（live API runner 是動態的,不像 OpenAB 5 + __local__
+        // 固定 6 key）。
+        let out = block_on(collect_live_quota_snapshot_with_home(
+            None::<&std::path::Path>,
+        ));
+        assert_eq!(out.runners.len(), 0, "home=None 時 runners 應為空 vec");
+        assert_eq!(
+            out.source, "live_api",
+            "source 標記要固定 live_api 給前端分流"
+        );
+        assert!(
+            out.updated_at > 0,
+            "updated_at 必為正 unix 秒數,實際 {}",
+            out.updated_at
+        );
+    }
+
+    #[test]
+    fn collect_live_quota_snapshot_with_home_some_without_credentials_returns_two_failed_runners() {
+        // 注入空 home（無 ~/.claude/.credentials.json 也無 ~/.codex/auth.json）→
+        // 兩 fetch 在 read_credentials 階段早返 RunnerQuota (ok=false),不打 API 不 timeout。
+        // 重點：結構完整（2 runner, 有 name/label/ok/text）+ 不 panic。
+        let home = tmp_home("empty");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
+        assert_eq!(
+            out.runners.len(),
+            2,
+            "應有 2 runner (claude + codex),實際 {}",
+            out.runners.len()
+        );
+        assert_eq!(out.source, "live_api");
+
+        for runner in &out.runners {
+            assert!(
+                !runner.ok,
+                "{} credentials 不存在時應 ok=false,實際 ok={}",
+                runner.name, runner.ok
+            );
+            assert!(
+                runner.text.starts_with('\u{26A0}'),
+                "{} 失敗訊息應以 ⚠ 開頭,實際 {:?}",
+                runner.name,
+                runner.text
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn collect_live_quota_snapshot_runners_have_known_names_claude_and_codex() {
+        // 前端 contract:runner.name 嚴格是 "claude" 與 "codex",對齊 hook_server.rs
+        // KNOWN_PROVIDERS 本機 CLI 段。任何改名 / 新加 / 漏掉 → 前端分組錯亂。
+        let home = tmp_home("names");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
+        let names: Vec<&str> = out.runners.iter().map(|r| r.name.as_str()).collect();
+        assert!(
+            names.contains(&"claude"),
+            "應含 claude runner,實際 {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"codex"),
+            "應含 codex runner,實際 {:?}",
+            names
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn collect_live_quota_snapshot_updated_at_is_fresh_unix_seconds() {
+        // 邊界:updated_at 必為「合理新」的 unix 秒數（> 2025-01-01 = 1735689600）,
+        // 防止 SystemTime::duration_since 退化（譬如 EPOCH 之前的時間點）回 0。
+        let home = tmp_home("ts");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
+        assert!(
+            out.updated_at > 1_735_689_600,
+            "updated_at 應 > 2025-01-01,實際 {}",
+            out.updated_at
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn collect_live_quota_snapshot_serializes_to_json_for_frontend() {
+        // 對齊前端 `invoke('get_live_quota_snapshot')` deserialize contract。
+        // 不只要能序列化,round-trip 也要能解回同樣的 LiveQuotaSnapshot。
+        let home = tmp_home("json");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
+        let json = serde_json::to_string(&out).expect("serialize LiveQuotaSnapshot 應成功");
+        let back: quota::LiveQuotaSnapshot =
+            serde_json::from_str(&json).expect("deserialize LiveQuotaSnapshot 應成功");
+        assert_eq!(back.runners.len(), out.runners.len());
+        assert_eq!(back.source, out.source);
+        assert_eq!(back.updated_at, out.updated_at);
+        // round-trip 後 runner 內容一致（name/label/color 不變,ok/text/raw 可比較）
+        for (a, b) in out.runners.iter().zip(back.runners.iter()) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.label, b.label);
+            assert_eq!(a.color, b.color);
         }
 
         let _ = std::fs::remove_dir_all(&home);
@@ -3160,6 +3347,7 @@ pub fn run() {
             manual_snapshot_once,
             rebuild_and_relaunch,
             test_toast,
+            get_live_quota_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LobsterPulse");

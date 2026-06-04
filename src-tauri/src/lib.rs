@@ -159,6 +159,13 @@ fn seed_default_sounds(dir: &std::path::Path) {
             "grokx-waiting.mp3",
             include_bytes!("../../sounds/grokx-waiting.mp3"),
         ),
+        // R78 T-BOT12: LPBOT 音效 placeholder（沿 R71 irisx 模式 1.5s/1.0s silent），
+        // 對齊 default_provider_sounds["lpbot"] = "lpbot.mp3" 實體檔
+        ("lpbot.mp3", include_bytes!("../../sounds/lpbot.mp3")),
+        (
+            "lpbot-waiting.mp3",
+            include_bytes!("../../sounds/lpbot-waiting.mp3"),
+        ),
     ];
     for (name, bytes) in defaults {
         let path = dir.join(name);
@@ -10690,13 +10697,13 @@ mod r74_play_sound_file_fallback_tests {
             "irisx_bot-waiting.mp3 應被 seed (R71 T-BOT3)"
         );
 
-        // 既有 6 OpenAB bot × 2 sound + irisx_bot × 2 + grokx × 2 = 14 個 mp3 應都 seeded
-        // (cicx/gitx/giminix/codex/openx/irisx_bot/grokx 各 .mp3 + -waiting.mp3)
-        // R78 T-BOT11: 加 grokx 後 12 → 14
+        // 既有 6 OpenAB bot × 2 sound + irisx_bot × 2 + grokx × 2 + lpbot × 2 = 16 個 mp3 應都 seeded
+        // (cicx/gitx/giminix/codex/openx/irisx_bot/grokx/lpbot 各 .mp3 + -waiting.mp3)
+        // R78 T-BOT11: 加 grokx 後 12 → 14；R78 T-BOT12: 加 lpbot 後 14 → 16
         assert_eq!(
             after_first.len(),
-            14,
-            "應 seeded 14 個 mp3 (7 OpenAB bot × 2, R78 T-BOT11 加 grokx), \
+            16,
+            "應 seeded 16 個 mp3 (8 OpenAB bot × 2, R78 T-BOT11 加 grokx, R78 T-BOT12 加 lpbot), \
              實際 {} 個, 列表: {after_first:?}",
             after_first.len()
         );

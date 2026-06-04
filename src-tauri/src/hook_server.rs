@@ -326,7 +326,7 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "codex",
     "copilot",
     "gemini",
-    // 7 OpenAB bot (R73: irisx_bot 由 R70 加；R78 T-BOT11: grokx 拆獨立 id)
+    // 8 OpenAB bot (R73: irisx_bot 由 R70 加；R78 T-BOT11: grokx 拆獨立 id；R78 T-BOT12: lpbot 納管)
     "cicx",
     "gitx",
     "giminix",
@@ -334,6 +334,7 @@ const KNOWN_PROVIDERS: &[&str] = &[
     "openx",
     "irisx_bot",
     "grokx",
+    "lpbot",
 ];
 
 /// Parse provider from HTTP request line: "POST /hook/claude HTTP/1.1"
@@ -556,12 +557,12 @@ mod tests {
             let got = parse_provider(req.as_bytes());
             assert_eq!(got, *p, "known provider {p:?} 應原樣回傳, actual={got:?}");
         }
-        // 白名單常數跟測試清單必須同步 (11 個) — 防未來加 provider 忘了更新測試
+        // 白名單常數跟測試清單必須同步 (12 個) — 防未來加 provider 忘了更新測試
         assert_eq!(
             KNOWN_PROVIDERS.len(),
-            11,
-            "KNOWN_PROVIDERS 應有 11 個 (4 本機 + 7 OpenAB: cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx, \
-             R78 T-BOT11 加 grokx)"
+            12,
+            "KNOWN_PROVIDERS 應有 12 個 (4 本機 + 8 OpenAB: cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx/lpbot, \
+             R78 T-BOT11 加 grokx, R78 T-BOT12 加 lpbot)"
         );
         for p in &known {
             assert!(KNOWN_PROVIDERS.contains(p), "KNOWN_PROVIDERS 應含 {p:?}");
@@ -695,13 +696,13 @@ mod tests {
             KNOWN_PROVIDERS.contains(&"irisx_bot"),
             "R73 護欄破: KNOWN_PROVIDERS 必須含 \"irisx_bot\" (R70 spec drift 修)"
         );
-        // 集合 size 11 確認 (4 本機 + 7 OpenAB, 包含 irisx_bot + grokx)
-        // R78 T-BOT11: 10 → 11 (加 grokx)
+        // 集合 size 12 確認 (4 本機 + 8 OpenAB, 包含 irisx_bot + grokx + lpbot)
+        // R78 T-BOT11: 10 → 11 (加 grokx)；R78 T-BOT12: 11 → 12 (加 lpbot)
         assert_eq!(
             KNOWN_PROVIDERS.len(),
-            11,
-            "R73 護欄破: KNOWN_PROVIDERS 應有 11 個 (4 本機 + 7 OpenAB: cicx/gitx/\
-             giminix/codex_bot/openx/irisx_bot/grokx, R78 T-BOT11 加 grokx), actual={}",
+            12,
+            "R73 護欄破: KNOWN_PROVIDERS 應有 12 個 (4 本機 + 8 OpenAB: cicx/gitx/\
+             giminix/codex_bot/openx/irisx_bot/grokx/lpbot, R78 T-BOT11 加 grokx, R78 T-BOT12 加 lpbot), actual={}",
             KNOWN_PROVIDERS.len()
         );
     }

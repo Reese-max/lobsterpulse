@@ -340,6 +340,9 @@ fn default_provider_sounds() -> HashMap<String, String> {
         // R78 T-BOT11: GROKX 已於 2026-06-04 由 openab operator 拆獨立 `bot_id="grokx"`
         // （原與 GITX 撞 `gitx`，見 openab/config-copilot-native.toml），補 4 同步點之一
         ("grokx".into(), "grokx.mp3".into()),
+        // R78 T-BOT12: LPBOT 納管（quota 監控用，operator 2026-06-04 在 openab
+        // config-lpbot.toml 加 [lobsterpulse] bot_id="lpbot" enabled=true）
+        ("lpbot".into(), "lpbot.mp3".into()),
     ])
 }
 
@@ -355,6 +358,8 @@ fn default_provider_waiting_sounds() -> HashMap<String, String> {
         ("irisx_bot".into(), "irisx_bot-waiting.mp3".into()),
         // R78 T-BOT11: GROKX waiting 音效（對稱 default_provider_sounds）
         ("grokx".into(), "grokx-waiting.mp3".into()),
+        // R78 T-BOT12: LPBOT waiting 音效（對稱 default_provider_sounds）
+        ("lpbot".into(), "lpbot-waiting.mp3".into()),
     ])
 }
 
@@ -426,6 +431,16 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
         ProviderConfig {
             enabled: true,
             name: "🤖 GROKX · OpenAB Grok".into(),
+            settings_path: None,
+        },
+    );
+    // R78 T-BOT12: LPBOT 納管（quota 監控用，後端 claude-agent-acp）
+    // 對齊 openab/config-lpbot.toml `[lobsterpulse] bot_id = "lpbot"`
+    m.insert(
+        "lpbot".into(),
+        ProviderConfig {
+            enabled: true,
+            name: "🤖 LPBOT · OpenAB Claude（quota 監控）".into(),
             settings_path: None,
         },
     );

@@ -545,3 +545,37 @@ URGENCY: MEDIUM
 - 任何 hook_server.rs 改動 (R66 護欄 chain 15 對 9-provider 持續 invariant)
 - 任何 config.rs 改動 (R70 4 同步點已落, 等 owner mission gate 決策再動)
 - 任何 H0 (24h chore_ratio 警戒下, 本輪觀察輪已守住紀律)
+
+### [2026-06-04] Round 72 (觀察 #2) — owner R73 mid-work read-only 驗證通過
+**類型**: 觀察 (延續 R72 entry 觀察輪紀律)
+**KPI**: owner R73 進度健康, 0 自身 M0-3 強烈可推進
+**KPI 進展表**:
+| KPI | 前值 (R72 entry) | 後值 (R72 #2) | 變化 |
+|---|---:|---:|---:|
+| lib_unit_tests (含 owner 半成品) | 364 | **365** | +1 (owner 新增 `r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback`) |
+| 護欄 chain 條數 | 16 | 16 | 0 (owner 半成品尚未 commit, 不算新護欄落地) |
+| clippy warnings | 0 | 0 | 0 |
+| fmt diff | 0 | 0 | 0 |
+| 24h commit | 0 (R72 觀察無 commit) | 0 (本輪觀察無 commit) | 0 |
+
+**為什麼觀察 #2 (不動工)**: 唯一 M0 候選 = R70 spec drift 修補 = owner mid-work (config.rs comment 改寫 + hook_server.rs 9→10 KNOWN_PROVIDERS + 新 R73 test + smoke fixture 10/10 + CLAUDE.md 9→10 mission)。R13 防護明令: owner 改動不主動 commit、不動 owner dirty 檔。owner 選擇走 R73+ 規劃建議的 (b) 路徑 (升級 hook_server 9→10 + mission version bump), 對齊 R70 半成品 = config 10 vs hook_server 9 不對齊的 P0 gate 解法。
+
+**做了什麼 (read-only 驗證)**:
+1. **cargo test --lib**: 365/365 過 (7.00s) — owner 半成品 hook_server.rs 編譯綠, 新 R73 test 跑過, 既有 test 全綠
+2. **cargo clippy --lib --no-deps -- -D warnings**: 0 warning (2.62s)
+3. **cargo fmt --check**: 0 diff
+4. **owner R73 半成品範圍** (read-only 不動):
+   - `src-tauri/src/hook_server.rs`: KNOWN_PROVIDERS 9→10 (加 `irisx_bot`)、parse_provider warn message 改 10 known、`parse_provider_known_ten_providers_returned_as_is` rename + irisx_bot fixture、護欄 chain #15 rename `r66_parse_provider_output_set_subset_of_ten_known_under_adversarial_input` + fixture 加 irisx_bot、新 test `r73_parse_provider_irisx_bot_returns_irisx_bot_not_claude_fallback` (護欄 chain 第 17 條雛型, 待 owner commit)、smoke test rename `smoke_test_all_10_providers_event_flow` + irisx_bot fixture
+   - `src-tauri/src/config.rs`: line 891 註解改寫 (「9 → 10 provider」「5 → 6 隻 OpenAB bot」), 護欄 chain #16 (d) `>= 5` threshold 沒改 (owner 設計選擇, 6 >= 5 仍過)
+   - `CLAUDE.md`: 9=9 mission → 10=10 mission (R73 version bump)
+5. **R13 防護確認**: 6 supervisor untracked + openspec/changes/ 維持 untracked; owner 3 個 dirty 檔 (config.rs/hook_server.rs/CLAUDE.md) 不動; 本輪 0 git add 動作
+
+**結果**: PASS (R72 觀察 #2, owner R73 mid-work 編譯+測試 clippy+fmt 全綠 + baseline 365/365 持續維持 + 0 lint warning + 0 fmt diff + 0 regression, 0 自身 M0-3 強烈可推進項, R13 防護守住, 不 commit owner 改動)
+
+**不做的範圍** (延續 R72 entry + 觀察 #2 紀律):
+- 任何 owner 半成品 commit (留 owner)
+- 任何 owner 半成品「補完」改動 (留 owner, 例 config.rs 護欄 (d) `>= 5` → `>= 6` 升級是 owner 設計決定)
+- 任何 M0-3 強烈可推進 (持續 saturated, 護欄 chain R50 freeze)
+- 任何 H0 (24h chore_ratio 警戒, 觀察 #2 守住紀律)
+- T-BOT4+ 推進 (mission gate, 留 owner)
+- MISSION.md 撰寫 (留 owner)

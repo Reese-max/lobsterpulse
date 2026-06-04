@@ -38,8 +38,8 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 
 | KPI | 前值 (R81) | 90 天目標 | 量測方式 |
 |---|---:|---:|---|
-| **K0 Provider 健康度覆蓋率** | 0/14 provider 有 P95 延遲 + 成功率指標 | 14/14 | Prometheus exporter 對應 metric 是否存在且有非零樣本 |
-| **K0 Quota 監控即時性** | 6 個 OpenAB bot 有 snapshot；本機 CLI 無 quota 監控 | 14/14 provider 都有 | `usage-*.json` 或等價 metric 是否被讀到 |
+| **K0 Provider 健康度覆蓋率** | 0/13 provider 有 P95 延遲 + 成功率指標 | 13/13 | Prometheus exporter 對應 metric 是否存在且有非零樣本 |
+| **K0 Quota 監控即時性** | 6 個 OpenAB bot 有 snapshot；本機 CLI 無 quota 監控 | 13/13 provider 都有 | `usage-*.json` 或等價 metric 是否被讀到 |
 | **K40 規格覆蓋率** | 1/1 active change (openab-bot-sync) 12/12 落地 | 100% 落地、0 漂移 | `spectra validate --changes <name>` 通過 + tasks.md 12/12 |
 | **K41 chore_treadmill 紅線** | 24h 55% 觸發 | <30% 持續 7 日 | `git log --since='7d' --pretty=format:'%s' \| grep -c '^chore' / total < 0.30` |
 | **K42 護欄 chain 飽和** | 17 條 saturated | 守住 17，不過度擴張 | guard test 全綠 + 新增需有架構變更理由 |

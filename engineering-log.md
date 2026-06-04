@@ -864,3 +864,49 @@ URGENCY: MEDIUM
 - 策略顧問巡邏建議的 `HookEvent -> OpenTelemetry/OpenInference/MCP` 對映表
 - 策略顧問建議的 `provider contract test matrix`
 - CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift 比對
+
+### [2026-06-05] Round 87 — M0 修 R86 留的 CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift
+**類型**: M0（修 mission/spec 一致性：3 個事實型 doc 寫 14 provider/10 OpenAB 跟程式碼真相 13/9 衝突 → 解 R86 wrap-up 留的第 5 條 owner follow-up；同性質 R80 M0 spec drift 修 pattern）
+**KPI**: K0 Quota 監控即時性目標 14/14 → 13/13 對齊 KNOWN_PROVIDERS 真相；K40 spec/實作一致性 +1（解 [HARNESS/Spectra] 規格驗證失敗的 docs 段）
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 Provider 健康度覆蓋率（目標值對齊） | 14/14（虛高）| 13/13（對齊 KNOWN_PROVIDERS）| spec/impl 一致性 +1 |
+| K0 Quota 監控即時性（目標值對齊） | 14/14（虛高）| 13/13（對齊 KNOWN_PROVIDERS）| spec/impl 一致性 +1 |
+| K40 spec/實作一致性 | R86 R82 半成品 12/12 落地，但 docs 寫 14 vs code 13 不一致 | 12/12 + docs 對齊 13 | +1 docs 對齊 |
+| K41 chore_treadmill | 24h 46% 已觸紅線 | 本輪 1 M0 docs fix (M0 不算 chore) | 持平（守住 5 輪 1 H0 cap）|
+| K42 護欄 chain 飽和 | 17 條 saturated | 17 條 saturated | 持平（無新增）|
+| baseline test | 391 passed | 391 passed | 0 regression |
+| cargo fmt / clippy | 0 diff / 0 warning | 0 diff / 0 warning | 持平 |
+| R13 防護守住 | 8 supervisor untracked | 8 supervisor untracked + openspec/changes/ 全不動 | 守住 |
+
+**為什麼**:
+- R86 wrap-up 留 R87+ owner 接力 5 條，第 5 條 = 「CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift 比對」→ 真相是 `hook_server.rs:335-352` KNOWN_PROVIDERS 13 個 (4 本機: claude/codex/copilot/gemini + 9 OpenAB: cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx/lpbot/mimo)，CLAUDE.md 寫 14、README.md 寫 14、MISSION.md K0 目標寫 14/14 都對不上程式碼 → 修這 3 檔對齊 13
+- 跟 R80 修 design.md spec drift 同性質：跨 K 不變式護欄 chain 守住 KNOWN_PROVIDERS 13 是 R7x 護欄 (R66 護欄 chain 15 鎖 `KNOWN_PROVIDERS` 集合對稱、R78 護欄 chain 16 鎖 9 隻 OpenAB bot name 後端對齊、R78 (f) 護欄鎖撞後端標籤)，但 docs 沒跟上護欄真相
+- 1 輪 1 件事：本輪只做 spec/impl 對齊，不擴張 scope
+- 24h chore_treadmill 46% 已觸紅線，本輪 M0 docs fix 算 mission conflict resolution 不算 H0 chore（歸類比照 R80 M0 spec drift 修）
+
+**做了什麼**:
+- `CLAUDE.md` line 11：「共 14 provider（🤖 OpenAB 10 + 💻 本機 4）」→「共 13 provider（🤖 OpenAB 9 + 💻 本機 4）」
+- `README.md` line 33：「14 provider（🤖 OpenAB 10 + 💻 本機 4）」→「13 provider（🤖 OpenAB 9 + 💻 本機 4）」
+- `README.md` line 35：「### 🤖 OpenAB 10 bot」→「### 🤖 OpenAB 9 bot」（內容早已列 9 個，標題數字錯）
+- `MISSION.md` line 41：「K0 健康度 0/14 → 14/14」→「0/13 → 13/13」
+- `MISSION.md` line 42：「K0 Quota 6/14 → 14/14」→「6/13 → 13/13」
+
+**沒做什麼（scope 控制）**:
+- 不改 `.openspec.yaml`（R13 防護：openspec/changes/ 全 untracked，本輪不擴張 R13 紀律；status: in-progress phase 2/5 仍 stale，留 R88+ owner 決定 commit spec closure）
+- 不改 `design.md`（同上 R13 防護）
+- 不改 `frontend` 卡片數 6+4=10 (line 79/985 main.js/index.html) → 那是 H0 chore，本輪 chore_treadmill 紅線禁止；留 R88+ H0 窗口
+- 不改 `CLAUDE.md` line 49「14 filter tabs」 → 實際 13 provider + ❌失敗 + 全部 = 15 tabs，但 line 49 算 9+4+❌失敗 (no 全部) = 14，可能是「全部 = default 不算 tab」算式；屬說明口徑分歧，不是事實錯誤，本輪不動避免 scope 擴張
+- 不接 R86 留的另 4 條 follow-up（quota 13 個 provider / Tauri command 接入 / OTel 對映表 / contract test matrix）→ 都是 1 輪 1 件的獨立 M0/M1 工作，留 R88+ owner 排程
+
+**驗證**:
+- `cargo test --lib`：391 passed / 0 failed（無 Rust 改動，但保守跑一次 baseline 確認）
+- `cargo fmt --check`：0 diff
+- `cargo clippy --lib -- -D warnings`：0 warning
+- `git diff --stat CLAUDE.md README.md MISSION.md`：3 檔 / 5+/5- 行
+- R13 防護守住：`git status` 仍 8 supervisor untracked + openspec/changes/ 不動（commit 用 `git add CLAUDE.md README.md MISSION.md engineering-log.md` 精準列路徑，**不用** `git add -A`）
+
+**結果**: PASS（M0 spec/impl 對齊 14→13/10→9，3 個事實型 doc 對齊 hook_server.rs KNOWN_PROVIDERS 真相，R86 留的 owner follow-up 第 5 條解了，baseline 391/391 持續綠 + 0 clippy + 0 fmt + 0 regression，R13 防護守住 8 untracked + openspec/changes/，K41 chore_treadmill 守住 M0 不算 chore 紀律，K42 護欄 chain 17 條凍結不擴張）
+
+**KPI-impact: K0 Quota 監控目標 14/14→13/13 對齊真相, K40 spec/impl 一致性 +1 (docs 段)**

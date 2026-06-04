@@ -30,9 +30,9 @@
 
 ## 監控清單（v5.1+）
 
-LobsterPulse v5.1 同時監控兩條路徑，共 **14 provider**（🤖 OpenAB 10 + 💻 本機 4）。
+LobsterPulse v5.1 同時監控兩條路徑，共 **13 provider**（🤖 OpenAB 9 + 💻 本機 4）。
 
-### 🤖 OpenAB 10 bot
+### 🤖 OpenAB 9 bot
 
 OpenAB process 直接 HTTP POST `/hook/{bot_id}`，bot_id 以 openab `config-*.toml` 為 source of truth：
 

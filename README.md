@@ -28,6 +28,34 @@
 
 注意：provider 預設仍然是 `未啟用`，避免第一次打開就直接改你本機 hook 設定；但音效預設與顯示順序已經換成你的工作流。
 
+## 監控清單（v5.1+）
+
+LobsterPulse v5.1 同時監控兩條路徑，共 **10 provider**（🤖 OpenAB 6 + 💻 本機 4）。
+
+### 🤖 OpenAB 6 bot
+
+OpenAB process 直接 HTTP POST `/hook/{bot_id}`，bot_id 以 openab `config-*.toml` 為 source of truth：
+
+- `cicx` → 🤖 CICX · OpenAB Claude（後端 claude-agent-acp）
+- `gitx` → 🤖 GITX · OpenAB Copilot
+- `giminix` → 🤖 GIMINIX · OpenAB **Antigravity**（agy-acp-wrapper；R75 T-BOT9 從 gemini 換來）
+- `codex_bot` → 🤖 CODEX · OpenAB Codex（codex-acp）
+- `openx` → 🤖 OPENX · OpenAB OpenCode（opencode）
+- `irisx_bot` → 🤖 IRISX · OpenAB **Hermes**（hermes -p irisx → gpt-5.5；openclaw→hermes 遷移，R70 T-BOT1）
+
+### 💻 本機 CLI 4
+
+CLI 呼叫 `lobster-pulse-hook.exe` sidecar，settings path 為各 CLI 標準位置：
+
+- `claude` → 💻 Claude Code（本機） → `~/.claude/settings.json`
+- `codex` → 💻 Codex CLI（本機） → `~/.codex/hooks.json`
+- `copilot` → 💻 Copilot CLI（本機） → `~/.copilot/config.json`
+- `gemini` → 💻 Gemini CLI（本機） → `~/.gemini/settings.json`
+
+預設全部 `enabled: false`（避免第一次開啟就改你本機 hook 設定）；要監控時從 tray 9 項 menu 開啟，會自動寫對應 CLI 的 hook config。
+
+Source of truth：`src-tauri/src/config.rs::default_providers()`（line 356-449），跨 4 同步點（providers / sounds / waiting_sounds / usage poller）必須對齊；R67 護欄測試守住一致性，跨點新增 provider 會被 CI 1 秒抓。
+
 ## 主要檔案
 
 - [src/index.html](src/index.html)

@@ -999,19 +999,26 @@ mod tests {
         // K16 4xx 沒 ++」的未來 regression (例如有人 refactor 把 K15 fetch_add 移出
         // process_body Err 分支到外面, K16 4xx 留在分支內, K15 觸發 K16 4xx 不再
         // 跟著觸發 → K15 > K16 4xx, 子集不變式破壞)。
-        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
-            // 1 次壞 JSON, 嚴格 single shot, race 噪音影響最小 (delta 為 1 or 2)
-            let _ = process_body(
-                b"r59_single_garbage { not json",
-                "claude",
-                &super::default_metrics(),
-            );
-        });
+        // R78 spec drift 修: 改用 `new_metrics()` 拿獨立 MetricsCore, before/after
+        // 從該 instance `snapshot()` 取, 完全隔離平行 test 的 default_metrics()
+        // shared counter 噪音。R65 設計意圖 (line 60-64 工廠 + line 275-276 註解)
+        // 給 unit test 換自己 instance → strict `assert_eq!` 對自己 instance 驗證,
+        // 但 with_isolated_metric_snapshot 仍走 default_metrics() (process-level),
+        // 對 strict equality / 反向蘊含仍不夠隔離。R36 shared counter race 復發:
+        // 4 個 atomic load 各自獨立 (snapshot line 49-52), 平行 test 跑 process_body
+        // 時 K15++ 跟 K16_4xx++ 之間有 race window, 我們的 before/after 跨 window
+        // → K15 delta > K16_4xx delta 假陽 fail。修法: 自己 hold 一份 MetricsArc,
+        // snapshot 從自己的 atomic 讀, 平行 test 跟我們完全無關。
+        let metrics = super::new_metrics();
+        let before = metrics.snapshot();
+        // 1 次壞 JSON, single shot, 隔離 instance 嚴格 (1, 1) delta
+        let _ = process_body(b"r59_single_garbage { not json", "claude", &metrics);
+        let after = metrics.snapshot();
         let delta = after.delta(before);
-        // K15 至少 1 (3 個 strict eq 條件之一), 強不等式成立條件
-        assert!(
-            delta.parse_failures >= 1,
-            "1 次壞 JSON 應讓 K15 counter 至少 +1, actual={}",
+        // K15 嚴格等於 1 (隔離 instance, 平行 test 干擾為 0)
+        assert_eq!(
+            delta.parse_failures, 1,
+            "1 次壞 JSON 在隔離 instance 應讓 K15 counter 嚴格 +1, actual={}",
             delta.parse_failures
         );
         // 核心反向蘊含: K15 > 0 → K16 4xx > 0 (同 fetch_add 緊貼)
@@ -1022,11 +1029,11 @@ mod tests {
             delta.parse_failures,
             delta.responses_4xx
         );
-        // 進一步: 既然 single shot, K16 4xx 至少 1
-        assert!(
-            delta.responses_4xx >= 1,
-            "1 次壞 JSON 應讓 K16 4xx counter 至少 +1 (process_body Err 緊貼 fetch_add), \
-             actual={}",
+        // 進一步: 既然 single shot, K16 4xx 嚴格等於 1
+        assert_eq!(
+            delta.responses_4xx, 1,
+            "1 次壞 JSON 在隔離 instance 應讓 K16 4xx counter 嚴格 +1 \
+             (process_body Err 緊貼 fetch_add), actual={}",
             delta.responses_4xx
         );
     }

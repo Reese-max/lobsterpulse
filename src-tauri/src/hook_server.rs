@@ -359,6 +359,13 @@ fn parse_provider(data: &[u8]) -> String {
         if raw == "bot" {
             return "openx".to_string();
         }
+        // R78 T-BOT4: cicx2 → cicx alias（比照 bot → openx）
+        // openab config-cicx2.toml 宣告 bot_id="cicx2"，但 LobsterPulse 用 "cicx"。
+        // 加 alias 確保 CICX2 POST /hook/cicx2 時正確路由到 cicx bucket，
+        // 不被 fallback 到 claude。若 openab 端已 normalize 成 cicx 則此 alias 為 no-op。
+        if raw == "cicx2" {
+            return "cicx".to_string();
+        }
         // R66: 白名單過濾 — 10 known provider 原樣回, 任意字串 (含路徑 injection、
         // typo、未來廢棄的 provider 名) → log warn + fallback "claude"。
         // 向後相容舊 hook config (R19 以前任意 provider 都會被接受), 但 K40
@@ -598,6 +605,19 @@ mod tests {
         let req = b"POST /hook/bot HTTP/1.1\r\n";
         let got = parse_provider(req.as_slice());
         assert_eq!(got, "openx", "/hook/bot 應 rewrite 成 openx legacy alias");
+    }
+
+    #[test]
+    fn r78_t_bot4_cicx2_alias_rewrites_to_cicx() {
+        // openab config-cicx2.toml 宣告 bot_id="cicx2"，加 alias 確保 POST /hook/cicx2
+        // 正確路由到 cicx bucket（比照 bot → openx 模式）。
+        let req = b"POST /hook/cicx2 HTTP/1.1\r\n";
+        let got = parse_provider(req.as_slice());
+        assert_eq!(got, "cicx", "/hook/cicx2 應 rewrite 成 cicx alias");
+        // 確認原始 cicx 不受影響
+        let req2 = b"POST /hook/cicx HTTP/1.1\r\n";
+        let got2 = parse_provider(req2.as_slice());
+        assert_eq!(got2, "cicx", "/hook/cicx 應原樣回傳");
     }
 
     // ─── R66 護欄 chain (R52-R62 第 15 條): parse_provider 輸出 provider 集合 ⊆ 10 known ───

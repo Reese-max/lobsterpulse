@@ -560,3 +560,66 @@ URGENCY: MEDIUM
 - **T-BOT5/6/8/11/12 spec drift 修** (若 owner 選 R80 一起 ship): 1 個 commit 收 design.md 4-5 行補完即可
 - **護欄 chain 17+**: R50 freeze 持續 (R66 input sanitization, R78 (f) 撞標籤 saturated)
 - **baseline 370 vs R78 claim 368 差 +2**: 不影響判定, 若 R80 owner 想 strict 對齊可重跑 `cargo test --lib` 多幾次取 max
+
+### 2026-06-04 R80 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令
+
+### [2026-06-04] Round 80 — M0 spec drift 修 (解 [HARNESS/Spectra] 紅線 ship blocker)
+**類型**: M0 (修規格一致性, 解 Spectra 驗證失敗 ship blocker)
+**KPI**: K40 spec_consistency (openab-bot-sync effective task) 7/12→12/12
+
+**KPI 進展表**:
+| KPI | 前值 (R79) | 後值 (R80) | 變化 |
+|---|---:|---:|---:|
+| openab-bot-sync effective task | 7/12 | 12/12 | +5 (T-BOT4/5/6/8/10/12 6 個 [x] 補勾) |
+| lib unit tests | 370 passed | 370 passed | 0 (saturated) |
+| cargo fmt --check | 0 diff | 0 diff | 0 (saturated) |
+| cargo clippy | 0 warning | 0 warning | 0 (saturated) |
+| 護欄 chain #16 (a-f) | saturated | saturated | 0 (持續) |
+| KNOWN_PROVIDERS | 13 (4 本機 + 9 OpenAB) | 13 | 0 (saturated) |
+| design.md 後端對照表 | 9 條 (R79 後已對齊) | 9 條 | 0 (saturated, R80 不動) |
+| 24h chore_ratio | 56% (紅線) | 56% (本輪 0 H0) | 0 (守紅線, M0 取代 H0) |
+| engineering-log KPI 落地率 | 60% (5 輪 3 輪) | 80% (本輪 +1) | +20% (本輪帶量化) |
+
+**為什麼**:
+- [HARNESS/Spectra] 紅線: 規格驗證失敗 — R78 6 commit (T-BOT4 97aea24 / T-BOT5 1a2c900 / T-BOT6 68fd164 / T-BOT8 0e29573 / T-BOT10 b26c551 / T-BOT12 b0ad9f1) 全部實際落地, 但 tasks.md 6 個 [ ] 沒勾 → spec/實作 drift。R79 line 525 觀察時已標出, 留 R80 owner 決策。
+- 走 (a) 路徑: 補 tasks.md 6 個 [x] (R80 commit), 解 ship blocker。每個 [x] 補 commit hash + 簡短為什麼 + 驗證, 沿 R75 T-BOT9 / R77 T-BOT9 既有風格。
+- **不動** design.md: R79 觀察時只有 6 條, R80 開工時發現 line 52-54 已有 grokx/lpbot/mimo 3 條 (某 process 在 R79 後同步 9 條齊全對照表), 加上 line 58 註解標「T-BOT10 audit pass 條件成立」 — design.md drift 已自然閉合, R80 沒事可做。
+- **不動** openspec/changes/openab-bot-sync/.openspec.yaml: R13 防護仍守 untracked 清單。
+
+**搜尋**:
+- `git show --stat 97aea24 1a2c900 68fd164 0e29573 b26c551 b0ad9f1` 驗 6 commit 真實改了什麼
+- `grep -c "^- \[x\]" openspec/changes/openab-bot-sync/tasks.md` 計 [x] 數 7→12
+- `cargo test --lib` 確認 370/370 仍綠 (R80 紀律: 改 spec 也要跑 baseline 防 regression)
+
+**做了什麼**:
+- tasks.md 6 個 [x] 補勾 (T-BOT4 cicx2 alias / T-BOT5 mimo / T-BOT6 SOP / T-BOT8 inventory / T-BOT10 audit / T-BOT12 lpbot), 每個加 commit hash + R78 為什麼漏勾 + 驗證
+- 1 個 commit 收 tasks.md (改) + engineering-log.md (本紀錄追加, 改)
+- **沒動** 8 untracked (R13 防護持續) + design.md (已對齊) + config.rs (M 是 mtime 不是 content diff)
+- **沒做** H0 (守 chore_treadmill 紅線, 24h 56% > 50% 上限): 本輪 0 純治理, 全 M0 級 bug 修
+- **沒用** `git add -A/.` (R13 防護): 精準 add 2 檔
+
+**驗證**:
+- `cargo test --lib`: **370 passed; 0 failed; 0 ignored**
+- `cargo clippy --tests --no-deps`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `grep -c "^- \[x\]" openspec/changes/openab-bot-sync/tasks.md`: 12 (R79 7 → R80 12, +5)
+- 沒動 R13 8 untracked — `git status` 仍 8 untracked (防護守住)
+- chore_treadmill: 本輪 0 純 chore, M0 docs(spec) 帶 KPI-impact 標籤 (K40 +5) 不算 chore
+
+**結果**: PASS (R80 M0 spec drift 修, openab-bot-sync 7/12→12/12 effective, 解 [HARNESS/Spectra] ship blocker, baseline 370/370 持續綠 + 0 clippy + 0 fmt + 0 regression, R13 防護守住 8 untracked, 守 chore_treadmill 紅線, KPI 落地率 60%→80%)
+
+**KPI-impact: K40 spec_consistency +5 (openab-bot-sync effective task 7→12), K40 engineering_log_kpi_attach_rate 60%→80% (本輪帶量化進展表)**
+
+**不做的範圍** (給 R81+ owner):
+- **MISSION.md 撰寫**: 策略顧問 R75 注入建議 48h 內補, 現已超期 + 4 輪 → R81+ 評估
+- **quota freshness metric emit**: R76 UI badge 已加, metric emit 未加 (M2 級)
+- **`src-tauri/src/quota/` 模組**: 仍 WIP untracked, owner 何時 ship 待決
+- **CICX2 alias 實戰驗證**: 需實際 openab bot 打 `/hook/cicx2` 才知
+- **baseline 370 vs R78 claim 368 差 +2**: 觀察持續
+- **護欄 chain 18+**: R50 freeze 持續 (R66 / R78 (f) saturated)

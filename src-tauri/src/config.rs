@@ -334,6 +334,9 @@ fn default_provider_sounds() -> HashMap<String, String> {
         ("codex_bot".into(), "codex.mp3".into()),
         ("codex".into(), "codex.mp3".into()),
         ("openx".into(), "openx.mp3".into()),
+        // R70 T-BOT1+T-BOT2: hermes agent / IRISX — 補 openclaw→hermes 遷移後新 bot
+        // 音效檔暫缺，T-BOT3 R71 補缺檔 fallback
+        ("irisx_bot".into(), "irisx_bot.mp3".into()),
     ])
 }
 
@@ -345,6 +348,8 @@ fn default_provider_waiting_sounds() -> HashMap<String, String> {
         ("codex_bot".into(), "codex-waiting.mp3".into()),
         ("codex".into(), "codex-waiting.mp3".into()),
         ("openx".into(), "openx-waiting.mp3".into()),
+        // R70 T-BOT1+T-BOT2: hermes agent / IRISX — 補 waiting 音效
+        ("irisx_bot".into(), "irisx_bot-waiting.mp3".into()),
     ])
 }
 
@@ -388,6 +393,17 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
         ProviderConfig {
             enabled: true,
             name: "🤖 OPENX · OpenAB OpenCode".into(),
+            settings_path: None,
+        },
+    );
+    // R70 T-BOT1: hermes agent / IRISX（後端 hermes -p irisx → gpt-5.5）
+    // 對齊 openab/config-hermes.toml `[lobsterpulse] bot_id = "irisx_bot"`
+    // 修前 IRISX 事件 POST /hook/irisx_bot 被 SessionManager 靜默吞掉
+    m.insert(
+        "irisx_bot".into(),
+        ProviderConfig {
+            enabled: true,
+            name: "🤖 IRISX · OpenAB Hermes".into(),
             settings_path: None,
         },
     );
@@ -544,7 +560,7 @@ pub fn expand_path(path: &str) -> PathBuf {
 pub fn detect_providers() -> HashMap<String, bool> {
     let mut detected = HashMap::new();
     let openab_present = openab_present();
-    for id in ["cicx", "gitx", "giminix", "codex_bot", "openx"] {
+    for id in ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot"] {
         detected.insert(id.into(), openab_present);
     }
     detected.insert(

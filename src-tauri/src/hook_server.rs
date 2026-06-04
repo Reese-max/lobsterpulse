@@ -7,40 +7,76 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-/// K15 落地：lifetime counter of JSON parse failures inside `process_body`。
+/// R65: K15/K16 counter bundle 從 4 個 process-level `static AtomicU64` 改成
+/// `Arc<MetricsCore>` 注入模式, 真正解掉 R36-R63 跨輪紀錄的 shared counter race。
 ///
-/// 對齊 K14 (DiscordHealth) 模式：process-level state，render 端 `Ordering::Relaxed`
-/// 讀 snapshot 即可。AtomicU64 比 Mutex<HashMap> 輕太多 —— 這裡只需累計「parse 失敗
-/// 次數」單一整數，無需 enum / last_class / 分類。
+/// 對齊 R64 wrap-up 第 1 條「K15/K16 race 真正解法」: 之前 static + cargo test 平行
+/// 跑時, 其他 test 的 `process_body(壞 JSON)` 會 fetch_add 進同一個 counter, 導致
+/// strict invariant test (`hook_parse_failures_counter_does_not_increment_on_valid_json`)
+/// 假陽性失敗 (R64 觀察輪實測 1 failed / 358 passed)。原本 14 條 R52-R63 護欄都用
+/// `delta >= N` 寬鬆斷言容忍 race noise, 只有那條 strict `delta == 0` test 凸顯問題。
 ///
-/// 統計語意：每收到一個 body，`process_body` 內 `serde_json::from_slice` 失敗
-/// → counter++。counter 是 lifetime aggregate（process 重啟歸零），operator 用
-/// Prometheus `rate(lobsterpulse_hook_parse_failures_total[5m])` 算 throughput
-/// 即可看到「這條路最近在丟事件」—— 比 grep log 友善很多。
-static HOOK_PARSE_FAILURES: AtomicU64 = AtomicU64::new(0);
+/// 修法: 把 4 個 atomic 包成 `MetricsCore` struct, 透過 `Arc<MetricsCore>` 共享——
+/// production 用 `default_metrics()` 全 process 共一份 (對齊原本 process-level
+/// lifetime aggregate 語意), test 用 `new_metrics()` 拿自己一份 (隔離平行噪音,
+/// strict assertion 可嚴格 `assert_eq!`)。`process_body` / `handle_client` /
+/// `accept_loop` 改成 explicit `&MetricsCore` 參數, 沒有 silent global state。
+pub struct MetricsCore {
+    /// K15：lifetime JSON parse failures
+    pub parse_failures: AtomicU64,
+    /// K16：lifetime 2xx OK responses
+    pub responses_2xx: AtomicU64,
+    /// K16：lifetime 4xx Bad Request responses
+    pub responses_4xx: AtomicU64,
+    /// K16：lifetime 5xx Server Error responses（目前永遠 0，保留供未來）
+    pub responses_5xx: AtomicU64,
+}
 
-/// K16 落地：lifetime counters of HTTP responses by status class (2xx / 4xx / 5xx)。
-///
-/// 對齊 K15 模式：process-level AtomicU64 各自獨立，render 端一次 snapshot。3 個
-/// counter 共用一個 `HookServerMetrics` struct 帶給 `render_prometheus_body` —— 避免
-/// 每加一個 metric 就多一個 fn param、每加一個 metric 就刷 44 個 test call site。
-///
-/// 統計語意：
-///   - 2xx：process_body 解析成功 + tx.send 成功 → 200 OK
-///   - 4xx：body 找不到 / JSON parse 失敗 → 400 Bad Request
-///   - 5xx：目前 `handle_client` 沒有 5xx 分支，永遠 0；保留欄位是為了讓 operator
-///     可直接設 `rate(...{class="5xx"}[5m]) > 0` alert，未來真的回 5xx 不用
-///     再改 schema / 改 alert rule
-///
-/// 與 K15 的差別：K15 是「payload 內部 parse 失敗」單一語意，K16 是「HTTP wire-level
-/// response 結果」分類。同一個 400 失敗會同時 ++ K15 和 K16 4xx —— K15 給「JSON 壞掉
-/// 多少」視角，K16 給「server 對外回了什麼 status code」視角。
-static HOOK_RESPONSES_2XX: AtomicU64 = AtomicU64::new(0);
-static HOOK_RESPONSES_4XX: AtomicU64 = AtomicU64::new(0);
-static HOOK_RESPONSES_5XX: AtomicU64 = AtomicU64::new(0);
+impl MetricsCore {
+    pub fn new() -> Self {
+        Self {
+            parse_failures: AtomicU64::new(0),
+            responses_2xx: AtomicU64::new(0),
+            responses_4xx: AtomicU64::new(0),
+            responses_5xx: AtomicU64::new(0),
+        }
+    }
+
+    /// 一次讀 4 個 atomic 給 Prometheus render 用。3 個 K16 counter 各自獨立 load,
+    /// render 端不持任何鎖跨越 string 構造（對齊 K14 K15 render 端約束）。
+    pub fn snapshot(&self) -> HookServerMetrics {
+        HookServerMetrics {
+            parse_failures: self.parse_failures.load(Ordering::Relaxed),
+            responses_2xx: self.responses_2xx.load(Ordering::Relaxed),
+            responses_4xx: self.responses_4xx.load(Ordering::Relaxed),
+            responses_5xx: self.responses_5xx.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// Cheap-to-clone metrics handle. Arc bump 即可, 不複製 atomic。
+pub type MetricsArc = Arc<MetricsCore>;
+
+/// 給 test 用的工廠: 每次呼叫都拿到全新獨立的 `MetricsCore` (atomic 全部從 0 開始),
+/// 平行 cargo test 期間該 instance 不會被其他 test 觸碰 → strict `assert_eq!` 安全。
+pub fn new_metrics() -> MetricsArc {
+    Arc::new(MetricsCore::new())
+}
+
+static DEFAULT_METRICS: std::sync::OnceLock<MetricsArc> = std::sync::OnceLock::new();
+
+/// Production 用的 process-level default。OnceLock 保證 lazy init 一次, 之後
+/// `default_metrics()` 每次 clone 一份 Arc (cheap, atomic refcount bump), 全
+/// process 共一份 lifetime aggregate (對齊原本 K15/K16 語意)。
+pub fn default_metrics() -> MetricsArc {
+    DEFAULT_METRICS.get_or_init(new_metrics).clone()
+}
 
 /// 一個 hook_server 全部 Prometheus-facing 計數的 snapshot。
 /// render 端用一個 `&HookServerMetrics` 就拿到 K15+K16 全部，省去 fn-signature 膨脹。
+///
+/// R65 對齊 MetricsCore 改造: `HookServerMetrics` 仍是 u64 snapshot (Copy + Default
+/// 不變), 改成從 `MetricsCore` 讀, 沒破壞既有 render_prometheus_body contract。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HookServerMetrics {
     /// K15：lifetime JSON parse failures
@@ -55,13 +91,11 @@ pub struct HookServerMetrics {
 
 /// 一次讀 4 個 atomic 給 Prometheus render 用。3 個 K16 counter 各自獨立 load，
 /// render 端不持任何鎖跨越 string 構造（對齊 K14 K15 render 端約束）。
+///
+/// R65: 改成從 `default_metrics()` 讀, 不再直接觸碰 4 個 static。Production 語意
+/// 跟原本 process-level 對齊, 沒改 K15/K16 lifetime aggregate 語意。
 pub fn hook_server_metrics() -> HookServerMetrics {
-    HookServerMetrics {
-        parse_failures: HOOK_PARSE_FAILURES.load(Ordering::Relaxed),
-        responses_2xx: HOOK_RESPONSES_2XX.load(Ordering::Relaxed),
-        responses_4xx: HOOK_RESPONSES_4XX.load(Ordering::Relaxed),
-        responses_5xx: HOOK_RESPONSES_5XX.load(Ordering::Relaxed),
-    }
+    default_metrics().snapshot()
 }
 
 #[cfg(test)]
@@ -131,7 +165,12 @@ impl HookServer {
                     info!("LobsterPulse server listening on port {candidate_port}");
 
                     let tx = Arc::new(tx);
-                    tokio::spawn(accept_loop(listener, tx));
+                    // R65: 把 process-level default metrics 注入 accept_loop, 每個
+                    // handle_client spawn 都 clone Arc (cheap) — production 行為
+                    // 等同原本 4 個 static AtomicU64, 沒改 K15/K16 lifetime aggregate
+                    // 語意, 但 unit test 可換成自己 new_metrics() 隔離平行噪音。
+                    let metrics = default_metrics();
+                    tokio::spawn(accept_loop(listener, tx, metrics));
 
                     return Ok(rx);
                 }
@@ -143,12 +182,17 @@ impl HookServer {
     }
 }
 
-async fn accept_loop(listener: TcpListener, tx: Arc<mpsc::UnboundedSender<HookEvent>>) {
+async fn accept_loop(
+    listener: TcpListener,
+    tx: Arc<mpsc::UnboundedSender<HookEvent>>,
+    metrics: MetricsArc,
+) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let tx = tx.clone();
-                tokio::spawn(handle_client(stream, tx));
+                let metrics = metrics.clone();
+                tokio::spawn(handle_client(stream, tx, metrics));
             }
             Err(e) => {
                 error!("Accept error: {e}");
@@ -160,6 +204,7 @@ async fn accept_loop(listener: TcpListener, tx: Arc<mpsc::UnboundedSender<HookEv
 async fn handle_client(
     mut stream: tokio::net::TcpStream,
     tx: Arc<mpsc::UnboundedSender<HookEvent>>,
+    metrics: MetricsArc,
 ) {
     let mut buf = vec![0u8; 65536];
     let n = match tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut buf))
@@ -190,7 +235,7 @@ async fn handle_client(
 
     let response = if let Some(body_start) = find_body_start(data) {
         let body = &data[body_start..];
-        match process_body(body, &provider) {
+        match process_body(body, &provider, &metrics) {
             Ok(event) => {
                 if tx.send(event).is_err() {
                     warn!(
@@ -198,7 +243,7 @@ async fn handle_client(
                         provider
                     );
                 }
-                HOOK_RESPONSES_2XX.fetch_add(1, Ordering::Relaxed);
+                metrics.responses_2xx.fetch_add(1, Ordering::Relaxed);
                 "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
             }
             Err(()) => {
@@ -216,7 +261,7 @@ async fn handle_client(
             }
         }
     } else {
-        HOOK_RESPONSES_4XX.fetch_add(1, Ordering::Relaxed);
+        metrics.responses_4xx.fetch_add(1, Ordering::Relaxed);
         "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     };
 
@@ -225,7 +270,11 @@ async fn handle_client(
 
 /// 從 HTTP body 解析 + 標準化 provider event。
 /// 抽成 pure function 方便 unit test；失敗回 Err(())，呼叫端決定 log/response 策略。
-fn process_body(body: &[u8], provider: &str) -> Result<HookEvent, ()> {
+///
+/// R65: 接受 `&MetricsCore` 參數, K15/K16 counter 注入而非 global static。Production
+/// caller (`handle_client`) 傳 `default_metrics()`, test caller 傳 `new_metrics()`
+/// 拿自己一份 → strict `assert_eq!` 對自己 instance 驗證, 隔離平行 cargo test 噪音。
+fn process_body(body: &[u8], provider: &str, metrics: &MetricsCore) -> Result<HookEvent, ()> {
     let raw: crate::hook_event::RawHookEvent = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(_) => {
@@ -238,8 +287,8 @@ fn process_body(body: &[u8], provider: &str) -> Result<HookEvent, ()> {
             //     「server 對外回了多少 4xx」
             // 兩個 metric 維度不同（payload 語意 vs wire-level 結果），operator
             // 依需求選用。++ 在 process_body 內，unit test 可直接觸發驗證。
-            HOOK_PARSE_FAILURES.fetch_add(1, Ordering::Relaxed);
-            HOOK_RESPONSES_4XX.fetch_add(1, Ordering::Relaxed);
+            metrics.parse_failures.fetch_add(1, Ordering::Relaxed);
+            metrics.responses_4xx.fetch_add(1, Ordering::Relaxed);
             return Err(());
         }
     };
@@ -371,6 +420,7 @@ fn normalize_event_name(event: &mut HookEvent) {
 mod tests {
     use super::{normalize_event_name, process_body};
     use crate::hook_event::HookEvent;
+    use std::sync::atomic::Ordering;
 
     fn make_event(name: &str, status: Option<&str>) -> HookEvent {
         HookEvent {
@@ -406,7 +456,8 @@ mod tests {
     #[test]
     fn process_body_parses_valid_event() {
         let body = br#"{"hook_event_name":"Stop","session_id":"abc"}"#;
-        let event = process_body(body, "claude").expect("valid json should parse");
+        let event = process_body(body, "claude", &super::default_metrics())
+            .expect("valid json should parse");
         assert_eq!(event.provider, "claude");
         assert_eq!(event.hook_event_name, "Stop");
         assert_eq!(event.session_id, "abc");
@@ -415,7 +466,7 @@ mod tests {
     #[test]
     fn process_body_returns_err_on_invalid_json() {
         let body = b"not json { broken";
-        assert!(process_body(body, "claude").is_err());
+        assert!(process_body(body, "claude", &super::default_metrics()).is_err());
     }
 
     // ─── K15 落地：process_body 內 JSON parse 失敗 → lifetime counter++ ───
@@ -429,7 +480,7 @@ mod tests {
     fn hook_parse_failures_counter_increments_on_invalid_json() {
         let (before, after, _) = super::with_isolated_metric_snapshot(|| {
             // 故意觸發 parse 失敗：braces 不對、不是 JSON
-            let _ = process_body(b"not json { broken", "claude");
+            let _ = process_body(b"not json { broken", "claude", &super::default_metrics());
         });
         let delta = after.delta(before).parse_failures;
         assert!(
@@ -441,26 +492,44 @@ mod tests {
 
     #[test]
     fn hook_parse_failures_counter_does_not_increment_on_valid_json() {
-        // HOOK_PARSE_FAILURES 是 process-level AtomicU64（K15 lifetime aggregate
-        // 設計），cargo test 平行時其他 test 的 process_body(壞 JSON) 會
-        // fetch_add 進同一個 counter，所以「valid JSON 不該 increment」不能用
-        // assert_eq!(after, before) 對全局值斷言 —— 會被平行 test 噪音打掛。
+        // R65 收邊：原本 strict `assert_eq!(delta, 0)` 因為 HOOK_PARSE_FAILURES 是
+        // process-level AtomicU64, cargo test 平行時其他 test 的 process_body(壞 JSON)
+        // 會 fetch_add 進同一個 counter, 噪音打掛這條 strict invariant test (R64 觀察
+        // 輪實測 1 failed / 358 passed)。修法: 拿一份獨立 `new_metrics()` 自己用,
+        // strict assertion 對自己 instance 驗證 → 平行 test 不再污染。
         //
-        // 證明 valid JSON 不 increment 的方式是「call 回 Ok」：process_body 內
-        // fetch_add 緊接在 Err(()) return 之前，Ok 分支不碰 counter。所以本
-        // test 只驗「valid JSON 解析成功、且沒走到 fetch_add 那條 Err 路徑」，
-        // counter 數值交給另外 2 條 incremental test 驗。R58 收邊：同時用 delta
-        // 驗證 K15 counter 在 valid JSON 路徑下沒被誤 ++ (delta 必須是 0)。
-        let (before, after, event) = super::with_isolated_metric_snapshot(|| {
-            process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
-                .expect("valid json should parse")
-        });
+        // 語意: process_body Ok 分支不該碰任何 counter, 對齊 process_body 設計:
+        //   - Err 分支: metrics.parse_failures++ 跟 metrics.responses_4xx++ 緊貼 fetch_add
+        //   - Ok 分支: 完全不讀不寫 metrics
+        // 所以對「valid JSON 進 process_body」這條 call, metrics 應該 4 個 atomic 全部 0。
+        let metrics = super::new_metrics();
+        let event = process_body(
+            br#"{"hook_event_name":"Stop","session_id":"s1"}"#,
+            "claude",
+            &metrics,
+        )
+        .expect("valid json should parse");
         assert_eq!(event.hook_event_name, "Stop");
-        let delta = after.delta(before).parse_failures;
         assert_eq!(
-            delta, 0,
-            "valid JSON 不該 ++ K15 parse_failures counter, actual delta={delta}, before={}, after={}",
-            before.parse_failures, after.parse_failures
+            metrics.parse_failures.load(Ordering::Relaxed),
+            0,
+            "valid JSON 不該 ++ K15 parse_failures counter"
+        );
+        assert_eq!(
+            metrics.responses_4xx.load(Ordering::Relaxed),
+            0,
+            "valid JSON 不該 ++ K16 4xx counter"
+        );
+        // 順便確認 2xx/5xx 也都沒被 valid JSON 副作用觸發
+        assert_eq!(
+            metrics.responses_2xx.load(Ordering::Relaxed),
+            0,
+            "valid JSON 不該 ++ K16 2xx counter (2xx 是 handle_client 內 Ok 分支 ++, process_body 內不寫)"
+        );
+        assert_eq!(
+            metrics.responses_5xx.load(Ordering::Relaxed),
+            0,
+            "5xx counter 應永遠是 0 (保留欄位)"
         );
     }
 
@@ -470,7 +539,11 @@ mod tests {
             // 連續 3 次壞 JSON 應讓 counter +3（不嚴格等於 3 因為平行 test 噪音，
             // 只驗證 >= 3）
             for i in 0..3 {
-                let _ = process_body(format!("garbage payload #{i}").as_bytes(), "claude");
+                let _ = process_body(
+                    format!("garbage payload #{i}").as_bytes(),
+                    "claude",
+                    &super::default_metrics(),
+                );
             }
         });
         let delta = after.delta(before).parse_failures;
@@ -510,8 +583,12 @@ mod tests {
         // 本測試目的：確認 valid JSON 走 process_body Ok 分支時，K16 metrics 的
         // 4xx counter 沒有被誤 ++（4xx 應該只在 Err(()) 那條 ++）。
         let (before, after, _) = super::with_isolated_metric_snapshot(|| {
-            let _ = process_body(br#"{"hook_event_name":"Stop","session_id":"s1"}"#, "claude")
-                .expect("valid json should parse");
+            let _ = process_body(
+                br#"{"hook_event_name":"Stop","session_id":"s1"}"#,
+                "claude",
+                &super::default_metrics(),
+            )
+            .expect("valid json should parse");
         });
         // 4xx 不該被 valid JSON 觸發。Race-tolerant threshold：counter 係
         // process-level atomic，平行程式下其他 test 喺呢段時間內仍會 ++ 4xx
@@ -536,7 +613,7 @@ mod tests {
         // 對齊 K15 測試模式：bad JSON → process_body Err → 對應 K16 4xx counter
         // ++。本測試只 snapshot 4xx delta，不對其他 counter 下嚴格斷言。
         let (before, after, _) = super::with_isolated_metric_snapshot(|| {
-            let _ = process_body(b"not json { broken", "claude");
+            let _ = process_body(b"not json { broken", "claude", &super::default_metrics());
         });
         let delta_4xx = after.delta(before).responses_4xx;
         assert!(
@@ -601,7 +678,11 @@ mod tests {
         // 是「自己這條 test 觀察到的下限」, 不會被平行 test 推高使斷言失敗）。
         let (before, after, _) = super::with_isolated_metric_snapshot(|| {
             for i in 0..1000u32 {
-                let _ = process_body(format!("r58_burst_garbage #{i}").as_bytes(), "claude");
+                let _ = process_body(
+                    format!("r58_burst_garbage #{i}").as_bytes(),
+                    "claude",
+                    &super::default_metrics(),
+                );
             }
         });
         let delta = after.delta(before).parse_failures;
@@ -629,7 +710,11 @@ mod tests {
         // 內部 monotonic atomic 保證本 test 自己至少 +3, noise 只會推高。
         let (before, after, _) = super::with_isolated_metric_snapshot(|| {
             for i in 0..3 {
-                let _ = process_body(format!("r59_garbage #{i}").as_bytes(), "claude");
+                let _ = process_body(
+                    format!("r59_garbage #{i}").as_bytes(),
+                    "claude",
+                    &super::default_metrics(),
+                );
             }
         });
         let delta = after.delta(before);
@@ -685,7 +770,11 @@ mod tests {
         // 跟著觸發 → K15 > K16 4xx, 子集不變式破壞)。
         let (before, after, _) = super::with_isolated_metric_snapshot(|| {
             // 1 次壞 JSON, 嚴格 single shot, race 噪音影響最小 (delta 為 1 or 2)
-            let _ = process_body(b"r59_single_garbage { not json", "claude");
+            let _ = process_body(
+                b"r59_single_garbage { not json",
+                "claude",
+                &super::default_metrics(),
+            );
         });
         let delta = after.delta(before);
         // K15 至少 1 (3 個 strict eq 條件之一), 強不等式成立條件
@@ -714,21 +803,24 @@ mod tests {
     #[test]
     fn process_body_defaults_session_id_when_missing() {
         let body = br#"{"hook_event_name":"Stop"}"#;
-        let event = process_body(body, "openx").expect("valid json should parse");
+        let event = process_body(body, "openx", &super::default_metrics())
+            .expect("valid json should parse");
         assert_eq!(event.session_id, "openx-default");
     }
 
     #[test]
     fn process_body_normalizes_snake_case_event_name() {
         let body = br#"{"hook_event_name":"pre_tool_use","session_id":"s1"}"#;
-        let event = process_body(body, "copilot").expect("valid json should parse");
+        let event = process_body(body, "copilot", &super::default_metrics())
+            .expect("valid json should parse");
         assert_eq!(event.hook_event_name, "PreToolUse");
     }
 
     #[test]
     fn process_body_promotes_failed_post_tool_use_to_failure() {
         let body = br#"{"hook_event_name":"PostToolUse","session_id":"s1","tool_status":"failed"}"#;
-        let event = process_body(body, "openx").expect("valid json should parse");
+        let event = process_body(body, "openx", &super::default_metrics())
+            .expect("valid json should parse");
         assert_eq!(event.hook_event_name, "PostToolUseFailure");
     }
 
@@ -900,12 +992,13 @@ mod tests {
                 "fixture #{idx} ({}): parse_provider 解析錯誤，得到 {provider:?}",
                 fixture.expected_provider,
             );
-            let event = process_body(fixture.body, &provider).unwrap_or_else(|e| {
-                panic!(
-                    "fixture #{idx} ({}): process_body 失敗：{e:?}",
-                    fixture.expected_provider,
-                )
-            });
+            let event = process_body(fixture.body, &provider, &super::default_metrics())
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "fixture #{idx} ({}): process_body 失敗：{e:?}",
+                        fixture.expected_provider,
+                    )
+                });
             assert_eq!(
                 event.hook_event_name.as_str(),
                 fixture.expected_event,

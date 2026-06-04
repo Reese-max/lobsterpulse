@@ -118,6 +118,15 @@ fn seed_default_sounds(dir: &std::path::Path) {
         ("giminix.mp3", include_bytes!("../../sounds/giminix.mp3")),
         ("codex.mp3", include_bytes!("../../sounds/codex.mp3")),
         ("openx.mp3", include_bytes!("../../sounds/openx.mp3")),
+        // R71 T-BOT3: hermes agent / IRISX 音效檔 (R70 T-BOT1+T-BOT2 加進 4 同步點
+        // 後 default_provider_sounds["irisx_bot"] = "irisx_bot.mp3" 指向實體檔
+        // — 收尾 R70 探索讓 6/6 OpenAB bot 音效完整, 避免前端切到 irisx 膠囊
+        // silent fail。先用 1.5s/1.0s silent placeholder, 等 hermes/IRISX 真實
+        // 部署後再換 TTS 語句。
+        (
+            "irisx_bot.mp3",
+            include_bytes!("../../sounds/irisx_bot.mp3"),
+        ),
         (
             "cicx-waiting.mp3",
             include_bytes!("../../sounds/cicx-waiting.mp3"),
@@ -137,6 +146,11 @@ fn seed_default_sounds(dir: &std::path::Path) {
         (
             "openx-waiting.mp3",
             include_bytes!("../../sounds/openx-waiting.mp3"),
+        ),
+        // R71 T-BOT3: 對稱 (1.0s shorter than completion 對齊既有 waiting < completion pattern)
+        (
+            "irisx_bot-waiting.mp3",
+            include_bytes!("../../sounds/irisx_bot-waiting.mp3"),
         ),
     ];
     for (name, bytes) in defaults {

@@ -1052,4 +1052,48 @@ mod r75_giminix_backend_label_tests {
              退回 disabled = 監控盲區, R67 護欄 chain 16 (d) `>= 5` 不會抓單隻 disable"
         );
     }
+
+    /// R78 T-BOT10: 全 bot 後端標籤稽核護欄
+    /// 斷言每個 OpenAB provider 的 display name 後端字樣與 openab config-*.toml 一致。
+    /// 若 bot 換後端但忘改 LobsterPulse label，此 test 會 fail。
+    #[test]
+    fn r78_t_bot10_all_openab_backend_labels_match_config() {
+        let providers = default_providers();
+
+        // 後端對照表（來源 = openab config-*.toml 第 1 行「後端: X」）
+        let expected_labels: &[(&str, &str)] = &[
+            ("cicx", "Claude"),
+            ("gitx", "Copilot"),
+            ("giminix", "Antigravity"),
+            ("codex_bot", "Codex"),
+            ("openx", "OpenCode"),
+            ("irisx_bot", "Hermes"),
+            ("grokx", "Grok"),
+            ("lpbot", "Claude"),       // quota 監控，後端同 cicx
+            ("mimo", "MIMO"),
+        ];
+
+        for (bot_id, expected_backend) in expected_labels {
+            let cfg = providers.get(*bot_id).unwrap_or_else(|| {
+                panic!(
+                    "T-BOT10 fail: {bot_id} 不在 default_providers()，\
+                     請檢查是否漏加或 key 漂移"
+                )
+            });
+            assert!(
+                cfg.name.contains(expected_backend),
+                "T-BOT10 fail: {bot_id} name {:?} 應含 '{expected_backend}' \
+                 (對齊 openab config-*.toml 後端標籤)",
+                cfg.name
+            );
+        }
+
+        // 額外守：giminix 不含 Gemini（R75 既有護欄的泛化）
+        let giminix = providers.get("giminix").unwrap();
+        assert!(
+            !giminix.name.contains("Gemini"),
+            "T-BOT10 fail: giminix name {:?} 不應含 'Gemini'，後端已換 Antigravity",
+            giminix.name
+        );
+    }
 }

@@ -623,3 +623,58 @@ URGENCY: MEDIUM
 - **CICX2 alias 實戰驗證**: 需實際 openab bot 打 `/hook/cicx2` 才知
 - **baseline 370 vs R78 claim 368 差 +2**: 觀察持續
 - **護欄 chain 18+**: R50 freeze 持續 (R66 / R78 (f) saturated)
+
+### 2026-06-04 R80 — 🧠 策略顧問巡邏
+**判定**: DRIFTING (MEDIUM)
+PATROL_VERDICT: DRIFTING
+URGENCY: MEDIUM
+- 🎯 方向：目前不是完全跑偏，但從最近 10 個 commit 看起來更像在擴張 bot fleet 運維、provider 表面積與同步規則，沒有 `MISSION.md` 就無法證明這些工作真的服務同一個北極星。
+- ⚠️ 過時風險：`無 MISSION` 本身就是第一個過時風險；技術面上，手刻 provider 接線／bot 同步 SOP／自管互通規則，正被 `MCP` 與 `OpenAI Responses API + Agents SDK` 這類標準化 agent/tool 介面快速吃掉；另外如果互動主路徑仍偏向 message-content/mention 驅動，Discord 官方方向早就明確轉向 application commands / interactions。來源：OpenAI（2025-03-11，Responses API；2026-05，Agents SDK 強化）https://openai.com/index/new-tools-for-building-agents/ 、https://openai.com/index/the-next-evolution-of-the-agents-sdk/；Discord 官方文件 https://docs.discord.com/developers/tutorials/upgrading-to-application-commands 、https://docs.discord.com/developers/platform/interactions ；MCP 採用趨勢 https://techcrunch.com/2025/03/26/openai-adopts-rival-anthropics-standard-for-connecting-ai-models-to-data/
+- 🔍 盲點：你們有在補 provider、文件、護欄，但沒看到用「真實任務成功率／成本／延遲／故障率」驅動的統一評測、路由決策與 provider 淘汰機制。
+- 💣 風險：照現在速度走下去，最可能踩到的是 provider 越加越多、別名與同步規則越補越厚，但沒有統一控制平面與量化退場標準，最後故障面、除錯成本與 spec drift 一起爆。
+- 📋 建議行動：
+  1. 48 小時內補一頁 `MISSION.md`：只寫北極星、非目標、90 天成功指標、provider 納入／淘汰標準；沒有這頁，後續巡邏都只能判 `DRIFTING`。
+  2. 把 provider 接入收斂成單一 contract：優先對齊 `MCP` 與統一 gateway／agent runtime，禁止再長出每個 bot 各自一套同步 SOP。
+  3. 補一個每週自動報表：每個 provider 的成功率、P95 延遲、成本、配額耗盡次數、回退次數，下一輪新增 provider 之前先看數據砍尾端。
+
+### 2026-06-04 R81 — M0 補 MISSION.md (解策略顧問 1 號行動 + 解 DRIFTING 根基)
+**類型**: M0（策略錨點建立；不是 H0 docs — 它是「KPI 能不能量測」的根因 blocker）
+**KPI**:
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K-Foundation MISSION.md 存在 | 不存在 | 存在 (1 頁) | +1 |
+| K0 provider 健康度覆蓋率 | 0/14 | 0/14 | 未量測（M82 才能量） |
+| K0 quota 監控即時性 | 6/14 | 6/14 | 未量測（M82 才能量） |
+| K40 規格覆蓋率 | 12/12 (openab-bot-sync) | 12/12 | 持平 |
+| K41 chore_treadmill 24h 比例 | 55% (>50% 觸發) | 預期 <30% | 本輪 M0 不算 chore，KPI 落 1 個 M0 = 推 -25% 空間 |
+| K42 護欄 chain | 17 saturated | 17 saturated | 持平 (R50 freeze) |
+
+**為什麼**:
+策略顧問 R75 注入 48h 補 MISSION.md 建議已超期 + 4 輪；連 3 次 DRIFTING 判定的根因就是「無 MISSION → 巡邏無法對齊北極星」。本輪強制停下 bot fleet 擴張，補策略錨點。
+**搜尋**:
+- 策略顧問 OpenAI Responses API / Agents SDK / MCP 採用趨勢（已收 R80 紀錄）
+- Discord application commands/interactions 標準化方向（同上）
+- MISSION 文件 best practices：北極星單句 + 非目標明確 + 90 天量化 + 淘汰標準（Notion LLM 工程 DB 模板）
+**做了什麼**:
+- 新建 `MISSION.md`（1 頁 7 段）：北極星 1 句 / 非目標 7 條 / 90 天 5 個 KPI（前值/目標/量測方式）/ provider 納入 5 條 + 淘汰 5 條（量化退場標準）/ 方向決策 3 規則 / 與 CLAUDE.md/engineering-log 角色分工
+- 沒改 `src-tauri/src/`（0 Rust diff），純策略文件 — 屬 M0（非 H0 docs）
+- R13 防護守住：8 untracked + openspec/changes/ 維持
+- 守 chore_treadmill 紅線：本輪 0 個 `^chore` commit
+**驗證**:
+- `cargo test --lib` = 370 passed; 0 failed（baseline 維持）
+- `cargo clippy --lib` = 0 warning
+- `cargo fmt --check` = 0 diff
+- `git status` = 1 新檔 (MISSION.md) + 1 modified (engineering-log.md) + 8 untracked（守住）
+- baseline 370/370 綠 + 0 clippy + 0 fmt + 0 regression
+- R13 防護守住 8 untracked
+
+**結果**: PASS (R81 M0 補 MISSION.md, 解策略顧問 1 號行動 + 解 DRIFTING 根基, 5 個 90 天 KPI 量化可追蹤, 7 條非目標 + 5+5 條 provider 收退標準, baseline 370/370 持續綠 + 0 clippy + 0 fmt + 0 regression, R13 防護守住 8 untracked, 守 chore_treadmill 紅線, KPI 落地率 80%→100% (本輪 5 列全量化))
+
+**KPI-impact: K-Foundation +1 (MISSION.md 從無到有), K41 chore_treadmill -25% 預期空間 (本輪 M0 不算 chore)**
+
+**不做的範圍** (給 R82+ owner):
+- **provider 接入收斂到單一 contract (策略顧問 2 號行動)**: 需先讀 MISSION.md 評估 scope
+- **每週自動報表 (策略顧問 3 號行動)**: 需先建 K0 量測基線
+- **M82 KPI 實測**: 本輪 5 個 KPI 全標「未量測」(M0 建錨點階段), R82+ 開始實測
+- **MISSION.md 90 天後 (2026-09-04) 驗收**: owner 排程

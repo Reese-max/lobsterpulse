@@ -727,3 +727,39 @@ URGENCY: MEDIUM
 - **K0 趨勢追蹤**: 把每週 `.harness-k0.json` 串成時序, 算覆蓋率變化率
 - **owner WIP 衝突**: `M src-tauri/src/hook_server.rs` 37 lines diff 不是我的, 留 owner 處理; R83 動它 = R13 紅線
 - **CLAUDE.md 14 vs hook_server.rs 13 provider 數量差**: spec drift, 留 R84 比對實際 KNOWN_PROVIDERS vs CLAUDE.md 描述
+
+### [2026-06-04] Round 84 — R82 K46 半成品完工: unknown_provider_fallbacks counter 落地
+**類型**: M1 (推進 K0 observability)
+**KPI**: K0 (Provider 健康度觀測性) +1 — 補上白名單漏列 / 拼錯 / CLI 升版改 id 的 self-detect 信號
+
+**KPI 進展表**:
+| KPI | 前值 (R83 wrap-up) | 後值 (R84) | 變化 |
+|---|---:|---:|---|
+| lib unit tests | 370 passed | 372 passed | +2 (R82 K46 新護欄 test) |
+| cargo clippy | 0 warning | 0 warning | 持續 |
+| cargo fmt --check | 0 diff | 0 diff | 持續 |
+| K46 unknown_provider_fallbacks counter | 無 (R82 半成品) | 有 (K15/K16 模式擴展) | 從無到有 |
+
+**為什麼**:
+- R82 owner 開工做 K46 counter (K15/K16 模式擴展, R73 KNOWN_PROVIDERS 9→10 方向延伸), 改 hook_server.rs + lib.rs M 半成品 + 開 `src-tauri/src/quota/` 新模組; 半成品留 dirty R80-R83 累積未 commit
+- R80 prompt 紅線: 禁止 H0, 必須 M0-M3 推進 KPI; 策略顧問連 3 次 DRIFTING, 必須選對齊北極星的工作
+- K46 = K15/K16 模式擴展, 對齊 MISSION K0 「Provider 健康度覆蓋率 14/14」的精神 (不是直接 +1/14, 但補上 self-detect 信號讓 K0 從「per-provider 指標齊全」邁向「指標 + 自我審計齊全」)
+- 一輪一件事: 只接 R82 K46 完工; quota/ 模組留 R85 owner 決定 (需先補 spec proposal 走 MISSION Provider 納入標準 #5 「spec 先行」)
+
+**搜尋**:
+- 無 (沿用既有 K15/K16 模式, 不需新技術調研)
+
+**做了什麼**:
+- Stage 限定: `src-tauri/src/hook_server.rs` + `src-tauri/src/lib.rs` (R82 K46 範圍 2 檔)
+- 修 R82 owner 漏的 1 行 import: `use super::{new_metrics, normalize_event_name, parse_provider, process_body, KNOWN_PROVIDERS};` (原本漏 `new_metrics`, 造成 9 個 test call site 編譯失敗)
+- K46 改動本體: MetricsCore 加 atomic 欄位、parse_provider 多收 metrics 參考、render_prometheus_body 加 emit line、2 條護欄 test
+- 不動: `src-tauri/src/quota/` (R82 另一個半成品, mod.rs 引 `pub mod openai` 但 openai.rs 不存在 → 模組未掛載 → 孤兒代碼, 編不過風險) + 8 個 supervisor untracked (R13 防護)
+
+**結果**: PASS (R84 K46 R82 半成品完工, commit da43df6, 守 chore_treadmill 紅線 0% [M1 不算 chore], 守 1 輪 1 件事, baseline 370→372, R13 守住 8 untracked + 1 個 ?? quota/ owner WIP 留 R85)
+
+**KPI-impact: K0 (Provider 健康度觀測性) +1 — K46 補上白名單漏列 self-detect**
+
+**不做的範圍** (給 R85+ owner):
+- **quota/ 模組處理**: R82 owner 開工的 `src-tauri/src/quota/{mod.rs, anthropic.rs}`, mod.rs 引 `pub mod openai` 缺檔 → 需先決定 (A) 刪 openai stub 引用走單 anthropic 路線 + 補 spec proposal (B) 補 openai.rs + spec proposal (C) 整個 quota/ 模組廢棄回到 R75 既有 OpenAB `usage-*.json` snapshot 機制。**R85 owner 必須先讀 MISSION.md Provider 納入標準 #5 spec 先行再決定**
+- **R83 留的 4 個策略顧問行動收尾**: 自動週排程 / K0 趨勢追蹤 / CLAUDE.md 14 vs KNOWN_PROVIDERS 13 spec drift 比對
+- **R13 守住**: 8 supervisor untracked + 1 ?? quota/ (本輪不動)

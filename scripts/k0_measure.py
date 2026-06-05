@@ -210,11 +210,19 @@ def main() -> int:
     print(f"  quota dir   : {QUOTA_DIR}")
     print("=" * 60)
     print(render_table(health, quota))
+    # R111 修:R102 拆 K0-A 雙軌時漏了「端點 down」與「13 provider 真的 0
+    # emit」在 stdout 報表的區分 — 兩種情況都會印 0/13,讀者分不出是「端點
+    # 死掉沒量到」還是「13 個 provider 都沒事件流過」。端點 down 時明確標
+    # (endpoint DOWN) suffix,避免誤導;K0-B 不受影響(quota 是 filesystem
+    # scan,不走 /metrics 端點)。JSON 結構不動,`metrics_endpoint_alive`
+    # 欄位 R102 已落,消費者可自己分流。
+    endpoint_alive = bool(metrics_text)
+    down_suffix = "" if endpoint_alive else " (endpoint DOWN)"
     print("-" * 60)
     print(f"K0-A1 健康度 emit 覆蓋率 (端點實際 emit): "
-          f"{k0a1_covered}/{total} ({k0a1_pct}%)")
+          f"{k0a1_covered}/{total} ({k0a1_pct}%){down_suffix}")
     print(f"K0-A2 健康度 sample 覆蓋率 (非零 sessions): "
-          f"{k0a2_covered}/{total} ({k0a2_pct}%)")
+          f"{k0a2_covered}/{total} ({k0a2_pct}%){down_suffix}")
     print(f"K0-B  Quota 即時性 (fresh <24h): "
           f"{k0b_covered}/{total} ({k0b_pct}%)")
     print("=" * 60)

@@ -864,3 +864,67 @@ URGENCY: LOW
 - 已知 flaky test (quota::copilot parallel env-var race): 不在本 M2 範圍, 留 H0 窗口考慮改 serial runner / Mutex 包 env
 - 5 週 Prometheus rename 廣播時程 T-1 dual-emit shim (R108+ owner follow-up, 本輪 M2 不在該範圍)
 - K41 量測延伸 K42 自動護欄: 連續 N 週 >30% 自動擋 commit, 屬 L2 自動化, 留 R109+ M1
+
+### [2026-06-05] Round 112 — M0 修 quota::copilot env-var race flaky test
+
+**類型**: M0
+**KPI**: baseline 穩定性 +1 (消除 parallel env-var race flake)
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| baseline 穩定性 (cargo test --lib parallel) | 431/431 偶發 1 fail (R111 記) | 431/431 連 3 次 0 flake | +1 |
+| K0-A1 端點 emit 覆蓋率 | 0/13 (DOWN) | 0/13 (DOWN) | 0 (本輪 M0 修 test, 不動業務) |
+| K0-A2 端點 sample 覆蓋率 | 0/13 (DOWN) | 0/13 (DOWN) | 0 |
+| K0-B Quota 即時性 | 4/13 | 4/13 | 0 |
+| K40 spec coverage | 4/4 closed | 4/4 closed | 0 |
+| K42 chain 17 條 | 17 | 17 | 0 (本輪修 test 內部 race, 非新護衛) |
+| K41 chore_treadmill 24h | 56% broad / 27% pure | 56% broad / 27% pure | 0 (本輪 1 fix, 不算 chore) |
+| R13 untracked 守住 | 6 個 | 6 個 | 持平 (2 檔 M) |
+
+**為什麼**:
+- 連 9 輪 (R102-R111) 全做 spec drift / 量測基建 / 文檔 prep, KPI 數字 0 推進, 策略顧問 R100 警告 DRIFTING 風險浮現
+- 換角度: 不再糾結 spec closure / 量測基建 / 文檔 prep, 直奔真實 P0 bug
+- copilot.rs::tests 5 個 env-var test + lib.rs::tests 2 個 env-var test 共 7 處用 std::env::set_var / remove_var
+- env 是 process-global 狀態, cargo test parallel 跑時多個 test thread 同時寫會互相覆寫
+- copilot.rs L188-190 docstring 自我招認「接受小機率 flake」+ R111 engineering-log 記「parallel 預設跑 quota::copilot 會因 env-var race 偶發 1 fail」= 確鑿 P0 證據
+- R110 baseline 跑 parallel 偶發中 1 fail, 直接擋 90 天驗收信心
+- 對齊 /pua 角色 (bug-first): 修真實 bug > 純治理批次 / 純文件 prep
+- 對齊 CLAUDE.md「絕對不要刪除現有測試 (除非測試本身有 bug)」: 修 test 內部 race 是修 test bug, 不刪測試
+- 對齊 R107 接力清單「已知 flaky test (quota::copilot parallel env-var race): 留 H0 窗口考慮改 serial runner / Mutex 包 env」: 本輪選 Mutex (零新增 dep), 不走 serial runner (那只是把 flake 推給 CI)
+
+**搜尋**: 
+- 不需搜尋, 證據已備齊 (copilot.rs L188-190 docstring 自我招認 + R111 engineering-log 明記 + 0 新 dep 守則在 docstring L188 已聲明)
+- 對齊 Rust 慣例: std::sync::Mutex 跨 test thread 序列化是標準模式 (parking_lot::Mutex 不必要, std::sync::Mutex 對短臨界區夠用)
+- 對齊踩雷紀錄簿「不引入 dep 守則」: serial_test crate 不引, 走 std::sync::Mutex 維持 K42 chain 17 不擴張
+
+**做了什麼**:
+- `src-tauri/src/quota/copilot.rs` 加 `#[cfg(test)] pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(())`, process-global 序列化所有 env 寫入的 test
+- copilot.rs::tests 5 個 env-var test 每個開頭加 `let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner())` (防 panic 導致 poison 後續 test 連鎖死)
+- lib.rs::collect_live_quota_snapshot_tests 2 個 env-var test 也 use 同一把鎖 (`use crate::quota::copilot::ENV_LOCK;`), 跨 mod 共用, 避免 copilot.rs::tests set → lib.rs read 污染路徑
+- 改寫 copilot.rs L186-190 docstring 反映「用 ENV_LOCK 序列化, 零新增 dep」
+- `git add` 精準 2 檔 (`src-tauri/src/quota/copilot.rs` + `src-tauri/src/lib.rs`), R13 守住 6 untracked
+- 不寫新護衛 test (修 test 內部 race, 非 K42 chain 範圍, chain 17 飽和不擴)
+- 不動 LP_METRICS / quota 模組業務邏輯 / collect_live_quota_snapshot_with_home 簽名
+- 不動 K0 量化窗口數字 (純測試穩定性, 不動業務)
+
+**驗證**:
+- `git status --short`: 2 檔 M (copilot.rs + lib.rs), 6 untracked 守住 (R13)
+- `git diff --stat`: 2 檔 / 31 insertions / 4 deletions
+- `cargo test --lib quota::copilot`: 11 passed; 0 failed
+- `cargo test --lib` (parallel 預設) 連 3 次: 431 passed; 0 failed 全綠, 0 flake (8.10s ~ 9.53s 之間)
+- `cargo fmt --check`: clean
+- `cargo clippy --tests -- -D warnings`: clean
+- commit ba35ec1 落地 2 檔 / 31 insertions / 4 deletions
+
+**結果**: PASS (M0 修 env-var race flaky test, 連 3 次 parallel 跑 0 flake, baseline 穩定性 +1, 守住 6 untracked R13, K42 chain 17 條不擴張, K41 chore_treadmill 24h 27% pure 守住)
+
+**KPI-impact: baseline 穩定性 +1 (消除 parallel env-var race flake, 90 天驗收不再有「偶發 1 fail」不確定性, 0 KPI 數字變動)**
+
+**留 R113+ owner 接力**:
+- K0 真實推進 (K0-A1 4→13 / K0-A2 1→13 / K0-B 4→13): 受 OpenAB bot process 是否在運作影響, 本機不可控, 留外部依賴解卡
+- 5 週 Prometheus rename 廣播時程 T-1 dual-emit shim: R106 接力清單首位, R107+ 已就位但未動, 留 R113+ owner 走實際 rename
+- gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
+- OpenAB snapshot staleness 真正推進 (K0 Quota 4→13 推 stale/missing 5 個): 需 OpenAB 端 snapshot 寫入鏈路, 非本機 scope
+- K0-A1/K0-A2 「被動 → 主動」synthetic test event: 留 R109+ H0 窗口考慮 (chain 17 飽和不擴)
+- K41 量測延伸 K42 自動護欄: 連續 N 週 >30% 自動擋 commit, 屬 L2 自動化, 留 R109+ M1

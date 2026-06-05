@@ -98,17 +98,28 @@ LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
 
 ### 重新建置 release
 
-```powershell
-cd .\src-tauri
-cargo build --release
-```
+> ⚠️ **必用 `cargo tauri build`，不可純 `cargo build --release`**。
+> 純 cargo build --release 會跳過 frontend embed，release webview fallback
+> 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
+> 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
 
-如果要打完整 Tauri bundle，這台機器還需要先安裝 `cargo-tauri`：
+兩種變體：
 
-```powershell
-cargo install tauri-cli
-cargo tauri build
-```
+- **快速驗證**（只要 `.exe`，不打 installer）：
+
+  ```powershell
+  cd .\src-tauri
+  cargo tauri build --no-bundle
+  ```
+
+  前置：`cargo install tauri-cli --locked`（鎖版避免 Tauri CLI breaking change）。
+
+- **完整 installer**（要 `.msi` / `.deb` / `.AppImage` 等）：
+
+  ```powershell
+  cargo install tauri-cli --locked
+  cargo tauri build
+  ```
 
 ## 品牌資產
 
@@ -160,7 +171,7 @@ repo 內附了一個可以重生品牌圖示的腳本：
 這版目前已驗證過：
 
 - `cargo check`
-- `cargo build --release`
+- `cargo tauri build --no-bundle`（release 二進位，frontend 已 embed）
 - `lobster-pulse.exe` 可成功啟動
 
 ## 已知保留項

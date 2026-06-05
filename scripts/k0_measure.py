@@ -132,8 +132,20 @@ def scan_quota_snapshots() -> Dict[str, Dict]:
     # 是 usage-{bot}.json) 進 fresh_path。R110 修:移除 R83 殘留的 `candidates`
     # 死碼(從未被引用,且硬編碼 .stale- 無日期跟 STALE_MARKER 8 位數要求不一致,
     # 誤導讀者以為 stale 檔無日期)。
+    #
+    # R114 修:openx 需對齊 hook_server.rs:376-378 別名 — OpenAB BackendType::Other
+    # 寫 usage-bot.json (legacy), 而 hook_server 把 POST /hook/bot rewrite 成
+    # "openx"。本腳本若只看 usage-openx.json* 會永遠漏算 openx (就算 OpenAB
+    # 正常運作也計不到), 必須雙 glob 把 usage-bot.json* 也納入 openx bucket。
+    # 修法:openx 加第二個 base name "usage-bot", 跟主檔名併行 glob。對齊
+    # hook_server.rs 的別名語意, 避免 K0 Quota coverage 永遠少算 1 個 provider。
     for bot in OPENAB_BOT:
-        all_files = list(QUOTA_DIR.glob(f"usage-{bot}.json*"))
+        base_names = [f"usage-{bot}"]
+        if bot == "openx":
+            base_names.append("usage-bot")
+        all_files: List[Path] = []
+        for base in base_names:
+            all_files.extend(QUOTA_DIR.glob(f"{base}.json*"))
         fresh_path = None
         stale_paths: List[Path] = []
         for f in all_files:
@@ -198,6 +210,12 @@ def main() -> int:
     k0a2_covered = sum(1 for v in health.values() if v > 0)
     # K0-B: quota 新鮮的 provider 數
     k0b_covered = sum(1 for v in quota.values() if v.get("state") == "fresh")
+    # R114: K0 Quota coverage — 任何狀態 (fresh/stale) 都算 quota data path 已接上,
+    # 對齊 MISSION.md "K0 Quota 監控即時性" KPI 13/13 目標「usage-*.json 或等價
+    # metric 是否被讀到」, 比 K0-B (僅 fresh) 寬。R114 修 openx legacy alias 後從
+    # 9/13 → 10/13 (openx 的 usage-bot.json 終於被認到)。
+    k0_quota_coverage = sum(1 for v in quota.values()
+                            if v.get("state") in ("fresh", "stale"))
 
     total = len(KNOWN_PROVIDERS)
     k0a1_pct = round(100.0 * k0a1_covered / total, 1)
@@ -225,6 +243,10 @@ def main() -> int:
           f"{k0a2_covered}/{total} ({k0a2_pct}%){down_suffix}")
     print(f"K0-B  Quota 即時性 (fresh <24h): "
           f"{k0b_covered}/{total} ({k0b_pct}%)")
+    # R114: 補 K0 Quota coverage (任何狀態) — 對齊 MISSION 13/13 目標。
+    k0_quota_cov_pct = round(100.0 * k0_quota_coverage / total, 1)
+    print(f"K0-Q  Quota 覆蓋率 (fresh+stale 都有 data path): "
+          f"{k0_quota_coverage}/{total} ({k0_quota_cov_pct}%)")
     print("=" * 60)
     print(f"[K0-A1 端點 emit 過的 provider label: "
           f"{sorted(emit_providers)}]")
@@ -243,6 +265,9 @@ def main() -> int:
         },
         "k0b_quota_freshness": {"fresh": k0b_covered, "total": total,
                                 "pct": k0b_pct},
+        # R114: K0 Quota coverage KPI 量化 (fresh+stale 都有 data path 算覆蓋)
+        "k0q_quota_coverage": {"covered": k0_quota_coverage, "total": total,
+                                "pct": k0_quota_cov_pct},
         "providers": {
             p: {
                 "metrics_sessions": health.get(p, 0.0),

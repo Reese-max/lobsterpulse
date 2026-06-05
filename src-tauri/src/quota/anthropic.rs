@@ -1,7 +1,6 @@
-// R82 半成品: 設計為 K0 Quota 監控即時性 6/14→14/14 接力點。
-// 目前 fetch 尚未被 Tauri command 呼叫（R86+ 接入），整檔暫列 dead_code。
-// 純函數 fmt_tokens / fmt_countdown 已加 unit test 確保契約。
-#![allow(dead_code)]
+//! Anthropic (Claude CLI) live quota fetch：讀 `~/.claude/.credentials.json`
+//! 拿 access_token、解析 session token 到期日、抓 stats cache 顯示本週/今日用量。
+//! R82 開工，R85 落地，R89 經 Tauri command 接入 (`quota::anthropic::fetch`)。
 
 use super::RunnerQuota;
 use serde::Deserialize;

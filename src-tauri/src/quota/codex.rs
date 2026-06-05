@@ -1,9 +1,7 @@
-// R86: 為本機 `codex` CLI provider 實作 K0 Quota 監控即時性 contract。
-// 對齊 R85 anthropic.rs pattern：讀 auth.json 拿 access_token + 解析 JWT exp
-// 拿 token 到期日 + 打 https://api.openai.com/v1/models 探 token 仍有效
-// + 從 config.toml 拿 model 名 + 顯示 ChatGPT 訂閱類型。
-// 整檔暫列 dead_code（Tauri command 接入留 R87+，對齊 R85 留 R86+ owner 接入的註解）。
-#![allow(dead_code)]
+//! OpenAI (Codex CLI) live quota fetch：讀 `~/.codex/auth.json` 拿 access_token、
+//! 解析 JWT exp 拿 token 到期日、打 `/v1/models` 探 token 有效性、從 `config.toml`
+//! 拿 model 名、顯示 ChatGPT 訂閱類型。R86 落地，R89 經 Tauri command 接入
+//! (`quota::codex::fetch`)。
 
 use super::RunnerQuota;
 use serde::Deserialize;
@@ -13,13 +11,9 @@ const OPENAI_MODELS_API: &str = "https://api.openai.com/v1/models";
 
 #[derive(Debug, Deserialize)]
 struct CodexAuth {
-    #[serde(rename = "auth_mode")]
-    auth_mode: Option<String>,
     #[serde(rename = "OPENAI_API_KEY")]
     openai_api_key: Option<String>,
     tokens: Option<CodexTokens>,
-    #[serde(rename = "last_refresh")]
-    last_refresh: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

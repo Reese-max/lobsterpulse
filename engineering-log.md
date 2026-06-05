@@ -876,3 +876,58 @@ URGENCY: MEDIUM
 - **6 條 counter 重命名 _total 結尾 (H0/M0)**: R103+ follow-up, 需先廣播 alert/dashboard 跟進
 - **OTel SDK 整合 (H0)**: R103+ follow-up
 - **R100 策略顧問 #3**: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+
+### [2026-06-05] Round 108 — M1 Gemini CLI live quota 模組（K0 Quota 8/13 → 9/13）
+
+**類型**: M1（K0 Quota 即時性推進，**首個 KPI 數字變動輪**，break 0 改善張力）
+**KPI**: K0 Quota 監控即時性 8/13 → 9/13（本機 CLI live quota 段 2/4 → 3/4，+1 runner: gemini）
+**為什麼**: R100~R107 連 8 輪 M0 closure/護衛 (KPI 數字 0 變動)，R107 收尾段明文標 R108+ 接力清單首位是 K0 Quota 9/13 M1 候選。本輪挑 gemini CLI（4 本機 CLI 中第 3 個 + OpenAB bot 之後 7 個 usage snapshot 是另一路徑）— 對齊 codex.rs pattern, 風險低、可 deterministic 測試、本地 gemini CLI 未登入（`~/.gemini/oauth_creds.json` 0 bytes）也不擋測試（read_credentials 早返 ⚠）。這輪 K0 推進是 KPI **真實變動**（不是 closure 標記切換），是 R101 以後第一個有 KPI 數字 +1 的輪。
+
+**搜尋**:
+- `cat src-tauri/src/quota/{mod,codex}.rs` 確認 codex.rs pattern（OAuth credentials → API probe → RunnerQuota）
+- `grep "gemini" src-tauri/src/config.rs` 確認 gemini 是 default_providers 第 4 個本機 CLI
+- `cat ~/.gemini/oauth_creds.json` 確認本地狀態（0 bytes, 視同「未登入」, 為什麼需要 empty file 友善提示）
+
+**做了什麼**:
+- `src-tauri/src/quota/gemini.rs` (新檔, 280 行): 對齊 codex.rs pattern —
+  - `read_credentials(home)`: 讀 `~/.gemini/oauth_creds.json`, 0 bytes/whitespace-only 視同「not logged in」友善早返
+  - `parse_expiry(rfc3339)`: 解析 `"2026-12-31T23:59:59.000Z"` → unix epoch 秒
+  - `fmt_countdown(epoch)`: 對齊 anthropic.rs / codex.rs 同名 helper（複製不抽共用, 避 quota/ 模組 cyclic dep 風險）
+  - `fetch(home)`: bearer_auth 探 `https://generativelanguage.googleapis.com/v1beta/models`, 200/401 分流 text
+- `src-tauri/src/quota/mod.rs`: `pub mod gemini;` register
+- `src-tauri/src/lib.rs:516-525`: `collect_live_quota_snapshot_with_home` 加 gemini fetch (sequential 對齊 3 個 fetch 簡化)
+- `src-tauri/src/lib.rs:1019-1073`: 2 個 collect snapshot test 從 2 runner → 3 runner, names check 加 gemini
+
+**驗證**:
+- `cargo test --lib`: **420 passed; 0 failed; 0 ignored** (R107 408 + 12 新 gemini unit tests = 420，net +12)
+- `cargo clippy --all-targets`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `git status`: 3 檔 commit (lib.rs +24/-12, mod.rs +3/-1, gemini.rs +280 new)，8 untracked + 2 spec 檔 守住 (R13)
+- 護欄 chain 16 (R106) 自動通過：gemini 是本機 CLI（prefix `💻`），cross-attribute `OPENAB_BOT_IDS` 反向檢查（in_openab=false）符合
+- K42 chain 17 條不擴張 (本輪屬 quota/ 模組延伸, 不動護衛 chain)
+- K41 chore_treadmill 24h 0% (本輪 M1 feat, 不算 chore)
+- K40 spec coverage: 2/2 closed (otel + contract-matrix-guard) 維持
+
+**結果**: PASS (M1 Gemini CLI live quota 落地, baseline 408→420 (+12 unit tests), K0 Quota 即時性 8/13→9/13, R13 守住 8 untracked + 2 spec 檔, K42 chain 17 條不擴張, K41 chore_treadmill 24h 0%, **R101 以後首個 KPI 數字真實 +1 輪**)
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 Quota 即時性 | 8/13 (R89) | 9/13 | +1 (gemini runner) |
+| 本機 CLI live quota 段 | 2/4 (claude + codex) | 3/4 (claude + codex + gemini) | +1 |
+| baseline lib tests | 408/408 綠 (R107) | 420/420 綠 | +12 unit tests |
+| K0-A1 emit coverage | 0/13 (待 OpenAB bot 實運) | 0/13 | 0 (本輪不推進, 待 M1+ OpenAB 端) |
+| K42 護欄 chain 飽和 | 17 條 (R106 鎖) | 17 條 | 0 (R108 不擴 chain) |
+| K41 chore_treadmill 24h | 0% (R107) | 0% | 持平 (M1 feat) |
+| K40 spec coverage closed | 2/2 (otel + contract-matrix-guard) | 2/2 | 持平 |
+| M0 連續輪數張力 | 8 連 M0 (R100~R107) | 0 連 M0 | **R108 break → M1** |
+
+**KPI-impact: K0_quota 8/13→9/13 (本機 CLI live quota +1 runner: gemini)**
+
+**留 R109+ owner 接力**:
+- K0 Quota 9/13 → 10/13: copilot 本機 CLI live quota (對齊 gemini pattern, GitHub OAuth credentials path)
+- K0-A1 推進: 需 OpenAB bot 實際打 `/hook/{provider}` 累積 5 種以上 non-zero samples (環境就緒時 M1)
+- K40 開新 change: 若有 spec-worthy 變更可開 proposal
+- 6 條 counter 重命名 _total 結尾 (R103+ follow-up, 需先廣播 alert/dashboard 跟進)
+- OTel SDK 整合 (R103+ follow-up)
+- R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md

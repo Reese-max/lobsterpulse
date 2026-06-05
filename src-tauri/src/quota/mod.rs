@@ -1,9 +1,11 @@
 //! K0 Quota 監控即時性 contract：聚合本機 CLI runner 的 live API fetch 結果。
 //! R82 開工，R85/R86 補 anthropic、codex 兩個 fetch 實作，R89 Tauri command
-//! 接入 (`get_live_quota_snapshot` → `collect_live_quota_snapshot_with_home`)。
+//! 接入 (`get_live_quota_snapshot` → `collect_live_quota_snapshot_with_home`),
+//! R108 加 gemini 對齊 4 本機 CLI 中第 3 個 (K0 Quota 8/13 → 9/13)。
 
 pub mod anthropic;
 pub mod codex;
+pub mod gemini;
 
 use serde::{Deserialize, Serialize};
 

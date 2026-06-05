@@ -513,12 +513,13 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
             updated_at,
         };
     };
-    // 兩個 fetch 各自打不同 API endpoint（Anthropic + OpenAI），
+    // 三個 fetch 各自打不同 API endpoint（Anthropic + OpenAI + Google），
     // 即使平行也省不到一半（網路 RTT 為主），這裡採 sequential 簡化。
     let claude = quota::anthropic::fetch(home).await;
     let codex = quota::codex::fetch(home).await;
+    let gemini = quota::gemini::fetch(home).await;
     quota::LiveQuotaSnapshot {
-        runners: vec![claude, codex],
+        runners: vec![claude, codex, gemini],
         source: "live_api".to_string(),
         updated_at,
     }
@@ -1016,18 +1017,21 @@ mod collect_live_quota_snapshot_tests {
     }
 
     #[test]
-    fn collect_live_quota_snapshot_with_home_some_without_credentials_returns_two_failed_runners() {
-        // 注入空 home（無 ~/.claude/.credentials.json 也無 ~/.codex/auth.json）→
-        // 兩 fetch 在 read_credentials 階段早返 RunnerQuota (ok=false),不打 API 不 timeout。
-        // 重點：結構完整（2 runner, 有 name/label/ok/text）+ 不 panic。
+    fn collect_live_quota_snapshot_with_home_some_without_credentials_returns_three_failed_runners()
+    {
+        // 注入空 home（無 ~/.claude/.credentials.json 也無 ~/.codex/auth.json 也無
+        // ~/.gemini/oauth_creds.json）→ 三 fetch 在 read_credentials 階段早返
+        // RunnerQuota (ok=false),不打 API 不 timeout。
+        // 重點：結構完整（3 runner, 有 name/label/ok/text）+ 不 panic。
+        // R108 從 2 runner → 3 runner,加 gemini 對齊 4 本機 CLI 中第 3 個。
         let home = tmp_home("empty");
         std::fs::create_dir_all(&home).unwrap();
 
         let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
         assert_eq!(
             out.runners.len(),
-            2,
-            "應有 2 runner (claude + codex),實際 {}",
+            3,
+            "應有 3 runner (claude + codex + gemini),實際 {}",
             out.runners.len()
         );
         assert_eq!(out.source, "live_api");
@@ -1050,9 +1054,10 @@ mod collect_live_quota_snapshot_tests {
     }
 
     #[test]
-    fn collect_live_quota_snapshot_runners_have_known_names_claude_and_codex() {
-        // 前端 contract:runner.name 嚴格是 "claude" 與 "codex",對齊 hook_server.rs
-        // KNOWN_PROVIDERS 本機 CLI 段。任何改名 / 新加 / 漏掉 → 前端分組錯亂。
+    fn collect_live_quota_snapshot_runners_have_known_names_claude_codex_gemini() {
+        // 前端 contract:runner.name 嚴格是 "claude" / "codex" / "gemini",對齊
+        // hook_server.rs KNOWN_PROVIDERS 本機 CLI 段(R108 起 3 個 live quota runner)。
+        // 任何改名 / 新加 / 漏掉 → 前端分組錯亂。
         let home = tmp_home("names");
         std::fs::create_dir_all(&home).unwrap();
 
@@ -1066,6 +1071,11 @@ mod collect_live_quota_snapshot_tests {
         assert!(
             names.contains(&"codex"),
             "應含 codex runner,實際 {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"gemini"),
+            "應含 gemini runner,實際 {:?}",
             names
         );
 

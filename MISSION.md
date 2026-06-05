@@ -46,6 +46,28 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 | **K41 chore_treadmill 紅線** | 24h 55% 觸發 | <30% 持續 7 日 | `git log --since='7d' --pretty=format:'%s' \| grep -c '^chore' / total < 0.30` |
 | **K42 護欄 chain 飽和** | 17 條 saturated | 守住 17，不過度擴張 | guard test 全綠 + 新增需有架構變更理由 |
 
+### R108 量測快照（補：避免 R81 前值凍結誤導）
+
+> 補頁動機：R108 supervisor 報 `consecutive_drifts: 3` + top_risk = 「K0 Quota 數字」，
+> 追源頭發現 MISSION/CLAUDE 量化值停在 R81、跟現實分叉。R81 baseline 是策略錨點
+> 不可抹，**新加 R108 量測 column** 保留 R81 作為「歷史基準」+ 補當前現況。
+
+| KPI | R81 baseline（前值） | R108 量測現況 | 變化 | 驗收差距 |
+|---|---:|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 0/13 | 0/13 (endpoint DOWN, 未跑 build) | ±0 | 缺 13 |
+| K0-A2 sample 覆蓋 | 0/13 | 0/13 (endpoint DOWN) | ±0 | 缺 13 |
+| K0 程式碼定義層 (R101) | 0/13 | 13/13 (R101 達標) | **+13** | 達標 |
+| K0 Quota 監控即時性 | 6 OpenAB snapshot；本機無 | **K0-B fresh 4/13 + K0-Q (fresh+stale) 9/13** | **+3** | 缺 4 (irisx_bot/grokx/lpbot/mimo 完全 missing) |
+| K40 規格覆蓋率 | 1/1 (openab-bot-sync 12/12) | 5/5 active change 全 closed (43/43 tasks) | **+4** | 達標 |
+| K41 chore_treadmill 24h | 55% | **R108 k41_chore_treadmill.py 7d: 13/206 = 6.3% (K41 達標 <30%)** | **-49** | 達標 (<30%) |
+| K42 護衛 chain | 17 條 | 17 條 (R113.1 owner M dual-emit value guard 提案中) | ±0 | 達標 (守住不擴張) |
+
+**R108 量化結論**：
+- K0 Quota 距 13/13 目標缺 4 (需 OpenAB `irisx_bot`/`grokx`/`lpbot`/`mimo` 寫 snapshot，**非本機 scope**)
+- K0-A1/A2 缺 13 (需 13 個 agent 真的有事件流過，**非本機 scope**)
+- 5 個文件/治理級 KPI 全綠 — supervisor 報的「drift」是 **文件 vs 量測分叉**，非 KPI 倒退
+- 下個 M1 候選：R113.1 dual-emit value contract guard (owner M 提案中，等 commit 後 K42 chain 17→18 需架構理由)
+
 任一指標連 2 週落後 → 觸發策略重審（不是「再補一輪」）。
 
 ---

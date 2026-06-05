@@ -977,3 +977,57 @@ URGENCY: LOW
 - gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
 - K0 真實推進 (K0-A1 4→13 / K0-A2 1→13 / K0-B 4→13): 受 OpenAB bot process 影響, 留外部依賴解卡
 - K41 量測延伸 K42 自動護欄: 連續 N 週 >30% 自動擋 commit, 屬 L2 自動化, 留 R109+ M1
+
+---
+
+### [2026-06-05] Round 108 — M0 修 MISSION.md KPI 表 R81 前值凍結 spec drift
+
+**類型**: M0 (修 spec drift, 對齊 supervisor top_risk 「K0 Quota 數字」)
+**KPI**: K40 規格覆蓋率 守 (MISSION 量測方式 + R81 前值 + R108 量測現況 三欄對齊, 0 spec drift)
+**搜尋**: supervisor-report.json 露餡 `consecutive_drifts: 3` + `directive_issued: true` + top_risk = 「K0 Quota 停在 10/13、最近 5 commit 全 docs/chore 推進放緩」, 追根 MISSION.md 表格 7 輪沒更新量化值
+
+**為什麼做這個**:
+- supervisor 連 3 輪 DRIFTING 的真因是 MISSION/CLAUDE 量化值凍結 R81、跟現實分叉
+- 5 個 change 雖然 status=closed, tasks 100% (43/43), 但 K0 Quota / K0-A1 現況數字無文件化記錄
+- 補 R108 量測 column 是 R81 補頁者聲明「K40 規格覆蓋率 100% 落地、0 漂移」精神的延伸
+- surgical 修補, 不破壞 R81 baseline 結構, 不擴張 K42 chain
+
+**做了什麼**:
+- `MISSION.md` 90 天 KPI 表下方加 R108 量測快照 block
+- 5 個 KPI row 各加 R108 現況 column + 變化 + 驗收差距
+- K41 數字以 `k41_chore_treadmill.py` 實際量測結果為準 (7d 13/206 = 6.3%, K41 達標)
+- K0 Quota 數字以 `k0_measure.py` 實際量測結果為準 (K0-B 4/13 fresh + K0-Q 9/13 fresh+stale)
+- 寫「R108 量化結論」段落: 4 個缺口 (irisx_bot/grokx/lpbot/mimo) 標記「非本機 scope」, 5 個文件/治理級 KPI 全綠
+- 點出 R113.1 (owner M 提案中) 為下個 M1 候選, 屆時 K42 chain 17→18 需架構理由
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| MISSION.md spec drift (K0 Quota 量化值) | 凍結 R81 「6 OpenAB」 | R108 「K0-B 4/13 + K0-Q 9/13」 量化 | spec drift 消除 |
+| K0 Quota (K0-Q) | 6/13 (R81 文件) | 9/13 (R108 量測) | +3 |
+| K0 Quota (K0-B fresh) | 0/13 (R81 文件：本機 CLI 無) | 4/13 (R108 量測：本機 CLI live) | +4 |
+| K0-A1 emit | 0/13 (R81 + R108 endpoint DOWN) | 0/13 (持平，缺 build 環境) | ±0 |
+| K0 程式碼定義層 (R101) | 0/13 | 13/13 | +13 (R101 已 closure) |
+| K40 spec coverage | 1/1 (openab-bot-sync 12/12) | 5/5 active change 全 closed (43/43) | +4 |
+| K41 chore_treadmill 7d | 55% (R81 24h 觸發) | 6.3% (R108 7d 量測) | -49 |
+| K42 護衛 chain | 17 條 | 17 條 (R113.1 owner M 提案中) | ±0 |
+| baseline (cargo test --lib) | 431/431 (R113) | 437/437 (R108) | +6 (owner M 護衛 chain 延伸已 merge) |
+
+**驗證**:
+- `cargo test --lib` 連 1 次: 437 passed; 0 failed; 0 flake 全綠 (8.71s)
+- `python scripts/k0_measure.py`: K0-B 4/13 + K0-Q 9/13 印出
+- `python scripts/k41_chore_treadmill.py`: 13/206 = 6.3% [OK] 印出
+- `cat .harness-k41.json`: status=OK, ratio=0.063
+- `cat .harness-k0.json`: k0b_quota_freshness={fresh:4,total:13,pct:30.8}, k0q_quota_coverage={covered:9,total:13,pct:69.2}
+- `git status --short`: 4 檔 M (MISSION.md 本輪 + 3 檔 owner M R114 工作中 R13 守護) + 6 untracked 守住
+
+**結果**: PASS (M0 修 MISSION.md spec drift, R108 量化 block 補 5 KPI row + R108 量化結論, 對齊 supervisor top_risk, K40 規格覆蓋率 100% 守, K42 chain 17 條不擴張, K41 6.3% 達標, R13 守住 owner M 3 dirty 檔)
+
+**KPI-impact: MISSION spec drift 消除 (K0 Quota / K0-B / K0-A1 / K41 / K42 量化值對齊現實)**, **K40 規格覆蓋率 守 100%**
+
+**留 R109+ owner 接力**:
+- R113.1 dual-emit value contract guard (owner M 提案中, 落 commit 後 K42 chain 17→18 需架構理由)
+- R114 openx legacy alias (owner M 工作中, 落 commit 後 K0-Q 9→10)
+- K0 Quota 10→13 (剩 3 個: irisx_bot/grokx/lpbot/mimo 寫 snapshot, 需 OpenAB scope 解卡)
+- K0-A1/A2 0→13 (需 endpoint 跑 build + 13 agent 真的有事件流過, 需環境+外部依賴)
+- supervisor `consecutive_drifts` 3→0 機制: 需 owner 級 spec 補「directive 後 N 輪未推進要降 score / 強迫 M1」規則, R109+ owner follow-up

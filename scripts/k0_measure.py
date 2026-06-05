@@ -124,13 +124,15 @@ def scan_quota_snapshots() -> Dict[str, Dict]:
             out[p] = {"state": "missing", "mtime_age_hours": None,
                       "path": str(local_path)}
 
-    # OpenAB bot 各看 usage-{id}.json (可能含 .stale-YYYYMMDD 後綴)
+    # OpenAB bot 各看 usage-{id}.json (可能含 .stale-YYYYMMDD 後綴)。
+    # 實際檔名格式 (對齊 STALE_MARKER 正則 \.stale-\d{8}$):
+    #   - usage-{bot}.json                  ← fresh (主檔,OpenAB 正常寫入)
+    #   - usage-{bot}.json.stale-YYYYMMDD   ← stale (主檔被 rename 成 .stale-日期 標記過期)
+    # glob 抓所有匹配,再用 STALE_MARKER 分流:符合的進 stale_paths,其餘(嚴格就
+    # 是 usage-{bot}.json) 進 fresh_path。R110 修:移除 R83 殘留的 `candidates`
+    # 死碼(從未被引用,且硬編碼 .stale- 無日期跟 STALE_MARKER 8 位數要求不一致,
+    # 誤導讀者以為 stale 檔無日期)。
     for bot in OPENAB_BOT:
-        candidates = [
-            QUOTA_DIR / f"usage-{bot}.json",
-            QUOTA_DIR / f"usage-{bot}.json.stale-",
-        ]
-        # 直接 glob 找含 bot id 的檔案
         all_files = list(QUOTA_DIR.glob(f"usage-{bot}.json*"))
         fresh_path = None
         stale_paths: List[Path] = []

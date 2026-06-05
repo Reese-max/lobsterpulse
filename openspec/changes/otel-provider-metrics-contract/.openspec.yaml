@@ -1,0 +1,17 @@
+schema: spec-driven
+id: otel-provider-metrics-contract
+created: 2026-06-05
+updated: 2026-06-05
+status: open
+phase: 1/1
+created_by: auto-dev-loop
+owner: auto-dev-loop
+# R102 開工: 對齊 R100 策略顧問 (2026-06-04) 行動 #1 — 把 24 條 lobsterpulse_*
+# metric 收斂到 spec 對照表, 對應 OTel GenAI semconv + Prometheus naming convention。
+# Phase 1: 寫 4 個 spec 檔 + 1 條護欄 test 守住 render_prometheus_body emit
+# 必須 ⊆ LP_METRICS (lib.rs module-level const 收斂 24 條 metric 名稱)。
+# 解 [HARNESS/Spectra] 規格驗證失敗 (新開 spec change 補規格對齊契約缺口)。
+# 1 輪 1 件: 不重命名 6 條 counter 違反 convention 的 metric
+# (改 metric 名稱 = 破既有 Prometheus 抓取 + alert + Grafana dashboard,
+# 1 輪不可承受 scope, 列 R103+ follow-up); 不接 OTel SDK (純 spec 對齊)。
+kpi_alignment: k0_provider_health_metrics_contract

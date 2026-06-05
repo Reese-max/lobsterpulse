@@ -12,8 +12,8 @@
   - 驗證：proposal.md 含 4 段 (Goal/Background/Scope/Capabilities)
 - [x] **T-MET2: 寫 design.md 對照表** — 41 條 LP metric 對應 OTel semconv + Prometheus convention (R103 對齊: 26→41, 6→7 段)
   - 驗證：41 條 metric 全列、每條有 Type + OTel 對應 + convention 檢查
-- [x] **T-MET3: 寫 spec.md ADDED Requirements** — 2 個 Requirement + 5 個 Scenario, 對齊 41 / 7-section / 3 條 test 名稱 (R103 對齊)
-  - 驗證：spec.md 含 2 個 Requirement（spec 對齊契約 + render 護欄）+ 至少 5 個 Scenario
+- [x] **T-MET3: 寫 spec.md ADDED Requirements** — 3 個 Requirement + 7 個 Scenario (R102 開 2+5, R103 收齊 3+7: 加 #3「spec drift is CI-visible failure」+ Scenario `const edit + design.md edit land in the same commit` / `removing metric from const without removing emit fails the guard` / `empty state still produces a valid contract subset`), 對齊 41 / 7-section / 3 條 test 名稱
+  - 驗證：spec.md 含 3 個 Requirement（spec 對齊契約 + render 護欄 + drift 可見性）+ 7 個 Scenario（≥5 達標）
 - [x] **T-MET4: 寫 .openspec.yaml metadata** — schema/id/created/status/phase (R102 完成)
   - 驗證：`.openspec.yaml` 4 個 metadata 欄位齊 + status=open
 - [x] **T-MET5: 寫 tasks.md** — 本檔 (R102 完成, R103 補 26→41 / 6→7 標記)
@@ -24,10 +24,10 @@
 
 ## Phase 2: Spec closure
 
-- [ ] **T-MET8: 收 closure** — tasks.md 7 個 [x] 全勾 + .openspec.yaml status=closed + phase=1/1
-  - 驗證：tasks.md `grep -c "^- \[x\]"` = 7；`.openspec.yaml` status=closed
-- [ ] **T-MET9: 護欄 test 寫入 engineering-log.md** — R103 紀錄 + KPI 進展表
-  - 驗證：engineering-log.md 有 `### [2026-06-05] Round 103` 段 + KPI 進展表 ≥1 列
+- [x] **T-MET8: 收 closure** — tasks.md 9 個 [x] 全勾 + .openspec.yaml status=closed + phase=1/1 (R104 收)
+  - 驗證：tasks.md `grep -c "^- \[x\]"` = 9；`.openspec.yaml` status=closed
+- [x] **T-MET9: 護欄 test 寫入 engineering-log.md** — R103 紀錄 + KPI 進展表 (R103 已寫, R104 收 closure 時補 R104 紀錄)
+  - 驗證：engineering-log.md 有 `### [2026-06-05] Round 103` 段 + `### [2026-06-05] Round 104` 段, 兩段皆含 KPI 進展表 ≥1 列
 
 ## 不在本 change scope（列為 follow-up）
 

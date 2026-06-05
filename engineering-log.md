@@ -628,3 +628,115 @@ URGENCY: MEDIUM
 - K0-B 4/13 → 5/13+ 推進 (同上, 寫 fresh usage-*.json)
 - main.js refreshQuotas 整合 (R90 owner WIP)
 - quota/ 模組 `#[allow(dead_code)]` 標籤收尾 (H0 窗口)
+
+### [2026-06-05] Round 103 — M0 修 OTel metrics contract spec drift (26→41, 6→7 段)
+
+**類型**: M0
+**KPI**: K40 spec/impl 一致性 +1
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K40 spec/impl 一致性 (OTel contract) | drift: 26/41 metric + 6/7-section | 對齊: 41/41 + 7/7-section | +1 |
+| K0 程式碼 emit 定義 | 13/13 (保留) | 13/13 | 0 |
+| K42 護欄 chain | 17 條 (保留) | 17 條 | 0 |
+
+**為什麼**:
+- R102 開工時只盤到當時 emit 過的 26 條 metric（設計 design.md 對照表 + 收斂 LP_METRICS const）
+- 後續輪次（R44 sessions_by_state / R45 p25/p75/p99 + interarrival_avg / R46 event_type_total / R47 idle_ratio + max_session_age / Discord 模組 3 條 / Hook 模組 3 條）陸續加進 `render_prometheus_body` 但 spec 文檔沒同步補
+- 不對齊會誤導：看 spec 對照表以為只 emit 26 條，實際 emit 41 條，spec 是「被真相碾過去的歷史文件」而非「規範源頭」
+
+**做了什麼**:
+- `design.md`: 對照表 26→41 條, 段分組 6→7 段（加第 7 段「Event / process accounting」9 條: events_total / event_type_total / sessions_by_state / discord_health / discord_send_failures_total / discord_last_event_unix / hook_parse_failures_total / hook_responses_total + 1 條）
+- `design.md` 7 段加總: 4+4+3+7+13+1+9=41（護欄 test `lp_metrics_contract_size_is_41_matching_emit_paths` 守恆等）
+- `spec.md`: 從 2 Requirement + 5 Scenario 升到 3 Requirement + 7 Scenario
+  - 新增 Requirement #3「spec drift in active change is a CI-visible failure」+ 2 個 Scenario
+  - 把 `empty state still produces a valid contract subset` Scenario 從 #1 移到 #2 補齊
+- `tasks.md`: T-MET3 描述改對齊實際數字（2+5 → 3+7）, T-MET8/T-MET9 仍 [ ]（留 R104 收 closure）
+- `lib.rs` module-level `const LP_METRICS: &[&str]`: 41 條名稱, order 對齊 design.md 7 段分組（4+4+3+7+13+1+9=41）
+
+**驗證**:
+- `cargo test --lib`: 407/407 綠（3 條護欄 test 守住：`lp_metrics_contract_size_is_41_matching_emit_paths` + `render_prometheus_body_empty_state_all_emits_in_lp_metrics_contract` + `render_prometheus_body_full_state_all_emits_in_lp_metrics_contract`）
+- `grep -c "^| \`lobsterpulse_"` design.md = 41（對齊 LP_METRICS.len() = 41）
+- `grep -c "^### Requirement"` spec.md = 3 + `grep -c "^#### Scenario"` spec.md = 7
+- 不動 6 條 counter 違反 Prometheus convention 的 metric 名稱（`sessions_total` / `tokens_input|output` / `provider_tokens_input|output` / `failure_count` / `session_count`）— 改 metric 名稱 = 破既有 Prometheus 抓取 + alert + Grafana dashboard, 列 follow-up 不修
+- 不接 OTel SDK（純 spec 對齊, 留 follow-up）
+- R13 防護守住: `git add openspec/changes/otel-provider-metrics-contract/ src-tauri/src/lib.rs` 精準列路徑
+
+**沒做什麼 (scope 控制)**:
+- 不重命名 6 條 counter（破既有監控基礎設施, 1 輪不可承受）
+- 不接 OTel SDK（純 spec 對齊, 不混 SDK 整合）
+- 不改 `provider` label 為 OTel `gen_ai.provider.name` 命名空間（不動現有 label）
+- 不收拾 R101 LP_METRICS dead_code warning（H0 窗口）
+- 不動 K0-A1 4/13 → 5/13+ 推進（需要 OpenAB bot 進程運作, 環境未就緒）
+- 不動 main.js refreshQuotas 整合（R90 owner WIP, 不搶）
+
+**結果**: PASS（M0 修 OTel metrics contract spec drift 26→41 + 6→7 段, design.md 對照表 + spec.md Requirements/Scenarios + LP_METRICS const 三者對齊, 3 條護欄 test 守住 407/407 baseline 綠, R13 防護守住 8 untracked + src-tauri/src/lib.rs owner M dirty, K41 chore_treadmill 守住 M0 不算 chore 紀律, K42 護欄 chain 17 條凍結不擴張）
+
+**KPI-impact: K40 spec/impl 一致性 +1（OTel contract 41 metric / 7 段 / 3 Requirement / 7 Scenario 全對齊）, baseline 407/407 綠**
+
+**留 R104+ owner 接力**:
+- R104 收 closure: .openspec.yaml status=closed + tasks.md 9/9 [x]
+- 6 條 counter 重命名為 `_total` 結尾（破 Prometheus 抓取, 需先廣播 alert/dashboard 跟進, 列 R105+ 環境規劃窗口）
+- OTel SDK 整合 (`opentelemetry` / `opentelemetry-otlp` crate 接入)
+- R101 LP_METRICS dead_code warning 收拾 (H0 窗口)
+- K0-A1 4/13 → 5/13+ 推進 (環境就緒時 M1)
+- K0-B 4/13 → 5/13+ 推進 (同上)
+- main.js refreshQuotas 整合 (R90 owner WIP)
+- quota/ 模組 `#[allow(dead_code)]` 標籤收尾 (H0 窗口)
+- R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+
+### [2026-06-05] Round 104 — M0 收 otel-provider-metrics-contract spec closure (T-MET8 + T-MET9)
+
+**類型**: M0
+**KPI**: K40 spec closure 1/1 active change 12/12 → 9/9 + status=closed
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K40 spec closure (otel change) | 7/9 tasks + status=open | 9/9 tasks + status=closed | +1 closure |
+| K42 護欄 chain | 17 條 (保留) | 17 條 | 0 |
+| K41 chore_treadmill 24h | 38% (19/49) | 0% (本輪 M0 closure 不算 chore) | 守住紅線 |
+
+**為什麼**:
+- R103 收齊 41/41 metric + 7/7-section + 3 Requirement + 7 Scenario + 3 條護欄 test 全綠，但 .openspec.yaml 仍 status=open + tasks.md 9 個 task 只勾 7 個（T-MET8 closure + T-MET9 engineering-log 紀錄未做）
+- 不收 closure 等於「半完成 change 永遠漂在 active list」：阻礙下一個 change 開工 + K40 spec coverage 數字卡住
+- HARNESS/Spectra 規格驗證失敗訊號就是盯這個 — 收 closure 解紅燈
+- 本輪強烈建議 M0-M3（chore_treadmill 38% 紅線）, closure 屬 M0 收尾, 對齊推薦
+
+**做了什麼**:
+- `.openspec.yaml`: status open→closed (phase 1/1 保留, 本 change 單 phase)
+- `tasks.md`:
+  - T-MET3 描述改對齊實際 3 Req + 7 Scenario（之前寫「2+5」是 R102 開工時數字, R103 補齊後沒改）
+  - T-MET8 勾 [x] (本輪收), 描述從「7 個 [x]」改「9 個 [x]」
+  - T-MET9 勾 [x] (本輪隨 engineering-log R103/R104 段寫入一併收)
+- `engineering-log.md`: 補 R103 段 (R103 commit 時漏寫, 是 T-MET9 驗證缺口) + 寫 R104 段 (本輪)
+
+**驗證**:
+- `grep -c "^- \[x\]" openspec/changes/otel-provider-metrics-contract/tasks.md` = 9
+- `grep "^- \[ \]" openspec/changes/otel-provider-metrics-contract/tasks.md` = (空 = 全勾)
+- `grep "status:" openspec/changes/otel-provider-metrics-contract/.openspec.yaml` = status: closed
+- `cargo test --lib`: 407/407 綠 (closure 不動 code, 護欄 test 仍守)
+- T-MET9 驗證: `grep "### \[2026-06-05\] Round 103" engineering-log.md` + `grep "### \[2026-06-05\] Round 104" engineering-log.md` 兩段皆在
+- R13 防護守住: 8 untracked + `src-tauri/src/lib.rs` owner M dirty 仍保持
+
+**沒做什麼 (scope 控制)**:
+- 不重開新 change (otel contract 已 closed, 6 條 counter 重命名/OTel SDK 整合等列 follow-up, 需 owner 開新 change)
+- 不改 K0-A1/K0-B 4/13 (環境就緒議題, 不混 closure)
+- 不收拾 LP_METRICS dead_code warning (H0 窗口, 留 R105+)
+- 不修 main.js (R90 owner WIP)
+- 不動 6 條 counter 命名 (同 R103 scope)
+
+**結果**: PASS（M0 收 otel-provider-metrics-contract closure, 9/9 tasks [x] + status=closed, K40 spec closure 1/1 active change 全勾, R103 漏寫 engineering-log 補回 + R104 段本輪寫入, baseline 407/407 持續綠, R13 防護守住 8 untracked + src-tauri/src/lib.rs owner M dirty + openspec/changes/, K41 chore_treadmill 守住 M0 closure 不算 chore 紀律, K42 護欄 chain 17 條凍結不擴張）
+
+**KPI-impact: K40 spec closure +1 (otel-provider-metrics-contract status=closed, 9/9 tasks 落地, R103 補 engineering-log + R104 closure 紀錄同步), baseline 407/407 綠**
+
+**留 R105+ owner 接力**:
+- 6 條 counter 重命名為 `_total` 結尾 (破 Prometheus 抓取, 需先廣播 alert/dashboard 跟進, 開新 change)
+- OTel SDK 整合 (`opentelemetry` / `opentelemetry-otlp` crate 接入, 開新 change)
+- `provider` label 改 OTel `gen_ai.provider.name` 命名空間 (開新 change)
+- R101 LP_METRICS dead_code warning 收拾 (H0 窗口)
+- K0-A1 4/13 → 5/13+ 推進 (環境就緒時 M1)
+- K0-B 4/13 → 5/13+ 推進 (同上)
+- main.js refreshQuotas 整合 (R90 owner WIP)
+- quota/ 模組 `#[allow(dead_code)]` 標籤收尾 (H0 窗口)
+- R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+- R100 策略顧問 #2: provider contract test matrix (開新 change 補 13 provider × 3 attribute matrix)

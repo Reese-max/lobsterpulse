@@ -2,7 +2,7 @@ schema: spec-driven
 id: otel-provider-metrics-contract
 created: 2026-06-05
 updated: 2026-06-05
-status: open
+status: closed
 phase: 1/1
 created_by: auto-dev-loop
 owner: auto-dev-loop

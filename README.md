@@ -59,6 +59,19 @@ CLI 呼叫 `lobster-pulse-hook.exe` sidecar，settings path 為各 CLI 標準位
 
 Source of truth：`src-tauri/src/config.rs::default_providers()`（line 356-449），跨 4 同步點（providers / sounds / waiting_sounds / usage poller）必須對齊；R67 護欄測試守住一致性，跨點新增 provider 會被 CI 1 秒抓。
 
+## Prometheus `/metrics` endpoint
+
+LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
+（預設 `http://127.0.0.1:19380/metrics`）。完整契約見
+[`openspec/changes/otel-provider-metrics-contract/`](openspec/changes/otel-provider-metrics-contract/)
+（41 條 7 段組織 + R102/R103 護衛 chain 守住 set 與 emit 對齊）。
+
+> ⚠️ **DEPRECATION 公告 (2026-06-05)**：6 條 counter-typed metric 將於
+> **2026-07-03** rename 為 `_total` 結尾（對齊 Prometheus naming convention）。
+> 抓取端 / alert / Grafana dashboard 對**現名**的引用將失效。完整對照表見
+> [CHANGELOG.md](CHANGELOG.md) v0.5.5 段，5 週廣播時程見
+> [`openspec/changes/prometheus-counter-convention/design.md`](openspec/changes/prometheus-counter-convention/design.md)。
+
 ## 主要檔案
 
 - [src/index.html](src/index.html)

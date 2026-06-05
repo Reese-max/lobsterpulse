@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.5.5 (unreleased) · 2026-06-05 — Prometheus metric rename prep (T-0 公告)
+
+> 📢 **DEPRECATION 公告（T+4 週切換 / 2026-07-03）**：6 條 counter-typed
+> Prometheus metric 將從現名 rename 為 `_total` 結尾，對齊
+> [Prometheus naming convention](https://prometheus.io/docs/practices/naming/)。
+> 抓取端（scrape / recording / alert rule）、Grafana dashboard、文檔引用
+> 對**現名**的所有表達式將於 T+4 週失效。本段是 5 週廣播時程的 T-0 公告
+> （後續 T-1 dual-emit shim → T-2 廣播 → T-3 監控窗口 → T-4 切換 →
+> T-5 post-mortem 走 R107+ owner）。
+>
+> 對齊 R106 spec [prometheus-counter-convention](openspec/changes/prometheus-counter-convention/)
+> R-3 Requirement（廣播 4 層面 + 5 週時程）+ R106 接力清單首位
+> 「廣播文檔先備齊」前置工作。**T-0 公告本身不動 code**（R106 1 輪 1 件
+> 純 spec → 文檔 prep），實際 rename 留 R107+ owner follow-up。
+>
+> Source of truth 對照表（6 條 TYPE=counter，2026-06-05 盤點 LP_METRICS
+> const + emit site + 35 個 test assertion 三層一致）：
+
+| # | 現名 | 目標 rename 名（`_total` 結尾） | LP_METRICS row |
+|---:|---|---|---:|
+| 1 | `lobsterpulse_tokens_input` | `lobsterpulse_tokens_input_total` | 92 |
+| 2 | `lobsterpulse_tokens_output` | `lobsterpulse_tokens_output_total` | 93 |
+| 3 | `lobsterpulse_provider_tokens_input` | `lobsterpulse_provider_tokens_input_total` | 94 |
+| 4 | `lobsterpulse_provider_tokens_output` | `lobsterpulse_provider_tokens_output_total` | 95 |
+| 5 | `lobsterpulse_provider_failure_count` | `lobsterpulse_provider_failure_count_total` | 97 |
+| 6 | `lobsterpulse_provider_session_count` | `lobsterpulse_provider_session_count_total` | 109 |
+
+抓取端 / alert / Grafana dashboard owner 請於 **T-1 (2026-06-12)**
+dual-emit shim 落地前更新對應表達式，避免 T+4 週切換日 silent break。
+詳見 [`openspec/changes/prometheus-counter-convention/`](openspec/changes/prometheus-counter-convention/)
+（含 design 5 週時程 + spec R-3 廣播 4 層面）。
+
+> ℹ️ 不在本公告 scope：gauge `lobsterpulse_sessions_total` 雖用 `_total`
+> 結尾（反向違規：gauge 不該 `_total`），但跟本公告 6 條 counter 缺 `_total`
+> 是**不同方向**的 spec drift，留 R106+ follow-up 另案處理。
+
 ## v0.5.4 · 2026-04-17 — 完整度補齊
 
 ### 新增

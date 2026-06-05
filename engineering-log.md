@@ -705,3 +705,75 @@ URGENCY: LOW
 - prometheus-counter-rename-2026-q3 (R106 接力清單): 5 週廣播時程 + 實際 rename 6 條 metric, 留 R109+ owner
 - gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
 - R108/R109 雙軌並進守住 K41 (M0 修 spec drift + M1 quota 模組), 避免 chore_treadmill 飆高
+
+### [2026-06-05] Round 106 — M1 T-0 公告備齊 (CHANGELOG + README + CONTRIBUTING 廣播文檔 prep)
+
+**類型**: M1 (文件)
+**KPI**: K0 Prometheus naming convention 從 spec 契約封版 → T-0 公告備齊啟動 (5 週廣播時程第 0 步, R106 接力清單首位解卡)
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---|
+| **K0 Prometheus naming convention** 推進軸 | spec 契約封版 (R106 closure) | spec 契約 + T-0 公告備齊 | 結構性 +1 (spec→文檔, 5 週時程 T-0 啟動) |
+| K0 Quota 即時性 | 10/13 (R109) | 10/13 | 0 (本輪 M1 文檔 prep, 不動 quota 模組) |
+| K0-A1 emit coverage | 4/13 (30.8%) | 4/13 | 0 (本輪不推進) |
+| K0-A2 sample coverage | 1/13 (7.7%) | 1/13 | 0 (同上) |
+| K0-B quota freshness | 4/13 (30.8%) | 4/13 | 0 (同上) |
+| K40 spec coverage closed | 4/4 (R106 closure) | 4/4 | 持平 (本輪 M1 文檔, 不屬 K40 spec closure) |
+| K42 護欄 chain 飽和 | 17 條 | 17 條 | 0 (M1 文檔 prep, 不擴護衛 chain — 文檔不屬 Rust chain 範圍) |
+| K41 chore_treadmill 24h | 0% (R110) | 0% | 持平 (本輪 1 docs M1, 不算 chore) |
+| baseline lib tests | 431/431 (R110) | 431/431 | 0 (純 docs, Rust code 不動) |
+| R13 untracked 守住 | 6 個 | 6 個 | 持平 (3 檔 docs M, 6 noise 不污染) |
+
+**為什麼**:
+- R106 接力清單首位明列「廣播文檔先備齊: CHANGELOG.md / README.md / CONTRIBUTING.md 加 Prometheus metric rename notice (本 change 廣播段已寫完, R107+ 真正 rename 當下直接 copy-paste)」, R106 接力首位解卡
+- 環境約束: K0 Quota 10/13 受 OpenAB 進程約束 (snapshot 4 個 stale-20260417 沒新寫入), K0-A1/A2 4/13、1/13 受事件流約束, K40 4/4 達頂, K42 chain 17 飽和, 唯一可推進 KPI = K0 Prometheus naming convention 文檔 prep 軸
+- 1 輪 1 件 + /pua bug-first: 文檔 M1 是 0 代碼風險、0 chain 擴張、0 KPI 數字倒退的中間路徑, 對齊 R106 spec R-3 廣播 4 層面「文檔 / 公告」段 + design 廣播時程 T-0
+- 不寫護衛 test (文檔 M1, 護衛 chain 17 飽和不擴, 對齊 R100 策略顧問 #2 chain 飽和守則)
+- 不實際 rename 6 條 metric (R106 spec 「不在本 change scope」明列 follow-up, R107+ owner 才動)
+- 不動 `lobsterpulse_sessions_total` gauge 反向違規 (R106 spec R-4 明列「不改」, 留 R106+ follow-up)
+- 對齊 R108 雙段 pattern (R108 同時 M0 修 spec drift + 補 engineering-log), R106 同時 M1 文檔 prep + engineering-log 紀錄
+
+**搜尋**:
+- 不需搜尋, R106 接力清單首位已備齊 (proposal 廣播段 + design 5 週時程 + spec R-3 廣播 4 層面)
+- 對齊 R106 spec R-3「T-0 公告備齊: CHANGELOG.md 加 Prometheus metric rename notice / README.md / CONTRIBUTING.md 標 6 條舊名 → 新名對照」
+
+**做了什麼**:
+- `CHANGELOG.md` 新增 `## v0.5.5 (unreleased) · 2026-06-05 — Prometheus metric rename prep (T-0 公告)` 段 (30 行):
+  - 📢 DEPRECATION 公告 headline + 5 週廣播時程 T-0 定位
+  - 6 條對照表 (現名 → 目標名 + LP_METRICS row 9 列) 跟 design.md「Counter rename 對照表」6 row 一致
+  - T-1 (2026-06-12) dual-emit shim 落地 deadline 提示, 抓取端/alert/Grafana dashboard owner
+  - 註解 `lobsterpulse_sessions_total` gauge 反向違規不屬本公告 scope
+- `README.md` 新增 `## Prometheus /metrics endpoint` 段 (10 行):
+  - 41 條 metric 透過 port+100 exporter emit (對齊 otel-provider-metrics-contract spec)
+  - ⚠️ DEPRECATION 公告 (2026-06-05) 指向 CHANGELOG.md v0.5.5 段 + design.md 5 週時程
+- `CONTRIBUTING.md` 新增 `## Prometheus metric 命名` 段 (16 行):
+  - 3 行 convention 規則 (✅ counter `_total` / ❌ counter 缺 `_total` / ❌ gauge `_total`)
+  - 📢 DEPRECATION 公告指向 spec + CHANGELOG, 提 R107+ owner 真正 rename 當下同 commit 寫 1 條護衛 test `counter_metrics_must_have_total_suffix` 對齊 spec R-2
+- `git add` 精準列 3 檔 docs 路徑 (不用 `-A`), R13 守住 6 untracked
+- 不動 lib.rs / LP_METRICS const / render_prometheus_body / test assertion
+- 不擴 K42 chain 17 條 (文檔 M1, 不屬 Rust chain 範圍)
+- 不動 K40 spec closure 4/4 (M1 文檔, 不屬 K40 scope)
+- 不動 K0 Quota 10/13 (環境約束, OpenAB 進程需在運作)
+
+**驗證**:
+- `git status --short`: 3 檔 M (CHANGELOG.md / README.md / CONTRIBUTING.md), 6 untracked 守住 (R13)
+- `git diff --stat`: 3 檔 / 66 insertions
+- `cargo test --lib`: **431 passed; 0 failed** (純 docs, Rust code 不動 → baseline 持平)
+- K42 chain 17 條不擴張 (M1 文檔 prep, 護衛 chain 沒動)
+- K41 chore_treadmill 24h: 0% 守住 (本輪 1 docs M1, 不算 chore)
+- K0 Quota / K0-A1 / K0-A2 / K0-B 4 項 K0 子軸: 0 變動 (本輪文檔 prep, 不動 K0 量化窗口)
+
+**結果**: PASS (M1 T-0 公告備齊, CHANGELOG.md 加 DEPRECATION 公告 + 6 條對照表 / README.md 加 Prometheus /metrics endpoint 段 / CONTRIBUTING.md 加 Prometheus metric 命名段, 對齊 R106 spec R-3 廣播 4 層面 + design 5 週時程 T-0 + R106 接力清單首位解卡, baseline 431/431 持續綠, R13 守住 6 untracked, K42 chain 17 條不擴張, K41 chore_treadmill 24h 0%)
+
+**KPI-impact: K0 Prometheus naming convention 結構性 +1 (spec 契約封版 → T-0 公告備齊啟動, 5 週廣播時程第 0 步就位), 0 KPI 數字變動, 0 chain 擴張, 0 代碼風險**
+
+**留 R107+ owner 接力**:
+- prometheus-counter-rename-2026-q3: 開新 change 走實際 rename 6 條 metric (LP_METRICS const 6 row + emit site 6 處 + 35 test assertion) + 1 條護衛 test `counter_metrics_must_have_total_suffix` in lib.rs (本 R106 文檔 prep 已把 T-0 公告備齊, R107+ 開新 change 對齊契約 + rename 同步 commit)
+- 5 週時程: T-0 公告備齊 (R106 本輪) → T-1 dual-emit shim (R107+) → T-2 廣播 → T-3 監控窗口 → T-4 切換 (2026-07-03) → T-5 post-mortem
+- T-1 dual-emit shim 設計: render_prometheus_body 同時 emit 舊名 + 新名, 1 條新護衛 test `dual_emit_includes_both_legacy_and_total_names` 守
+- 抓取端 / alert rule / Grafana dashboard rename 廣播公告: R107+ owner follow-up, 由 alert / dashboard owner 跟進 (T-2 2026-06-19)
+- gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
+- OpenAB snapshot staleness 真正推進 (K0 Quota 10→11/12/13): irisx_bot / grokx / lpbot 三個 bot live quota 模組, 需 OpenAB 端 snapshot 寫入鏈路
+- K0-A1/K0-A2 「被動 → 主動」synthetic test event: chain 17 飽和不擴, 留 R109+ H0 窗口
+- R106 (本輪) M1 文檔 prep + R108 M0 修 k0 spec drift + R109 M1 Copilot quota + R110 M0 清理 k0 candidates 死碼, 4 輪雙軌並進守 K41 chore_treadmill

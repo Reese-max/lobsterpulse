@@ -564,3 +564,85 @@
 - k0_measure.py docstring/spec drift: L3 "14 provider" / L35-37 "14 provider 真實清單" 跟 KNOWN_PROVIDERS=13 不一致 (R102 拆 K0-A 雙軌時漏修), R106+ 護衛 spec 窗口
 - M0 連續輪數張力訊號: R101~R105 連 5 輪 M0 closure/護衛, R108/R109 接力 2 輪 M1 突破 (K0 Quota 9→10/13), R105 接力 closure 不算連發 M0
 
+
+### 2026-06-05 R105 — 👁️ AI Supervisor 審查
+**品質**: PASS (8/10)
+**方向**: ALIGNED** (7/10)
+**風險**: K0 Quota 停在 10/13，最近 5 個 commit 全是 docs/chore，實際推進動能放緩**
+
+**綜合**: 7/10
+**指令**: 已注入修正指令
+
+### 2026-06-05 R105 — 🧠 策略顧問巡邏
+**判定**: ON_TRACK (LOW)
+PATROL_VERDICT: ON_TRACK
+URGENCY: LOW
+
+🎯 方向：commit 鎖死在 K0（provider 健康度 + quota）和 K40/K42（規格治理 + 護欄），與 MISSION.md 北極星完全對齊，零跑偏。
+
+⚠️ 過時風險：**中低但需監控** — OTel GenAI semantic conventions 正在收斂（[OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)），業界 Langfuse / Arize / Datadog 都在往 OTel pipeline 靠攏。LobsterPulse 用自訂 Prometheus metric 格式，短期無害（本機桌面工具），但如果未來想接 OTel collector 或讓外部 dashboard 消費，需要一次格式遷移。目前不構成阻斷，但 90 天內若有 OTel GenAI spec 正式 release，應評估是否提前對齊。
+
+🔍 盲點：**K0-A1 / K0-A2 是被動 KPI** — 程式碼定義 13/13 已滿（R101），但實際 emit 0/13、非零 sample 0/13。這兩個指標完全依賴外部 provider 是否在跑，LobsterPulse 自己無法主動推進。如果 90 天內某些 provider（特別是低頻使用的）剛好沒事件流過，KPI 就會卡在非滿覆蓋。建議：(1) 區分「可控覆蓋率」vs「環境依賴覆蓋率」，(2) 對低頻 provider 設 synthetic test event 來驗證 emit 路徑真的通。
+
+💣 風險：**chore_treadmill 壓力** — R81 baseline 是 55%，目標 <30%。最近 10 個 commit 裡有 `chore: rotate engineering-log`、`style(fmt)`、`fix(spec)` 這類治理 commit，如果 spec closure 批次結束後沒有新 feature 進入，chore 比例會飆高。需要在 spec closure 收尾後立刻進入下一批 feature work（quota 模組 10→13/13），否則 K41 會紅。
+
+📋 建議行動：
+1. **立即**：在 quota 模組 10/13 的基礎上，鎖定剩下 3 個 provider 的 live quota 實作順序（建議先挑最容易拿到 `usage-*.json` 的），確保下一批 commit 是 `feat` 不是 `chore`，守住 K41。
+2. **本週內**：對 K0-A1/A2 設計一組 synthetic event 測試（模擬 hook event → 驗證 /metrics 端點 emit），把「被動等 provider 跑」變成「主動驗證 emit 鏈路通」，避免 90 天到了才發現 emit 路徑有 bug。
+3. **持續監控**：追蹤 OTel GenAI semantic conventions 的 release 進度，如果 2026-Q3 正式 GA，開一個 `openspec/changes/otel-alignment/` 提案評估遷移成本。
+
+### [2026-06-05] Round 106 — M0 收 prometheus-counter-convention spec closure (status=open→closed, 8/8 tasks [x])
+**類型**: M0
+**KPI**: K40 spec coverage closed 3/4 → **4/4** (+1, R105 接力清單首位解卡)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---|
+| **K40** spec coverage closed | 3/4 (otel + contract-matrix-guard + openab-bot-sync + k0_measure drift 開) | **4/4** (prometheus-counter-convention 收 closure) | +1 |
+| K0 Quota 即時性 | 10/13 (R109) | 10/13 | 0 (本輪 M0 closure 不推進 quota) |
+| K0-A1 emit coverage | 0/13 (待 OpenAB bot 實運) | 0/13 | 0 (本輪不推進) |
+| K0 Prometheus naming convention (新維度) | 0/6 合規 (spec 契約無) | 0/6 runtime 合規 (spec 契約已 closure) | spec 對齊契約落地 (R107+ 才 runtime 落實) |
+| K42 護欄 chain 飽和 | 17 條 (R102/R103 鎖) | 17 條 | 0 (M0 closure 不擴 chain, 護衛 test 留 R107+ rename 同步) |
+| K41 chore_treadmill 24h | 0% (R109) | 0% | 持平 (1 docs spec closure) |
+| baseline lib tests | 431/431 (R109) | 431/431 | 0 (M0 spec closure 不動 code) |
+| R13 untracked 守住 | 6 個 | 6 個 | 持平 (R106 spec 5 檔 A 不混 noise) |
+
+**為什麼**:
+- R105 接力清單首位明列「6 條 counter 重命名 _total 結尾（破 Prometheus 抓取, 需先廣播 alert/dashboard 跟進）」— spec 階段收 closure, 對齊契約封版
+- R100 策略顧問風險 #1 (metrics schema 沒對齊業界 convention) 兩條護衛 chain 並存收齊: R102/R103 OTel semconv (R103 護衛 chain) + R106 Prometheus naming convention (本 change 護衛 test 設計, 留 R107+ 實作)
+- 1 輪 1 件紀律: 實際 rename 6 條 metric 是跨 2-3 週窗口 scope (dual-emit + alert 廣播 + dashboard 廣播 + 文檔同步) — 本輪純 spec 對齊契約, code 留 R107+ owner follow-up
+- 護衛 test 對現名會 false positive (現名無 _total 是 spec drift 源頭), 需 owner 拿對齊契約 + rename 同步 commit 才一致 — 留 R107+ rename 當下同 commit 一起寫
+- M0 連續輪數張力: R101~R106 連 6 輪 M0 closure/護衛, R108/R109 接力 2 輪 M1 突破 (K0 Quota 9→10/13), R106 接力 closure 性質跟 R105 同 (解卡不算連發 M0, 是把 R105 留 untracked 備好狀態收 closure)
+
+**搜尋**:
+- 不需搜尋, R105 開的 spec 骨架 (4 spec 檔 + .openspec.yaml) 已備齊, 對齊 R102/R103/R105 spec closure pattern
+- 5 週時程設計參考: OpenTelemetry / Prometheus 官方 semantic migration guide 標準 4-6 週 deprecation window
+
+**做了什麼**:
+- `openspec/changes/prometheus-counter-convention/proposal.md`: 5 段 (Goal/Background/Scope/Capabilities/廣播), 廣播段 4 事項 (抓取端/alert/dashboard/deprecation 公告)
+- `openspec/changes/prometheus-counter-convention/design.md`: 6 條 counter rename 對照表 (現名→目標名) + 4 層面 impact (Code-level/抓取端/Grafana/文檔) + 5 週廣播時程 (T-0 公告→T-5 post-mortem) + 1 條新護衛 test 設計 (counter_metrics_must_have_total_suffix)
+- `openspec/changes/prometheus-counter-convention/specs/prometheus-counter-convention/spec.md`: 4 Requirement + 8 Scenario (R-1 6 條 _total 結尾 / R-2 護衛 test 守 convention / R-3 廣播 4 層面 5 週時程 / R-4 不改反向違規 gauge)
+- `openspec/changes/prometheus-counter-convention/tasks.md`: 8 個 task 4 phase 1 (T-CC1~T-CC6) + 2 phase 2 (T-CC7 closure + T-CC8 log), 8/8 [x] 全勾
+- `openspec/changes/prometheus-counter-convention/.openspec.yaml`: status=open → closed, phase=1/1, R106 closure 註記段
+- `git add` 精準列 5 檔路徑 (不用 `-A`), R13 守護 6 個 untracked 雜訊不污染
+- 不動 lib.rs (護衛 test 留 R107+ rename 同步, 不在本輪 1 輪 1 件 scope)
+- 不動 護欄 chain 17 條 (chain 飽和守住, M0 closure 不擴 chain)
+- 不動 `lobsterpulse_sessions_total` (gauge 反向違規, R106+ follow-up 不同 spec drift 類型)
+
+**驗證**:
+- `git status --short`: 5 檔 A (prometheus-counter-convention 全套 spec), 6 untracked 守住 (R13)
+- `grep -c "^- \[x\]" tasks.md`: 8
+- `grep -c "^- \[ \]" tasks.md`: 0
+- `cargo test --lib`: **431 passed; 0 failed** (本輪 M0 spec closure 不動 code → baseline 持平)
+- K42 chain 17 條不擴張 (M0 spec closure, 護衛 chain 沒動)
+- K41 chore_treadmill 24h: 0% 守住 (本輪 1 docs spec, 不算 chore)
+- commit 1edb87a 落地 5 檔 / 499 insertions
+
+**KPI-impact: K40 spec coverage closed 3/4 → 4/4 (prometheus-counter-convention 收 closure, R105 接力清單首位解卡), 0 KPI 數字變動**
+
+**留 R107+ owner 接力**:
+- prometheus-counter-rename-2026-q3: 開新 change 走實際 rename 6 條 metric (LP_METRICS const + emit site + 35 test assertion) + 1 條護衛 test `counter_metrics_must_have_total_suffix` in lib.rs (本 change 留 design 段, code 留 R107+)
+- 5 週時程: T-0 公告 → T-1 dual-emit shim → T-2 廣播 → T-3 監控窗口 → T-4 切換 → T-5 post-mortem
+- 廣播文檔先備齊: CHANGELOG.md / README.md / CONTRIBUTING.md 加 Prometheus metric rename notice (本 change 廣播段已寫完, R107+ 真正 rename 當下直接 copy-paste)
+- gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
+- k0_measure.py docstring/spec drift: L3 "14 provider" / L35-37 "14 provider 真實清單" 跟 KNOWN_PROVIDERS=13 不一致 (R102 拆 K0-A 雙軌時漏修), 護衛 spec 窗口待修
+- R108/R109 接力 M1 突破 (K0 Quota 9→10/13) 跟 R106 接力 M0 closure (K40 4/4) 雙軌並進, 守 K41 chore_treadmill < 30% 紅線

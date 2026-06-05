@@ -1,0 +1,20 @@
+schema: spec-driven
+id: contract-matrix-guard
+created: 2026-06-05
+updated: 2026-06-05
+status: open
+phase: 1/1
+created_by: auto-dev-loop
+owner: auto-dev-loop
+# R106 開工: 對齊 R100 策略顧問 (2026-06-04) 行動 #2 follow-up — 把既有 R67 護欄
+# chain 16 (provider_registration_guard_tests, config.rs:909) 的「3 同步點 set 對稱」
+# 泛化成「13 row × 3 attribute value-equal」矩陣式 contract test。
+#
+# 解: (1) R67 護欄只驗 keys 對稱 (e.g. sounds keys ⊆ providers keys), 不驗 value 對齊
+# (e.g. cicx 預期 sound "cicx.mp3" 但 code 寫成 "cicx.MP3" 或 "cicx-bot.mp3" 都不抓);
+# (2) 加新 provider 時 4 同步點 (default_providers / default_provider_sounds /
+# default_provider_waiting_sounds / lib.rs:39 OPENAB_BOT_IDS) 缺一不可,
+# 但目前 4 同步點散落, 沒有 single source of truth 強制對齊。
+#
+# 1 輪 1 件: 不動 6 條 counter 命名 / 不接 OTel SDK / 不改 parse_provider。
+kpi_alignment: k42_provider_registration_guard_chain

@@ -999,6 +999,150 @@ mod provider_registration_guard_tests {
 }
 
 #[cfg(test)]
+mod provider_contract_matrix_tests {
+    //! R106 護欄：13 provider × 3 attribute 矩陣式 contract test。
+    //!
+    //! 對齊 R100 策略顧問 #2 follow-up:「provider contract test matrix (開新 change
+    //! 補 13 provider × 3 attribute matrix)」。把既有 R67 護欄 (line 909) 的
+    //! 「3 同步點 set 對稱」泛化成「13 row × 3 attribute value-equal」：每個
+    //! provider 必須通過 name prefix / enabled_default / sound mapping 三檢查。
+    //!
+    //! 跟 R67 護欄差異:
+    //! - R67: (sounds keys ⊆ providers keys) + (sounds ≡ waiting_sounds set)
+    //!   + (enabled 🤖 ≥ 5) + (name prefix) + (後端關鍵字兩兩不同) — 純結構性 set 收斂
+    //! - R106: 每 row 強制 attribute value 對齊 (e.g. cicx 必須 enabled=true +
+    //!   name 含 "🤖" + sound "cicx.mp3" + waiting "cicx-waiting.mp3")
+    //!
+    //! 3 attribute 設計理由:
+    //! 1. **name prefix + emoji**: 對齊 CLAUDE.md naming convention (🤖 OpenAB / 💻 本機 CLI)
+    //! 2. **enabled_default**: 對齊 K0 即時性 — enabled 才能進 K0 量化; 9 OpenAB bot
+    //!    預設 enabled (mimo 例外 disabled — R78 T-BOT5 決策), 4 本機 CLI 預設 disabled
+    //! 3. **sound file**: 對齊 R67 護欄 (a)(c) 但細到 filename, 防「key 對 value 錯」
+    //!
+    //! 跨 4 同步點對齊 (跟 R67 同): default_providers (line 370) / default_provider_sounds
+    //! (line 329) / default_provider_waiting_sounds (line 351) / OPENAB_BOT_IDS (lib.rs:39)
+    //! — 4 同步點其中任一漂移, 矩陣會立刻點出哪 row 哪 attribute 壞掉。
+    //!
+    //! 不算 K42 chain 18 擴張 (R50 freeze 持續): 本 test 屬 chain 16 「provider 對稱」
+    //! 對稱面延伸 (R67 護欄細化), 用同一條 guard 概念, 不算新 chain。
+    use super::*;
+    use crate::OPENAB_BOT_IDS;
+
+    /// 13 provider × 3 attribute 期望值 single source of truth.
+    ///
+    /// (id, name_emoji_prefix, enabled_default, sound_file, waiting_sound_file)
+    /// - `sound_file == ""` 表示本機 CLI 預期無 default sound entry (claude / copilot / gemini)
+    /// - 加 provider 必須同步加這條 row, test 自動 fail if 漏
+    /// - 改 attribute 也要同步改這條 row, 強迫 owner 思考「為什麼改」而非默默改
+    const CONTRACT: &[(&str, &str, bool, &str, &str)] = &[
+        // 9 OpenAB bots (🤖 前綴, 預設 enabled — mimo 例外 disabled 由 R78 T-BOT5 決策)
+        ("cicx", "🤖", true, "cicx.mp3", "cicx-waiting.mp3"),
+        ("gitx", "🤖", true, "gitx.mp3", "gitx-waiting.mp3"),
+        ("giminix", "🤖", true, "giminix.mp3", "giminix-waiting.mp3"),
+        ("codex_bot", "🤖", true, "codex.mp3", "codex-waiting.mp3"),
+        ("openx", "🤖", true, "openx.mp3", "openx-waiting.mp3"),
+        ("irisx_bot", "🤖", true, "irisx_bot.mp3", "irisx_bot-waiting.mp3"),
+        ("grokx", "🤖", true, "grokx.mp3", "grokx-waiting.mp3"),
+        ("lpbot", "🤖", true, "lpbot.mp3", "lpbot-waiting.mp3"),
+        ("mimo", "🤖", false, "mimo.mp3", "mimo-waiting.mp3"),
+        // 4 本機 CLI (💻 前綴, 預設 disabled — user 手動從 tray 開)
+        // codex 例外: 跟 codex_bot 共用 codex.mp3 / codex-waiting.mp3 (R70 spec 決策)
+        // claude / copilot / gemini: 預期無 default sound entry (留 user 自訂)
+        ("claude", "💻", false, "", ""),
+        ("codex", "💻", false, "codex.mp3", "codex-waiting.mp3"),
+        ("copilot", "💻", false, "", ""),
+        ("gemini", "💻", false, "", ""),
+    ];
+
+    #[test]
+    fn r106_provider_contract_13_by_3_matrix() {
+        let providers = default_providers();
+        let sounds = default_provider_sounds();
+        let waiting_sounds = default_provider_waiting_sounds();
+        let openab_set: std::collections::HashSet<&str> =
+            OPENAB_BOT_IDS.iter().copied().collect();
+
+        // 矩陣完整性: CONTRACT 必須 13 row, 對齊 R78 spec 13 provider (4 本機 + 9 OpenAB)
+        assert_eq!(
+            CONTRACT.len(),
+            13,
+            "R106 護欄破 [matrix size]: CONTRACT 應有 13 row (4 本機 + 9 OpenAB), \
+             觀察 = {}",
+            CONTRACT.len()
+        );
+
+        for &(id, prefix, enabled, sound_file, waiting_sound_file) in CONTRACT {
+            let p = providers.get(id).unwrap_or_else(|| {
+                panic!(
+                    "R106 護欄破 [provider missing]: {id:?} 不在 default_providers() 內, \
+                     觀察 keys = {:?}",
+                    providers.keys().collect::<Vec<_>>()
+                )
+            });
+
+            // Attribute 1: name prefix (🤖 OpenAB / 💻 本機 CLI)
+            let prefix_with_space = format!("{prefix} ");
+            assert!(
+                p.name.starts_with(&prefix_with_space),
+                "R106 護欄破 [name prefix]: {id:?} name {:?} 缺 {prefix_with_space:?} 前綴",
+                p.name
+            );
+
+            // Attribute 2: enabled default
+            assert_eq!(
+                p.enabled, enabled,
+                "R106 護欄破 [enabled_default]: {id:?} 預期 enabled={enabled}, 觀察={}",
+                p.enabled
+            );
+
+            // Attribute 3a: sound file mapping
+            if sound_file.is_empty() {
+                assert!(
+                    !sounds.contains_key(id),
+                    "R106 護欄破 [sound absent]: {id:?} 本機 CLI 不該有 default sound entry, \
+                     觀察 sounds[{id:?}] = {:?}, 若要補需同步更新 CONTRACT",
+                    sounds.get(id)
+                );
+            } else {
+                assert_eq!(
+                    sounds.get(id).map(|s| s.as_str()),
+                    Some(sound_file),
+                    "R106 護欄破 [sound file]: {id:?} 預期 sound {sound_file:?}, 觀察 {:?}",
+                    sounds.get(id)
+                );
+            }
+
+            // Attribute 3b: waiting sound file mapping
+            if waiting_sound_file.is_empty() {
+                assert!(
+                    !waiting_sounds.contains_key(id),
+                    "R106 護欄破 [waiting absent]: {id:?} 本機 CLI 不該有 default \
+                     waiting_sound entry"
+                );
+            } else {
+                assert_eq!(
+                    waiting_sounds.get(id).map(|s| s.as_str()),
+                    Some(waiting_sound_file),
+                    "R106 護欄破 [waiting sound file]: {id:?} 預期 {waiting_sound_file:?}, \
+                     觀察 {:?}",
+                    waiting_sounds.get(id)
+                );
+            }
+
+            // Cross-attribute: OpenAB bot 必須在 OPENAB_BOT_IDS, 本機 CLI 反之
+            // (lib.rs:39 const, 跟 R100 護欄 chain 16 (line 909) 對齊)
+            let expect_in_openab = prefix == "🤖";
+            let actual_in_openab = openab_set.contains(id);
+            assert_eq!(
+                actual_in_openab, expect_in_openab,
+                "R106 護欄破 [OPENAB_BOT_IDS membership]: {id:?} prefix={prefix:?} \
+                 預期 in_openab={expect_in_openab}, 觀察 OPENAB_BOT_IDS = {openab_set:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod r75_giminix_backend_label_tests {
     //! R75 T-BOT9 fallback 守護測試 — GIMINIX label gemini → Antigravity。
     //!

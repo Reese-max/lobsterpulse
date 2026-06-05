@@ -2572,6 +2572,44 @@ fn render_prometheus_body(
             "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds{{provider=\"{p}\"}} {secs}\n"
         ));
     }
+    // R101 落地：per-provider success rate gauge (MISSION K0 「Provider 健康度
+    // 覆蓋率」第一支：成功率維度)。補 K29 failure_to_completion_ratio 跟
+    // K30 P95 之外的「整體事件成功率」維度 —— 對齊 MISSION.md K0 定義
+    // 「13/13 provider 有 P95 延遲 + 成功率指標」(K30 P95 session duration
+    // 已實作 = P95 維度達成; R101 = 成功率維度達成 → K0 health 0/13 → 13/13
+    // metric 覆蓋)。語意差異化(不跟 K29 合併):K29 派生自
+    // `failure_count / completed_sessions_count` (= 「每次完成平均 retry
+    // 幾次」= retry 視角,補 session duration 分布之外的失敗比);R101 派生自
+    // `1.0 - failure_count / events_total` (= 「全部事件中非失敗佔比」=
+    // 健康度視角,補 P95 之外的整體事件成功率)。K29 = 1.0 表示「每次完成
+    // retry 1 次」= 訊號;R101 = 1.0 表示「零失敗」= 健康。兩個 ratio 數學
+    // 不等價(K29 分母 = 完成次數,R101 分母 = 全部事件),各 emit 各值。
+    //
+    // 資料源:ProviderTotals.failure_count(K10 PostToolUseFailure 累計) /
+    // ProviderTotals.events_total(K7 任何 event 累計) —— 純 derived,無新
+    // 觸發點 / 新欄位,完全沿用 K7 / K9 / K10 既有 lifetime counter。f64
+    // gauge 4 位小數跟 K25 avg / K28 stddev / K29 failure_ratio 對齊。過濾
+    // 策略跟 K25 / K29 同款「0/0 不 emit」防線:`events_total == 0` 跳過
+    // 不 emit (0/0 數學未定義,emit 0.0 假冒「成功率 0%」= 假健康信號)。
+    // 數值範圍 clamp 到 [0.0, 1.0](理論 `failure_count <= events_total`
+    // 由 bump_provider_totals 單調遞增保證,clamp 是防禦性)。sort + format
+    // 跟 K6-K35 既契約一致;空 map → 沒 sample line(HELP/TYPE 標頭仍輸出,
+    // 對齊 K11「header only」契約)。
+    //
+    // Operator 用途:R101 = 1.0 表示該 provider 0 失敗 = 完美健康;R101 < 0.5
+    // 表示過半事件失敗 = 嚴重健康問題,alert rule 可設 `success_rate < 0.95`
+    // 觸發「該 provider 5% 以上事件失敗」early warning。跟 K29 互補:
+    // K29 看「retry 密度」(高流量 provider 失敗次數正常)、R101 看「健康度
+    // 訊號」(任何 provider 不分流量都該 ≥ 0.95 = 99.x% 成功才正常)。
+    out.push_str("# HELP lobsterpulse_provider_success_rate Per-provider event success rate (gauge; derived from K7 events_total + K9 failure_count as 1.0 - failure/total; 4 decimal precision; 1.0=zero failures; missing=provider never received any event yet)\n# TYPE lobsterpulse_provider_success_rate gauge\n");
+    let success_rate = session::success_rate_at(provider_totals);
+    let mut success_rate_sorted: Vec<_> = success_rate.iter().collect();
+    success_rate_sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (p, ratio) in &success_rate_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_success_rate{{provider=\"{p}\"}} {ratio:.4}\n"
+        ));
+    }
     // K12 落地：per-provider idle ratio = `idle_seconds / lifetime_seconds`。
     // 派生自 K8 `last_event_at`（idle 分子）+ K10 `since`（lifetime 分母），純
     // 組合既有資料源、無新 fs / event 收集點。`lifetime ≤ 0` 已在 pure fn 端被

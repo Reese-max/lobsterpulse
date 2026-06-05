@@ -993,6 +993,61 @@ pub fn completed_sessions_interarrival_at(
     out
 }
 
+/// R101 配套 pure fn（K0 health 第一支：成功率 gauge）：
+/// 把 `ProviderTotals` 裡的「累計失敗事件數」跟「累計全部事件數」組合成
+/// success rate 衍生 gauge（`HashMap<provider, ratio>`，f64）給
+/// `render_prometheus_body` emit。R101 = MISSION K0 「Provider 健康度覆蓋率」
+/// 推進的第一支：MISSION 定義 K0 = 「13/13 provider 有 P95 延遲 + 成功率指標」，
+/// K30 P95 session duration 已有 → 補成功率維度。命名刻意**不**用 K 編號
+/// 前綴（K22-K35 編號空間是「session-level 完成維度」metric），改用 mission
+/// 對齊的 `success_rate` 命名 = 讀 Prometheus 的人不用先學專案內部 K 編號
+/// 才能理解這條 metric 的用途。
+///
+/// 跟 K29 `failure_to_completion_ratio_at` 語意有微妙差異（不能合併）：
+/// - K29 派生自 `failure_count / completed_sessions_count`（=「每完成一次
+///   session 平均失敗幾次 tool」= retry 視角，補 K22-K28 session duration
+///   分布之外的「失敗 vs 成功」維度）
+/// - R101 派生自 `1.0 - failure_count / events_total`（=「所有事件中
+///   非失敗事件佔比」= 健康度視角，補 K30 P95 之外的「整體事件成功率」）
+///
+/// 兩個 ratio 在數學上不等價（K29 分母是完成次數、R101 分母是全部事件）：
+/// K29 = 1.0 表示「每次完成平均都 retry 1 次」= 訊號；R101 = 1.0 表示
+/// 「0 失敗」= 健康。K29 跟 R101 各自 emit 各自值，互不污染。
+///
+/// 派生自 K7 `events_total`（`bump_provider_totals` 對任何 event 都 += 1，
+/// lifetime aggregate，session 結束 / stale 回收後不蒸發）跟 K9/K10
+/// `failure_count`（PostToolUseFailure 累計）兩個既有 lifetime counter：
+/// 純 derived，不開新 `ProviderTotals` 欄位（K12 idle_ratio / K25 avg
+/// 同款「既有資料源派生指標」策略，記憶體零成本）。f64 gauge 4 位小數
+/// 跟 K25 avg / K28 stddev / K29 failure_ratio 對齊；跟 K22 / K23 / K24
+/// 整數語意區分。
+///
+/// 過濾語意跟 K25 / K29 同款「0/0 不 emit」防線：`events_total == 0`
+/// 跳過不 emit sample —— 0/0 數學未定義，emit 0.0 假冒「成功率 0%」會誤導
+/// Prometheus 端把「沒資料」當「完全失敗」= 假健康信號。「provider 沒
+/// 收過任何 event」跟「provider 每次都失敗」是不同語意，缺資料寧可少一條
+/// sample 也不要假裝 0。
+///
+/// 數值範圍: `[0.0, 1.0]`（`failure_count <= events_total` 由 `bump_provider_totals`
+/// 單調遞增保證：failure_count 是 events_total 的子集計數，永遠不會超過
+/// events_total）。clamp 到 `[0.0, 1.0]` 防理論上「events_total == 0 但
+/// failure_count > 0」（防禦性，正常路徑不會發生）。f64 4 位小數固定
+/// precision（跟 K25 `idle_ratio` `{:.4}` 同格式，避免 IEEE 754 尾數雜訊）。
+///
+/// 排序: by provider alphabetical，跟 K6-K35 既契約一致；空 map → 沒
+/// sample line（HELP/TYPE 標頭仍輸出，跟 K11「header only」契約一致）。
+pub fn success_rate_at(provider_totals: &HashMap<String, ProviderTotals>) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    for (p, t) in provider_totals {
+        if t.events_total == 0 {
+            continue;
+        }
+        let ratio = 1.0 - (t.failure_count as f64 / t.events_total as f64);
+        out.insert(p.clone(), ratio.clamp(0.0, 1.0));
+    }
+    out
+}
+
 /// K26 配套 pure fn：把 `ProviderTotals` 裡的「歷史最長完成 session 年齡」攤平
 /// 成 `HashMap<provider, secs>` 給 `render_prometheus_body` emit。跟 K22
 /// `last_completed_session_age_at` 對稱：都過濾 `None`（該 provider 累計收過
@@ -1406,8 +1461,8 @@ mod tests {
     use super::{
         completed_sessions_interarrival_at, completed_sessions_p25_at, completed_sessions_p50_at,
         completed_sessions_p75_at, completed_sessions_p95_at, completed_sessions_p99_at,
-        completed_sessions_stddev_at, failure_to_completion_ratio_at, SessionManager,
-        SessionTransition,
+        completed_sessions_stddev_at, failure_to_completion_ratio_at, success_rate_at,
+        SessionManager, SessionTransition,
     };
     use crate::hook_event::HookEvent;
     use chrono::{Duration, Utc};
@@ -2468,6 +2523,183 @@ mod tests {
         assert!(
             (out.get("cicx").copied().unwrap_or(-1.0) - 10.0).abs() < 1e-9,
             "failure=10, completed=1 → ratio = 10.0 (alert > 2.0 觸發), got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    // ─── R101 落地：success_rate gauge + success_rate_at (K0 health 第一支：成功率維度) ───
+    //
+    // 對齊 MISSION.md K0「Provider 健康度覆蓋率」定義「13/13 provider 有 P95 延遲
+    // + 成功率指標」── K30 P95 session duration 已實作 = P95 維度達成；R101
+    // 補成功率維度 → K0 health 從 0/13 → 13/13 metric 覆蓋。測試群對齊 K29
+    // (failure_to_completion_ratio_at) 7 條場景同款防線：過濾 / 整數 ratio /
+    // 分數 ratio / 非整除 ratio / per-provider 隔離 / 高失敗率 / clamp 防禦。
+
+    #[test]
+    fn r101_success_rate_at_skips_providers_with_no_events() {
+        // 過濾契約：跟 K25 idle_ratio / K29 failure_ratio 同款「0/0 不 emit」
+        // 防線 —— events_total=0 跳過不 emit (避免 0/0 數學未定義 emit 成 0.0
+        // 假冒「成功率 0%」= 假健康信號)。語意對齊 K22 None 跳過: 「缺資料」
+        // 寧可少一條 sample, 不要假裝 0 誤導 Prometheus alert。
+        let mut totals = HashMap::new();
+        totals.insert("claude".to_string(), ProviderTotals::default()); // events=0
+        let out = success_rate_at(&totals);
+        assert!(
+            out.is_empty(),
+            "events_total=0 的 provider 該跳過, 避免誤判「成功率=0」當「完全失敗」"
+        );
+    }
+
+    #[test]
+    fn r101_success_rate_at_emits_one_when_no_failures() {
+        // failure_count=0 + events_total=N > 0 → ratio = 1.0 (「零失敗」= 真實
+        // 健康信號, 跟 K25「count=0 跳過」是不同語意 —— K25 跳過的是「缺資料」,
+        // R101 1.0 emit 的是「有資料且為零失敗」, 必須分清楚)。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                events_total: 100,
+                failure_count: 0,
+                ..Default::default()
+            },
+        );
+        let out = success_rate_at(&totals);
+        assert!(
+            (out.get("cicx").copied().unwrap_or(-1.0) - 1.0).abs() < 1e-9,
+            "failure=0, events=100 → success_rate = 1.0 (零失敗健康信號), got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn r101_success_rate_at_emits_fractional_success_rate() {
+        // 整除分數成功率：failure=3, events=10 → 1.0 - 3/10 = 0.7 (4 位小數 →
+        // 0.7000) — operator alert「success_rate < 0.95」會觸發。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                events_total: 10,
+                failure_count: 3,
+                ..Default::default()
+            },
+        );
+        let out = success_rate_at(&totals);
+        assert!(
+            (out.get("cicx").copied().unwrap_or(-1.0) - 0.7).abs() < 1e-9,
+            "failure=3, events=10 → 1.0 - 0.3 = 0.7, got {:?}",
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn r101_success_rate_at_emits_non_terminal_decimal_ratio() {
+        // 非整除成功率：failure=3, events=7 → 1.0 - 3/7 ≈ 0.5714 (IEEE 754
+        // 真實浮點值)。驗證 4 位小數 format 不會把 0.571428... 整數化掉。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "gemini".to_string(),
+            ProviderTotals {
+                events_total: 7,
+                failure_count: 3,
+                ..Default::default()
+            },
+        );
+        let out = success_rate_at(&totals);
+        let expected = 1.0 - 3.0 / 7.0;
+        assert!(
+            (out.get("gemini").copied().unwrap_or(-1.0) - expected).abs() < 1e-9,
+            "failure=3, events=7 → 1.0 - 3/7 ≈ {}, got {:?}",
+            expected,
+            out.get("gemini")
+        );
+    }
+
+    #[test]
+    fn r101_success_rate_at_per_provider_isolated() {
+        // per-provider 隔離：3 provider 各自獨立 ratio (cicx 0.7, claude 1.0,
+        // gemini 跳過) —— 互相不污染, 跟 K22-K35 既有 per-provider 隔離契約一致。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                events_total: 10,
+                failure_count: 3,
+                ..Default::default()
+            },
+        );
+        totals.insert(
+            "claude".to_string(),
+            ProviderTotals {
+                events_total: 50,
+                failure_count: 0,
+                ..Default::default()
+            },
+        );
+        totals.insert("gemini".to_string(), ProviderTotals::default()); // events=0 跳過
+
+        let out = success_rate_at(&totals);
+        assert!(
+            (out.get("cicx").copied().unwrap_or(-1.0) - 0.7).abs() < 1e-9,
+            "cicx = 1.0 - 3/10 = 0.7 (per-provider 隔離), got {:?}",
+            out.get("cicx")
+        );
+        assert!(
+            (out.get("claude").copied().unwrap_or(-1.0) - 1.0).abs() < 1e-9,
+            "claude = 1.0 - 0/50 = 1.0"
+        );
+        assert_eq!(out.get("gemini"), None, "gemini events=0 跳過");
+        assert_eq!(out.len(), 2, "只有 cicx + claude 進 map");
+    }
+
+    #[test]
+    fn r101_success_rate_at_handles_low_success_rate() {
+        // 低成功率場景：failure=10, events=11 → 1.0 - 10/11 ≈ 0.0909 (operator
+        // alert `success_rate < 0.95` 會觸發「該 provider 90%+ 事件失敗」=
+        // 健康度嚴重異常)。比 K29 的「10/1 = 10.0」對稱：R101 = 1 - 10/11 ≈ 0.09
+        // ≈ 「90% 失敗」語意, alert 邊界一致。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                events_total: 11,
+                failure_count: 10,
+                ..Default::default()
+            },
+        );
+        let out = success_rate_at(&totals);
+        let expected = 1.0 - 10.0 / 11.0;
+        assert!(
+            (out.get("cicx").copied().unwrap_or(-1.0) - expected).abs() < 1e-9,
+            "failure=10, events=11 → 1.0 - 10/11 ≈ {}, got {:?}",
+            expected,
+            out.get("cicx")
+        );
+    }
+
+    #[test]
+    fn r101_success_rate_at_clamps_to_unit_interval_defensively() {
+        // 數值範圍: [0.0, 1.0] clamp 防禦 —— 理論 failure_count <= events_total
+        // 由 `bump_provider_totals` 單調遞增保證 (failure_count 是 events_total
+        // 的子計數, 永不大於 events_total), 但若有人手搓 ProviderTotals 強塞
+        // failure_count > events_total, clamp 仍把結果釘在 [0, 1]。這是純 fn
+        // 級防禦, 不污染正常路徑 (K29 沒有對應 clamp, 因 K29 派生式無負值風險;
+        // R101 用 subtraction 1.0 - x 才有負值風險, 故 clamp 必要)。
+        let mut totals = HashMap::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                events_total: 10,
+                failure_count: 100, // 防禦性: 理論不可能但測試 clamp 行為
+                ..Default::default()
+            },
+        );
+        let out = success_rate_at(&totals);
+        assert_eq!(
+            out.get("cicx"),
+            Some(&0.0),
+            "failure > events 該 clamp 到 0.0 (不 emit 負值), got {:?}",
             out.get("cicx")
         );
     }

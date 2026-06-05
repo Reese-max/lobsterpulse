@@ -1041,7 +1041,13 @@ mod provider_contract_matrix_tests {
         ("giminix", "🤖", true, "giminix.mp3", "giminix-waiting.mp3"),
         ("codex_bot", "🤖", true, "codex.mp3", "codex-waiting.mp3"),
         ("openx", "🤖", true, "openx.mp3", "openx-waiting.mp3"),
-        ("irisx_bot", "🤖", true, "irisx_bot.mp3", "irisx_bot-waiting.mp3"),
+        (
+            "irisx_bot",
+            "🤖",
+            true,
+            "irisx_bot.mp3",
+            "irisx_bot-waiting.mp3",
+        ),
         ("grokx", "🤖", true, "grokx.mp3", "grokx-waiting.mp3"),
         ("lpbot", "🤖", true, "lpbot.mp3", "lpbot-waiting.mp3"),
         ("mimo", "🤖", false, "mimo.mp3", "mimo-waiting.mp3"),
@@ -1059,8 +1065,7 @@ mod provider_contract_matrix_tests {
         let providers = default_providers();
         let sounds = default_provider_sounds();
         let waiting_sounds = default_provider_waiting_sounds();
-        let openab_set: std::collections::HashSet<&str> =
-            OPENAB_BOT_IDS.iter().copied().collect();
+        let openab_set: std::collections::HashSet<&str> = OPENAB_BOT_IDS.iter().copied().collect();
 
         // 矩陣完整性: CONTRACT 必須 13 row, 對齊 R78 spec 13 provider (4 本機 + 9 OpenAB)
         assert_eq!(

@@ -821,3 +821,46 @@ URGENCY: LOW
 - K42 chain 17 條飽和: 不擴張
 - 已知 flaky test (quota::copilot parallel env-var race): 不在本 M2 範圍,留 H0 窗口考慮改 serial runner / Mutex 包 env
 - 5 週 Prometheus rename 廣播時程 T-1 dual-emit shim (R107+ owner follow-up,本輪 M2 不在該範圍)
+
+---
+
+### [2026-06-05] Round 107 — M2 加 K41 chore_treadmill 7 日量測腳本
+
+**類型**: M2
+**KPI**: K41 量化從「無腳本」到「可量測」+1
+**為什麼**: R111 收尾後連 2 輪無改善 (drift=2 警告), 換角度避開「重複 R106-R111 spec closure + K0 spec 修」路徑, 改補 K41 量測基建 — MISSION 90 天 KPI 寫的 `<30% 持續 7 日` 只有口頭目標沒有量測腳本, owner 無法每週驗收, 護欄無從自動化。K0 軸 (A1/A2/B) 已被 R83/R102/R108/R111 接力量測到位, 該補的是治理軸 (K41)
+**搜尋**: N/A (對齊 k0_measure.py R83 同樣定位的 M2 量測基建, 不需外部 best practice 搜尋)
+**做了什麼**:
+- 新增 `scripts/k41_chore_treadmill.py`: 7 日 rolling window 內掃 `git log --since=7d --pretty=format:%s`, subject prefix 比對 `chore/refactor/archive/sensor` 4 個 governance prefix (對齊 MISSION R81 補頁定義)
+- 純 stdlib (json/subprocess/sys/datetime/pathlib), 對齊 k0_measure.py 風格, 0 新依賴
+- 輸出 stdout 人類可讀表 + `.harness-k41.json` machine-readable (已 .gitignore 排除, 對齊 k0_measure 同樣慣例)
+- 退出碼 0 (達標 <30%) / 1 (漂移 ≥30%): 護欄風格, owner/scheduler 可串接
+- Windows cp950 解碼雷點: subprocess 走 bytes → `decode("utf-8", errors="replace")` 避雷, 留下註記 (scripts/ 第一個吃 git 輸出的, 之後若加 k4* 腳本可參考)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K41 量測可達性 | 無腳本, 人工目視 git log | 7d 自動量, exit code 護欄 | +1 (量化基建) |
+| K41 7d 比例 (本次跑) | 未量過 | 6.5% (13/201) [OK] | +量測基線 |
+| K0-A1 端點 emit 覆蓋率 | 0/13 (DOWN) | 0/13 (DOWN) | 0 (LobsterPulse 未跑) |
+| K0-A2 端點 sample 覆蓋率 | 0/13 (DOWN) | 0/13 (DOWN) | 0 |
+| K0-B Quota 即時性 | 4/13 | 4/13 | 0 (本輪 M2 不推 K0 數字) |
+| K40 spec coverage | 4/4 closed | 4/4 closed | 0 |
+| K42 chain 17 條 | 17 | 17 | 0 不擴張 |
+**驗證**:
+- `git status --short`: 1 檔新增 (scripts/k41_chore_treadmill.py), 守住 6 untracked + 1 .harness-k0.json 動態寫入已 .gitignore (R13)
+- `python scripts/k41_chore_treadmill.py`: 印 `K41 chore_treadmill (7d): 13/201 = 6.5% (threshold <30%) [OK]`, exit=0
+- 13 個 chore 命中: 11 個 `chore: rotate engineering-log` + 1 個 `chore: init spectra openspec directory` + 1 個 `chore: init engineering log`, 全部 governance prefix 正確 (refactor/archive/sensor = 0)
+- `.harness-k41.json` 寫入含 7 keys (window_days/threshold/chore_count/total_count/ratio/status/chore_subjects/ts)
+- 對齊 k0_measure.py 風格: 純 stdlib, 模組 docstring 解 KPI 對齊, stdout 人類可讀 + JSON 機器讀, 護欄退出碼
+- cargo baseline: 本輪 Rust code 不動, R111 收尾的 431/431 持續綠 (rust side 未重跑,Python 腳本無 Rust dep)
+**結果**: PASS (M2 補 K41 量測基建, 跑出 6.5% 達標基線, 守住 6 untracked R13, K42 chain 17 不擴張, K40 4/4 closure 維持)
+
+**KPI-impact: K41 量測可達性 +1 (從無腳本到 7d 自動量, exit code 護欄, 6.5% 達標基線記錄)**
+
+**留 R108+ owner 接力**:
+- K0 真實推進 (K0-A1 4→13 / K0-A2 1→13 / K0-B 4→13): 受 OpenAB bot process 是否在運作影響, 本機不可控, 留外部依賴解卡
+- K41 持續守 6.5% 7d rolling <30%: 排程每週跑累積判斷「連續多點 <30%」才達標, 本輪只給量測基建
+- K42 chain 17 條飽和: 不擴張
+- 已知 flaky test (quota::copilot parallel env-var race): 不在本 M2 範圍, 留 H0 窗口考慮改 serial runner / Mutex 包 env
+- 5 週 Prometheus rename 廣播時程 T-1 dual-emit shim (R108+ owner follow-up, 本輪 M2 不在該範圍)
+- K41 量測延伸 K42 自動護欄: 連續 N 週 >30% 自動擋 commit, 屬 L2 自動化, 留 R109+ M1

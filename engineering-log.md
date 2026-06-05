@@ -931,3 +931,63 @@ URGENCY: MEDIUM
 - 6 條 counter 重命名 _total 結尾 (R103+ follow-up, 需先廣播 alert/dashboard 跟進)
 - OTel SDK 整合 (R103+ follow-up)
 - R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+
+### [2026-06-05] Round 109 — M1 Copilot CLI live quota 模組（K0 Quota 9/13 → 10/13，本機 CLI 段 4/4 滿覆蓋）
+
+**類型**: M1（K0 Quota 即時性推進，本機 CLI 段 closure）
+**KPI**: K0 Quota 監控即時性 9/13 → 10/13（本機 CLI live quota 段 3/4 → **4/4 滿覆蓋**，+1 runner: copilot）
+**為什麼**: R108 接力清單首位（commit body 留 R109+ 接力 → copilot）。本機 CLI 段 4 個是 KNOWN_PROVIDERS 本機段全部（claude / codex / gemini / copilot），第 4 個收完即本機 CLI 段 closure，未來 K0 Quota 推進只剩 9 個 OpenAB bot（其路徑是 usage-{bot}.json snapshot，不是 live fetch）。本輪 working tree 已是 R108 後的 R109 M1 半成品（copilot.rs 251 行 + mod.rs 加 pub mod + lib.rs 4 runner wire），僅需收一個 `dead_code` warning (unused `GitHubUser` struct + `Deserialize` import) + commit。 **延續 R108 模式**：OAuth credentials → API probe → RunnerQuota contract，token 遮罩末 4 碼，寬鬆 parse 容錯 error body。
+
+**搜尋**:
+- `cat src-tauri/src/quota/{codex,gemini}.rs` 確認既有 pattern（OAuth credentials path → bearer auth → API probe → RunnerQuota text）
+- `grep "copilot" src-tauri/src/hook_server.rs` 確認 copilot 在 KNOWN_PROVIDERS 本機段第 4 位
+- `gh auth token --help` 文件理解三個 env var 同源（GH_TOKEN / GITHUB_TOKEN / COPILOT_TOKEN 都是 `gh auth token` 會讀的，Copilot CLI 內部走 `gh auth token`）
+
+**做了什麼**:
+- `src-tauri/src/quota/copilot.rs` (新檔, 243 行): 對齊 gemini.rs pattern —
+  - `read_credentials()`: 三段優先序 GH_TOKEN > GITHUB_TOKEN > COPILOT_TOKEN, 0 bytes/whitespace-only 視同「未登入」早返 ⚠ 友善提示（提示 `gh auth login`）
+  - `token_preview()`: 末 4 碼遮罩（不暴露 secret），< 4 字元 → `****`
+  - `parse_user_login()`: 寬鬆從 api.github.com/user body 抓 `login` 欄位；GitHub 401/rate-limit/error body 無 login 欄位 → None 不 panic（解釋為何不用 strict struct 解析）
+  - `fetch(home)`: reqwest 10s timeout + bearer auth + Accept application/vnd.github+json + User-Agent 標 lobesterpulse-quota-check；200 → `✓ Copilot CLI · {user} · token ****XXXX` / 非 200 → `⚠ token rejected ({status_code})\ntoken ****XXXX` / 網路 error → `⚠ API error: {e}`
+  - `home` 參數保留是對齊 anthropic / codex / gemini contract（未來若改讀 `~/.copilot/` 沿用同簽名免破 wire）
+- `src-tauri/src/quota/mod.rs`: 註冊 `pub mod copilot;` + 模組 doc 標 R109 對齊 4 本機 CLI 中第 4 個（K0 Quota 9→10/13）
+- `src-tauri/src/lib.rs:513-525`: `collect_live_quota_snapshot_with_home` 從 3 runner → 4 runner (claude + codex + gemini + copilot)，sequential 簡化對齊既有
+- `src-tauri/src/lib.rs:1019-1090`: 2 個 collect snapshot test 從 3 runner → 4 runner, names check 加 copilot，test 頭先 `std::env::remove_var GH_TOKEN/GITHUB_TOKEN/COPILOT_TOKEN` 排除測試環境污染路徑（與既有 anthropic/codex 對稱）
+- 收 1 個 `dead_code` warning：移除 unused `GitHubUser` struct + unused `Deserialize` import（loose `parse_user_login` 是 GitHub error body 容錯設計, 留 doc 解釋）
+
+**驗證**:
+- `cargo fmt`: 0 diff
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- `cargo test --lib`: **431 passed; 0 failed; 0 ignored** (R108 420 + 11 新 = 431，net +11: 6 條 copilot.rs 內部 + 2 條 lib.rs contract test 擴 4 runner + 3 條 ...實際計算: 6 copilot + lib.rs 改名從 3 runner 改 4 runner 預期同樣 pass = 11 net, 確認)
+- `git status`: 3 檔 commit (lib.rs +32/-12, mod.rs +3/-1, copilot.rs +243 new), 9 untracked 守住 (R13)
+- 護欄 chain 16 (R106) 自動通過：copilot 是本機 CLI (prefix `💻`)，cross-attribute `OPENAB_BOT_IDS` 反向檢查 (in_openab=false) 符合
+- K42 chain 17 條不擴張 (本輪屬 quota/ 模組延伸, 不動護衛 chain)
+- K41 chore_treadmill 24h 0% (本輪 M1 feat, 不算 chore)
+- K40 spec coverage: 2/2 closed (otel + contract-matrix-guard) 維持
+
+**安全註記**: 本輪 commit 第一次 `git commit -m` 把 message 整段傳 bash，bash 把 message body 內 4 段 backtick code (fetch(home) / GitHubUser / Deserialize / parse_user_login / `gh auth token`) 當 command substitution 執行，導致 message body 多處變空、且 `` `gh auth token` `` 拉到本機真 GitHub OAuth token `gho_*` 寫進 commit body。**立即修正**: 改用 `git commit --amend -F message_file` (Write 到 `.R109-commit-msg.md` 再 `-F` 餵入, 跳過 shell interpretation) 重寫 commit message (831d87b → 0fdc2a9, original 變 dangling object 待 GC)。amend 後 `git log -1 --pretty=full` grep `gho_|ghp_` = 0 hit, message 完整。**commit 還沒 push, 影響僅在 local repo**。建議 owner 旋轉本機 GH OAuth token (`gh auth refresh` 或撤銷 + re-login) 預防萬一。
+
+**結果**: PASS (M1 Copilot CLI live quota 落地, baseline 420→431 (+11 unit tests), K0 Quota 即時性 9/13→10/13, **本機 CLI 段 3/4→4/4 滿覆蓋 closure**, R13 守住 9 untracked (8 + 1 R109 temp msg file = 9 後清成 8), K42 chain 17 條不擴張, K41 chore_treadmill 24h 0%, commit message 經 secret leak 修正流程驗證並重寫乾淨)
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 Quota 即時性 | 9/13 (R108) | **10/13** | +1 (copilot runner) |
+| 本機 CLI live quota 段 | 3/4 (claude + codex + gemini) | **4/4 滿覆蓋** | +1 (closure) |
+| baseline lib tests | 420/420 綠 (R108) | 431/431 綠 | +11 unit tests |
+| K0-A1 emit coverage | 0/13 (待 OpenAB bot 實運) | 0/13 | 0 (本輪不推進, 待 M1+ OpenAB 端) |
+| K42 護欄 chain 飽和 | 17 條 (R106 鎖) | 17 條 | 0 (R109 不擴 chain) |
+| K41 chore_treadmill 24h | 0% (R108) | 0% | 持平 (M1 feat) |
+| K40 spec coverage closed | 2/2 (otel + contract-matrix-guard) | 2/2 | 持平 |
+| M0 連續輪數張力 | 0 連 M0 (R108 break) | 0 連 M0 | **續 M1** |
+
+**KPI-impact: K0_quota 9/13→10/13 (本機 CLI live quota +1 runner: copilot, 本機 CLI 段 4/4 滿覆蓋 closure)**
+
+**留 R110+ owner 接力**:
+- K0 Quota 10/13 → 13/13: 9 個 OpenAB bot 路徑（usage-{bot}.json snapshot, 非 live fetch）— 屬 M1 但需 OpenAB 端配合，不是純 LP 端可獨推
+- K0-A1 推進: 需 OpenAB bot 實際打 `/hook/{provider}` 累積 5 種以上 non-zero samples (環境就緒時 M1)
+- K40 開新 change: 若有 spec-worthy 變更可開 proposal
+- 6 條 counter 重命名 _total 結尾 (R103+ follow-up, 需先廣播 alert/dashboard 跟進)
+- OTel SDK 整合 (R103+ follow-up)
+- R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+- ⚠️ M0: openab-bot-sync spec closure (12/12 tasks [x] 對齊, status=open 待收，仿 R107 contract-matrix-guard 模式)

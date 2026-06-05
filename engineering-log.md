@@ -773,3 +773,55 @@ URGENCY: MEDIUM
 | baseline tests | 414/414 綠 | 414/414 綠 | 0 |
 | dead_code 謊言檔 | 3 (mod/anthropic/codex) | 0 | -3 |
 | CodexAuth dead field | 2 (auth_mode/last_refresh) | 0 | -2 |
+
+### [2026-06-05] Round 106 — M0 護衛 chain 16 細化: 13 provider × 3 attribute matrix 護衛 test
+**類型**: M0 (護衛 defensive)
+**KPI**: K42 chain 16 細化 (0 KPI 數字變動, 護衛 defensive)
+**為什麼**: R100 策略顧問 (2026-06-04) 行動 #2 follow-up 明確要求: 「開新 change 補 13 provider × 3 attribute matrix」。R67 護衛 chain 16 (config.rs:909) 只護 keys 對稱 (e.g. sounds keys ⊆ providers keys), 不護 value 對齊 (e.g. cicx 預期 sound "cicx.mp3" 但 code 寫成 "cicx.MP3" R67 不抓)。R106 補這個盲點: 13 row × 3 attribute value-equal matrix + cross-attribute OPENAB_BOT_IDS membership, 把護衛強度從「set 對稱」升到「attribute 對齊」。
+
+**搜尋**:
+- 沒搜 (本輪是 R100 策略顧問 follow-up 直接命題, 護衛 design 從 R67 護衛 5 條斷言擴張到 R106 矩陣)
+- 對齊 session 12878 observation: 「Dead Code Markers Inventory」系列, 護衛 chain 細化同類
+- 對齊 R100 策略顧問 #2 follow-up: 「provider contract test matrix (開新 change 補 13 provider × 3 attribute matrix)」
+
+**做了什麼**:
+- `src-tauri/src/config.rs`: 新增 `provider_contract_matrix_tests` module + 1 條護衛 test
+  `r106_provider_contract_13_by_3_matrix`, 內含 `CONTRACT` const 13 row × 3 attribute
+  期望值 (name prefix / enabled_default / sound file mapping) + cross-attribute
+  OPENAB_BOT_IDS membership 驗證
+- `openspec/changes/contract-matrix-guard/`: 開新 change 4 檔 spec 文檔
+  (proposal.md / design.md / tasks.md / .openspec.yaml + spec.md), K42 chain 16 細化
+  (跟 R67 同 chain, 不算 chain 18 擴張, R50 freeze 持續)
+- 不動 R67 護衛 (config.rs:909) — R67 護 keys 對稱 / R106 護 value 對齊, 兩條並存互補
+- 不動 4 同步點本體 (default_providers / default_provider_sounds /
+  default_provider_waiting_sounds / OPENAB_BOT_IDS) — R106 只驗對齊, 不修對齊源
+- 不動 8 untracked + 2 spec 檔 (openab-bot-sync) 守 R13 防護
+
+**驗證**:
+- `cargo test`: 414→415 綠 (R106 護衛 1/1 pass, baseline 持平)
+- `cargo clippy --all-targets`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `git status`: 6 R106 檔 commit, 8 untracked + 2 spec 檔 (openab-bot-sync) 守住 (R13)
+- K42 chain 17 條不擴張 (R106 屬 chain 16 護衛對稱面延伸, R50 freeze 持續)
+- K41 chore_treadmill 24h 0% (R106 屬防禦性 M0, 不算 chore)
+- K40 spec coverage: 1/1 closed (otel) + 1/1 open (contract-matrix-guard) — Phase 1 6/6 tasks [x], 待 Phase 2 closure
+
+**結果**: PASS (M0 護衛 chain 16 細化, 1 條 test 守 13 row × 3 attribute + cross-attribute OPENAB_BOT_IDS membership, 6 檔 510+ 落地, baseline 414→415, K42 chain 17 條不擴張, R13 守住 8 untracked + 2 spec 檔, K41 chore_treadmill 24h 0%)
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K42 護欄 chain 飽和 | 17 條 | 17 條 | 0 (R106 屬 chain 16 細化) |
+| K41 chore_treadmill 24h | 0% (前輪 R105) | 0% | 持平 |
+| baseline tests | 414/414 綠 | 415/415 綠 | +1 (R106 護衛 1 條) |
+| 護衛 chain 16 細化維度 | 5 條斷言 (R67) | 5 條 + 1 條矩陣 test | +1 test, +6 斷言/row |
+| K40 spec coverage | 1/1 closed (otel) | 1/1 + 1/1 open (contract-matrix-guard) | +1 open |
+| contract-matrix-guard change | 0/6 tasks [x] | 6/6 tasks [x] (待 closure) | +6 |
+
+**留 R107+ owner 接力**:
+- contract-matrix-guard Phase 2 closure (T-MTX7 + T-MTX8): tasks.md 全勾 + .openspec.yaml status=closed + engineering-log 補 closure 紀錄
+- 6 條 counter 重命名為 _total 結尾 (R103+ follow-up, 需先廣播 alert/dashboard 跟進)
+- OTel SDK 整合 (`opentelemetry` / `opentelemetry-otlp` crate 接入, R103+ follow-up)
+- K0-A1 4/13 → 5/13+ 推進 (環境就緒時 M1)
+- K0 Quota 8/13 → 13/13 推進 (R89 claude/codex live 之外再加 gemini/copilot 等)
+- R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md

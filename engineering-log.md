@@ -504,3 +504,59 @@ URGENCY: LOW
 - K0 Quota 10→13 (剩 3 個: irisx_bot/grokx/lpbot/mimo 寫 snapshot, 需 OpenAB scope 解卡)
 - K0-A1/A2 0→13 (需 endpoint 跑 build + 13 agent 真的有事件流過, 需環境+外部依賴)
 - supervisor `consecutive_drifts` 3→0 機制: 需 owner 級 spec 補「directive 後 N 輪未推進要降 score / 強迫 M1」規則, R109+ owner follow-up
+
+### [2026-06-06] Round 109 — M0 修 README.md build SOP spec drift (三方對齊)
+
+> ⚠️ 觸發：本輪連 4 輪「審查通過」無改善（PUA 強制 7 項檢查收 M0）。第 6 項文件對齊不通過 — README 三處 build SOP 跟 CLAUDE.md + build.sh 直接衝突，會觸發 webview 白屏。
+
+**類型**: M0 (user-facing spec drift fix)
+**KPI**: build SOP 一致性 +1 (README ↔ CLAUDE.md ↔ build.sh 三方對齊)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---|
+| baseline (cargo test --lib) | 437/437 (R108) | 437/437 | 0 (純文件層, 不動 code) |
+| build SOP doc 一致性 | README 用 `cargo build --release` 跟 SOP 衝突 | README 用 `cargo tauri build --no-bundle` 對齊 | +1 (三方對齊) |
+| K40 規格覆蓋率 | 5/5 active change closed (R108) | 5/5 | 0 (本輪是 build SOP, 不在 OpenSpec change 目錄) |
+| K42 護衛 chain | 17 條 (R108 守) | 17 條 | 0 (本輪不擴 chain) |
+| K41 chore_treadmill 24h | 0% (R108 守) | 0% | 0 (1 docs) |
+| R13 owner dirty 守住 | 3 個 (owner M R114 工作中) | 3 個 | 0 (本輪只動 README.md) |
+
+**為什麼**:
+- 第 109 輪 PUA 強制 7 項檢查, 6 項過 (test 437/437 + clippy 0 warning + TODO/FIXME 0 + 外部輸入驗證 R66/R82 護衛鏈完整 + 錯誤處理 R13/R28 5 條 fail 路徑 surfaced + 業界差異 CLAUDE.md 60-79 已有)
+- 唯一不通過: **檢查 6 文件對齊** — README.md L102-103 「重新建置 release」段寫 `cargo build --release`, L107-110 bundle 段寫 `cargo tauri build` (沒 `--no-bundle`), L163 驗證狀態列 `cargo build --release`
+- 三方對質:
+  - **README.md** (L102-103): `cargo build --release` ❌
+  - **CLAUDE.md** (L32): 「必須 `cargo tauri build --no-bundle`，不可純 `cargo build --release`」✅
+  - **build.sh** (L10-12): 「always use `cargo tauri build` for releases, NOT `cargo build --release`」+ 「Plain cargo build skips frontend embedding — the webview will fall back to devUrl (localhost:1420) and show "Could not connect to localhost"」 ✅
+- 影響鏈: user 照 README 跑 release build → 二進位沒 embed frontend → webview 啟動 fallback devUrl → 啟動白屏 → debug hell
+- 冰山下面還有冰山: 雖然 owner M 知道 CLAUDE.md 是 source of truth, 但 README 是 user-facing 第一接觸點, 衝突不解 → 之後任何新 contributor 都會先撞白屏
+
+**搜尋**:
+- 必先讀: CLAUDE.md L30-34「Build SOP（重要）」段 + build.sh L1-12 內嵌註解
+- 對齊慣例: 前次 spec drift 修法 R108 (k0_measure.py docstring 14→13) + R110 (candidates 死碼移除), 模式是「先找三方對質表 → 改 user-facing 端 → 留 source of truth 端不動」
+- 沒搜: 本輪純文件 surgical edit, 不需 WebSearch (已有 CLAUDE.md + build.sh 兩方 source of truth 充分)
+
+**做了什麼 (3 處 surgical edit, 純 README.md, 無 code 變更)**:
+- L100-115「重新建置 release」段重寫: 加 ⚠️ 警告區塊, 拆兩種變體（快速驗證 `--no-bundle` vs 完整 installer `cargo tauri build`）, 對齊 CLAUDE.md L32 + build.sh L10-12
+- L107-110「如果要打完整 Tauri bundle」段: 保留 `cargo tauri build`（不打 --no-bundle 時打 .msi/.deb/.AppImage）, 加 `cargo install tauri-cli --locked` 鎖版（防 Tauri CLI breaking change, 對齊 CLAUDE.md「cargo install tauri-cli --locked」）
+- L171-173「驗證狀態」段: `cargo build --release` 改 `cargo tauri build --no-bundle`（frontend embed 已驗證）
+
+**驗證**:
+- `git diff README.md`: 純文件變更, 1 file / 21 insertions / 10 deletions, 0 code 行
+- `cargo test --lib` 連 1 次: 437 passed; 0 failed; 0 flake 全綠 (7.32s)
+- `cargo clippy --lib --all-targets -W clippy::all`: `Finished dev profile` 0 warning
+- `git status --short` 守 R13: owner M 3 dirty 檔 (MISSION.md / scripts/k0_measure.py / src-tauri/src/hook_server.rs) 一個未動 + 6 untracked 守住
+- 三方對質後對齊:
+  - README.md: 「必用 `cargo tauri build`, 不可純 `cargo build --release`」+ 兩種變體明示
+  - CLAUDE.md: L32 不動 (source of truth 端)
+  - build.sh: L10-12 不動 (script 端 source of truth)
+
+**結果**: PASS (M0 修 README build SOP spec drift, 三方對齊防 webview 白屏, baseline 437/437 守住, R13 守住 owner M 3 dirty 檔, K42 chain 17 條不擴張, K41 chore_treadmill 0% 守)
+
+**KPI-impact: build SOP 一致性 +1 (README ↔ CLAUDE.md ↔ build.sh 三方對齊, 防 user-facing webview 白屏 M0)**
+
+**留 R110+ owner 接力**:
+- K42 chain 17→18 (owner M R113.1 dual-emit value guard 已落, 需架構理由 doc 解 R114 後的 chain 18)
+- K0 Quota 10→13 (剩 3 個: irisx_bot/grokx/lpbot/mimo, 需 OpenAB scope 解卡)
+- K0-A1/A2 0→13 (需 endpoint 跑 build + 13 agent 真的有事件流過)
+- docs/landing page (docs/index.html) 對齊檢視: 跟 MISSION/CLAUDE.md 的 13 provider 數字 + 6 counter deprecation 對齊, 留 R110+ owner

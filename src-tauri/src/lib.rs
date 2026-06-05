@@ -28,6 +28,26 @@ struct AppSessionManager(Mutex<SessionManager>);
 struct AppConfigState(Mutex<AppConfig>);
 static LOCAL_USAGE_RUNNERS_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
+/// R100 提取：OpenAB bot id 列表單一 source of truth。
+///
+/// 驅動 `read_usage_snapshots_with_home` + `collect_quota_snapshot_mtimes` 兩個 fn
+/// 對齊 R78 補完後的 9 隻 OpenAB bot（cicx/gitx/giminix/codex_bot/openx/irisx_bot/
+/// grokx/lpbot/mimo），避免 inline 5-bot list 跟 KNOWN_PROVIDERS 13 漂移。
+///
+/// 對齊 R67 護欄 chain 16 精神（provider 對稱）：將來加 bot 只改這 1 個 const + KNOWN_PROVIDERS
+/// + default_providers 3 點，不再 4+ 處 inline list 散落各處。
+const OPENAB_BOT_IDS: &[&str] = &[
+    "cicx",
+    "gitx",
+    "giminix",
+    "codex_bot",
+    "openx",
+    "irisx_bot",
+    "grokx",
+    "lpbot",
+    "mimo",
+];
+
 #[tauri::command]
 fn get_state(manager: tauri::State<AppSessionManager>) -> AppState {
     manager.0.lock().unwrap().get_state()
@@ -501,21 +521,25 @@ fn handle_read_usage_snapshot(path: &std::path::Path, label: &str) -> Option<ser
 }
 
 /// 注入 home 變數版,production 由 `#[tauri::command] read_usage_snapshots` 用
-/// `dirs::home_dir()` 注入。`home = None` → 5 OpenAB bot + __local__ 全 None 對齊
+/// `dirs::home_dir()` 注入。`home = None` → 9 OpenAB bot + __local__ 全 None 對齊
 /// K11 `collect_quota_snapshot_mtimes` 邊界契約（無 HOME env 罕見但要保證不 crash）。
+///
+/// R100: bot 列表改用 `OPENAB_BOT_IDS` const 驅動,對齊 R78 補完後 9 隻 OpenAB bot
+/// (cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx/lpbot/mimo)。
 fn read_usage_snapshots_with_home(
     home: &Option<std::path::PathBuf>,
 ) -> std::collections::HashMap<String, Option<serde_json::Value>> {
     let mut out = std::collections::HashMap::new();
     let Some(dir) = home.as_ref().map(|h| h.join(".lobsterpulse")) else {
-        for p in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
-            out.insert(p.to_string(), None);
+        for p in OPENAB_BOT_IDS {
+            out.insert((*p).to_string(), None);
         }
+        out.insert("__local__".to_string(), None);
         return out;
     };
-    for bot in ["cicx", "gitx", "giminix", "codex_bot", "openx"] {
+    for bot in OPENAB_BOT_IDS {
         let path = dir.join(format!("usage-{bot}.json"));
-        out.insert(bot.to_string(), handle_read_usage_snapshot(&path, bot));
+        out.insert((*bot).to_string(), handle_read_usage_snapshot(&path, bot));
     }
     // Legacy：OpenAB BackendType::Other 寫 usage-bot.json 當 OPENX,只在 primary 缺時 fallback
     if out.get("openx").and_then(|v| v.as_ref()).is_none() {
@@ -615,29 +639,42 @@ mod read_usage_snapshot_tests {
     }
 
     #[test]
-    fn read_usage_snapshots_with_home_none_returns_all_six_keys_none() {
+    fn read_usage_snapshots_with_home_none_returns_all_ten_keys_none() {
         // 邊界:home = None（罕見但要保證不 crash）。對齊 K11 `collect_quota_snapshot_mtimes`
-        // 邊界契約 — 無 HOME env → 6 label (5 OpenAB + __local__) 全 None,呼叫端拿到
+        // 邊界契約 — 無 HOME env → 10 label (9 OpenAB + __local__) 全 None,呼叫端拿到
         // 空 HashMap 不會 panic 也不會嘗試 join 路徑。
+        //
+        // R100: 9 OpenAB bot 對齊 R78 補完後 (cicx/gitx/giminix/codex_bot/openx/
+        // irisx_bot/grokx/lpbot/mimo) + __local__ 共 10 個 slot,改用 OPENAB_BOT_IDS
+        // const 驅動避免再 drift。
         let out = read_usage_snapshots_with_home(&None);
         assert_eq!(
             out.len(),
-            6,
-            "6 label (cicx/gitx/giminix/codex_bot/openx/__local__) 全要存在"
+            10,
+            "10 label (9 OpenAB + __local__) 全要存在,實際 {} 個",
+            out.len()
         );
-        for key in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
+        for bot in OPENAB_BOT_IDS {
             assert!(
-                out.get(key).map(|v| v.is_none()).unwrap_or(false),
-                "{key} 在 home=None 時應為 None,實際 {:?}",
-                out.get(key)
+                out.get(*bot).map(|v| v.is_none()).unwrap_or(false),
+                "{bot} 在 home=None 時應為 None,實際 {:?}",
+                out.get(*bot)
             );
         }
+        assert!(
+            out.get("__local__").map(|v| v.is_none()).unwrap_or(false),
+            "__local__ 在 home=None 時應為 None,實際 {:?}",
+            out.get("__local__")
+        );
     }
 
     #[test]
     fn read_usage_snapshots_with_home_existing_files_populates_correctly() {
-        // 注入 home → 寫 5 OpenAB + __local__ 6 個檔案 → 對應 6 label 全 Some,內容 round-trip。
-        // 驗 legacy fallback:不寫 usage-bot.json → 仍能從 5 OpenAB 拿 openx(主檔優先)。
+        // 注入 home → 寫 9 OpenAB + __local__ 10 個檔案 → 對應 10 label 全 Some,
+        // 內容 round-trip。驗 legacy fallback:不寫 usage-bot.json → 仍能從 9 OpenAB
+        // 拿 openx(主檔優先)。
+        //
+        // R100: 5 OpenAB → 9 OpenAB,對齊 R78 補完 (irisx_bot/grokx/lpbot/mimo)。
         let home = std::env::temp_dir().join(format!(
             "lp-rs-home-{}",
             std::time::SystemTime::now()
@@ -653,6 +690,10 @@ mod read_usage_snapshot_tests {
         let payload_giminix = serde_json::json!({"backend": "giminix", "tokens": 1});
         let payload_codex_bot = serde_json::json!({"backend": "codex_bot", "tokens": 99});
         let payload_openx = serde_json::json!({"backend": "openx", "tokens": 3});
+        let payload_irisx_bot = serde_json::json!({"backend": "irisx_bot", "tokens": 11});
+        let payload_grokx = serde_json::json!({"backend": "grokx", "tokens": 13});
+        let payload_lpbot = serde_json::json!({"backend": "lpbot", "tokens": 17});
+        let payload_mimo = serde_json::json!({"backend": "mimo", "tokens": 19});
         let payload_local = serde_json::json!({"source": "local_runner", "tokens": 1000});
 
         for (name, payload) in [
@@ -661,6 +702,10 @@ mod read_usage_snapshot_tests {
             ("giminix", &payload_giminix),
             ("codex_bot", &payload_codex_bot),
             ("openx", &payload_openx),
+            ("irisx_bot", &payload_irisx_bot),
+            ("grokx", &payload_grokx),
+            ("lpbot", &payload_lpbot),
+            ("mimo", &payload_mimo),
             ("__local__", &payload_local),
         ] {
             let path = if name == "__local__" {
@@ -693,6 +738,22 @@ mod read_usage_snapshot_tests {
             Some(&payload_openx)
         );
         assert_eq!(
+            out.get("irisx_bot").and_then(|v| v.as_ref()),
+            Some(&payload_irisx_bot)
+        );
+        assert_eq!(
+            out.get("grokx").and_then(|v| v.as_ref()),
+            Some(&payload_grokx)
+        );
+        assert_eq!(
+            out.get("lpbot").and_then(|v| v.as_ref()),
+            Some(&payload_lpbot)
+        );
+        assert_eq!(
+            out.get("mimo").and_then(|v| v.as_ref()),
+            Some(&payload_mimo)
+        );
+        assert_eq!(
             out.get("__local__").and_then(|v| v.as_ref()),
             Some(&payload_local)
         );
@@ -703,9 +764,11 @@ mod read_usage_snapshot_tests {
 
     #[test]
     fn read_usage_snapshots_with_home_legacy_alias_fills_openx_when_missing() {
-        // Legacy fallback:5 OpenAB 主檔缺 openx,但有 usage-bot.json → openx 從 legacy
+        // Legacy fallback:9 OpenAB 主檔缺 openx,但有 usage-bot.json → openx 從 legacy
         // 取（OPENX alias）。對齊 K11 `collect_quota_snapshot_mtimes_openx_legacy_alias_fallback`
         // 契約,確保 legacy 路徑不只走 mtime,也走 read。
+        //
+        // R100: 4 個未寫 label → 8 個未寫 label (加 irisx_bot/grokx/lpbot/mimo)。
         let home = std::env::temp_dir().join(format!(
             "lp-rs-legacy-{}",
             std::time::SystemTime::now()
@@ -716,7 +779,7 @@ mod read_usage_snapshot_tests {
         let dir = home.join(".lobsterpulse");
         std::fs::create_dir_all(&dir).unwrap();
 
-        // 故意只寫 cicx + usage-bot.json,其他 4 個 OpenAB label 都不存在
+        // 故意只寫 cicx + usage-bot.json,其他 8 個 OpenAB label 都不存在
         std::fs::write(
             dir.join("usage-cicx.json"),
             serde_json::to_string(&serde_json::json!({"backend": "cicx"})).unwrap(),
@@ -737,8 +800,17 @@ mod read_usage_snapshot_tests {
             out.get("openx").and_then(|v| v.as_ref()),
             Some(&legacy_payload)
         );
-        // 其他 4 個 label:gitx/giminix/codex_bot 不存在 → None,openx 已被 legacy 填不再 None
-        for key in ["gitx", "giminix", "codex_bot"] {
+        // 其他 8 個 label:gitx/giminix/codex_bot/irisx_bot/grokx/lpbot/mimo 不存在 → None,
+        // openx 已被 legacy 填不再 None
+        for key in [
+            "gitx",
+            "giminix",
+            "codex_bot",
+            "irisx_bot",
+            "grokx",
+            "lpbot",
+            "mimo",
+        ] {
             assert!(
                 out.get(key).map(|v| v.is_none()).unwrap_or(false),
                 "{key} 不寫檔時應為 None"
@@ -746,6 +818,63 @@ mod read_usage_snapshot_tests {
         }
 
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn openab_bot_ids_constant_matches_r78_inventory() {
+        // R100 護欄：守 `OPENAB_BOT_IDS` const 對齊 R78 補完後的 9 隻 OpenAB bot
+        // (cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx/lpbot/mimo)。
+        //
+        // 對齊 R67 護欄 chain 16 精神(provider 對稱):將來加 bot 必須 1) 加這 const +
+        // 2) 加 default_providers + 3) 加 KNOWN_PROVIDERS + 4) 加 usage-{bot}.json
+        // snapshot slot,任何一點漏接這條 test 會自動 fail(常數長度/內容漂移即破)。
+        //
+        // 不算 chain 17 擴張(護欄 chain 17 已飽和凍結,R97 決策):這是 chain 16
+        // 「provider 對稱」既有對稱面延伸到 quota snapshot 讀檔的第 4 同步點。
+        assert_eq!(
+            OPENAB_BOT_IDS.len(),
+            9,
+            "9 OpenAB bot 對齊 R78 後清單,實際 {} 個",
+            OPENAB_BOT_IDS.len()
+        );
+        let expected: std::collections::HashSet<&str> = [
+            "cicx",
+            "gitx",
+            "giminix",
+            "codex_bot",
+            "openx",
+            "irisx_bot",
+            "grokx",
+            "lpbot",
+            "mimo",
+        ]
+        .into_iter()
+        .collect();
+        let actual: std::collections::HashSet<&str> = OPENAB_BOT_IDS.iter().copied().collect();
+        assert_eq!(
+            actual,
+            expected,
+            "OPENAB_BOT_IDS 內容要嚴格等於 R78 補完清單,差集: 多={:?} 缺={:?}",
+            actual.difference(&expected).collect::<Vec<_>>(),
+            expected.difference(&actual).collect::<Vec<_>>()
+        );
+
+        // 雙向護欄:既有的 read_usage_snapshots_with_home 跟 collect_quota_snapshot_mtimes
+        // 對 OPENAB_BOT_IDS 應「吃 9 個 bot」 — 透過輸出 HashMap 的大小間接驗證。
+        let out_read = read_usage_snapshots_with_home(&None);
+        assert_eq!(
+            out_read.len(),
+            9 + 1, // 9 OpenAB + __local__
+            "read_usage_snapshots_with_home 應產出 9 OpenAB + __local__ = 10 slot,實際 {}",
+            out_read.len()
+        );
+        let out_mtimes = collect_quota_snapshot_mtimes(&None);
+        assert_eq!(
+            out_mtimes.len(),
+            9 + 1,
+            "collect_quota_snapshot_mtimes 應產出 9 OpenAB + __local__ = 10 slot,實際 {}",
+            out_mtimes.len()
+        );
     }
 }
 
@@ -1703,14 +1832,16 @@ fn collect_quota_snapshot_mtimes(
     let mut out: std::collections::HashMap<String, Option<SystemTime>> =
         std::collections::HashMap::new();
     let Some(dir) = home.as_ref().map(|h| h.join(".lobsterpulse")) else {
-        // 5 個 OpenAB bot + 1 個 local runner 全填 None，caller 端 filter 後不出現
+        // 9 個 OpenAB bot + 1 個 local runner 全填 None，caller 端 filter 後不出現
         // 在 metric map（age 段就只 emit header、沒 sample）。
-        for p in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
-            out.insert(p.to_string(), None);
+        // R100: 改用 OPENAB_BOT_IDS const 驅動,對齊 R78 後 9 隻 OpenAB。
+        for p in OPENAB_BOT_IDS {
+            out.insert((*p).to_string(), None);
         }
+        out.insert("__local__".to_string(), None);
         return out;
     };
-    for bot in ["cicx", "gitx", "giminix", "codex_bot", "openx"] {
+    for bot in OPENAB_BOT_IDS {
         let path = dir.join(format!("usage-{bot}.json"));
         out.insert(
             bot.to_string(),
@@ -5427,23 +5558,32 @@ mod render_prometheus_tests {
     #[test]
     fn collect_quota_snapshot_mtimes_returns_none_for_all_when_home_is_none() {
         // 邊界：dirs::home_dir() 回 None（無 HOME env、罕見但可能）→ 不 crash，
-        // 5 個 OpenAB bot + 1 個 local runner 全填 None，caller 端 filter 後不出現在
+        // 9 個 OpenAB bot + 1 個 local runner 全填 None，caller 端 filter 後不出現在
         // metric map（age 段就只 emit header、沒 sample）。
+        //
+        // R100: 5 → 9 OpenAB bot,對齊 R78 補完,改用 OPENAB_BOT_IDS const 驅動。
         let out = collect_quota_snapshot_mtimes(&None);
 
-        assert_eq!(out.len(), 6, "5 OpenAB bot + __local__ 共 6 個 key");
-        for p in ["cicx", "gitx", "giminix", "codex_bot", "openx", "__local__"] {
-            assert_eq!(out.get(p).copied(), Some(None), "{p} 應該是 None");
+        assert_eq!(out.len(), 10, "9 OpenAB bot + __local__ 共 10 個 key");
+        for p in OPENAB_BOT_IDS {
+            assert_eq!(out.get(*p).copied(), Some(None), "{p} 應該是 None");
         }
+        assert_eq!(
+            out.get("__local__").copied(),
+            Some(None),
+            "__local__ 應該是 None"
+        );
     }
 
     #[test]
     fn collect_quota_snapshot_mtimes_returns_mtime_for_existing_files() {
         // 主軸：home 存在 → 對 `~/.lobsterpulse/usage-{bot}.json` 與 `usage-local.json`
         // 做 `metadata()`，有檔案 → Some(mtime)、沒檔案 → None。
-        // 寫 2 個假檔（cicx + __local__）→ 該 2 個 key 有 mtime、其他 4 個 None。
+        // 寫 2 個假檔（cicx + __local__）→ 該 2 個 key 有 mtime、其他 8 個 None。
         // 注意：helper 內部會 `home.join(".lobsterpulse")` 當資料目錄，所以測試要把檔案寫
         // 在 `<tmp>/.lobsterpulse/` 下對齊 production shape。
+        //
+        // R100: 4 → 8 個未寫 key,對齊 9 OpenAB bot 全 slot 接上。
         let tmp = QuotaSnapshotTmpDir::new("mixed");
         let data_dir = tmp.path().join(".lobsterpulse");
         std::fs::create_dir_all(&data_dir).expect("mkdir .lobsterpulse");
@@ -5456,8 +5596,17 @@ mod render_prometheus_tests {
         // 有寫的 2 個 key → mtime 不是 None
         assert!(out.get("cicx").and_then(|m| m.as_ref()).is_some());
         assert!(out.get("__local__").and_then(|m| m.as_ref()).is_some());
-        // 沒寫的 4 個 key → None
-        for p in ["gitx", "giminix", "codex_bot", "openx"] {
+        // 沒寫的 8 個 key → None
+        for p in [
+            "gitx",
+            "giminix",
+            "codex_bot",
+            "openx",
+            "irisx_bot",
+            "grokx",
+            "lpbot",
+            "mimo",
+        ] {
             assert_eq!(out.get(p).copied(), Some(None), "{p} 不存在檔案，應回 None");
         }
     }

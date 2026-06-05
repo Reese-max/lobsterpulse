@@ -1007,3 +1007,62 @@ URGENCY: MEDIUM
 
 **綜合**: 1/10
 **指令**: 已注入修正指令
+
+### [2026-06-05] Round 100 — M0 修 K0 snapshot bot list spec drift (5/9→9/9 OpenAB slot 對齊)
+**類型**: M0 (spec drift 修 bug + K0 slot 對齊)
+**KPI**: K0 Quota 監控即時性 slot 對齊 5/9 → 9/9 OpenAB (cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx/lpbot/mimo)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 Quota snapshot slot 對齊 (OpenAB) | 5/9 | 9/9 | +4 |
+| K0 Quota 即時性 總計 (snapshot + live) | 8/13 | 12/13 (8→12,若 4 個新 bot 端有寫) / 8/13 (若全無寫) | +0~+4 |
+| K42 護欄 chain | 17 saturated | 17 saturated (R100 是 chain 16 延伸非 chain 17) | 0 |
+| K41 chore_treadmill | M0 邊界 | M0 不算 chore (M0 修 bug 紀律) | 0 |
+| baseline tests | 396/396 | 397/397 | +1 (新護欄 test) |
+
+**為什麼**:
+- **Spec drift 本質**：R78 補完 OpenAB 9 隻 (T-BOT5 mimo / T-BOT11 grokx / T-BOT12 lpbot) 後,`read_usage_snapshots_with_home` 跟 `collect_quota_snapshot_mtimes` 兩個 fn 仍 inline 寫死 5 隻 bot list。`usage-irisx_bot.json` / `usage-grokx.json` / `usage-lpbot.json` / `usage-mimo.json` 這 4 隻就算 OpenAB 端有寫,LobsterPulse 端也讀不到 → K0 Quota 即時性實際黑盒 4 隻,snapshot 監控 KPI 永遠算不到 9/9。
+- **Pua 警示背景**：4 輪 (R87/R88/R89/R90) 沒 K0 實質推進,pua 要求「找改善點」。M0 修 spec drift 是「低風險、確定性高、可量化 KPI 推進」的最佳選擇 — 不做 gemini/copilot live runner (外部 API 認證複雜度 1 輪風險高),不做 H0 (chore 紅線 44%)。
+- **1 輪 1 件**：只修 1 個 spec drift (bot list 對齊 9 隻),不擴 quota runner (留 R101+)、不接 main.js refreshQuotas 整合 (R90 owner 改的還沒 commit,R13 防護守住)。
+- **R78 spec drift 沒接護欄的教訓**：R78 護欄 chain 16 守 3 同步點對稱 (default_providers / default_provider_sounds / default_provider_waiting_sounds),但漏了第 4 同步點 (usage snapshot 讀檔 bot list) — 所以 R78 補完 9 隻後,讀檔層漂了 4 隻沒人發現。R100 補護欄對齊這 4 同步點。
+
+**做了什麼**:
+- `src-tauri/src/lib.rs:30-46` 新增 module-level `const OPENAB_BOT_IDS: &[&str]` 單一 source of truth,9 隻 OpenAB bot 對齊 R78 補完清單
+- `src-tauri/src/lib.rs:529-546` `read_usage_snapshots_with_home` bot list 改用 `OPENAB_BOT_IDS` 驅動 (home=None early return 6→10 slot,主讀 5→9 bot)
+- `src-tauri/src/lib.rs:1734-1747` `collect_quota_snapshot_mtimes` 同步改用 const 驅動
+- 5 處既有 test 改 fn 名 + docstring + assertion 對齊 9 隻:
+  - `read_usage_snapshots_with_home_none_returns_all_ten_keys_none` (6→10 slot)
+  - `read_usage_snapshots_with_home_existing_files_populates_correctly` (5+__local__ → 9+__local__)
+  - `read_usage_snapshots_with_home_legacy_alias_fills_openx_when_missing` (4→8 其他未寫 label)
+  - `collect_quota_snapshot_mtimes_returns_none_for_all_when_home_is_none` (5→9 OpenAB)
+  - `collect_quota_snapshot_mtimes_returns_mtime_for_existing_files` (4→8 未寫 key)
+- `src-tauri/src/lib.rs:817-866` 新增 1 條護欄 test `openab_bot_ids_constant_matches_r78_inventory`:
+  - 守 `OPENAB_BOT_IDS` 長度 = 9 + 內容 = R78 補完 9 隻 (HashSet 對稱比對,差集報 detail)
+  - 雙向守 `read_usage_snapshots_with_home` 跟 `collect_quota_snapshot_mtimes` 對 const 吃 9 個 bot (透過輸出 HashMap 大小間接驗證)
+  - 對齊 R67 護欄 chain 16 精神 (provider 對稱),延伸到 quota snapshot 讀檔第 4 同步點
+  - **不算 chain 17 擴張**:commit 註明這是 chain 16 既有對稱面延伸,K42 護欄 chain 17 條凍結不變
+
+**沒做什麼（scope 控制）**:
+- 不寫 gemini/copilot live runner (R89 follow-up 第 2 條):1 輪 1 件,認證體系複雜度風險高,留 R101+ owner
+- 不接 main.js refreshQuotas 整合:owner R90 改的還在工作區未 commit,R13 防護守住不動
+- 不擴 K20 Prometheus gauge:R89 註明 live fetch 語意不合,留 owner 判斷
+- 不動 8 supervisor untracked + openspec/changes/:R13 防護守住
+- 不擴張 K42 護欄 chain 17:R100 新 test 算 chain 16 延伸非 chain 17
+- 不重命名既有 quota/ 模組的 `#[allow(dead_code)]` 標籤:R89 scope creep 收尾不在本輪 scope,留 R101+ owner
+
+**驗證**:
+- `cargo test --lib`：396→**397** passed / 0 failed (新增 1 護欄 test + 既有 5 test 改內容全 pass)
+- `cargo clippy --lib -- -D warnings`：0 warning
+- `cargo fmt --check`：1 diff → `cargo fmt` 修掉 → 0 diff
+- R13 防護守住:commit 用 `git add src-tauri/src/lib.rs engineering-log.md` 精準列路徑 (不用 `git add -A`),main.js 改動留 owner R90、8 supervisor untracked + openspec/changes/ 仍 dirty
+
+**結果**: PASS（M0 修 K0 snapshot bot list spec drift 5/9→9/9 OpenAB slot 對齊 + 1 條護欄 test 守 chain 16 第 4 同步點,baseline 396→397 tests 持續綠 + 0 clippy + 0 fmt + 0 regression,R13 防護守住 8 untracked + main.js owner 改動 + openspec/changes/,K41 chore_treadmill 守住 M0 不算 chore 紀律,K42 護欄 chain 17 條凍結不擴張）
+
+**KPI-impact: K0 Quota snapshot slot 對齊 5/9→9/9 OpenAB (+4 個新 slot 接上: irisx_bot/grokx/lpbot/mimo), K42 chain 17 凍結不動 (R100 護欄 = chain 16 延伸非 chain 17)**
+
+**留 R101+ owner 接力**:
+- 4 個新 OpenAB bot 端實際有沒寫 `usage-{bot}.json` 待查 (operator 餵入觀察) — 寫了才算 K0 12/13,沒寫就 K0 還是 8/13 但 slot 已對齊
+- gemini + copilot live runner (R89 follow-up 第 2 條) — 對齊 anthropic.rs 模式但 API 認證體系 (Google AI / GitHub Copilot Internal) 需先 research
+- 前端 main.js refreshQuotas 整合 — owner R90 改的還未 commit,等 owner 接力
+- R82 留下的 `quota/*` `#[allow(dead_code)]` 標籤收尾 — R89 接入後已非 dead code,但 R89 scope creep 沒清,留 R101+ H0 窗口
+

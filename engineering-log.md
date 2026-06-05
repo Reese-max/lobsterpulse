@@ -504,3 +504,63 @@
   - **K40 開新 change**: 若有 spec-worthy 變更可開 proposal
 - 6 條 counter 重命名 _total 結尾 (R103+ follow-up, 需先廣播 alert/dashboard 跟進)
 - OTel SDK 整合 (R103+ follow-up, 需 spec 先行)
+
+### [2026-06-05] Round 105 — M0 收 openab-bot-sync spec closure (status=open→closed, 12/12 tasks [x])
+
+**類型**: M0 (spec closure, 仿 R107 contract-matrix-guard 模式)
+**KPI**: K40 spec coverage 1/1 active change closure 守 (openab-bot-sync 從 open → closed), 0 KPI 數字變動
+**commit**: 33e93c5
+
+**為什麼**:
+- R109 接力清單首位明列「openab-bot-sync spec closure (12/12 tasks [x] 對齊, status=open 待收)」
+- 12/12 tasks 已對齊 (T-BOT1~T-BOT12 對應 R70/R71/R73/R74/R75/R78/R80 commit, 5 phase 全部落地)
+- R92 已備好 .openspec.yaml closure 註記段 (status=closed, phase=5/5, R92 closure 註解), 工作區留 untracked 待收
+- R80 教訓: 開 spec 沒 closure = spec 漂移種子, R105 收 closure 守 K40 spec coverage 不漂移
+- M0 連續輪數張力: R105 (M0) → R108/R109 (M1 break) → R105 (本輪 M0 接力 closure) — 接力 closure 性質跟連發 M0 不同, 是把已備狀態落地, 1 輪解卡不混
+
+**搜尋**:
+- 不需搜尋, R107 contract-matrix-guard closure 範本已存在 (R107 段 log 完整記錄 8/8 tasks closure pattern)
+
+**做了什麼**:
+- `openspec/changes/openab-bot-sync/.openspec.yaml`: 從 R92 已備 closure 狀態 (status=closed, phase=5/5) 正式 commit (R92 留 untracked 待收, R105 收)
+- `openspec/changes/openab-bot-sync/design.md`: R92 設計文件 58 行 (4 同步點 SOP + IRISX 設計 + cicx2 drift 處置 + 防再漂), 從未 commit, 一起收
+- `git add` 精準列 2 檔路徑 (不用 `-A`), R13 守護 6 個 untracked 雜訊不污染 (.arch-fitness.json / .harness-memory.db / .supervisor-report.json / .engineer-loop.failures.jsonl / bash.exe.stackdump / src-tauri/bash.exe.stackdump)
+- 不動 tasks.md (12/12 早 [x], 已 tracked)
+- 不動 護欄 chain 17 條 (chain 飽和守住, M0 closure 不擴 chain)
+- 不動 .openspec.yaml 內部內容 (R92 寫好 closure 註記段, R105 不重寫, 守「解卡不重混」)
+
+**驗證**:
+- `git status --short`: 2 檔 A (openab-bot-sync .openspec.yaml + design.md), 6 untracked 守住 (R13)
+- `grep -c "^- \[x\]" tasks.md`: 12 (R92 12/12 對齊 + R105 不動)
+- `grep -c "^- \[ \]" tasks.md`: 0 (0 個 [ ] 殘留)
+- `cargo test --lib`: **431 passed; 0 failed** (本輪 M0 closure 不動 code → baseline 持平)
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- K42 chain 17 條不擴張 (M0 spec closure, 護衛 chain 沒動)
+- K41 chore_treadmill 24h: 0% 守住 (本輪 1 docs, 不算 chore)
+- `git log -1 --pretty=%B | grep -E 'gho_|ghp_|sk-'`: 0 hit (file-based commit msg, 避 R109 secret leak 教訓)
+- commit 33e93c5 落地 2 檔 / 78 insertions
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---|
+| K40 spec coverage closed | 3/3 (otel + contract-matrix-guard + openab-bot-sync R92 階段) | **3/3** (openab-bot-sync 正式 commit closure) | 0 (closure 狀態從 R92 就到位, R105 是 commit 動作) |
+| K0 Quota 即時性 | 10/13 (R109) | 10/13 | 0 (本輪 M0 closure 不推進) |
+| K0-A1 emit coverage | 0/13 (待 OpenAB bot 實運) | 0/13 | 0 (本輪不推進) |
+| K42 護欄 chain 飽和 | 17 條 (R106 鎖) | 17 條 | 0 (M0 closure 不擴 chain) |
+| K41 chore_treadmill 24h | 0% (R109) | 0% | 持平 (1 docs) |
+| baseline lib tests | 431/431 (R109) | 431/431 | 0 (M0 closure 不動 code) |
+| R13 untracked 守住 | 6 個 (1 R109 temp msg 已清) | 6 個 | 持平 (R105 temp msg 也清成 6) |
+| 接力清單首位 closure 數 | 1/4 (R100 #3 R105 closure) | **2/4** | +1 (openab-bot-sync closure) |
+
+**KPI-impact: K40 spec coverage closed 1/1 (openab-bot-sync 正式 commit closure, 接力清單首位解卡), 0 KPI 數字變動**
+
+**留 R106+ owner 接力**:
+- R109 commit body 接力線剩 2 條 (R105 解 1 條):
+  - **K0 Quota 10/13 → 11/13+**: 9 個 OpenAB bot 路徑（usage-{bot}.json snapshot）— 需 OpenAB 端配合，非純 LP 端可獨推
+  - **K0-A1 推進**: 需 OpenAB bot 實際打 `/hook/{provider}` 累積 5 種以上 non-zero samples (環境就緒時 M1)
+- K40 開新 change: 若有 spec-worthy 變更可開 proposal
+- 6 條 counter 重命名 _total 結尾 (R103+ follow-up, 需先廣播 alert/dashboard 跟進)
+- OTel SDK 整合 (R103+ follow-up, 需 spec 先行)
+- k0_measure.py docstring/spec drift: L3 "14 provider" / L35-37 "14 provider 真實清單" 跟 KNOWN_PROVIDERS=13 不一致 (R102 拆 K0-A 雙軌時漏修), R106+ 護衛 spec 窗口
+- M0 連續輪數張力訊號: R101~R105 連 5 輪 M0 closure/護衛, R108/R109 接力 2 輪 M1 突破 (K0 Quota 9→10/13), R105 接力 closure 不算連發 M0
+

@@ -332,7 +332,10 @@ fn process_body(body: &[u8], provider: &str, metrics: &MetricsCore) -> Result<Ho
 /// 不完整 (R70 commit 自以為修好, 實際只救回「事件不被吞」, 沒救回「provider 名
 /// 正確歸入獨立 bucket」)。R73 把 irisx_bot 加進白名單, 護欄 chain 升級為
 /// 10 known, R67 護欄 chain #16 (d) `>= 5` 還過 (6 >= 5)。
-const KNOWN_PROVIDERS: &[&str] = &[
+// R114: 改 `const` 為 `pub const`,給 `lib.rs` `get_provider_coverage_report`
+// 當 source of truth,避免 13 個 provider 列表在 lib.rs 跟 hook_server.rs 兩處
+// 漂移。對齊 R100 OPENAB_BOT_IDS 單一 source of truth 精神。
+pub const KNOWN_PROVIDERS: &[&str] = &[
     // 4 本機 CLI
     "claude",
     "codex",
@@ -1028,18 +1031,19 @@ mod tests {
     // 4xx delta 因為 4xx 來源只有 process_body Err。
     #[test]
     fn r59_k15_parse_failures_subset_of_k16_responses_4xx_under_parse_burst() {
-        // 3 次 process_body(壞 JSON) + race-tolerant threshold 對齊 R58 紀律
-        // (atomic counter 平行程式下 noise 必然 bump, strict == 不可靠)。Process
-        // 內部 monotonic atomic 保證本 test 自己至少 +3, noise 只會推高。
-        let (before, after, _) = super::with_isolated_metric_snapshot(|| {
-            for i in 0..3 {
-                let _ = process_body(
-                    format!("r59_garbage #{i}").as_bytes(),
-                    "claude",
-                    &super::default_metrics(),
-                );
-            }
-        });
+        // 3 次 process_body(壞 JSON) on 隔離 MetricsCore instance — 對齊同 R59 第二條
+        // test 模式 (line 1107-1111 `super::new_metrics()`), 避免 R36 wrap-up 警告的
+        // shared counter race: default_metrics() 是 process-level shared atomic, 平
+        // 行 test 跨 snapshot 兩次獨立 load 中間的 process_body Err 會讓 K15 跟 K16 4xx
+        // 的 delta 失同步, subset (K15 ≤ K16 4xx) 跟 strict == 都會假陽 fail。本 test
+        // scope 內 4xx 來源只有 process_body Err, 隔離 instance 下 strict == 跟 ≤ 都
+        // 應該成立, 同時守住跨 K 不變式 (K15 ⊆ K16 4xx) 跟單元性 (3 次同源 +1)。
+        let metrics = super::new_metrics();
+        let before = metrics.snapshot();
+        for i in 0..3 {
+            let _ = process_body(format!("r59_garbage #{i}").as_bytes(), "claude", &metrics);
+        }
+        let after = metrics.snapshot();
         let delta = after.delta(before);
         // Race-tolerant 下限: 3 次自己觸發必到, noise 推高不算 fail。
         assert!(

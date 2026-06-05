@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-K0 KPI 量測腳本 — 量化 LobsterPulse 14 provider 監控覆蓋率
+K0 KPI 量測腳本 — 量化 LobsterPulse 13 provider 監控覆蓋率
 
 R83 落地。對齊 MISSION.md K0 兩軸:
   K0-A1 Provider 健康度 emit 覆蓋率: 多少 provider 在 /metrics 端點實際有
@@ -32,10 +32,10 @@ import urllib.error
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# 14 provider 真實清單 (對齊 CLAUDE.md 「4 本機 + 10 OpenAB」)
-# hook_server.rs KNOWN_PROVIDERS 寫 13 (4+9), 漏 openx/irisx_bot 之間某個? 我們以
-# hook_server.rs 為 source of truth: 4 + 9 = 13. 多 1 個等下次 code 端 spec 一致性
-# 巡邏時再處理。腳本先以 13 量化, 留 KNOWN_PROVIDERS_ACTUAL 為單一可信源。
+# 13 provider 真實清單 (對齊 CLAUDE.md v5.1 「4 本機 CLI + 9 OpenAB bot」)
+# hook_server.rs::KNOWN_PROVIDERS 為 source of truth: 4 + 9 = 13。
+# R108 修 docstring/spec drift: 舊版寫「14 / 4+10」是 R83 落地時尚未對齊 R78
+# (grokx/lpbot/mimo 補完後) 的殘留, 已同步收齊。
 LOCAL_CLI = ["claude", "codex", "copilot", "gemini"]
 OPENAB_BOT = ["cicx", "gitx", "giminix", "codex_bot", "openx",
               "irisx_bot", "grokx", "lpbot", "mimo"]

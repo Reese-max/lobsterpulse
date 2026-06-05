@@ -777,3 +777,47 @@ URGENCY: LOW
 - OpenAB snapshot staleness 真正推進 (K0 Quota 10→11/12/13): irisx_bot / grokx / lpbot 三個 bot live quota 模組, 需 OpenAB 端 snapshot 寫入鏈路
 - K0-A1/K0-A2 「被動 → 主動」synthetic test event: chain 17 飽和不擴, 留 R109+ H0 窗口
 - R106 (本輪) M1 文檔 prep + R108 M0 修 k0 spec drift + R109 M1 Copilot quota + R110 M0 清理 k0 candidates 死碼, 4 輪雙軌並進守 K41 chore_treadmill
+
+---
+
+### [2026-06-05] Round 111 — M2 k0_measure 端點 DOWN 與 0 emit 區分
+
+**類型**: M2
+**KPI**: K0 measurement clarity +1
+**為什麼**: R102 拆 K0-A 雙軌時漏了「metrics 端點 dead」與「13 provider 真的 0 emit」在 stdout 報表的區分 — 兩種情況都印 0/13,讀者分不出是「端點死掉沒量到」還是「13 個 provider 都沒事件流過」。9 個 OpenAB bot 平常無事件,端點不跑時報表連續多日顯示 0/13,易誤導為「13 個 bot 全死」,實際是 lobsterpulse process 沒啟動
+**搜尋**: N/A (純自身觀察 — 4 spec closure 後,baseline 端點 down 跑 k0_measure 看到 0/13 直觀會誤判)
+**做了什麼**:
+- `scripts/k0_measure.py` main() 加 `endpoint_alive = bool(metrics_text)` 旗
+- K0-A1 / K0-A2 兩行 print 在端點 down 時附加 `(endpoint DOWN)` suffix
+- K0-B 不動 (quota 走 filesystem scan,不走 metrics 端點)
+- JSON 結構不動 (`metrics_endpoint_alive` 欄位 R102 已落,consumer 可自己分流)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 measurement clarity | 報表 0/13 兩種情況混 | 端點 down 標 (endpoint DOWN) | +1 |
+| K0-A1 端點 emit 覆蓋率 | 0/13 (DOWN 誤判) | 0/13 (DOWN) | 數字不變,語意明 |
+| K0-A2 端點 sample 覆蓋率 | 0/13 (DOWN 誤判) | 0/13 (DOWN) | 數字不變,語意明 |
+| K0-B Quota 即時性 | 4/13 | 4/13 | 0 |
+| K40 spec coverage | 4/4 closed | 4/4 closed | 0 |
+| K41 chore_treadmill 24h | 56% broad / 27% pure | 56% broad / 27% pure | 0 (本輪 feat 1) |
+| K42 chain 17 條 | 17 | 17 | 0 不擴張 |
+**驗證**:
+- `git status --short`: 1 檔 M (scripts/k0_measure.py), 6 untracked 守住 (R13)
+- `git diff --stat`: 1 檔 / 10 insertions / 2 deletions
+- `python scripts/k0_measure.py` 重跑: 端點 down 時 K0-A1/A2 顯示 `0/13 (0.0%) (endpoint DOWN)`,端點 up 時無 suffix 維持原貌
+- `cargo test --lib -- --test-threads=1`: **431 passed; 0 failed** (serial 跑全綠; parallel 預設跑 quota::copilot 會因 env-var race 偶發 1 fail,屬已知 flaky,R110 baseline 跑 parallel 也會中,不屬本改動 regression)
+- JSON schema 7 keys 全保留 (timestamp/metrics_endpoint_alive/providers_total/k0a1_health_emit/k0a2_health_sample/k0b_quota_freshness/providers),consumer 完全相容
+- spectra validate: 4 個 change 全 ✓ (與本改動無關,順手確認)
+- commit 432406e 落地 1 檔 / 10 insertions / 2 deletions
+
+**結果**: PASS (M2 區分端點 down 與 0 emit, K0 報表語意更明確, baseline 431/431 持續綠, R13 守住 6 untracked, K42 chain 17 條不擴張, K41 chore_treadmill 24h 27% pure 守住)
+
+**KPI-impact: K0 measurement clarity +1 (報表端點 down 與 0 emit 視覺區分, 避免 MISSION 報表誤導), 0 數字變動, 0 chain 擴張**
+
+**留 R112+ owner 接力**:
+- K0 真實推進 K0-A1 4→13 / K0-A2 1→13: 受 OpenAB bot process 是否在運作影響,本機不可控,留外部依賴解卡
+- K0 Quota 4→13 推 stale/missing 5 個: 需 OpenAB 端 snapshot 寫入鏈路,非本機 scope
+- K41 chore_treadmill pure 27% 卡 30% 邊界: 持續守 M1/M2/M3 為主、不輕易落 chore,本輪 M2 feat +1 守住
+- K42 chain 17 條飽和: 不擴張
+- 已知 flaky test (quota::copilot parallel env-var race): 不在本 M2 範圍,留 H0 窗口考慮改 serial runner / Mutex 包 env
+- 5 週 Prometheus rename 廣播時程 T-1 dual-emit shim (R107+ owner follow-up,本輪 M2 不在該範圍)

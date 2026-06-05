@@ -142,6 +142,16 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     }
 }
 
+/// process-global Mutex 序列化所有讀寫 `GH_TOKEN` / `GITHUB_TOKEN` / `COPILOT_TOKEN`
+/// 的測試。env var 是 process-global 狀態,cargo test parallel 跑時多個
+/// test 同時 set_var / remove_var 會互相覆寫 → 偶發 1 fail (R111 紀錄
+/// 「parallel 預設跑 quota::copilot 會因 env-var race 偶發 1 fail」)。
+/// 為零新增 dep 守 K42 chain 不擴張,用 std::sync::Mutex 全局序列化。
+/// `pub(crate)` 讓 lib.rs 內的 quota 測試也共用同一把鎖,避免 cross-mod 污染。
+/// 用 `unwrap_or_else(|p| p.into_inner())` 防 panic 導致 poison 後續 test 連鎖死。
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,12 +194,15 @@ mod tests {
     }
 
     /// 透過 env 注入 token 測 read_credentials 優先序。
-    /// 風險:env 是 process-global,平行 cargo test 會互相干擾 → 用
-    /// `serial_test` crate 標記? 為了零新增 dep,改用 std::env::set_var
-    /// 在每個測試頭尾嚴格隔離,接受小機率 flake。
-    /// 真實驗證:測試單獨跑過 (`cargo test copilot`) 0 flake。
+    /// race 防護:env 是 process-global,cargo test parallel 跑多個 test
+    /// 同時 set_var / remove_var 會互相覆寫。用 `ENV_LOCK` (process-global
+    /// std::sync::Mutex) 序列化所有 env 寫入的 test,跨 mod 共用同一把鎖
+    /// 避免 copilot.rs::tests 與 lib.rs::tests 互相污染。
+    /// 零新增 dep 守 K42 chain 不擴張。`unwrap_or_else(|p| p.into_inner())`
+    /// 防 panic 導致 poison 後續 test 連鎖死。
     #[test]
     fn read_credentials_prefers_gh_token() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // 先清空所有候選,確保優先序可重現
         std::env::remove_var("COPILOT_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
@@ -201,6 +214,7 @@ mod tests {
 
     #[test]
     fn read_credentials_falls_back_to_github_token() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::remove_var("COPILOT_TOKEN");
         std::env::remove_var("GH_TOKEN");
         std::env::set_var("GITHUB_TOKEN", "ghp_github_token_value");
@@ -211,6 +225,7 @@ mod tests {
 
     #[test]
     fn read_credentials_falls_back_to_copilot_token() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
         std::env::set_var("COPILOT_TOKEN", "ghp_copilot_token_value");
@@ -221,6 +236,7 @@ mod tests {
 
     #[test]
     fn read_credentials_whitespace_only_treated_as_missing() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
         std::env::remove_var("COPILOT_TOKEN");
@@ -232,6 +248,7 @@ mod tests {
 
     #[test]
     fn read_credentials_no_env_vars_returns_friendly_error() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
         std::env::remove_var("COPILOT_TOKEN");

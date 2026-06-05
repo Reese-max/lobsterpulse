@@ -981,6 +981,7 @@ mod collect_live_quota_snapshot_tests {
     //! 故意不測：rate-limit header 解析 / 成功 fetch 路徑（要打真的 API,CI 環境
     //! 無網路或會污染真實 quota 計數,留 smoke / manual 測）。
     use super::*;
+    use crate::quota::copilot::ENV_LOCK;
 
     /// 為每個 test 製造獨立 tmp home（避免 parallel test 互踩）。
     fn tmp_home(tag: &str) -> std::path::PathBuf {
@@ -1029,6 +1030,12 @@ mod collect_live_quota_snapshot_tests {
         let home = tmp_home("empty");
         std::fs::create_dir_all(&home).unwrap();
 
+        // 防 env-var race (對齊 copilot.rs::tests 的 ENV_LOCK 序列化):
+        // 與 quota::copilot::tests 共用同一把 process-global Mutex,
+        // 確保 copilot.rs 內 5 個 env-var test 在跑時這個 test 不會被切到
+        // 中間狀態 (例如 set 後未 remove 切到這邊 read)。
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
         // 確保 copilot 的 read_credentials 也不會從 env 拉到真 token
         // (測試環境理論上不會設 GH_TOKEN / GITHUB_TOKEN / COPILOT_TOKEN,
         // 但保險起見先清掉,排除 runner 不在 '⚠ ...' 開頭的污染路徑)
@@ -1069,6 +1076,9 @@ mod collect_live_quota_snapshot_tests {
         // 任何改名 / 新加 / 漏掉 → 前端分組錯亂。
         let home = tmp_home("names");
         std::fs::create_dir_all(&home).unwrap();
+
+        // 防 env-var race (對齊 copilot.rs::tests 的 ENV_LOCK 序列化)
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");

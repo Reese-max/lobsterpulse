@@ -957,3 +957,53 @@ URGENCY: MEDIUM
 **結果**: PASS（M1 Tauri command 殼 + 5 個邊界 unit test 落地，K0 Quota 即時性 +2/13（6→8），baseline 391→396 tests 持續綠 + 0 clippy + 0 fmt + 0 regression，R13 防護守住 8 untracked + openspec/changes/，K41 chore_treadmill 守住 M1 不算 chore 紀律，K42 護欄 chain 17 條凍結不擴張）
 
 **KPI-impact: K0 Quota 監控即時性 +2/13 (claude + codex live fetch 對外暴露待前端呼叫)**
+
+### 2026-06-05 R90 — 👁️ AI Supervisor 審查（觀察輪 — main.js 接 `__live__` envelope 落地）
+**類型**: M1（K0 Quota 即時性 contract 完整度 8/13 前端接線：R89 Tauri command `get_live_quota_snapshot` 對外暴露後，main.js refreshQuotas + updateCapsuleQuota 必須消費）
+**KPI**: K0 Quota contract 完整度 +1（8/13 後端→前端接線完成；K0 即時性數值仍 8/13 不變）
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 Quota 監控即時性（後端） | 8/13 (claude + codex live API + 6 OpenAB snapshot) | 8/13 | 0（前端接線不變後端覆蓋）|
+| K0 Quota contract 完整度（後端→前端） | 7/13 (6 OpenAB snapshot 到前端) | 8/13 (+ live API envelope `__live__` 注入) | +1 |
+| K42 護欄 chain | 17 saturated | 17 saturated | 0 |
+| K41 chore_treadmill | 0% (M1 不算 chore) | 0% (M1 不算 chore) | 0 |
+| baseline tests | 396/396 | 396/396 | 0 |
+| R13 防護 | 8 untracked + openspec/changes/ | 8 untracked + openspec/changes/ | 守住 |
+
+**為什麼**:
+- R89 wrap-up 留的「前端 main.js refreshQuotas 整合」owner follow-up，R90 觀察輪把活做完但漏 commit → supervisor 1/10 起點
+- 雙資料源（OpenAB snapshot + live API）→ 第三條 `__live__` key 注入 envelopes 同形（runners / source / updated_at），前端 merge 邏輯 `Map by name, live 優先` 避免 snapshot 24h fresh 掩蓋 live 更緊 pct
+- 1 輪 1 件事：只接 R89 已暴露的 command，不擴 quota/ 模組（gemini/copilot/9 OpenAB bot runner 屬另 1 輪 M1，留 R100+）
+- 護欄 chain K42 17 條已飽和 → 不擴張
+
+**做了什麼**:
+- `src/main.js:1441-1464` refreshQuotas 改用 `Promise.allSettled` 平行抓 `read_usage_snapshots` + `get_live_quota_snapshot`，任一失敗不擋另一條；`liveSnap.runners.filter(r => r.ok)` 至少 1 個 ok 才注入 `__live__`，避免滿版錯誤蓋掉其它來源
+- `src/main.js:1490-1496` 全域額度區 fallback chain：`__local__ || __live__ || OpenAB snapshot (cicx/gitx/giminix/codex_bot)`；標題動態切換 `💻 本機額度` / `💻 本機額度 (live)` / `☁️ OpenAB 額度`
+- `src/main.js:1881-1891` updateCapsuleQuota 合併 `__local__` + `__live__` runners by name，live 優先（同 name 較新以避免 snapshot 24h fresh 掩蓋 live 更緊 pct）
+- `engineering-log.md` 補 R90 完整紀錄（觀察輪交付不完整 + KPI 表 + 沒做的範圍）
+
+**沒做什麼（scope 控制）**:
+- 不接 K0 健康度指標（P95 延遲 + 成功率 Prometheus metric）→ M1 跨檔需 spec 先行，留 R100+ owner 排程
+- 不擴 quota/ 模組（gemini/copilot/9 OpenAB bot runner）→ 那是另 1 輪 M1
+- 不修 main.js:1159 runnerPct vs 1880 updateCapsuleQuota 內聯 candidates 邏輯重複（DRY 違規但 R90 closure 範圍外；現階段 2 處一致，加欄位會漏一處）→ 留 R100+ 獨立 commit
+- 不動 8 supervisor untracked + openspec/changes/ → R13 防護守住
+
+**驗證**:
+- `cargo check`：綠 (0.67s)
+- `cargo test --lib`：396/396 持續綠（無 Rust 改動）
+- `cargo clippy --lib -- -D warnings`：0 warning
+- R13 防護守住：commit 用 `git add src/main.js engineering-log.md` 精準列路徑（**不用** `git add -A`），8 untracked + openspec/changes/ 仍 dirty
+- 5 個 R89 邊界 test 持續守住 live envelope 契約：`runners_have_known_names_claude_and_codex` + `serializes_to_json_for_frontend` + `updated_at_is_fresh_unix_seconds` 是前端 `__live__` 注入的契約保證
+
+**結果**: PASS（M1 R90 closure 收尾：main.js refreshQuotas + updateCapsuleQuota 整合 R89 live API 暴露，K0 Quota contract 完整度 7→8/13，baseline 396/396 持續綠 + 0 clippy + 0 fmt + 0 regression，R13 防護守住 8 untracked + openspec/changes/，K41 chore_treadmill 守住 M1 不算 chore 紀律，K42 護欄 chain 17 條凍結不擴張）
+
+**KPI-impact: K0 Quota contract 完整度 7→8/13 (前端接 `__live__` envelope)**
+
+### 2026-06-05 R90 — 👁️ AI Supervisor 審查
+**品質**: PASS|WARN|FAIL (1/10)
+**方向**: ALIGNED|DRIFTING|OFF_TRACK (1/10)
+**風險**: 最大的方向偏差風險是什麼（一句話）
+
+**綜合**: 1/10
+**指令**: 已注入修正指令

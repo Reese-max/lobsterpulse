@@ -1445,9 +1445,22 @@ async function refreshQuotas() {
   }
   refreshQuotasInFlight = true;
   // 雙資料源：OpenAB snapshot 檔（加分） + runtime provider_totals（即時累計，必備）
+  // R90: 加第 3 條 live API（Tauri IPC `get_live_quota_snapshot`,R89 暴露）,
+  // 與 snapshot 平行抓, 任一失敗不擋另一條；live 注入 `__live__` key, `__local__`
+  // 缺/stale 時 fallback 用。
   try {
-    let snapshots = {};
-    try { snapshots = await invoke("read_usage_snapshots"); } catch (e) {}
+    const [snapshotsRes, liveRes] = await Promise.allSettled([
+      invoke("read_usage_snapshots"),
+      invoke("get_live_quota_snapshot"),
+    ]);
+    let snapshots = snapshotsRes.status === "fulfilled" ? snapshotsRes.value : {};
+    const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
+    window.__lastLiveQuota = liveSnap;
+    // 轉成跟 snapshot envelope 同形（runners / source / updated_at）,
+    // 至少 1 runner ok 才視為可用, 避免滿版錯誤蓋掉其它來源。
+    snapshots.__live__ = (liveSnap?.runners || []).some(r => r.ok)
+      ? { runners: liveSnap.runners.filter(r => r.ok), source: liveSnap.source || "live_api", updated_at: liveSnap.updated_at || 0 }
+      : null;
     window.__lastQuotaSnapshots = snapshots;
     // snapshot 更新時同步刷新 capsule quota 提示
     updateCapsuleQuota();
@@ -1474,10 +1487,13 @@ async function refreshQuotas() {
     </div>`;
     }).filter(Boolean).join("");
 
-    // 全域額度區——**LobsterPulse 自跑的 local runner 優先**，若無才用 OpenAB snapshot
+    // 全域額度區——**LobsterPulse 自跑的 local runner 優先**，若無才用 live API 補，
+    // 兩者皆缺才 fallback 到 OpenAB snapshot。
     const localSnap = snapshots.__local__;
-    const representativeSnap = localSnap || snapshots.cicx || snapshots.gitx || snapshots.giminix || snapshots.codex_bot;
-    const sectionTitle = localSnap ? "💻 本機額度" : "☁️ OpenAB 額度";
+    const liveSnap = snapshots.__live__;
+    const representativeSnap = localSnap || liveSnap || snapshots.cicx || snapshots.gitx || snapshots.giminix || snapshots.codex_bot;
+    const sectionTitle = localSnap ? "💻 本機額度"
+      : (liveSnap ? "💻 本機額度 (live)" : "☁️ OpenAB 額度");
 
     // freshness badge: 計算 snapshot 年齡
     let freshnessBadge = "";
@@ -1865,8 +1881,14 @@ function renderCapsule(st) {
 function updateCapsuleQuota() {
   const el = $("capsule-quota");
   if (!el) return;
-  const snap = window.__lastQuotaSnapshots?.__local__;
-  const runners = snap?.runners || [];
+  // R90: 合併 local snapshot + live API runners, live 優先（同 name 較新）以避免
+  // snapshot 還在 24h fresh 但 live 已抓到更緊 % 時被舊資料掩蓋。
+  const localRunners = window.__lastQuotaSnapshots?.__local__?.runners || [];
+  const liveRunners = (window.__lastLiveQuota?.runners || []).filter(r => r.ok);
+  const runnersByName = new Map();
+  for (const r of liveRunners) runnersByName.set(r.name, r);
+  for (const r of localRunners) if (!runnersByName.has(r.name)) runnersByName.set(r.name, r);
+  const runners = Array.from(runnersByName.values());
   let tightest = null; // {name, pct, icon}
   const ICONS = { claude: "⏱", codex: "🤖", copilot: "⚡", gemini: "💎" };
   for (const r of runners) {

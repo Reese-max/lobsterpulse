@@ -11364,6 +11364,139 @@ mod render_prometheus_tests {
             );
         }
     }
+
+    /// R113.1: dual-emit 數值一致性護衛
+    ///
+    /// 補強 R113 既有的「string contains」護衛：舊護衛只斷言「兩個名字都出現在
+    /// body」→ 若其中一條 emit path 改了 source 忘記同步另一條, 兩個名字都還在
+    /// body 但 value 已經分叉 (silent contract drift). 本護衛 parse 出實際
+    /// `(labels, value)`, 對 6 條 dual-emit pair 斷言 HashMap 相等
+    ///
+    /// 涵蓋 case:
+    ///   - global counter (#1 #2): 兩個名字同 value (sum 來自同一 source)
+    ///   - per-provider counter (#3-#6): 兩個名字對每個 provider label 都同 value
+    ///
+    /// 對齊 R106 design.md 對照表 6 條 + 5 週時程 T-1 階段; T-4 切換日撤銷
+    /// (屆時舊名刪除, 護衛可改為「舊名不在 body」+ 新名仍 emit 數值)
+    #[test]
+    fn render_prometheus_body_dual_emit_values_match_per_provider() {
+        // 沿用 full_state test 的 fixture, 不重複建資料
+        let mut totals = HashMap::<String, ProviderTotals>::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                tokens_input: 100,
+                tokens_output: 50,
+                session_count: 3,
+                failure_count: 1,
+                events_total: 10,
+                event_type_counts: std::collections::BTreeMap::new(),
+                since: Some(Utc::now() - chrono::Duration::seconds(60)),
+                last_event_at: Some(Utc::now() - chrono::Duration::seconds(5)),
+                last_completed_session_age_secs: Some(30),
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        totals.insert("openx".to_string(), ProviderTotals::default());
+
+        let mut quota_ages = HashMap::new();
+        quota_ages.insert("cicx".to_string(), 120i64);
+        quota_ages.insert("claude".to_string(), 5i64);
+
+        let mut quota_pct = HashMap::new();
+        quota_pct.insert("cicx".to_string(), 80u8);
+        quota_pct.insert("claude".to_string(), 95u8);
+
+        let mut last_completed_age = HashMap::new();
+        last_completed_age.insert("cicx".to_string(), 30i64);
+        last_completed_age.insert("claude".to_string(), 10i64);
+
+        let sessions = vec![
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::WaitingForUser),
+            info_with_state("openx", false, SessionState::Idle),
+        ];
+
+        let body = render_prometheus_body(
+            &sessions,
+            3,
+            2,
+            &totals,
+            &quota_ages,
+            &quota_pct,
+            Some(15),
+            &last_completed_age,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // 從 Prometheus text body parse 出指定 metric 的所有 (labels, value)
+        // 支援兩種格式:
+        //   "<name> <value>"              (無 label)
+        //   "<name>{k=\"v\"} <value>"     (有 label, label pair 由 } 邊界切)
+        fn extract_metric_values(body: &str, metric_name: &str) -> HashMap<String, u64> {
+            let mut out = HashMap::new();
+            for line in body.lines() {
+                if line.is_empty() || line.starts_with("# ") {
+                    continue;
+                }
+                let Some(rest) = line.strip_prefix(metric_name) else {
+                    continue;
+                };
+                let (labels, value_str) = if let Some(brace) = rest.strip_prefix('{') {
+                    let Some(end) = brace.find('}') else {
+                        continue;
+                    };
+                    let labels = brace[..end].to_string();
+                    let value_str = brace[end + 1..].trim();
+                    (labels, value_str)
+                } else {
+                    (String::new(), rest.trim())
+                };
+                if let Ok(v) = value_str.parse::<u64>() {
+                    out.insert(labels, v);
+                }
+            }
+            out
+        }
+
+        let dual_emit_pairs = [
+            (
+                "lobsterpulse_tokens_input",
+                "lobsterpulse_tokens_input_total",
+            ),
+            (
+                "lobsterpulse_tokens_output",
+                "lobsterpulse_tokens_output_total",
+            ),
+            (
+                "lobsterpulse_provider_tokens_input",
+                "lobsterpulse_provider_tokens_input_total",
+            ),
+            (
+                "lobsterpulse_provider_tokens_output",
+                "lobsterpulse_provider_tokens_output_total",
+            ),
+            (
+                "lobsterpulse_provider_failure_count",
+                "lobsterpulse_provider_failure_count_total",
+            ),
+            (
+                "lobsterpulse_provider_session_count",
+                "lobsterpulse_provider_session_count_total",
+            ),
+        ];
+        for (legacy, total) in &dual_emit_pairs {
+            let legacy_vals = extract_metric_values(&body, legacy);
+            let total_vals = extract_metric_values(&body, total);
+            assert_eq!(
+                legacy_vals, total_vals,
+                "R113.1 dual-emit 數值分叉 (silent contract drift): 舊名 {legacy} = {legacy_vals:?}, 新名 {total} = {total_vals:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

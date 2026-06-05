@@ -740,3 +740,36 @@ URGENCY: MEDIUM
 - quota/ 模組 `#[allow(dead_code)]` 標籤收尾 (H0 窗口)
 - R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
 - R100 策略顧問 #2: provider contract test matrix (開新 change 補 13 provider × 3 attribute matrix)
+
+### [2026-06-05] Round 105 — M0 收 quota/ dead_code 殘留
+**類型**: M0 (技術債謊言)
+**KPI**: housekeeping (baseline 持平, 0 KPI 數字變動, 但 3 檔 dead_code marker 謊言→真話)
+**為什麼**: R82 quota/ 模組開工時 Tauri command 未接入,3 檔 (mod/anthropic/codex) 頂端掛 `#![allow(dead_code)]` + 檔頭標「R82 半成品」「R86 半成品」。R89 Tauri command 經 `quota::anthropic::fetch` / `quota::codex::fetch` (lib.rs:518-519) 接入後,整模組已 non-dead,但 dead_code marker 從未清。CodexAuth 內 `auth_mode` / `last_refresh` 兩個 `Option<String>` deserialized 後從未讀,屬 dead field。程式碼謊言會誤導未來讀者以為模組未接。
+
+**搜尋**:
+- 沒搜 (本輪是純 surgical 清理, 對齊 session 12878 observation「Dead Code Markers Inventory: Quota Modules Unused」)
+- `grep -r auth_mode\|last_refresh src/` 0 hit → 確認 field 移除安全
+
+**做了什麼**:
+- `src-tauri/src/quota/mod.rs`: 移除 `#![allow(dead_code)]` + 改 `//!` doc comment 標 R82→R85/R86→R89 真實 timeline
+- `src-tauri/src/quota/anthropic.rs`: 同上, 移除檔頭 R82 半成品註解
+- `src-tauri/src/quota/codex.rs`: 同上 + 移除 `CodexAuth` 內 `auth_mode` / `last_refresh` 兩個 dead field
+- 不動 `lib.rs` / `openspec/` / `bash.exe.stackdump` / 8 untracked 守 R13 防護
+
+**驗證**:
+- `cargo test`: 414/414 綠 (含 quota 子集 62/62)
+- `cargo clippy --all-targets`: 0 warning
+- `cargo fmt --check`: 0 diff
+- `git status`: 3 檔 commit, 8 untracked + 2 spec 檔守住 (R13)
+- baseline 414/414 持平 (refactor 不變 behavior)
+
+**結果**: PASS（M0 收 quota/ dead_code 殊言, 3 檔 10+/18- 淨負 8 行, baseline 414/414 持平, K42 護欄 chain 17 條不擴張, R13 守住 8 untracked + 2 spec 檔, K41 chore_treadmill 24h 0%（本輪 H0/M0 收尾不算 chore））
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K42 護欄 chain 飽和 | 17 條 | 17 條 | 0 |
+| K41 chore_treadmill 24h | 0% (前輪收 closure) | 0% | 持平 |
+| baseline tests | 414/414 綠 | 414/414 綠 | 0 |
+| dead_code 謊言檔 | 3 (mod/anthropic/codex) | 0 | -3 |
+| CodexAuth dead field | 2 (auth_mode/last_refresh) | 0 | -2 |

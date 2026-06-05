@@ -646,3 +646,62 @@ URGENCY: LOW
 - gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
 - k0_measure.py docstring/spec drift: L3 "14 provider" / L35-37 "14 provider 真實清單" 跟 KNOWN_PROVIDERS=13 不一致 (R102 拆 K0-A 雙軌時漏修), 護衛 spec 窗口待修
 - R108/R109 接力 M1 突破 (K0 Quota 9→10/13) 跟 R106 接力 M0 closure (K40 4/4) 雙軌並進, 守 K41 chore_treadmill < 30% 紅線
+
+### [2026-06-05] Round 108 — M0 修 k0_measure.py spec drift (14→13, 4+10→4+9)
+**類型**: M0
+**KPI**: K0 KPI 量測一致性 +1 (docstring 對齊 code reality, 13 個 provider 量化窗口名實相符)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---|
+| K0 KPI 量測一致性 (docstring ↔ code) | 漂移 (寫 14/4+10, 實 13/4+9) | 對齊 (13/4+9) | +1 |
+| K40 spec coverage closed | 4/4 (R106 closure) | 4/4 | 持平 (本輪 M0 修 spec drift, 不屬 K40 spec closure) |
+| K0 Quota 即時性 | 10/13 (R109) | 10/13 | 0 (M0 修量測腳本, 不推進 quota 模組) |
+| K0-A1 emit coverage | 4/13 (30.8%) | 4/13 (30.8%) | 0 (K0-A1 受 OpenAB bot 是否在運作影響, 本輪不推進) |
+| K0-A2 sample coverage | 1/13 (7.7%) | 1/13 (7.7%) | 0 (同上) |
+| K0-B quota freshness | 4/13 (30.8%) | 4/13 (30.8%) | 0 (本輪 M0 修, 不動 OpenAB snapshot 寫入) |
+| K42 護欄 chain 飽和 | 17 條 (R106 鎖) | 17 條 | 0 (M0 修量測腳本, 不擴護衛 chain) |
+| K41 chore_treadmill 24h | 0% (R106) | 0% | 持平 (本輪 1 fix, 不算 chore) |
+| baseline lib tests | 431/431 (R106) | 431/431 | 0 (M0 不動 Rust code) |
+| R13 untracked 守住 | 6 個 | 6 個 | 持平 (`git add scripts/k0_measure.py` 精準 1 檔, 不碰 6 個 noise) |
+
+**為什麼**:
+- R106 follow-up 明確列 k0_measure.py docstring/spec drift 為 R106+ owner 接力: L3 寫「14 provider」+ L35-37 寫「4 本機 + 10 OpenAB」, 實際 KNOWN_PROVIDERS=13 (4+9) 對齊 hook_server.rs source of truth
+- R83 落地時尚未對齊 R78 (grokx/lpbot/mimo 補完) 的殘留, R102 拆 K0-A 雙軌時漏修 — 護衛 spec 窗口待修
+- 「1 輪沒有改善 = 失敗」壓力下, M0 spec drift 修是最對齊 /pua persona (bug-first) 的最小有效路徑: 4 行改動、risk 0、有 audit trail
+- 不擴 K42 chain 17 條 (M0 spec drift 修, 不屬護衛 chain scope)
+- 不寫護衛 test (k0_measure.py 是 Python 腳本, 非 Rust chain 範圍, R100 策略顧問 #2 護衛 chain 精神守住)
+- 1 輪 1 件: 對齊 R107 fix(spec) pattern (修 spec drift, 不擴 chain), 不混 quota 模組 / 不混 Prometheus rename 窗口
+
+**搜尋**:
+- 不需搜尋, R106 follow-up 註記段已備齊 (R106 段 L 末「k0_measure.py docstring/spec drift: L3 "14 provider" / L35-37 "14 provider 真實清單" 跟 KNOWN_PROVIDERS=13 不一致」)
+- 對齊 R107 fix(spec) 模式 (R107 M0 修 contract-matrix-guard spec drift, R108 M0 修 k0_measure.py spec drift, 兩條獨立 spec drift 收齊)
+
+**做了什麼**:
+- L3 docstring: `14 provider` → `13 provider`
+- L35 comment: `14 provider 真實清單 (對齊 CLAUDE.md 「4 本機 + 10 OpenAB」)` → `13 provider 真實清單 (對齊 CLAUDE.md v5.1 「4 本機 CLI + 9 OpenAB bot」)`
+- L36-37 從「漏 openx/irisx_bot 之間某個? 我們以 hook_server.rs 為 source of truth...」改成 R108 修補註記 + hook_server.rs::KNOWN_PROVIDERS 為 source of truth 的明確聲明
+- `git add scripts/k0_measure.py` 精準 1 檔, R13 守住 6 untracked (`.arch-fitness.json` / `.engineer-loop.failures.jsonl` / `.harness-memory.db` / `.supervisor-report.json` / `bash.exe.stackdump` / `src-tauri/bash.exe.stackdump`) 不污染
+- 不動 lib.rs / 不動 OPENAB_BOT_IDS const / 不動 quota/ 模組
+- 不動 K42 chain 17 條
+- 不寫護衛 test (Python 腳本, 非 Rust chain 範圍)
+
+**驗證**:
+- `python scripts/k0_measure.py` 輸出: total: 13, K0-A1 4/13 (30.8%), K0-A2 1/13 (7.7%), K0-B 4/13 (30.8%) — 量化窗口名實相符
+- `.harness-k0.json` machine-readable: providers_total = 13, K0-A1 4/13, K0-A2 1/13, K0-B 4/13 (JSON schema 一致)
+- `cargo test --lib`: **431 passed; 0 failed** (本輪 M0 修 Python 腳本, baseline 持平)
+- `git status --short`: 6 untracked 不變 (R13 守住)
+- K42 chain 17 條不擴張
+- K41 chore_treadmill 24h: 0% 守住 (本輪 1 fix, 不算 chore)
+- commit b7d23ae 落地 1 檔 / 5 insertions, 5 deletions
+
+**結果**: PASS (M0 修 k0_measure.py spec drift 14→13 + 4+10→4+9, docstring/comment 對齊 hook_server.rs::KNOWN_PROVIDERS source of truth, baseline 431/431 持續綠, R13 守住 6 untracked, K42 chain 17 條不擴張, K41 chore_treadmill 24h 0%)
+
+**KPI-impact: K0 KPI 量測一致性 +1 (docstring 對齊 code reality, 13 個 provider 量化窗口名實相符), 0 KPI 數字變動**
+
+**留 R109+ owner 接力**:
+- k0_measure.py 護衛 test 化 (Python script 寫 Rust-side test): 可在 R100 策略顧問 #2 護衛 chain 精神下擴 1 條 Python 對齊 test, 但 chain 17 已飽和, 留 R109+ H0 窗口
+- OpenAB snapshot staleness 真正推進 (K0 Quota 10→11/12/13): irisx_bot / grokx / lpbot 三個 bot 的 live quota 模組, R100 策略顧問 #1 行動「鎖定剩下 3 個 provider 的 live quota 實作順序」 — 需要先有 OpenAB 端 snapshot 寫入鏈路, 環境依賴
+- K0-A1/K0-A2 從「被動」轉「主動」: R100 策略顧問 #2 建議「對低頻 provider 設 synthetic test event 來驗證 emit 路徑真的通」, 寫護衛 test 觸發 fake SessionStart → 驗證 /metrics emit 該 provider label, 確保 90 天到時 emit 鏈路確實通而非 bot 沒跑就以為路壞了
+- prometheus-counter-rename-2026-q3 (R106 接力清單): 5 週廣播時程 + 實際 rename 6 條 metric, 留 R109+ owner
+- gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
+- R108/R109 雙軌並進守住 K41 (M0 修 spec drift + M1 quota 模組), 避免 chore_treadmill 飆高

@@ -1,0 +1,14 @@
+schema: spec-driven
+id: prometheus-counter-convention
+created: 2026-06-05
+updated: 2026-06-05
+status: closed
+phase: 1/1
+created_by: auto-dev-loop
+owner: auto-dev-loop
+# R106 closure: 4 個 spec 檔 8/8 tasks [x] 全勾, spec 對齊契約封版 (proposal 5 段 / design 4 層面 impact + 5 週時程 + 護衛 test 設計 / spec 4 Requirement + 8 Scenario / tasks 8 8)。
+# 實際 rename 6 條 counter (LP_METRICS const + emit site + 35 test assertion) 列 R107+ owner follow-up — 破既有 Prometheus 抓取 + alert + dashboard, 1 輪 1 件不可承受 scope。
+# 護衛 test 程式碼實作 (counter_metrics_must_have_total_suffix in lib.rs) 留 R107+ rename 當下同 commit 一起寫 (護衛 test 對現名會 false positive, 需對齊契約 + rename 同步)。
+# R106 接力清單首位解卡: R105 接力清單列「6 條 counter 重命名 _total 結尾 (破 Prometheus 抓取, 需先廣播 alert/dashboard 跟進)」spec 階段收 closure, code 階段留 R107+。
+# K40 spec coverage closed: 3/3 → 4/4 (R106 closure 本輪 +1)。
+kpi_alignment: k0_prometheus_naming_convention

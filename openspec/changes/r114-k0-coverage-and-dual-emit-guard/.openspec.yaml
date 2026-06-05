@@ -1,6 +1,6 @@
 schema: spec-driven
 id: r114-k0-coverage-and-dual-emit-guard
 created: 2026-06-05
-updated: 2026-06-05
-status: open
-phase: 0/1
+updated: 2026-06-06
+status: closed
+phase: 1/1

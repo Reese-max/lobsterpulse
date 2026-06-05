@@ -560,3 +560,47 @@ URGENCY: LOW
 - K0 Quota 10→13 (剩 3 個: irisx_bot/grokx/lpbot/mimo, 需 OpenAB scope 解卡)
 - K0-A1/A2 0→13 (需 endpoint 跑 build + 13 agent 真的有事件流過)
 - docs/landing page (docs/index.html) 對齊檢視: 跟 MISSION/CLAUDE.md 的 13 provider 數字 + 6 counter deprecation 對齊, 留 R110+ owner
+
+---
+
+### [2026-06-06] Round 111 — R114 closure 接力 (3 commit + spec closure)
+
+**類型**: M1 (K0 Quota coverage 量測補強) + refactor (SSoT prep)
+**KPI**: K0 Quota 監控即時性 K0-Q 8/13 → 9/13 (+1 從 openx alias 修); K42 chain 17→17 不擴張守住; K40 5/5 → 6/6 (R114 spec closure 進 closed 集)
+**為什麼**: R114 提案 (R110 接力 WIP) 切 3 段: A) R113.1 dual-emit value guard (M0 spec drift 修, owner M R114 M0 commit `6551953` 已落) + B) KNOWN_PROVIDERS pub const (refactor SSoT 預備) + C) k0_measure K0-Q + openx alias (M1 K0 推進). R111 (本輪) 接力 owner M 段 B+C + 收 closure 流程.
+**搜尋**: R106 design.md 對照表 6 條 dual-emit pair (已 closure 來源) + R114 proposal/design.md Rollout 順序 (lib.rs → k0_measure → hook_server).
+**做了什麼** (3 commit + 1 closure commit, design.md Rollout 6 順序):
+1. **commit R114-1** (owner M `6551953` 已落): `fix(metrics): R114 M0 R113.1 dual-emit value-equality guard` — lib.rs +133 行, R113.1 護衛 test `render_prometheus_body_dual_emit_values_match_per_provider`, baseline 437→438.
+2. **commit R114-2** (本輪): `feat(scripts): R114 M1 k0_measure K0-Q coverage + openx legacy alias` — `scripts/k0_measure.py` `scan_quota_snapshots` openx 加 `usage-bot` 第二個 base name + `main` 加 `k0q_quota_coverage` JSON + console 印. 對齊 `hook_server.rs:376-378` 別名語意 (`POST /hook/bot` → openx rewrite).
+3. **commit R114-3** (本輪): `refactor(hook_server): R114 KNOWN_PROVIDERS pub const SSoT prep` — `hook_server.rs` `const` → `pub const` + 4 行 R114 註解, 給將來 `lib.rs` `get_provider_coverage_report` 引用鋪路.
+4. **commit R114-4** (本輪, 收 closure): `docs(mission)+docs(engineering-log)+chore(spec) R114 closure` — MISSION.md 修 4 處 spec drift (K0-Q 10/13→9/13 對齊實跑, 缺 3→缺 4 對齊真實 missing 列表, K42 chain 17→18→17 對齊實際結果, 結論段補 R114 row) + engineering-log 本 R111 entry + `openspec/changes/r114-k0-coverage-and-dual-emit-guard/tasks.md` 13/13 [x] + `.openspec.yaml` status=closed phase=1/1.
+
+**驗證**:
+- `cargo test --lib` 連 1 次: **438 passed; 0 failed; 0 flake 全綠** (7.17s)
+- `cargo fmt --check`: 0 diff
+- `cargo clippy --lib -- -D warnings`: 0 warning
+- `python scripts/k0_measure.py` 跑: K0-A1 0/13 (endpoint DOWN, 預期) + K0-A2 0/13 (endpoint DOWN) + K0-B fresh 4/13 + **K0-Q 9/13** (4 fresh + 5 stale: cicx/gitx/giminix/codex_bot/openx). 對齊 design.md 4.4 修後表 +1 從 openx alias 修 (修前 8/13 → 修後 9/13).
+- MISSION.md 4 處 spec drift 修對齊實跑: K0-Q 9/13 (不是 owner M 寫的 10/13), 缺 4 個 (不是 3 個), K42 chain 17→17 (不是 17→18).
+- R13 防護: 每個 commit 明確 `git add <path>` 不 add -A; 5 個 owner M 真正 dirty (lib.rs R110 護欄 test + main.js + docs/index.html + docs/styles.css + bash stackdump) 一個未動, 留 owner M 接力.
+- K42 chain 17→17 不擴張 (R114 R113.1 護衛 test 進既有 `render_prometheus_tests` mod, 不開新 mod).
+- K41 chore_treadmill 24h: 0% 守 (本輪 1 feat + 1 refactor + 1 docs + 1 chore, 純業務推進, 不算 chore).
+
+**KPI 進展表**:
+| KPI | 前值 (R109 落地) | 後值 (R111 R114 closure) | 變化 |
+|---|---:|---:|---|
+| baseline (cargo test --lib) | 437/437 (R109) | **438/438** | +1 (R113.1 護衛 test 落地) |
+| K0 Quota coverage (K0-Q) | 8/13 (R109 推算, openx 漏算 missing) | **9/13** (openx alias 修) | +1 (openx 從 missing 變 stale) |
+| K0 Quota coverage 距 13/13 目標 | 缺 3 (R109 補 mis-count) | 缺 4 (真實列表 irisx_bot/grokx/lpbot/mimo) | 0 (spec 對齊) |
+| K42 護衛 chain | 17 條 (R109) | 17 條 (R114 進既有 mod, 不擴張) | 0 (守住) |
+| K40 規格覆蓋率 | 5/5 active change closed | 6/6 (R114 closure 進 closed 集) | +1 |
+
+**結果**: PASS (R114 closure 接力, K0-Q 8→9/13, baseline 437→438, K42 chain 17→17 守住, K40 5→6, MISSION 4 處 spec drift 修對齊實跑, R13 守住 owner M 5 個真正 WIP dirty 一個未動)
+
+**KPI-impact: K0 Quota 8/13 → 9/13 (openx alias 修, +1 data path 接上)**
+
+**留 R115+ owner 接力**:
+- K0 Quota 9→13 (剩 4 個: irisx_bot/grokx/lpbot/mimo, 需 OpenAB 端 snapshot 寫入鏈路, 非本機 scope)
+- K0-A1/A2 0→13 (需 endpoint 跑 build + 13 agent 真的有事件流過)
+- K42 chain 18 提案: owner M R110 護欄 cross-module test (lib.rs R110 OPENAB_BOT_IDS ⊆ hook_server::KNOWN_PROVIDERS) 已在 dirty, 走既有 mod 也 chain 17→17, 收 R115 接力
+- docs/landing page (docs/index.html) 對齊檢視: 跟 MISSION/CLAUDE.md 的 13 provider 數字 + 6 counter deprecation 對齊, 留 R115+ owner
+- MISSION R81 baseline K42 chain 17 條 飽和契約 vs R113.1/R114 dual-emit value guard 護衛走既有 mod 17→17 不擴張: spec doc 需要 R115 接力 (R110+ 留的架構 doc 待 owner)

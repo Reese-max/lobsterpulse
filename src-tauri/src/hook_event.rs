@@ -77,15 +77,22 @@ impl RawHookEvent {
         let tool_name = get_str(f, "tool_name")
             .or_else(|| get_str(f, "toolName"))
             .or_else(|| get_str(f, "tool"))
-            .or_else(|| get_str(f, "title"));
+            .or_else(|| get_str(f, "title"))
+            // Claude tool_use blocks 用 `name` 當工具名稱（Anthropic 官方 schema）
+            .or_else(|| get_str(f, "name"));
 
         let notification_type =
             get_str(f, "notification_type").or_else(|| get_str(f, "notificationType"));
 
+        // tool_call_id — Claude tool_use blocks 用 `id`（Anthropic 官方 schema），
+        // 部分 OpenAB bot 用 `tool_use_id` 區隔用途。少了這兩個 alias 會讓
+        // PreToolUse/PostToolUse 配對 dedup 失效。
         let tool_call_id = get_str(f, "tool_call_id")
             .or_else(|| get_str(f, "toolCallId"))
             .or_else(|| get_str(f, "call_id"))
-            .or_else(|| get_str(f, "callId"));
+            .or_else(|| get_str(f, "callId"))
+            .or_else(|| get_str(f, "id"))
+            .or_else(|| get_str(f, "tool_use_id"));
 
         let tool_status = get_str(f, "tool_status")
             .or_else(|| get_str(f, "toolStatus"))
@@ -100,6 +107,8 @@ impl RawHookEvent {
             .or_else(|| f.get("input_tokens"))
             .or_else(|| get_nested_value(f, "usage", "inputTokens"))
             .or_else(|| get_nested_value(f, "usage", "input_tokens"))
+            // OpenAI/Codex style camelCase 變體
+            .or_else(|| get_nested_value(f, "usage", "promptTokens"))
             .or_else(|| get_nested_value(f, "usage", "prompt_tokens"))
             .and_then(get_u64);
         let tokens_output = f
@@ -111,6 +120,8 @@ impl RawHookEvent {
             .or_else(|| get_nested_value(f, "usage", "outputTokens"))
             .or_else(|| get_nested_value(f, "usage", "output_tokens"))
             .or_else(|| get_nested_value(f, "usage", "completion_tokens"))
+            // OpenAI/Codex style camelCase 變體
+            .or_else(|| get_nested_value(f, "usage", "completionTokens"))
             .and_then(get_u64);
 
         let failed_status = get_str(f, "status")
@@ -154,7 +165,13 @@ impl RawHookEvent {
 }
 
 fn get_str(map: &std::collections::HashMap<String, Value>, key: &str) -> Option<String> {
-    map.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+    // trim 統一去掉首尾空白：避免 `session_id: "  s1  "` 與 `"s1"` 被視為不同 session。
+    // 空字串 / 純空白視為不存在（None），讓 `unwrap_or_default()` fallback 生效。
+    map.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
 }
 
 fn get_nested_value<'a>(
@@ -249,5 +266,90 @@ mod tests {
         let ev = raw.normalize("openx");
         assert_eq!(ev.tool_status.as_deref(), Some("failed"));
         assert_eq!(ev.error.as_deref(), Some("permission denied"));
+    }
+
+    /// R107.2: tool_name 補 `name` alias（Claude tool_use.name 官方 schema）
+    #[test]
+    fn normalize_reads_tool_name_from_name_field() {
+        let raw: RawHookEvent = serde_json::from_value(json!({
+            "event": "PreToolUse",
+            "session_id": "s3",
+            "name": "Read"
+        }))
+        .expect("raw event json should deserialize");
+        let ev = raw.normalize("claude");
+        assert_eq!(ev.tool_name.as_deref(), Some("Read"));
+    }
+
+    /// R107.2: tool_call_id 補 `id` / `tool_use_id` alias（Claude tool_use.id）
+    #[test]
+    fn normalize_reads_tool_call_id_from_anthropic_fields() {
+        // `id` 欄位
+        let raw: RawHookEvent = serde_json::from_value(json!({
+            "event": "PreToolUse",
+            "session_id": "s4",
+            "id": "toolu_abc123"
+        }))
+        .expect("raw event json should deserialize");
+        let ev = raw.normalize("claude");
+        assert_eq!(ev.tool_call_id.as_deref(), Some("toolu_abc123"));
+
+        // `tool_use_id` 欄位
+        let raw2: RawHookEvent = serde_json::from_value(json!({
+            "event": "PreToolUse",
+            "session_id": "s5",
+            "tool_use_id": "toolu_xyz789"
+        }))
+        .expect("raw event json should deserialize");
+        let ev2 = raw2.normalize("claude");
+        assert_eq!(ev2.tool_call_id.as_deref(), Some("toolu_xyz789"));
+    }
+
+    /// R107.2: tokens_input nested 補 `promptTokens` camelCase
+    #[test]
+    fn normalize_reads_prompt_tokens_camelcase() {
+        let raw: RawHookEvent = serde_json::from_value(json!({
+            "event": "tool_call_update",
+            "session_id": "s6",
+            "usage": {
+                "promptTokens": 999,
+                "completionTokens": 42
+            }
+        }))
+        .expect("raw event json should deserialize");
+        let ev = raw.normalize("codex");
+        assert_eq!(ev.tokens_input, Some(999));
+        assert_eq!(ev.tokens_output, Some(42));
+    }
+
+    /// R107.1: get_str 內部 trim + 空字串視為 None。
+    /// `session_id: "  s7  "` 應被正規化為 "s7"，
+    /// `"   "` 純空白應讓 `unwrap_or_default()` fallback 生效。
+    #[test]
+    fn normalize_trims_whitespace_in_string_fields() {
+        let raw: RawHookEvent = serde_json::from_value(json!({
+            "event": "SessionStart",
+            "session_id": "  s7  ",
+            "prompt": "\thello\n",
+            "cwd": " /tmp/proj "
+        }))
+        .expect("raw event json should deserialize");
+        let ev = raw.normalize("claude");
+        assert_eq!(ev.session_id, "s7");
+        assert_eq!(ev.prompt.as_deref(), Some("hello"));
+        assert_eq!(ev.cwd.as_deref(), Some("/tmp/proj"));
+    }
+
+    /// R107.1: 純空白欄位視為不存在，觸發 unwrap_or_default() fallback。
+    /// session_id 全空白 → 走 default 空字串（讓 session 走 default bucket 而非污染命名空間）。
+    #[test]
+    fn normalize_treats_blank_string_as_missing() {
+        let raw: RawHookEvent = serde_json::from_value(json!({
+            "event": "SessionStart",
+            "session_id": "   "
+        }))
+        .expect("raw event json should deserialize");
+        let ev = raw.normalize("claude");
+        assert_eq!(ev.session_id, "");
     }
 }

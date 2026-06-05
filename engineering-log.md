@@ -928,3 +928,52 @@ URGENCY: LOW
 - OpenAB snapshot staleness 真正推進 (K0 Quota 4→13 推 stale/missing 5 個): 需 OpenAB 端 snapshot 寫入鏈路, 非本機 scope
 - K0-A1/K0-A2 「被動 → 主動」synthetic test event: 留 R109+ H0 窗口考慮 (chain 17 飽和不擴)
 - K41 量測延伸 K42 自動護欄: 連續 N 週 >30% 自動擋 commit, 屬 L2 自動化, 留 R109+ M1
+
+### [2026-06-05] Round 113 — M1 T-1 dual-emit shim 實作 (5 週時程第 1 週)
+
+**類型**: M1 (承接 R106 接力清單首位, 真正走實際 rename 流程)
+**KPI**: K0 Prometheus naming convention 0/6 spec contract → 6/6 dual-emit 階段 (T-1 半程, T-4 切換日後 → runtime 6/6 真正合規)
+
+**為什麼**:
+- R106 接力清單首位明確列 `prometheus-counter-rename-2026-q3` T-1 週實作, 從 R106 排隊至今 7 輪, 本輪 1 件做掉
+- 1 輪 1 件紀律: T-1 dual-emit (5 週時程第 1 週) 是 1 輪可承受 scope (const 47 + dual-emit 6 條 + 護衛延伸 ~50 行)
+- 2 輪無產出警告: 換角度 → 從「純 M0 spec closure」改「真實 T-1 實作」, 突破連 2 輪 M0/M2 治理批次的循環
+- baseline 修 1 條 fail: 過去 R112 報的「431/431 綠」是錯的, lp_metrics_contract_size_is_41 早 fail (const 早改 47 但 test 未對齊), R107 順手修這條
+- M0 bonus: 修 1 條 stale test (Test A 41 → 47), R103 chain 護衛 test 與 const 同步, 恢復真實 431/431 綠
+
+**做了什麼**:
+- T-PCR1: 驗證 `src-tauri/src/lib.rs:91-146` `LP_METRICS` const 已 47 條 (含 6 條新 `_total` 名, 注釋已標 R113 T-1 dual-emit), 0 改動
+- T-PCR2: `render_prometheus_body` 加 6 條新 emit block (對應 6 個 counter) — 每條保留舊 emit + 加新 emit (HELP/TYPE/sample), 舊名 HELP comment 加 `# DEPRECATED: use {new_name}, scheduled removal week 4` 標 owner 切換日
+- T-PCR3: R103 護衛 chain 既有 2 條 test 增 assertion — Test A `lp_metrics_contract_size_is_41_matching_emit_paths` → `lp_metrics_contract_size_is_47_matching_emit_paths` (size 41 → 47, 註解 4+4+3+7+13+1+9=41 → 4+8+4+7+14+1+9=47, 加 6 條新 _total 名 100% 出現 assertion); Test B 末尾加 6 條 dual_emit_pairs for 迴圈 (每條斷言 body 同時含舊名 + 新名)
+- T-PCR4: spec 4 檔已 closure (proposal.md 6 段 + design.md 6 段 + spec.md 4 個 Requirement + 8 個 Scenario + tasks.md 6 task)
+- T-PCR5: 本段 engineering-log
+- T-PCR6: 收 closure — commit + 3 次 parallel 0 flake
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| baseline (cargo test --lib) | 430/431 (R103 size test fail) | 431/431 | +1 修 fail |
+| K0 Prometheus naming convention (dual-emit 階段) | 0/6 spec contract | 6/6 dual-emit | +6 半程 (T-4 後 6/6 runtime 合規) |
+| K40 spec coverage | 4/4 closed + 1/1 active open | 4/4 closed + 1/1 active open | 0 數字變動 (closure 在 T-4 後) |
+| K42 chain 17 條 | 17 | 17 | 0 不擴張 (R103 chain 延伸, 0 新 chain) |
+| K41 chore_treadmill 24h | 27% pure | 27% pure | 0 算 chore (本輪 feat + 護衛 chain 延伸) |
+
+**驗證**:
+- `git status --short`: 1 檔 M (lib.rs, owner M dirty) + 6 untracked 守住 (R13)
+- `cargo test --lib` 連 3 次 parallel: 431 passed; 0 failed; 0 flake 全綠 (7.73s ~ 8.29s)
+- `cargo fmt --check`: clean
+- `cargo clippy --lib -- -D warnings`: clean
+- R103 chain 2 條 test 100% pass (`lp_metrics_contract_size_is_47_matching_emit_paths` + `render_prometheus_body_full_state_all_emits_in_lp_metrics_contract`)
+
+**結果**: PASS (M1 T-1 dual-emit shim 實作, 6 條 counter 同時 emit 舊名 + 新名, R103 護衛 chain 延伸守住 6 條 dual-emit assertion, baseline 430/431 → 431/431 真綠, R13 守住 6 untracked, K42 chain 17 條不擴張, K41 chore_treadmill 27% pure 守住)
+
+**KPI-impact: K0 Prometheus naming convention 0/6 → 6/6 (dual-emit 階段, T-4 切換日後 → runtime 6/6 真正合規), baseline 穩定性 +1 (R103 chain 修 1 stale test 0 flake 連 3 跑)**
+
+**留 R114+ owner 接力**:
+- T-2 抓取端 scrape config / alert rule / Grafana dashboard rename 廣播公告 (R114+ M1, 5 週時程第 2 週)
+- T-3 monitoring window: 觀察 dual-emit 期間舊名是否有 alert / dashboard 仍未跟進 (R115+)
+- T-4 切換日: 移除舊名 emit + LP_METRICS const 拿掉 6 條舊 row + # DEPRECATED comment 清掉 + CHANGELOG 標 REMOVED (R116+)
+- T-5 post-mortem: 觀察 1 週確認 0 broken alert / 0 broken dashboard (R117+)
+- gauge `lobsterpulse_sessions_total` 反向違規: 不同 spec drift 類型, 留 R106+ follow-up
+- K0 真實推進 (K0-A1 4→13 / K0-A2 1→13 / K0-B 4→13): 受 OpenAB bot process 影響, 留外部依賴解卡
+- K41 量測延伸 K42 自動護欄: 連續 N 週 >30% 自動擋 commit, 屬 L2 自動化, 留 R109+ M1

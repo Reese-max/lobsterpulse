@@ -1,0 +1,18 @@
+schema: spec-driven
+id: prometheus-counter-rename-2026-q3
+created: 2026-06-05
+updated: 2026-06-05
+status: closed
+phase: 1/1
+created_by: auto-dev-loop <xsx042388@gmail.com>
+owner: auto-dev-loop
+# R113 開工：承接 R106 收 closure 的 prometheus-counter-convention spec 對齊契約
+# (6 條 counter 現名 → 目標名對照表 + 影響面盤點 + 5 週時程), 真正走實際 rename。
+# 本輪 1 件: T-1 dual-emit shim — render_prometheus_body 同時 emit 舊名 + 新名
+# (舊名加 # DEPRECATED comment 標 owner), LP_METRICS const 41 → 47
+# (6 條新名加入 contract), R103 護衛 chain 延伸 (size 41 → 47 + dual-emit
+# 雙名同時出現 assertion), 1 輪 1 件不混 T-2 之後的 alert/dashboard 廣播。
+# 對齊 R106 design.md 5 週時程 T-0 公告 (R106 M1 完成) → T-1 dual-emit shim
+# (本輪 R113) → T-2 alert/dashboard 廣播 (R114+) → T-3 監控窗口 → T-4 切換
+# → T-5 post-mortem。
+kpi_alignment: k0_prometheus_naming_convention_dual_emit_phase

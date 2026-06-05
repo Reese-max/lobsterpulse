@@ -72,11 +72,17 @@ const OPENAB_BOT_IDS: &[&str] = &[
 /// R44 (sessions_by_state)、R47 (idle_ratio / max_session_age)、
 /// R45 (p25/p75/p99 + interarrival_avg)、Discord 模組 3 條 (R19+) 跟 Hook 模組
 /// 3 條 (R46+) 後續輪次陸續加進 render_prometheus_body，但 LP_METRICS 沒同步補。
-/// R103 補齊到 41 條，護欄 test 才會綠。
+/// R103 補齊到 41 條，R113 T-1 dual-emit 補到 47 條（41 + 6 條新 `_total` 名），
+/// 護欄 test 才會綠。
 ///
-/// ⚠️ **勿重命名**：本 const 是 spec 對齊契約，重命名既有 6 條違反 Prometheus
-/// counter convention 的 metric（見 design.md 「Spec drift 候選」段）是 R104+
-/// follow-up 範圍，本輪 1 件不混。
+/// ⚠️ **T-1 dual-emit 階段**：本 const 同時列 6 條現名 + 6 條新 `_total` 名（共 12 row，
+/// 總 47）。T-4 切換日（week 4）後舊 6 條現名從 const 移除（`len()` 回到 41），
+/// 對齊 R106 (2026-06-05) 已 closure 的 `prometheus-counter-convention` spec
+/// 對齊契約 5 週時程 T-1 → T-4 階段。
+///
+/// ⚠️ **勿於本輪 T-1 重命名**：重命名既有 6 條現名 = 破既有 Prometheus 抓取 +
+/// alert + Grafana dashboard 1 輪不可承受 scope，留 R114+ owner follow-up T-4
+/// 切換日執行（見 `openspec/changes/prometheus-counter-rename-2026-q3/`）。
 // 契約 const：prod `render_prometheus_body` 不直接引用（契約語意靠 3 條護欄 test
 // 在 test 編譯時守 `emit ⊆ LP_METRICS`），保留模組層讓未來可 `pub(crate)` 暴露給
 // debug/diagnostic 命令讀契約清單（例如列出契約外的 emit 候選）。`dead_code`
@@ -88,13 +94,18 @@ const LP_METRICS: &[&str] = &[
     "lobsterpulse_sessions_active",
     "lobsterpulse_provider_sessions",
     "lobsterpulse_provider_active",
-    // 2. Token accounting (4)
+    // 2. Token accounting (4 → 8, R113 T-1 dual-emit 加 4 條新 _total)
     "lobsterpulse_tokens_input",
+    "lobsterpulse_tokens_input_total",
     "lobsterpulse_tokens_output",
+    "lobsterpulse_tokens_output_total",
     "lobsterpulse_provider_tokens_input",
+    "lobsterpulse_provider_tokens_input_total",
     "lobsterpulse_provider_tokens_output",
-    // 3. Failure & health (3)
+    "lobsterpulse_provider_tokens_output_total",
+    // 3. Failure & health (3 → 4, R113 T-1 dual-emit 加 1 條新 _total)
     "lobsterpulse_provider_failure_count",
+    "lobsterpulse_provider_failure_count_total",
     "lobsterpulse_provider_failure_to_completion_ratio",
     "lobsterpulse_provider_success_rate",
     // 4. Idle / freshness (7)
@@ -105,8 +116,9 @@ const LP_METRICS: &[&str] = &[
     "lobsterpulse_provider_last_completed_session_age_seconds",
     "lobsterpulse_provider_idle_ratio",
     "lobsterpulse_provider_max_session_age_seconds",
-    // 5. Session count / duration aggregates (13)
+    // 5. Session count / duration aggregates (13 → 14, R113 T-1 dual-emit 加 1 條新 _total)
     "lobsterpulse_provider_session_count",
+    "lobsterpulse_provider_session_count_total",
     "lobsterpulse_provider_completed_sessions_total",
     "lobsterpulse_provider_completed_sessions_total_duration_seconds",
     "lobsterpulse_provider_completed_sessions_average_duration_seconds",
@@ -2220,30 +2232,54 @@ fn render_prometheus_body(
             "lobsterpulse_provider_active{{provider=\"{p}\"}} {c}\n"
         ));
     }
-    out.push_str("# HELP lobsterpulse_tokens_input Lifetime input tokens across all providers\n# TYPE lobsterpulse_tokens_input counter\n");
+    // R113 T-1 dual-emit (對齊 R106 spec 對齊契約 5 週時程 T-1 週): 舊名加
+    // # DEPRECATED comment 標 owner 切換日, 新名加入 (T-4 切換日後舊條移除)
+    out.push_str("# HELP lobsterpulse_tokens_input Lifetime input tokens across all providers (DEPRECATED: use lobsterpulse_tokens_input_total, scheduled removal week 4)\n# TYPE lobsterpulse_tokens_input counter\n");
     out.push_str(&format!("lobsterpulse_tokens_input {tot_in}\n"));
-    out.push_str("# HELP lobsterpulse_tokens_output Lifetime output tokens across all providers\n# TYPE lobsterpulse_tokens_output counter\n");
+    out.push_str("# HELP lobsterpulse_tokens_input_total Lifetime input tokens across all providers\n# TYPE lobsterpulse_tokens_input_total counter\n");
+    out.push_str(&format!("lobsterpulse_tokens_input_total {tot_in}\n"));
+    out.push_str("# HELP lobsterpulse_tokens_output Lifetime output tokens across all providers (DEPRECATED: use lobsterpulse_tokens_output_total, scheduled removal week 4)\n# TYPE lobsterpulse_tokens_output counter\n");
     out.push_str(&format!("lobsterpulse_tokens_output {tot_out}\n"));
-    out.push_str("# HELP lobsterpulse_provider_tokens_input Lifetime input tokens per provider\n# TYPE lobsterpulse_provider_tokens_input counter\n");
+    out.push_str("# HELP lobsterpulse_tokens_output_total Lifetime output tokens across all providers\n# TYPE lobsterpulse_tokens_output_total counter\n");
+    out.push_str(&format!("lobsterpulse_tokens_output_total {tot_out}\n"));
+    out.push_str("# HELP lobsterpulse_provider_tokens_input Lifetime input tokens per provider (DEPRECATED: use lobsterpulse_provider_tokens_input_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_tokens_input counter\n");
     for (p, n) in &provider_in_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_tokens_input{{provider=\"{p}\"}} {n}\n"
         ));
     }
-    out.push_str("# HELP lobsterpulse_provider_tokens_output Lifetime output tokens per provider\n# TYPE lobsterpulse_provider_tokens_output counter\n");
+    out.push_str("# HELP lobsterpulse_provider_tokens_input_total Lifetime input tokens per provider\n# TYPE lobsterpulse_provider_tokens_input_total counter\n");
+    for (p, n) in &provider_in_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_tokens_input_total{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    out.push_str("# HELP lobsterpulse_provider_tokens_output Lifetime output tokens per provider (DEPRECATED: use lobsterpulse_provider_tokens_output_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_tokens_output counter\n");
     for (p, n) in &provider_out_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_tokens_output{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    out.push_str("# HELP lobsterpulse_provider_tokens_output_total Lifetime output tokens per provider\n# TYPE lobsterpulse_provider_tokens_output_total counter\n");
+    for (p, n) in &provider_out_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_tokens_output_total{{provider=\"{p}\"}} {n}\n"
         ));
     }
     // K7 落地：per-provider 失敗計數（lifetime aggregate）。
     // `failure_count` 來源是 `ProviderTotals`，由 `bump_provider_totals` 在
     // `PostToolUseFailure` 事件時 `+= 1` 累加；不依賴 live session（失敗事件
     // 之後 session 仍會轉 idle/移除，但累計保留在 ProviderTotals 不蒸發）。
-    out.push_str("# HELP lobsterpulse_provider_failure_count Lifetime tool/post failure count per provider\n# TYPE lobsterpulse_provider_failure_count counter\n");
+    out.push_str("# HELP lobsterpulse_provider_failure_count Lifetime tool/post failure count per provider (DEPRECATED: use lobsterpulse_provider_failure_count_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_failure_count counter\n");
     for (p, n) in &provider_fail_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_failure_count{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    out.push_str("# HELP lobsterpulse_provider_failure_count_total Lifetime tool/post failure count per provider\n# TYPE lobsterpulse_provider_failure_count_total counter\n");
+    for (p, n) in &provider_fail_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_failure_count_total{{provider=\"{p}\"}} {n}\n"
         ));
     }
     // K8 落地：per-provider idle_seconds gauge —— 距上次 event 多少秒。
@@ -2259,10 +2295,16 @@ fn render_prometheus_body(
     // 跟 K6/K7 lifetime aggregate 對齊：counter 類型，session 結束 / stale 回收後
     // live 為 0，但 ProviderTotals.session_count 仍保留 → metric 反映歷史累計。
     // 差異化 `lobsterpulse_provider_sessions`（live）：本 metric 顯示「曾經開過」總量。
-    out.push_str("# HELP lobsterpulse_provider_session_count Lifetime session count per provider\n# TYPE lobsterpulse_provider_session_count counter\n");
+    out.push_str("# HELP lobsterpulse_provider_session_count Lifetime session count per provider (DEPRECATED: use lobsterpulse_provider_session_count_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_session_count counter\n");
     for (p, n) in &provider_session_count_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_session_count{{provider=\"{p}\"}} {n}\n"
+        ));
+    }
+    out.push_str("# HELP lobsterpulse_provider_session_count_total Lifetime session count per provider\n# TYPE lobsterpulse_provider_session_count_total counter\n");
+    for (p, n) in &provider_session_count_sorted {
+        out.push_str(&format!(
+            "lobsterpulse_provider_session_count_total{{provider=\"{p}\"}} {n}\n"
         ));
     }
     // K10 落地：per-provider first-seen timestamp（Unix epoch seconds）——
@@ -11132,12 +11174,14 @@ mod render_prometheus_tests {
     // spec.md Scenario, 否則這條 test fail 並列出「未列名 metric」清單。
 
     #[test]
-    fn lp_metrics_contract_size_is_41_matching_emit_paths() {
-        // 7 段分組對齊 design.md: 4 + 4 + 3 + 7 + 13 + 1 + 9 = 41
+    fn lp_metrics_contract_size_is_47_matching_emit_paths() {
+        // 7 段分組對齊 design.md: R103 41 條 + R113 T-1 dual-emit 6 條新 _total 名
+        // = 4 + 8 + 4 + 7 + 14 + 1 + 9 = 47 (T-4 切換日後回到 41, 見
+        // openspec/changes/prometheus-counter-rename-2026-q3/spec.md S-PCR1.3)
         assert_eq!(
             LP_METRICS.len(),
-            41,
-            "LP_METRICS 應為 41 條（對齊 design.md 7 段 + 護欄 test 集合下界），目前 {} 條",
+            47,
+            "LP_METRICS 應為 47 條（R103 41 條 + R113 T-1 dual-emit 6 條新 _total 名）, 目前 {} 條",
             LP_METRICS.len()
         );
         // 防 LP_METRICS 內部有重複（spec.md 隱含 set 語意）
@@ -11147,6 +11191,22 @@ mod render_prometheus_tests {
             LP_METRICS.len(),
             "LP_METRICS 不可有重複項, 重複會破 contract 護欄語意 (移除重複項時不會被偵測到)"
         );
+        // R113 T-1 dual-emit 護衛：6 條新 _total 名 100% 必須出現在 LP_METRICS
+        // const（防漏列, 對齊 R106 design.md 對照表）
+        let dual_emit_new_names = [
+            "lobsterpulse_tokens_input_total",
+            "lobsterpulse_tokens_output_total",
+            "lobsterpulse_provider_tokens_input_total",
+            "lobsterpulse_provider_tokens_output_total",
+            "lobsterpulse_provider_failure_count_total",
+            "lobsterpulse_provider_session_count_total",
+        ];
+        for new_name in &dual_emit_new_names {
+            assert!(
+                LP_METRICS.contains(new_name),
+                "R113 T-1 dual-emit 6 條新 _total 名必須 100% 出現在 LP_METRICS const, 漏列: {new_name}"
+            );
+        }
     }
 
     #[test]
@@ -11269,6 +11329,40 @@ mod render_prometheus_tests {
             total_emits >= 30,
             "完整 state 預期 emit 至少 30 行 metric（含 5+ provider 維度 × 多 metric family），實際 {total_emits}, test 可能是空 body 偽綠"
         );
+        // R113 T-1 dual-emit 護衛：6 條 counter 必須同時 emit 舊名 + 新名（HELP/TYPE/sample 三件套）
+        // 對齊 R106 design.md 對照表 6 條 + 5 週時程 T-1 階段；T-4 切換日撤銷（不再需要 dual-emit）
+        let dual_emit_pairs = [
+            (
+                "lobsterpulse_tokens_input",
+                "lobsterpulse_tokens_input_total",
+            ),
+            (
+                "lobsterpulse_tokens_output",
+                "lobsterpulse_tokens_output_total",
+            ),
+            (
+                "lobsterpulse_provider_tokens_input",
+                "lobsterpulse_provider_tokens_input_total",
+            ),
+            (
+                "lobsterpulse_provider_tokens_output",
+                "lobsterpulse_provider_tokens_output_total",
+            ),
+            (
+                "lobsterpulse_provider_failure_count",
+                "lobsterpulse_provider_failure_count_total",
+            ),
+            (
+                "lobsterpulse_provider_session_count",
+                "lobsterpulse_provider_session_count_total",
+            ),
+        ];
+        for (legacy, total) in &dual_emit_pairs {
+            assert!(
+                body.contains(legacy) && body.contains(total),
+                "R113 T-1 dual-emit 必須 6 條 counter 同時 emit 舊名 + 新名, 缺一: 舊={legacy} 新={total}"
+            );
+        }
     }
 }
 

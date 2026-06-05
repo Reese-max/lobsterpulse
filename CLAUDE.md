@@ -57,6 +57,46 @@
 - **Forward migration 強制刷新 name**：`load_config` 用 `.and_modify(|ex| ex.name = default.name)` 覆寫 name 但保留 enabled/settings_path。
 - **Tray 左鍵 toggle**：`show_menu_on_left_click(false) + on_tray_icon_event` 接 `MouseButton::Left + ButtonState::Up`；叫回來時自動置中避膠囊跑出螢幕。
 
+## 競品備忘（Token Telemetry / tokenusage）— 為什麼不做純 token 計量工具
+
+> R100 策略顧問 #3 行動 closure（2026-06-05 R105）。原文：「把 Token Telemetry／tokenusage 列入 `CLAUDE.md` 競品備忘，明確寫 LobsterPulse 差異：單一膠囊＋多 runtime 狀態，而不是只算 token。」
+
+### 競品定位
+
+- **[Token Telemetry](https://tokentelemetry.com/)**（MIT，GitHub VasiHemanth/tokentelemetry）— 本機 web dashboard（port 3000，Hermes 插件 port 9119），讀 agent log files 為主、不需 hook。支援 11 tools（Claude Code / Codex / Gemini CLI / Antigravity / Qwen CLI / Vibe / Cursor / Copilot / OpenCode / Grok Build / Hermes Agent），搭配 Hermes Agent 涵蓋 38 source platforms（CLI / Telegram / Discord / Slack / Feishu / DingTalk / cron / webhook）。強項是 cost anomaly detection、reasoning-token visibility、subagent delegation rendering（尤其 Hermes）、traces。
+- **[tokenusage](https://tokenusage.org/)** — 自述「Fast token tracking for Codex, Claude, and AI coding workflows」，官網資訊稀薄，範圍比 Token Telemetry 窄，定位純 token 計量。
+
+### LobsterPulse 差異（3 條界）
+
+| 維度 | Token Telemetry / tokenusage | **LobsterPulse** |
+|---|---|---|
+| 部署形態 | browser dashboard（port 3000） | **Tauri 桌面膠囊**（300×46，system tray） |
+| 監控範圍 | 純本機 CLI（11 個）/ Codex+Claude | **13 provider**（4 本機 CLI + 9 OpenAB bot） |
+| 資料路徑 | 純 log file reader（不需 hook） | **雙路徑**（本機 sidecar + OpenAB HTTP POST `/hook/{id}`） |
+| 核心視角 | token / cost / reasoning / traces | **runtime 狀態機**（Idle/Working/WaitingForUser/Stale） |
+| 視覺入口 | 開 browser → 進 dashboard | 不開 browser：膠囊常駐 + 3 快捷鍵（Ctrl+Shift+L/D/E）+ 5 視圖 |
+| 即時反饋 | log 解析（無狀態轉移事件） | 膠囊視覺變色 + JS 播音效（task-completed / task-waiting 即時觸發） |
+
+### 我們守住 3 條界
+
+1. **不是 token 計量工具** — 北極星是「真實任務狀態」（MISSION.md 釘的），token 是 K0 Quota 輔助維度。**「單一膠囊＋多 runtime 狀態，而不是只算 token」** 是策略顧問原文，也是我們的設計立場。
+2. **不做 cloud dashboard** — MISSION 非目標 #2 明確拒做 SaaS 訂閱。Token Telemetry 走 port 3000 web 是 dashboard 路線，我們走 system tray capsule，永遠不開 browser。
+3. **不做純 log reader** — 我們用 hook sidecar 主動收事件（hook_server.rs 19280-19289），可即時 emit 狀態轉移（task-completed / task-waiting → 膠囊視覺 + JS 播音效）。純 log reader 看不到 Idle→Working 轉移瞬間，無法做「agent 在等你回」的 UX 提示。
+
+### 過時風險觀察（R100）+ 我們的反制
+
+- R100 警告：Claude Code 已有官方 OTel usage／token metrics，AI agent 監控往標準 observability 靠攏；Token Telemetry 在 11 個 CLI 都有覆蓋，scope 廣。
+- 我們反制（已落地）：
+  - K0 Quota 10/13（4 本機 CLI live + 9 OpenAB snapshot，R89/R108/R109 接力）
+  - K0 Provider 健康度 P95（K30）+ 成功率（R101）已 emit 到 `/metrics`
+  - OTel/Prometheus contract spec 已 closure（R102），對齊標準 metric 不落後
+- 差異化在「**桌面常駐 + 狀態機 + 雙路徑 + 雙生態**」（本機 CLI + OpenAB bot），這是 web dashboard 路線的 Token Telemetry 做不到的 UX
+- **不學他們**（scope 守界）：
+  - 不做 reasoning token visibility（不在 MISSION 北極星）
+  - 不做 subagent delegation rendering（MIMO 是 disabled bot，非 scope）
+  - 不做 skills / memory / cron monitoring（agent 內部、不是監控職責）
+  - 不做 cost anomaly detection（K0 Quota 是維度 1，不取代 cost alarm）
+
 ## 典型問題與 SOP
 
 - **找不到 tray icon**：Win11 摺進「^」→ `ms-settings:taskbar` → 釘出來

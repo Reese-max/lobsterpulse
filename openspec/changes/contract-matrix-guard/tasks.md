@@ -28,11 +28,12 @@
 
 ## Phase 2: Spec closure
 
-- [ ] **T-MTX7: 收 closure** — tasks.md 6 個 [x] 全勾 + .openspec.yaml status=closed + phase=1/1
+- [x] **T-MTX7: 收 closure** — tasks.md 6 個 [x] 全勾 + .openspec.yaml status=closed + phase=1/1
   - 涵蓋 spec.md Requirement: 護衛 1 條 test 守住 + 同一 commit 同步更新 CONTRACT + 4 同步點
-  - 驗證: tasks.md `grep -c "^- \[x\]"` = 6; `.openspec.yaml` status=closed
-- [ ] **T-MTX8: 護衛 test 寫入 engineering-log.md** — R106 紀錄 + KPI 進展表
+  - 驗證: tasks.md `grep -c "^- \[x\]"` = 8 (R107 +2); `.openspec.yaml` status=closed
+- [x] **T-MTX8: 護衛 test 寫入 engineering-log.md** — R106 紀錄 + KPI 進展表
   - 驗證: engineering-log.md 有 `### [2026-06-05] Round 106` 段, 含 KPI 進展表 ≥1 列
+  - R107 commit 同步追加 R107 落地紀錄 (status=open→closed 切換)
 
 ## 不在本 change scope（列為 follow-up）
 

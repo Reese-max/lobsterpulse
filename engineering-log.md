@@ -825,3 +825,54 @@ URGENCY: MEDIUM
 - K0-A1 4/13 → 5/13+ 推進 (環境就緒時 M1)
 - K0 Quota 8/13 → 13/13 推進 (R89 claude/codex live 之外再加 gemini/copilot 等)
 - R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+
+### [2026-06-05] Round 107 — M0 closure contract-matrix-guard spec (status=open → closed)
+
+**類型**: M0 (護衛 closure)
+**KPI**: K40 spec coverage 1/1 open → 1/1 closed (Phase 2 收 closure), 0 KPI 數字變動 (護衛 defensive)
+**為什麼**: R106 開 contract-matrix-guard change, 落地 6 檔 (proposal/design/spec/test/tasks/.openspec.yaml) 6/6 tasks [x] (Phase 1), 但 status=open / phase=1/1 — Phase 2 closure (T-MTX7 + T-MTX8) 還沒收。R80 spec drift 教訓: 開 spec 沒 closure = spec 漂移種子。本輪 R107 自然接續 R106 半成品, 收 status=closed。
+
+**誠實記錄**: 本輪是 M0 closure, 非 M1/M2/M3 KPI 推進。R100~R106 連續 7 輪 M0 closure/護衛 (KPI 數字 0 變動的純治理批次), 是 R101 (K0 emit 13/13) 之後未做實質 KPI 推進的張力訊號。R108+ owner 接力清單已有 K0-A1 5/13+ / K0 Quota 9/13+ 兩個 M1 候選, 任何一個都能 break 0 改善。
+
+**搜尋**:
+- `tail -50 engineering-log.md` 確認 R106 收尾段含 KPI 進展表 (T-MTX8 驗證條件)
+- `tail -3 src-tauri/.../contract-matrix-guard/{tasks.md, .openspec.yaml}` 確認 T-MTX7 編輯點
+
+**做了什麼**:
+- `openspec/changes/contract-matrix-guard/tasks.md`: T-MTX7 + T-MTX8 兩個 [ ] 改 [x], 補 R107 commit 註記
+- `openspec/changes/contract-matrix-guard/.openspec.yaml`: status=open → status=closed, 加 R107 closure 註記段
+- `engineering-log.md`: 本段 R107 落地紀錄追加 (T-MTX8 驗證條件)
+- 不動 8 untracked + 護衛 test 本體 (r106_provider_contract_13_by_3_matrix) — closure 是 spec 標記切換, 不改 code
+
+**驗證**:
+- `cargo test --lib`: **408 passed; 0 failed; 0 ignored** (R107 純 spec closure, 不動 code → baseline 持平)
+- `cargo clippy --all-targets`: 0 warning (本輪無 .rs 變更, 沿 R106 baseline)
+- `cargo fmt --check`: 0 diff (同上)
+- `tasks.md grep -c "^- \[x\]"`: 6 → 8 (R107 +2 closure task)
+- `.openspec.yaml status`: open → closed
+- K42 chain 17 條不擴張 (R107 純 spec, 護衛 chain 沒動)
+- K41 chore_treadmill 24h 0% (R107 M0 closure 沿 R106 護衛紀律)
+- R13 防護: `git status` 仍 8 untracked (本輪 0 動到 untracked 區)
+
+**結果**: PASS (M0 closure contract-matrix-guard, status=open → closed, Phase 1 6/6 + Phase 2 2/2 = 8/8 tasks [x], 1 條護衛 test 守住, baseline 408/408 持續綠, K40 spec coverage 1/1 closed 維持, K42 chain 17 條不擴張, R13 守住 8 untracked, K41 chore_treadmill 24h 0%)
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K40 spec coverage closed | 1/1 (otel) | 1/1 (otel) + 1/1 (contract-matrix-guard) | +1 closed |
+| K40 spec coverage open | 1/1 (contract-matrix-guard) | 0/1 | -1 open (轉 closed) |
+| K42 護欄 chain 飽和 | 17 條 | 17 條 | 0 (R107 純 spec, 不動護衛) |
+| K41 chore_treadmill 24h | 0% (R106) | 0% | 持平 |
+| baseline lib tests | 408/408 綠 | 408/408 綠 | 0 (R107 不改 code) |
+| contract-matrix-guard change tasks [x] | 6/8 (Phase 1 完) | 8/8 (Phase 1+2 完) | +2 |
+| contract-matrix-guard change status | open | closed | open→closed |
+| M0 連續輪數 | 7 (R101 後) | 8 (R101 後) | +1 (張力訊號, R108+ 應 break) |
+
+**KPI-impact: K40 spec_consistency +1 (contract-matrix-guard closure 1/1 open → 0/1 open, +1 closed)**
+
+**留 R108+ owner 接力**:
+- **K0-A1 推進 (M1)**: 4/13 → 5/13+, 需 OpenAB bot 實際打 `/hook/{provider}` 累積 5 種以上 non-zero samples
+- **K0 Quota 推進 (M1)**: 8/13 → 9/13+, R89 claude/codex live 之外加 gemini CLI live quota 實作 (參考 anthropic.rs / codex.rs pattern)
+- **6 條 counter 重命名 _total 結尾 (H0/M0)**: R103+ follow-up, 需先廣播 alert/dashboard 跟進
+- **OTel SDK 整合 (H0)**: R103+ follow-up
+- **R100 策略顧問 #3**: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md

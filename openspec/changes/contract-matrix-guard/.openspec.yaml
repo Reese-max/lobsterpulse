@@ -2,7 +2,7 @@ schema: spec-driven
 id: contract-matrix-guard
 created: 2026-06-05
 updated: 2026-06-05
-status: open
+status: closed
 phase: 1/1
 created_by: auto-dev-loop
 owner: auto-dev-loop
@@ -17,4 +17,8 @@ owner: auto-dev-loop
 # 但目前 4 同步點散落, 沒有 single source of truth 強制對齊。
 #
 # 1 輪 1 件: 不動 6 條 counter 命名 / 不接 OTel SDK / 不改 parse_provider。
+#
+# R107 收 closure: Phase 1 6/6 + Phase 2 2/2 = 8/8 tasks [x], 1 條護衛 test
+# (r106_provider_contract_13_by_3_matrix) 守住, baseline 415/415 綠, K42 chain 17
+# 凍結, R13 守住 8 untracked。status=open → closed。
 kpi_alignment: k42_provider_registration_guard_chain

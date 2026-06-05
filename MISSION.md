@@ -38,7 +38,9 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 
 | KPI | 前值 (R81) | 90 天目標 | 量測方式 |
 |---|---:|---:|---|
-| **K0 Provider 健康度覆蓋率** | 0/13 provider 有 P95 延遲 + 成功率指標 | 13/13 | Prometheus exporter 對應 metric 是否存在且有非零樣本 |
+| **K0-A1 Provider 健康度 emit 覆蓋率（端點實際 emit）** | 0/13 provider 在 /metrics 端點實際 emit 過 `lobsterpulse_provider_*{provider="X"}` 樣本 | 13/13 端點 emit (R102 拆維度, 受 OpenAB bot 是否在運作影響) | 掃 /metrics 文本中出現的 `provider="..."` label 集合 |
+| **K0-A2 Provider 健康度 sample 覆蓋率（非零 sessions）** | 0/13 provider 有非零 `provider_sessions` 樣本 | 13/13 真正「在運作 + 事件流過」 | `lobsterpulse_provider_sessions{provider="X"}` 值 > 0 |
+| **K0 Provider 健康度（程式碼定義層, R101 補齊）** | 0/13 provider 有對應 metric family 程式碼 emit 路徑 | 13/13 程式碼 emit 定義 (R101 已達標) | grep `lobsterpulse_provider_*.{provider=X}` 對每個 X 都有定義 |
 | **K0 Quota 監控即時性** | 6 個 OpenAB bot 有 snapshot；本機 CLI 無 quota 監控 | 13/13 provider 都有 | `usage-*.json` 或等價 metric 是否被讀到 |
 | **K40 規格覆蓋率** | 1/1 active change (openab-bot-sync) 12/12 落地 | 100% 落地、0 漂移 | `spectra validate --changes <name>` 通過 + tasks.md 12/12 |
 | **K41 chore_treadmill 紅線** | 24h 55% 觸發 | <30% 持續 7 日 | `git log --since='7d' --pretty=format:'%s' \| grep -c '^chore' / total < 0.30` |

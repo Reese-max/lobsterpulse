@@ -3,8 +3,16 @@
 K0 KPI 量測腳本 — 量化 LobsterPulse 14 provider 監控覆蓋率
 
 R83 落地。對齊 MISSION.md K0 兩軸:
-  K0-A Provider 健康度覆蓋率: 多少 provider 在 /metrics 有非零 sessions 樣本
-  K0-B Quota 監控即時性:     多少 provider 的 usage-*.json 是新鮮的 (<24h)
+  K0-A1 Provider 健康度 emit 覆蓋率: 多少 provider 在 /metrics 端點實際有
+           emit 過任何 `lobsterpulse_provider_*{provider="X"}` 樣本
+           (R101 補齊的是程式碼定義 13/13; 端點實際 emit 受事件流影響)
+  K0-A2 Provider 健康度 sample 覆蓋率: 多少 provider 有非零 sessions 樣本
+           (真正「provider 在運作 + 事件流過」維度)
+  K0-B  Quota 監控即時性:     多少 provider 的 usage-*.json 是新鮮的 (<24h)
+
+R102 拆 K0-A → K0-A1 (emit 維度) + K0-A2 (sample 維度), 對齊 MISSION spec
+(R101 寫 K0 13/13 是程式碼定義, 端點實際 emit 受 OpenAB bot 進程是否運作影響;
+不拆會誤導 KPI 報表, 5/13 端點 emit 跟 13/13 程式碼定義是不同的兩個事實)。
 
 輸出:
   - 人類可讀表 (stdout)
@@ -67,6 +75,25 @@ def parse_provider_sessions(metrics_text: str) -> Dict[str, float]:
         prov, val = m.group(1), float(m.group(2))
         if prov in out:
             out[prov] = val
+    return out
+
+
+def parse_provider_emit(metrics_text: str) -> set:
+    """
+    R102: 解析 /metrics 端點實際 emit 過哪些 provider label (任何
+    `lobsterpulse_provider_*{provider="X"}` 都算 emit 過)。
+    對齊 K0-A1 端點 emit 維度 (R101 補的 13/13 是程式碼定義, 端點
+    實際 emit 受 OpenAB bot 是否在運作影響 — OpenAB 9 個 bot 平時無
+    事件 → 端點不會 emit 對應樣本)。
+    """
+    out: set = set()
+    if not metrics_text:
+        return out
+    pattern = re.compile(
+        r'lobsterpulse_provider_[a-zA-Z0-9_]+\{provider="([^"]+)"\}'
+    )
+    for m in pattern.finditer(metrics_text):
+        out.add(m.group(1))
     return out
 
 
@@ -158,15 +185,21 @@ def render_table(health: Dict[str, float], quota: Dict[str, Dict]) -> str:
 def main() -> int:
     metrics_text = fetch_metrics()
     health = parse_provider_sessions(metrics_text)
+    emit_providers = parse_provider_emit(metrics_text)
     quota = scan_quota_snapshots()
 
-    # K0-A: 有 metrics 樣本的 provider 數
-    k0a_covered = sum(1 for v in health.values() if v > 0)
+    # R102: K0-A 拆雙軌
+    # K0-A1: /metrics 端點實際 emit 過 provider 樣本的 provider 數
+    #         (受 bot 進程是否運作 + 是否有事件流過影響)
+    k0a1_covered = sum(1 for p in KNOWN_PROVIDERS if p in emit_providers)
+    # K0-A2: 有非零 sessions 樣本的 provider 數 (真正「在運作 + 事件流過」)
+    k0a2_covered = sum(1 for v in health.values() if v > 0)
     # K0-B: quota 新鮮的 provider 數
     k0b_covered = sum(1 for v in quota.values() if v.get("state") == "fresh")
 
     total = len(KNOWN_PROVIDERS)
-    k0a_pct = round(100.0 * k0a_covered / total, 1)
+    k0a1_pct = round(100.0 * k0a1_covered / total, 1)
+    k0a2_pct = round(100.0 * k0a2_covered / total, 1)
     k0b_pct = round(100.0 * k0b_covered / total, 1)
 
     print("=" * 60)
@@ -176,22 +209,34 @@ def main() -> int:
     print("=" * 60)
     print(render_table(health, quota))
     print("-" * 60)
-    print(f"K0-A 健康度覆蓋率: {k0a_covered}/{total} ({k0a_pct}%)")
-    print(f"K0-B Quota 即時性 : {k0b_covered}/{total} ({k0b_pct}%)")
+    print(f"K0-A1 健康度 emit 覆蓋率 (端點實際 emit): "
+          f"{k0a1_covered}/{total} ({k0a1_pct}%)")
+    print(f"K0-A2 健康度 sample 覆蓋率 (非零 sessions): "
+          f"{k0a2_covered}/{total} ({k0a2_pct}%)")
+    print(f"K0-B  Quota 即時性 (fresh <24h): "
+          f"{k0b_covered}/{total} ({k0b_pct}%)")
     print("=" * 60)
+    print(f"[K0-A1 端點 emit 過的 provider label: "
+          f"{sorted(emit_providers)}]")
 
     # 寫 machine-readable JSON 供後續儀表板/CI 用
     report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "metrics_endpoint_alive": bool(metrics_text),
         "providers_total": total,
-        "k0a_health_coverage": {"covered": k0a_covered, "total": total,
-                                "pct": k0a_pct},
+        "k0a1_health_emit": {
+            "covered": k0a1_covered, "total": total, "pct": k0a1_pct,
+            "providers": sorted(p for p in emit_providers if p in KNOWN_PROVIDERS),
+        },
+        "k0a2_health_sample": {
+            "covered": k0a2_covered, "total": total, "pct": k0a2_pct,
+        },
         "k0b_quota_freshness": {"fresh": k0b_covered, "total": total,
                                 "pct": k0b_pct},
         "providers": {
             p: {
                 "metrics_sessions": health.get(p, 0.0),
+                "metrics_emit": p in emit_providers,
                 "quota": quota.get(p, {}),
             }
             for p in KNOWN_PROVIDERS

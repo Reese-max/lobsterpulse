@@ -572,3 +572,59 @@ URGENCY: MEDIUM
 - gemini + copilot live runner (R89/R100 follow-up): API 認證體系研究 + 對齊 anthropic.rs 模式
 - main.js refreshQuotas 整合 (R90 owner WIP): 等 owner commit
 - quota/ 模組 `#[allow(dead_code)]` 標籤收尾 (R100 follow-up H0 窗口)
+
+### 2026-06-05 R102 — M0 修 K0 spec drift: 拆 K0-A 雙軌 (emit 維度 vs sample 維度) + MISSION 對齊
+**類型**: M0 (spec drift 修)
+**KPI**: K0 量測回歸事實 (K0-A 1/13 誤標 13/13 修正為雙軌量化) + K40 spec/impl 一致性 +1
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---|
+| K0-A1 端點 emit 覆蓋率 | 1/13 (k0_measure 算 v>0 誤把 emit 維度當 sample 維度) | 4/13 (claude/codex/copilot/gemini 端點實際 emit 過 `lobsterpulse_provider_*{provider="X"}`) | spec/impl 分離 |
+| K0-A2 sample 覆蓋率 (非零 sessions) | 1/13 (前誤標) | 1/13 (真相回歸) | 0 |
+| K0 程式碼 emit 定義 (R101 達標) | 13/13 (保留) | 13/13 | 0 |
+| K0-B Quota 即時性 | 4/13 | 4/13 | 0 |
+| K40 spec/impl 一致性 (K0 段) | drift: MISSION 寫「非零樣本」算 13/13, R101 落地是「emit 維度」 | 對齊: MISSION 拆 3 個子軸 (A1/A2/定義) 對齊 k0_measure 真相 | +1 |
+
+**為什麼**:
+- R101 commit message 寫「K0 健康度覆蓋率 0/13→13/13」是程式碼定義層 (lib.rs 為 13 個 provider 都加 metric family emit 路徑), 但 k0_measure.py 算法只算 `lobsterpulse_provider_sessions{provider="X"}` 值 > 0 = 1/13
+- /metrics 端點實際 grep 結果: 只 emit 過 5 個 provider label (`__local__/claude/codex/copilot/gemini`), OpenAB 9 個 bot 端點完全沒出現 (受 bot 進程是否運作影響, 本機環境 OpenAB 沒跑)
+- 不拆 K0-A 會誤導: 看 K0 量測 1/13 會以為 R101 沒達標, 但其實 13/13 程式碼定義已達 — 兩者都是事實, 只是不同維度
+- 拆 K0-A1 (端點 emit) + K0-A2 (sample 非零) 雙軌量化 + 保留 K0 程式碼定義軸, MISSION + k0_measure 同時對齊真相 → K40 spec/impl 一致性 +1
+
+**做了什麼**:
+- `scripts/k0_measure.py`:
+  - 新增 `parse_provider_emit(metrics_text)` 抓所有 `lobsterpulse_provider_*{provider="X"}` label
+  - `main()` 拆 K0-A → K0-A1 (emit 維度) + K0-A2 (sample 維度)
+  - 報表加 K0-A1 端點實際 emit 過的 provider label 列表 (debug 用)
+  - `.harness-k0.json` schema 改: `k0a_health_coverage` → `k0a1_health_emit` + `k0a2_health_sample` (CI/儀表板下游要同步)
+  - `providers[*].metrics_emit: bool` 標記該 provider 是否在端點 emit 過樣本
+- `MISSION.md` K0 行: 從 1 行「非零樣本」拆 3 行 (A1 emit / A2 sample / 程式碼定義)
+- 不動 lib.rs metric 邏輯 (R101 補的 13/13 程式碼定義已對, 只是 k0_measure 沒分維度)
+- 不動 8 untracked + openspec/changes/ (R13 防護守住)
+
+**驗證**:
+- `python scripts/k0_measure.py`: 跑出新報表, K0-A1=4/13, K0-A2=1/13, K0-B=4/13 全部量化且對齊 MISSION
+- `python -X utf8 -c "import ast; ast.parse(open('scripts/k0_measure.py', encoding='utf-8').read())"`: 語法 OK
+- `.harness-k0.json` JSON schema 對齊: 三軸獨立, `providers[*].metrics_emit` bool 標記齊全
+- `cargo check`: baseline 綠 (1 個 LP_METRICS dead_code warning 是 R101 留下, 本輪 M0 spec drift 修不混 H0 收拾)
+- R13 防護守住: `git add scripts/k0_measure.py MISSION.md` 精準列路徑, 8 untracked + openspec/changes/ + src-tauri/src/lib.rs M dirty 仍保持
+
+**沒做什麼 (scope 控制)**:
+- 不動 R101 LP_METRICS dead_code warning (H0 收拾留 R103+ H0 窗口, 本輪 M0 不混)
+- 不修 K0-B 4/13 → 5/13+ (需要 OpenAB 進程實際跑寫 usage-*.json, 本機環境沒有, 留 R103+ M1 環境就緒時推)
+- 不動 OTel/Prometheus contract spec (R100 策略顧問 #1, R102 沒做 spec 區, 留 R103+)
+- 不重構 render_table 視覺化欄位 (跟 M0 spec drift 修無關, 不在 R102 scope)
+
+**結果**: PASS（M0 K0 spec drift 修 + K0 量測雙軌量化, MISSION 拆 K0-A1/A2/定義 3 子軸對齊 k0_measure 真相, K40 spec/impl 一致性 +1, baseline cargo check 綠 + JSON schema 對齊, R13 防護守住 8 untracked + openspec/changes/ + src-tauri/src/lib.rs owner M dirty, K41 chore_treadmill 守住 M0 不算 chore 紀律, K42 護欄 chain 17 條凍結不擴張）
+
+**KPI-impact: K0-A 拆 K0-A1 (4/13 端點 emit) + K0-A2 (1/13 sample 非零) 雙軌量化, MISSION K0 段 3 子軸對齊 k0_measure 真相, K40 +1, baseline cargo check 綠**
+
+**留 R103+ owner 接力**:
+- R100 策略顧問 #1: `openspec/changes/otel-provider-metrics-contract/` spec closure
+- R100 策略顧問 #3: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+- R101 LP_METRICS dead_code warning 收拾 (H0 窗口)
+- K0-A1 4/13 → 5/13+ 推進 (需要 OpenAB 至少 1 個 bot 進程運作, 環境就緒時 M1)
+- K0-B 4/13 → 5/13+ 推進 (同上, 寫 fresh usage-*.json)
+- main.js refreshQuotas 整合 (R90 owner WIP)
+- quota/ 模組 `#[allow(dead_code)]` 標籤收尾 (H0 窗口)

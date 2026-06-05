@@ -58,5 +58,5 @@ R100 策略顧問行動 #1 明確要求：
 
 - `otel-provider-metrics-contract` — LP `lobsterpulse_*` metric 對齊 OTel
   GenAI semconv + Prometheus naming convention 的 spec 對照表 + 護欄 test 防
-  spec drift（涵蓋 26 條 metric 對照 / `_total` 慣例 / `_seconds` 慣例 /
+  spec drift（涵蓋 41 條 metric 對照 / Prometheus counter / time 命名慣例 /
   provider label 語意 / 未列名 metric emit 阻擋）。

@@ -36,6 +36,7 @@
   - ⚠️ **勿動** config.rs line ~420 的本機 `gemini` CLI provider（`"💻 Gemini CLI（本機）"`，`~/.gemini/settings.json`）—— 那是獨立的本機 Gemini CLI，仍是 gemini
   - 驗證：膠囊/UI 的 GIMINIX 標籤顯示 Antigravity/agy 後端；本機 gemini CLI provider 不受影響、仍存在
 - [x] **T-BOT10: 全 bot 後端標籤稽核** — R78 commit b26c551 落地 `r78_t_bot10_all_openab_backend_labels_match_config` 護欄 (config.rs +44 行)：斷言 9 隻 OpenAB provider 的 display name 後端字樣與 openab config-*.toml 一致，對照表 cicx→Claude / gitx→Copilot / giminix→Antigravity / codex_bot→Codex / openx→OpenCode / irisx_bot→Hermes / grokx→Grok / lpbot→Claude / mimo→MIMO，額外守 giminix 不含 Gemini（R75 護欄泛化）。R78 spec 漏勾 [x]，R80 修。 (covers: Backend label reflects actual backend engine)
+  - 涵蓋 design.md 「後端對照表（name 應反映的後端，來源 = openab config-*.toml 第 1 行）」9 行對齊表（cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx/lpbot/mimo → 對應 openab config-*.toml 第 1 行「後端: X」字樣）
   - 驗證：cargo test --lib = 368 passed；護欄 test pass；9 隻 OpenAB bot name 後端字樣與 openab config 一致；無其他過時標籤殘留
 
 ## Phase 5: 拆撞 id + 納管（openab 端已於 2026-06-04 由 operator 修好，LP 端補 provider）

@@ -48,6 +48,91 @@ const OPENAB_BOT_IDS: &[&str] = &[
     "mimo",
 ];
 
+/// R102 提取 / R103 對齊：LobsterPulse Prometheus metric 命名契約單一 source of truth。
+///
+/// 對齊 `openspec/changes/otel-provider-metrics-contract/` 開的 OTel/Prometheus
+/// 契約 spec：`render_prometheus_body` 實際 emit 的 41 條 metric 名稱收斂成 1 個
+/// const，護欄 test 守 `render_prometheus_body` 每次新加 metric 必須先列進這裡
+/// 並同步更新 design.md 對照表與 spec.md 場景。防「未在 spec 出現就偷偷 emit」
+/// 的 spec drift。
+///
+/// 7 段分組對齊 design.md 7 個 metric 類別：
+/// 1. Session 數量（4 條）
+/// 2. Token accounting（4 條）
+/// 3. Failure & health（3 條）
+/// 4. Idle / freshness（7 條）
+/// 5. Session count / duration aggregates（13 條）
+/// 6. Quota signal（1 條）
+/// 7. Event / process accounting（9 條：events_total / event_type_total /
+///    sessions_by_state / discord health 三條 / hook health 三條）
+///
+/// 計 41 條 = 護欄 test 集合大小下界。
+///
+/// R103 對齊筆記：R102 開工時只盤到當時 emit 過的 26 條；R46 (event_type_total)、
+/// R44 (sessions_by_state)、R47 (idle_ratio / max_session_age)、
+/// R45 (p25/p75/p99 + interarrival_avg)、Discord 模組 3 條 (R19+) 跟 Hook 模組
+/// 3 條 (R46+) 後續輪次陸續加進 render_prometheus_body，但 LP_METRICS 沒同步補。
+/// R103 補齊到 41 條，護欄 test 才會綠。
+///
+/// ⚠️ **勿重命名**：本 const 是 spec 對齊契約，重命名既有 6 條違反 Prometheus
+/// counter convention 的 metric（見 design.md 「Spec drift 候選」段）是 R104+
+/// follow-up 範圍，本輪 1 件不混。
+// 契約 const：prod `render_prometheus_body` 不直接引用（契約語意靠 3 條護欄 test
+// 在 test 編譯時守 `emit ⊆ LP_METRICS`），保留模組層讓未來可 `pub(crate)` 暴露給
+// debug/diagnostic 命令讀契約清單（例如列出契約外的 emit 候選）。`dead_code`
+// warning 在 lib target 是預期、語意正確：契約在 test 守，prod 只 emit。
+#[allow(dead_code)]
+const LP_METRICS: &[&str] = &[
+    // 1. Session 數量 (4)
+    "lobsterpulse_sessions_total",
+    "lobsterpulse_sessions_active",
+    "lobsterpulse_provider_sessions",
+    "lobsterpulse_provider_active",
+    // 2. Token accounting (4)
+    "lobsterpulse_tokens_input",
+    "lobsterpulse_tokens_output",
+    "lobsterpulse_provider_tokens_input",
+    "lobsterpulse_provider_tokens_output",
+    // 3. Failure & health (3)
+    "lobsterpulse_provider_failure_count",
+    "lobsterpulse_provider_failure_to_completion_ratio",
+    "lobsterpulse_provider_success_rate",
+    // 4. Idle / freshness (7)
+    "lobsterpulse_provider_idle_seconds",
+    "lobsterpulse_provider_since_timestamp",
+    "lobsterpulse_provider_quota_snapshot_age_seconds",
+    "lobsterpulse_quota_history_csv_age_seconds",
+    "lobsterpulse_provider_last_completed_session_age_seconds",
+    "lobsterpulse_provider_idle_ratio",
+    "lobsterpulse_provider_max_session_age_seconds",
+    // 5. Session count / duration aggregates (13)
+    "lobsterpulse_provider_session_count",
+    "lobsterpulse_provider_completed_sessions_total",
+    "lobsterpulse_provider_completed_sessions_total_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_average_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_max_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_min_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_stddev_seconds",
+    "lobsterpulse_provider_completed_sessions_p95_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_p50_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_p99_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_p75_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_p25_duration_seconds",
+    "lobsterpulse_provider_completed_sessions_interarrival_avg_seconds",
+    // 6. Quota signal (1)
+    "lobsterpulse_provider_quota_remaining_pct",
+    // 7. Event / process accounting (9)
+    "lobsterpulse_provider_events_total",
+    "lobsterpulse_provider_event_type_total",
+    "lobsterpulse_provider_sessions_by_state",
+    "lobsterpulse_discord_health",
+    "lobsterpulse_discord_send_failures_total",
+    "lobsterpulse_discord_last_event_unix",
+    "lobsterpulse_hook_parse_failures_total",
+    "lobsterpulse_hook_responses_total",
+    "lobsterpulse_hook_unknown_provider_fallbacks_total",
+];
+
 #[tauri::command]
 fn get_state(manager: tauri::State<AppSessionManager>) -> AppState {
     manager.0.lock().unwrap().get_state()
@@ -10998,6 +11083,153 @@ mod render_prometheus_tests {
                 "lobsterpulse_provider_completed_sessions_p25_duration_seconds{provider=\"gemini\"} 13\n"
             ),
             "K34 gemini 50 樣本 P25 = 13 (idx=12, 命中 25% 位置), body: {body}"
+        );
+    }
+
+    // ============== R103 OTel/Prometheus spec alignment guard tests ==============
+    //
+    // 對齊 `openspec/changes/otel-provider-metrics-contract/spec.md` Requirement:
+    // `render_prometheus_body` output is a subset of the LP_METRICS contract.
+    // 護欄核心：每次新加 emit 必須先列入 LP_METRICS const + design.md 對照表 +
+    // spec.md Scenario, 否則這條 test fail 並列出「未列名 metric」清單。
+
+    #[test]
+    fn lp_metrics_contract_size_is_41_matching_emit_paths() {
+        // 7 段分組對齊 design.md: 4 + 4 + 3 + 7 + 13 + 1 + 9 = 41
+        assert_eq!(
+            LP_METRICS.len(),
+            41,
+            "LP_METRICS 應為 41 條（對齊 design.md 7 段 + 護欄 test 集合下界），目前 {} 條",
+            LP_METRICS.len()
+        );
+        // 防 LP_METRICS 內部有重複（spec.md 隱含 set 語意）
+        let unique: std::collections::HashSet<&str> = LP_METRICS.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            LP_METRICS.len(),
+            "LP_METRICS 不可有重複項, 重複會破 contract 護欄語意 (移除重複項時不會被偵測到)"
+        );
+    }
+
+    #[test]
+    fn render_prometheus_body_empty_state_all_emits_in_lp_metrics_contract() {
+        // 對應 spec.md Scenario: empty state still produces a valid contract subset
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        let contract: std::collections::HashSet<&str> = LP_METRICS.iter().copied().collect();
+        let mut off_contract: Vec<String> = Vec::new();
+        for line in body.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with("# HELP ") || line.starts_with("# TYPE ") {
+                continue;
+            }
+            // Prometheus 行格式：`metric_name{labels} value` 或 `metric_name value`。
+            // 取第一個 `{` 或空白前的 token 即為 metric name。
+            let token = line.split(['{', ' ', '\t']).next().unwrap_or("");
+            if !contract.contains(token) {
+                off_contract.push(token.to_string());
+            }
+        }
+        assert!(
+            off_contract.is_empty(),
+            "空 state 仍有未列名 metric ({off_contract:?}), 請先加入 LP_METRICS const + design.md 對照表 + spec.md Scenario"
+        );
+    }
+
+    #[test]
+    fn render_prometheus_body_full_state_all_emits_in_lp_metrics_contract() {
+        // 對應 spec.md Scenario: all current emit paths stay within the contract
+        // 跑多 provider + 多 state + 有 quota + 有 discord + 有 hook metrics 的完整
+        // render, 確保所有 emit 路徑（per-provider × metric × state 笛卡兒積）都
+        // 落在 LP_METRICS 集合內, 不漏列任何新加的 metric。
+        let mut totals = HashMap::<String, ProviderTotals>::new();
+        totals.insert(
+            "cicx".to_string(),
+            ProviderTotals {
+                tokens_input: 100,
+                tokens_output: 50,
+                session_count: 3,
+                failure_count: 1,
+                events_total: 10,
+                event_type_counts: std::collections::BTreeMap::new(),
+                since: Some(Utc::now() - chrono::Duration::seconds(60)),
+                last_event_at: Some(Utc::now() - chrono::Duration::seconds(5)),
+                last_completed_session_age_secs: Some(30),
+                ..Default::default()
+            },
+        );
+        totals.insert("claude".to_string(), ProviderTotals::default());
+        totals.insert("openx".to_string(), ProviderTotals::default());
+
+        let mut quota_ages = HashMap::new();
+        quota_ages.insert("cicx".to_string(), 120i64);
+        quota_ages.insert("claude".to_string(), 5i64);
+
+        let mut quota_pct = HashMap::new();
+        quota_pct.insert("cicx".to_string(), 80u8);
+        quota_pct.insert("claude".to_string(), 95u8);
+
+        let mut last_completed_age = HashMap::new();
+        last_completed_age.insert("cicx".to_string(), 30i64);
+        last_completed_age.insert("claude".to_string(), 10i64);
+
+        let sessions = vec![
+            info_with_state("cicx", true, SessionState::Working),
+            info_with_state("claude", true, SessionState::WaitingForUser),
+            info_with_state("openx", false, SessionState::Idle),
+        ];
+
+        let body = render_prometheus_body(
+            &sessions,
+            3,
+            2,
+            &totals,
+            &quota_ages,
+            &quota_pct,
+            Some(15),
+            &last_completed_age,
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        let contract: std::collections::HashSet<&str> = LP_METRICS.iter().copied().collect();
+        let mut off_contract: Vec<String> = Vec::new();
+        let mut total_emits = 0usize;
+        for line in body.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with("# HELP ") || line.starts_with("# TYPE ") {
+                continue;
+            }
+            total_emits += 1;
+            let token = line.split(['{', ' ', '\t']).next().unwrap_or("");
+            if !contract.contains(token) {
+                off_contract.push(token.to_string());
+            }
+        }
+        assert!(
+            off_contract.is_empty(),
+            "完整 state render 出現未列名 metric ({off_contract:?}), 總 emit 行 {total_emits}, 請先加入 LP_METRICS const + design.md 對照表 + spec.md Scenario"
+        );
+        // 反向 sanity check: 至少要 emit 一定數量的 metric 行, 確保 test 不是在空 body 上誤綠
+        assert!(
+            total_emits >= 30,
+            "完整 state 預期 emit 至少 30 行 metric（含 5+ provider 維度 × 多 metric family），實際 {total_emits}, test 可能是空 body 偽綠"
         );
     }
 }

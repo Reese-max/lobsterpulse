@@ -1,0 +1,20 @@
+schema: spec-driven
+id: openab-bot-sync
+created: 2026-06-03
+updated: 2026-06-05
+status: closed
+phase: 5/5
+created_by: operator <xsx042388@gmail.com>
+owner: auto-dev-loop
+# R92 收 closure: tasks.md 12/12 全數落地 (T-BOT1~T-BOT12 對應 R70/R71/R73/
+# R74/R75/R78/R80 commit), 護欄 chain 17 守護 KNOWN_PROVIDERS 13 對稱
+# (4 本機 + 9 OpenAB: cicx/gitx/giminix/codex_bot/openx/irisx_bot/grokx/
+# lpbot/mimo), 0 spec drift。
+# - Phase 1 (T-BOT1~T-BOT3): R70/R71/R74 IRISX hermes agent 4 同步點
+# - Phase 2 (T-BOT4/T-BOT5): R78 cicx2 alias + mimo disabled
+# - Phase 3 (T-BOT6/T-BOT7/T-BOT8): R78 SOP + R67 護欄 + docs
+# - Phase 4 (T-BOT9/T-BOT10): R75/R78 後端標籤對齊 + 全 bot audit
+# - Phase 5 (T-BOT11/T-BOT12): R78 grokx + lpbot 納管
+# 收 closure 後 R92+ 可開新 change 推進 K0 Quota 即時性 8/13→13/13
+# (剩 5 個 OpenAB bot + 4 本機 CLI 缺 quota 實作, 詳見 MISSION.md)。
+kpi_alignment: lobsters_pulse_v5_1_hook_server_9_to_10_providers

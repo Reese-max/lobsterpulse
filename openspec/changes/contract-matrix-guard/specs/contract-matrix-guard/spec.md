@@ -9,7 +9,7 @@
 
 ## ADDED Requirements
 
-### R-1: CONTRACT const is the single source of truth for the 13×3 matrix
+### Requirement: R-1 — CONTRACT const is the single source of truth for the 13×3 matrix
 
 LobsterPulse 必須維持 `CONTRACT: &[(&str, &str, bool, &str, &str)]` 矩陣內含 13 row,
 每 row 5 個欄位 (id / name prefix / enabled_default / sound_file / waiting_sound_file)。
@@ -26,7 +26,7 @@ LobsterPulse 必須維持 `CONTRACT: &[(&str, &str, bool, &str, &str)]` 矩陣�
 13 row 的 `id` 欄位集合必須等於 `default_providers().keys()` 集合 (4 同步點之一),
 漏 1 個或多 1 個都 fail。
 
-### R-2: name prefix (🤖 OpenAB / 💻 本機 CLI) is preserved per provider
+### Requirement: R-2 — name prefix (🤖 OpenAB / 💻 本機 CLI) is preserved per provider
 
 每個 provider 的 `name` 必須以對應 prefix + 空白開頭:
 - OpenAB bot (9 row) → `🤖 `
@@ -37,7 +37,7 @@ LobsterPulse 必須維持 `CONTRACT: &[(&str, &str, bool, &str, &str)]` 矩陣�
 對 13 row 逐一檢查 `p.name.starts_with(&format!("{prefix} "))`, 任一 fail 報
 `[name prefix] "{id}" name "{p.name}" 缺 "{prefix} " 前綴`。
 
-### R-3: enabled_default matches the contract for every provider
+### Requirement: R-3 — enabled_default matches the contract for every provider
 
 每個 provider 的 `enabled` 預設值必須對齊 CONTRACT 內對應 row:
 - 8 OpenAB bot (cicx / gitx / giminix / codex_bot / openx / irisx_bot / grokx / lpbot) → `true`
@@ -54,7 +54,7 @@ LobsterPulse 必須維持 `CONTRACT: &[(&str, &str, bool, &str, &str)]` 矩陣�
 cicx / gitx / giminix / codex_bot / openx / irisx_bot / grokx / lpbot 8 row 必須
 `enabled == true`, 對齊 K0 即時性 (enabled 才能進 K0 量化)。
 
-### R-4: sound file mapping is exactly equal to the contract for every provider
+### Requirement: R-4 — sound file mapping is exactly equal to the contract for every provider
 
 每個 provider 的 `default_provider_sounds` 與 `default_provider_waiting_sounds` 內
 key/value 必須對齊 CONTRACT:
@@ -74,7 +74,7 @@ key/value 必須對齊 CONTRACT:
 若被誤加 default sound, fail 此 scenario 並報
 `[sound absent] "claude" 本機 CLI 不該有 default sound entry`。
 
-### R-5 (cross-attribute): OPENAB_BOT_IDS membership matches the 🤖 prefix
+### Requirement: R-5 — OPENAB_BOT_IDS membership matches the 🤖 prefix (cross-attribute)
 
 每個 row 的 `prefix == "🤖"` ↔ `id ∈ OPENAB_BOT_IDS` 必須雙向對齊:
 - 9 row 🤖 prefix 必須在 OPENAB_BOT_IDS 集合內

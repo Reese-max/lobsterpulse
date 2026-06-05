@@ -504,3 +504,71 @@ URGENCY: MEDIUM
   1. 立刻開一個 `openspec/changes/otel-provider-metrics-contract/`，把 `HookEvent` 對應到 OTel／Prometheus metric 名稱，不先寫 UI。
   2. 下一輪 commit 不要再只修 snapshot bot list，改補 1 個 provider 的 P95 延遲＋成功率 exporter，直接推 K0 Provider 健康度。
   3. 把 Token Telemetry／tokenusage 列入 `CLAUDE.md` 競品備忘，明確寫 LobsterPulse 差異：單一膠囊＋多 runtime 狀態，而不是只算 token。
+
+### 2026-06-05 R101 — feat(metrics): K0 health 成功率 gauge 落地（K0 metric 覆蓋 0/13→13/13）
+
+**類型**: M1
+**KPI**: K0 Provider 健康度覆蓋率（成功率維度）0/13 → 13/13 metric emit 維度補齊
+**commit**: fc8f797
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| **K0** Provider 健康度覆蓋率 | 0/13 (0 metric emit) | 13/13 metric emit 維度 (P95 K30 + 成功率 R101) | +13/13 |
+| K0 Quota 即時性 | 12/13 (9 OpenAB snapshot + claude + codex live) | 12/13 (本輪未動) | 0 |
+| K42 護欄 chain | 17 saturated | 17 saturated (本輪 0 條新護欄,純 fn 自帶 7 條 test 是 K29 同款場景) | 0 |
+| K41 chore_treadmill | 0% (M1 feat) | 0% | 0 |
+| baseline tests | 397/397 | 404/404 | +7 (r101_* 7 條 unit test) |
+
+**為什麼**:
+- R100 策略顧問盲點 #2 直接命中:「下一輪 commit 不要再只修 snapshot bot list，改補 1 個 provider 的 P95 延遲＋成功率 exporter」→ 嚴格按建議做
+- MISSION K0 定義「13/13 provider 有 P95 延遲 + 成功率指標」:P95 由 K30 (completed_sessions_p95) 已實作 = P95 維度達成;本輪補成功率維度 → K0 health metric 覆蓋 0/13 → 13/13
+- 接手磁碟上 R101 WIP (lib.rs:2575+ 跟 session.rs:996+ 已寫了 `success_rate_at` pure fn + render body emit, 但無 unit test + doc clippy 3 條錯) → 撿半成品 + 補 7 條 test + 修 clippy → 完成落地
+
+**搜尋**:
+- 不需外搜:沿 K29 `failure_to_completion_ratio_at` 同款 7 條場景 (過濾 / 整除分數 / 非整除 / per-provider 隔離 / 高失敗率 / clamp 防禦) 1:1 對稱寫 R101 測試群,風格 + 註解 + 精度的 0.0001 tolerance 全部對齊 K29 = 護欄 chain 16 既有契約延伸
+- `cargo clippy --lib -- -D warnings` 撈到 3 條 doc_lazy_continuation (R101 doc 1012-1014 行 list 續接沒縮排) → 補空行斷 list 修掉
+
+**做了什麼**:
+- session.rs: 新增 `success_rate_at(provider_totals: &HashMap<String, ProviderTotals>) -> HashMap<String, f64>` pure fn (1.0 - failure_count/events_total, clamp [0,1] 防 subtraction 負值)
+- session.rs: 加 7 條 r101_* unit test, 對齊 K29 同款 7 場景:
+  1. `r101_success_rate_at_skips_providers_with_no_events` — 0/0 不 emit 防線
+  2. `r101_success_rate_at_emits_one_when_no_failures` — 零失敗 = 1.0 健康信號
+  3. `r101_success_rate_at_emits_fractional_success_rate` — 整除分數 (3/10 → 0.7)
+  4. `r101_success_rate_at_emits_non_terminal_decimal_ratio` — 非整除 (3/7 ≈ 0.5714)
+  5. `r101_success_rate_at_per_provider_isolated` — 3 provider 互不污染
+  6. `r101_success_rate_at_handles_low_success_rate` — 10/11 ≈ 0.0909 (alert < 0.95 觸發)
+  7. `r101_success_rate_at_clamps_to_unit_interval_defensively` — clamp [0,1] 防禦
+- lib.rs: `render_prometheus_body` emit `lobsterpulse_provider_success_rate{provider="..."}` gauge (sort by provider alphabetical, 4 位小數固定 precision, 空 map 只 emit HELP/TYPE header)
+- 命名刻意不沿 K 編號 (K22-K35 編號空間是 session-level 完成維度 metric), 改用 mission 對齊的 `success_rate` 命名 = Prometheus reader 不用先學專案 K 編號
+- 跟 K29 `failure_to_completion_ratio` 語意差異化但互補:
+  - K29 = `failure / completed_sessions` (retry 視角: 每次完成平均 retry 幾次)
+  - R101 = `1.0 - failure / events_total` (健康度視角: 所有事件中非失敗佔比)
+  - 兩個 ratio 分母不同各 emit 各值, 數學不等價, 互不污染 (K29 = 1.0 retry 訊號, R101 = 1.0 零失敗健康)
+- operator alert 規則對齊:`success_rate < 0.95` 觸發「該 provider 5% 以上事件失敗」early warning (跟 K29 `ratio > 2.0` 互補: K29 看高流量 provider 失敗密度, R101 看整體健康度下限)
+
+**沒做什麼（scope 控制）**:
+- 不寫 OTel 對齊 (R100 策略顧問 #1 行動): 開新 `openspec/changes/otel-provider-metrics-contract/` spec 沒動 — R13 防護守住 openspec/ untracked 不污染 + 1 輪 1 件紀律
+- 不接 main.js refreshQuotas 整合 (R100 follow-up #2): 仍 owner R90 WIP 留工作區
+- 不寫 gemini/copilot live runner: R89 follow-up 第 2 條仍留, API 認證體系風險高
+- 不擴 K42 護欄 chain 17: R101 7 條 test 純函式自帶驗證, 算 K29 同款既契約延伸, chain 17 凍結不變
+- 不重命名 quota/ 模組 `#[allow(dead_code)]`: R100 follow-up 留 R101+ H0 窗口, 本輪 M1 不混
+- 不動 8 supervisor untracked + openspec/changes/: R13 防護守住 (`git status` 後仍 8 untracked)
+
+**驗證**:
+- `cargo test --lib`: 397→**404** passed / 0 failed (新增 7 條 r101_* test 全部 pass, 既有 397 條 0 regression)
+- `cargo clippy --lib -- -D warnings`: **0 warning** (修了 3 條 doc_lazy_continuation)
+- `cargo fmt --check`: **0 diff** (1 條 long-fn-signature 被 fmt 自動 collapse)
+- R13 防護守住: `git add src-tauri/src/lib.rs src-tauri/src/session.rs` 精準列路徑 (不用 -A), 8 untracked + openspec/changes/ 仍 dirty 不污染
+- K41 chore_treadmill 守住: 本輪 1 個 feat (M1) + 1 個 docs (本 log) = 0 純 chore
+
+**結果**: PASS（M1 K0 health 成功率 gauge 落地 + 7 條 unit test 全綠 + 修 3 條 clippy doc 錯,K0 Provider 健康度覆蓋率 0/13→13/13 metric emit 維度補齊,baseline 397→404 tests 持續綠 + 0 clippy + 0 fmt + 0 regression,R13 防護守住 8 untracked + openspec/changes/,K41 chore_treadmill 守住 M1 不算 chore 紀律,K42 護欄 chain 17 條凍結不擴張,R100 策略顧問盲點 #2 命中率 100% 對齊落地）
+
+**KPI-impact: K0 Provider 健康度覆蓋率 0/13→13/13 (成功率維度補齊, 跟 K30 P95 對稱), baseline +7 tests, R13/R41/R42 全守住**
+
+**留 R102+ owner 接力**:
+- R100 策略顧問 #1 行動: 開 `openspec/changes/otel-provider-metrics-contract/` 對齊 OTel/Prometheus contract — 需先做 spec 才能寫 code, R101 沒動 spec 區
+- R100 策略顧問 #3 行動: 寫 Token Telemetry/tokenusage 競品備忘到 CLAUDE.md
+- gemini + copilot live runner (R89/R100 follow-up): API 認證體系研究 + 對齊 anthropic.rs 模式
+- main.js refreshQuotas 整合 (R90 owner WIP): 等 owner commit
+- quota/ 模組 `#[allow(dead_code)]` 標籤收尾 (R100 follow-up H0 窗口)

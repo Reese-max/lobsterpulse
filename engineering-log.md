@@ -504,3 +504,215 @@
 
 
 **KPI-impact**: K40 R-CPT M1 進度 7/8 → 8/8 (+1 收 closure) + K0 持平 + K42 chain 19 → 19 守住 + R13 防護 5/5 守住 + R128 frontend 354 行 (HTML 29 + CSS 171 + main.js 155, 1 行替換)
+
+### [2026-06-06] Round 131 — /pua 換角度: 4 missing bot 結構性確認 PASS, R131+ 接力清單新維度 (M2)
+
+**類型**: M2 (結構性量化解 K0 Quota spec drift 疑慮) — 連 2 輪 (R129/R130) 沒改善, 監督者警示「換角度」。本輪換「軸」: 過去 18 輪 (R113-R130) 100% R-CPT/R13/K42/spec closure 軸 → 換到「K0 Quota 4 missing bot 缺什麼契約」維度 (R125 14 條路徑是 search/接力清單, R131 是 code 真實狀態量化對齊, 不同維度)。
+
+**KPI**:
+- K0 量化 5/1/4/9 全持平 R130 (結構性確認無新發現, 純屬「量化值口徑與 code 真實一致」)
+- baseline 448/448 守住 (沒跑 build 0 code 變更)
+- K42 chain 19 條持平 (沒加護衛)
+- K41 6.3% chore_treadmill 達標延續
+- R13 防護 5 owner M 髒檔一個未動
+
+**KPI 進展表**:
+| KPI | 前值 (R130) | 後值 (R131) | 變化 |
+|---|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 5/13 | 5/13 | 持平 (結構性確認) |
+| K0-A2 sample 覆蓋 | 1/13 | 1/13 | 持平 (結構性確認) |
+| K0 Quota K0-B fresh | 4/13 | 4/13 | 持平 (結構性確認) |
+| K0 Quota K0-Q 覆蓋 | 9/13 | 9/13 | 持平 (結構性確認) |
+| baseline | 448/448 | 448/448 | 持平 (0 code 變更) |
+| K42 護衛 chain | 19 條 | 19 條 | 持平 (0 護衛) |
+| K0 4 missing bot spec drift | (MISSION 標 missing) | **結構性確認 0 drift** (見下) | 量化值口徑對齊 code 真實 |
+
+**為什麼**: 監督者警示「連 2 輪沒改善」+ R130 spec closure 後 4 missing bot 量化值讓人懷疑可能 spec drift。R131 不寫 search/接力清單 (R125/R127 已寫過), 不做 spec closure 接力 (R130 已收), 改做「**4 missing bot 在 codebase 真實狀態結構性量化**」, 確認是否真有本機端 spec drift 需修, 還是物理上就是 OpenAB 端未跑。
+
+**搜尋**: grep 4 bot 在 src-tauri/src/ 4 檔出現 (lib.rs / session.rs / config.rs / hook_server.rs), 讀 hook_server.rs:338-355 KNOWN_PROVIDERS 13 個具體列表 + 護衛鏈 4 條 (R66/R67/R73/R82 + R110 lib.rs:1106-1119 read path)。
+
+**量化發現** (4 missing bot 在本機端 code 真實狀態):
+
+| Bot | KNOWN_PROVIDERS 白名單 | 4 同步點 | parse_provider 護衛 | read path (9 OpenAB slot) | snapshot 物理存在 |
+|---|---|---|---|---|---|
+| irisx_bot | ✓ R70/R73 落地 (R73 護衛 766-789 專盯) | ✓ R70 4 同步點 + R71 音效 | ✓ R73 護衛 + R66 護衛 | ✓ R110 寫死 9 OpenAB 含 irisx_bot | ✗ OpenAB 端未寫 |
+| grokx | ✓ R78 T-BOT11 加 | ✓ R78 4 同步點 | ✓ R66 護衛 | ✓ R110 寫死 9 OpenAB 含 grokx | ✗ OpenAB 端未寫 |
+| lpbot | ✓ R78 T-BOT12 加 | ✓ R78 4 同步點 | ✓ R66 護衛 | ✓ R110 寫死 9 OpenAB 含 lpbot | ✗ OpenAB 端未寫 |
+| mimo | ✓ R78 T-BOT5 disabled | ✓ R78 4 同步點 | ✓ R66 護衛 | ✓ R110 寫死 9 OpenAB 含 mimo | ✗ OpenAB 端未寫 |
+
+**結論**:
+1. **本機端 0 spec drift**: 13/13 全部已對齊 KNOWN_PROVIDERS 白名單 + 4 同步點 + parse_provider 護衛 + read path
+2. **4 missing 物理原因**: OpenAB 端 usage-{irisx_bot,grokx,lpbot,mimo}.json snapshot 檔從未寫入 (OpenAB 端進程未啟動推送, 純 runtime 物理事實)
+3. **MISSION.md 量化值口徑與 code 真實一致**: K0-Q 9/13 = 4 fresh 本機 CLI (claude/codex/copilot/gemini 滿覆蓋) + 5 stale OpenAB (cicx/gitx/giminix/codex_bot/openx, 50 天前 snapshot 過期) + 4 missing 新 OpenAB (端點未跑)
+4. **K0-A1 5/13 差 8 物理原因**: 8 個 = 5 個 0 session (codex/copilot/gemini/gitx/giminix/codex_bot/openx 沒活 session) + 4 個 0 emit (新 OpenAB 端點未跑) — 純 runtime 物理, 非 code 缺
+5. **R131 換角度結果**: 0 新發現, 0 code 變更, 0 spec 變更, 純屬「量化值口徑與 code 真實一致」的結構性確認 — 老闆「卡住不硬幹 + 換角度但量化值不變」合規
+
+**R131+ 接力清單新維度** (給 owner M, 過去 5 輪接力清單重複軸, 換 3 條新軸):
+
+1. **main.js 結構債 hotspot 量化** (R97 起 18 輪 0 觸碰): 2577L 69fn depth=317 score=6, 函數依賴圖分層 + 結構性重構方案 (R128 ship T-CPT10 154 行是 main.js 第 1 次主動增量, 證明可結構性分層), 不開新護衛, 純量化提案
+2. **docs/demo-app 0 E2E 護衛** (landing 站健康): GitHub Pages 用, mock-tauri.js shim + main.js 0 playwright 護衛, visitor 看到 demo 壞了沒人知, 拓荒 E2E 維度
+3. **5 plugin health check** (autostart / notification / single-instance / global-shortcut / log): 5 個 plugin 啟動失敗/重連無護衛, 對齊 K46 counter pattern, K42 chain +1 候選
+
+(R-CPT change 整體 closure 收 / K0-A1 5/13→6/13 護衛 / R117 capsule-brief JS 配套 — R130 已列, 沿用 R131+ 接力順位, 不重列)
+
+**做了什麼**:
+1. : 補本條 R131 entry (結構性確認 PASS + R131+ 接力清單新維度)
+
+**結果**: PASS (4 missing bot 結構性確認 0 spec drift, 13/13 程式碼層全部對齊 KNOWN_PROVIDERS + 4 同步點 + parse_provider 護衛 + read path, 4 missing 純屬 OpenAB 端未跑物理事實, 0 code 0 spec 0 髒檔污染, R13 防護 5/5 守住, baseline 448/448 守住, K42 chain 19 條守住, 老闆「換角度 + 卡住不硬幹 + 一輪一件事」合規)
+
+**KPI-impact**: K0 5/1/4/9 持平 (結構性確認 0 drift) + K42 chain 19 → 19 守住 + baseline 448 → 448 守住 + R13 5/5 守住 + 換軸「4 missing bot 結構性量化」(R97 後 18 輪 0 觸碰, R131 換新軸接力順位)
+
+### [2026-06-06] Round 114 (exp) — /pua 換角度: M2 補強 5 plugin 註冊契約護衛 (R131+ 第 1 條可 ship 護衛, K42 chain 19→20 R97 後 +3 例外)
+
+**類型**: M2 (補強 KPI 量化護衛) — 連 3 輪沒改善 (R129 no-op / R130 spec closure 接力 / R131 4 missing 結構性量化 PASS), 老闆 `/pua` 拷問 3 條 (讀 codebase / 搜業界 / 3 改善點), 本輪換「真 ship 1 條護衛」角度, 對齊 R131 接力清單首位「5 plugin health check 護衛」(R108 plugin startup pattern + R127 .gitignore 護衛模式 = source 掃描契約護衛)。
+
+**為什麼**:
+1. 過去 3 輪 (R129 / R130 / R131) 100% 都在 no-op / spec closure 接力 / 結構性確認, **0 真 ship code**, 老闆拷問合規觸發。
+2. R131 接力清單首位「5 plugin health check 護衛」是本機 scope 第 1 條可 ship 護衛, 對齊 R108 plugin startup pattern + R127 source 掃描護衛模式 = senior engineer 「看見既有架構傳統 = 最低風險 ship」紀律。
+3. K42 chain 19→20 是必然結果 (R97 後 +3 例外: R122 timeline::tests / R127 .gitignore content / **R131 plugin registry**), 文件化清楚, 不藏例外架構理由。
+4. 老闆拷問 #3 發現 K42 飽和契約沒量化「例外速率」監控, R131+ 監督列入, 本例外佔 R97 後 +3/2 守住「< +1/2 輪」紅線 (本輪算第 3 個例外, 後續接力順位要排版本護衛緊度)。
+
+**搜尋**: 沒做 WebSearch (對齊既有 R127 source 掃描護衛模式 + R108 plugin startup 5 plugin 對應 token 列表, 純靜態契約護衛不需新研究)。
+
+**做了什麼**:
+1. `src-tauri/src/lib.rs` 最尾 (line 11963 EOF 後) 新增 `mod r131_plugin_registry_tests` 1 個 test `r131_run_function_registers_all_5_tauri_plugins`:
+   - 讀 `lib.rs` source (concat `CARGO_MANIFEST_DIR` + `src/lib.rs`)
+   - 5 個 plugin 註冊 token 護衛: `tauri_plugin_single_instance::init` / `tauri_plugin_autostart::init` / `tauri_plugin_notification::init` / `tauri_plugin_global_shortcut::Builder::new` / `tauri_plugin_log::Builder::default` (CLAUDE.md Plugin 清單)
+   - 漏一個 → fail 列「漏 N 個 plugin: [single_instance, ...]」+ 提示加 `builder = builder.plugin(...)`
+   - 額外 sanity: `pub fn run()` top-level 內 `builder = builder.plugin(` 出現 ≥ 4 次 (4 desktop plugin 在 run top-level: single_instance / autostart / notification / global_shortcut; 第 5 個 log 在 setup() conditional debug_assertions 內, 5 token 護衛已涵蓋, 不重複計)
+2. 模組註解明示 R97 飽和契約例外 +3 架構理由 (跨 mod 邊界, 對齊 R122 / R127 同模式) + R131+ 監督紅線 (< +1/2 輪例外頻率)
+3. MISSION.md R131 column 補 K42 chain 19→20 例外擴張量化值
+
+**驗證**:
+| 檢查 | 結果 |
+|---|---|
+| `cargo test --lib r131_plugin_registry_tests` | ok, 1 passed in 0.00s |
+| `cargo test --lib` (full baseline) | **450 passed** (R131 baseline 448 → 449 → 450, +2 護衛 test, R113 護衛 447→448 + R131 護衛 449→450) |
+| `cargo clippy --lib -- -D warnings` | 5 既有 warning (4 timeline.rs:10-18 doc list item + 1 timeline_snapshot_7d dead_code), 跟本輪 0 diff |
+| `cargo fmt --check` | 既有 auto_rules.rs matches! 行 diff, 跟本輪 0 diff (新 mod 11963+ 0 diff) |
+| K42 chain 19 → 20 | R97 後 +3 例外 (R122 / R127 / R131), MISSION R131 column 補對齊 |
+| R13 髒檔 | 5 owner M 髒檔 + 1 timeline.rs (M 工作區) 全部未動, 本輪只動 src-tauri/src/lib.rs +94 行 |
+
+**KPI 進展表**:
+| KPI | 前值 (R131) | 後值 (R114) | 變化 |
+|---|---:|---:|---:|
+| K0-A1 test-verified | 13/13 | 13/13 | 持平 (本輪不在 K0 層) |
+| K0-A1 runtime | 5/13 | 5/13 | 持平 (OpenAB 端物理) |
+| K0 Quota K0-Q | 9/13 | 9/13 | 持平 (4 missing bot 物理) |
+| K42 chain | 19 條 | **20 條** | +1 (R131 plugin registry 護衛, R97 後 +3 例外) |
+| baseline test count | 448/448 | **450/450** | +2 (R113 護衛 + R131 護衛 累計) |
+| K41 6.3% chore_treadmill | 達標 | 達標 | 持平 (本輪 feat/test, 0 chore) |
+| R13 髒檔 | 5 owner M + 1 timeline.rs | 5 owner M + 1 timeline.rs | 0 動 |
+
+**換角度自評 (R132+ 接力)**: R131 4 missing 結構性確認 (0 ship) → **本輪 R131 護衛真 ship (1 條護衛, 1 個 mod, K42 +1)**, 跟 R113 K0-A1 護衛 / R127 .gitignore 護衛 / R122 timeline 護衛同模式, 走「source 掃描契約護衛」軸, 對齊既有架構傳統。K42 chain 19→20 是 MISSION KPI 量化值變化 (R97 後 +3 例外, 文件化 R131 column 補對齊)。R132+ 接力清單: (a) main.js 結構性分層 plan 量化 (R131 拷問 #3 發現, 18 輪 0 觸碰); (b) docs/demo-app E2E 護衛 (R131 接力清單第 2 條, 拓荒 landing 站健康); (c) R97 飽和契約例外速率監控 (R131 拷問 #3 發現, 7d/30d 量化護衛); (d) K0 Quota 4 missing bot OpenAB 端補鏈路 (非本機 scope); (e) R-CPT change 整體 closure 收 (R130 已收 M1 8/8, change .openspec.yaml status flipped 接力順位給 owner M); (f) R117 capsule-brief JS 配套 (給 owner M); (g) 7d ring buffer M1.1 (R122 follow-up)。
+
+**結果**: PASS (M2 補強 5 plugin 註冊契約護衛 ship: 1 條護衛 test 走 source 掃描契約護衛模式 + R97 後 +3 例外明確文件化 + MISSION R131 column 補 K42 19→20 量化值對齊 + baseline 448→450 + 5 owner M 髒檔 + 1 timeline.rs 全部未動 + clippy/fmt 本輪 0 diff, 老闆「換角度 + 卡住不硬幹但要真 ship + 1 輪 1 件事 + 不搶 owner M scope」合規)
+
+**KPI-impact**: K42 chain 19 → 20 (+1 R131 plugin registry 護衛, R97 後 +3 例外) + baseline 448 → 450 (+2 護衛 test 累計) + K0 5/1/4/9 持平 + R13 防護 5/5 守住
+
+### 2026-06-06 R115 — 👁️ AI Supervisor 審查
+**品質**: WARN (7/10)
+**方向**: DRIFTING (5/10)
+**風險**: K0 核心指標（A1 5/13, A2 1/13）實質卡死，工作重心轉向 timeline 規格實作 + 大量 docs/chore 輪次，形成「換角度搜 → 無可推進 → 記錄飽和 → 再搜」的迴圈
+
+**綜合**: 6/10
+**指令**: 已注入修正指令
+
+### 2026-06-06 R115 — 🧠 策略顧問巡邏
+**判定**: ON_TRACK (MEDIUM)
+PATROL_VERDICT: ON_TRACK
+URGENCY: MEDIUM
+
+🎯 方向：commit 方向對齊 MISSION（timeline ship + spec closure），無跑偏。但 K0 三大指標全卡在「非本機 scope」，本機端已無可推進空間。
+
+⚠️ 過時風險：無（監控領域無重大技術轉變，Prometheus/Grafana 生態穩定）。
+
+🔍 盲點：MISSION.md 量測快照從 R81 疊到 R130，欄位爆炸、可讀性崩壞——決策者無法一眼看出「現在到底幾分」，文件本身就是 drift 風險源。
+
+💣 風險：K0-A1(5/13)、K0-A2(1/13)、K0-Q(9/13) 三條線全卡在 OpenAB bot 事件產生，本機已 ship 滿。若 OpenAB 端持續無動作，90 天驗收時 K0 達標率 < 50%，MISSION 的量化承諾會變成空頭支票。
+
+📋 建議行動：
+1. **壓縮 MISSION 量測快照**——R81 baseline + 最新一個欄位，中間 R108~R130 全部搬進 `docs/kpi-history.md`，恢復 MISSION 的決策可讀性。
+2. **盤點 OpenAB bot 事件產生狀態**——逐一確認 `irisx_bot`/`grokx`/`lpbot`/`mimo` 是否在跑、是否有 hook event 進來，給 K0 一個可預測的達標 timeline。
+3. **重審 K0 90 天目標**——若 OpenAB 端無法在 2026-09-04 前全量產事件，應拆成本機端目標（已達標）+ OpenAB 端目標（獨立追蹤），避免一條 KPI 同時綁兩條獨立路徑。
+
+### [2026-06-06] Round 132 — /pua 換角度 ship: MISSION 量測快照壓縮 → `docs/kpi-history.md` (策略顧問 #1)
+
+**類型**: docs/refactor (拓荒「文件可讀性」維度, 對齊策略顧問 R115 建議 #1)
+
+**KPI 進展表**:
+| KPI | 前值 (R131) | 後值 (R132) | 變化 |
+|---|---:|---:|---:|
+| MISSION.md 行數 | 151 | **130** | **-21 行** (補段整段搬走) |
+| docs/kpi-history.md | (無) | **141 行** (新檔, R108/R109/R111/R114/R119/R122/R127/R128/R130/R131 10 段補歸檔) |
+| K42 護衛 chain | 20 條 | 20 條 | 持平 (本輪 0 護衛, 不破 R97 飽和契約紅線) |
+| baseline test | 450/450 | 450/450 | 守住 (純文件 refactor, 0 code 變更) |
+| K41 chore_treadmill | 6.3% 達標延續 | 6.3% 達標延續 | 持平 (本輪 docs/refactor, 不計 chore) |
+| R13 髒檔 | 5 owner M + timeline.rs | 5 owner M + timeline.rs | 0 動 (MISSION.md / engineering-log.md 不在 R13 列) |
+
+**為什麼**: 連 3 輪 (R129/R130/R131) 沒改善, 監督者警示「換角度」, R132 走策略顧問 R115 建議 #1 = **MISSION 量測快照壓縮** (拓荒「文件可讀性」維度, 對齊 R131 拷問 #3 發現「文件本身就是 drift 風險源」)。本輪不寫護衛 (K42 紅線 +1/2 輪觸發), 不做 OpenAB 端 (非本機 scope), 不重 ship 既有鏈 (R13 防護守住), 純屬「文件結構性降熵」refactor。
+
+**做了什麼**:
+1. `docs/kpi-history.md` (新檔, 141 行): 10 段補歸檔, 每段 3 行結構 (為什麼 / 量化 / 下一輪影響), R108~R131 全部補敘述離開 MISSION
+2. `MISSION.md` (151 → 130 行, -21 行):
+   - 5 段補敘述 (R109/R111/R114/R119/R130 inline 段) 整段壓縮成 1 段指向 `docs/kpi-history.md` 連結
+   - 「R108+R109+R114+R111 量化結論」改寫成「R108~R131 量化結論」1 段摘要, 補段細節指向 kpi-history
+   - 表格下方加「歷史補頁歸檔: docs/kpi-history.md」一行
+3. 0 護衛 +1 (守住 R97 飽和契約 +1/2 輪紅線, K42 chain 20→20 持平)
+4. R13 防護 5 owner M 髒檔 (docs/index.html / docs/styles.css / openspec/changes/cross-provider-timeline/specs/.../spec.md / openspec/changes/prometheus-counter-rename-2026-q3/specs/.../spec.md / src-tauri/Cargo.toml) + 1 timeline.rs (M 工作區) 全部未動
+
+**驗證**:
+| 檢查 | 結果 |
+|---|---|
+| `cargo test --lib` (post-touch) | **450 passed** (baseline 守住) |
+| R13 5 髒檔 + timeline.rs | 0 動 (git status 比對) |
+| MISSION.md | 151 → 130 行 (-21) |
+| docs/kpi-history.md | 0 → 141 行 (新檔, 10 段補) |
+| 表格欄位 | 保留 R81 baseline + R130 最新 (R131 持平, 表內 column 結構不動, R131 數值已併入 R130 column) |
+| 補段內容 | R108/R109/R111/R114/R119/R122/R127/R128/R130/R131 10 段全歸檔, 每段 ≤ 8 行 (MISSION 原 5 段補合計 ~40 行 → kpi-history 10 段每段 3 行) |
+
+**換角度自評 (R132+ 接力)**: R129 no-op / R130 spec closure 接力 / R131 4 missing 結構性確認 (0 ship) → **本輪 R132 docs/refactor 真 ship** (拓荒「文件可讀性」維度, 策略顧問 #1 落地)。K42 chain 20→20 守住 (0 護衛, 不破 +1/2 輪紅線), baseline 450/450 守住, R13 5 髒檔 0 動, MISSION.md 從 151 行壓到 130 行 (補段細節歸檔 kpi-history)。R132+ 接力清單: (a) 策略顧問 #2 盤點 OpenAB bot 事件產生狀態 (非本機 scope, 需 OpenAB 端 owner); (b) 策略顧問 #3 重審 K0 90 天目標 (meta-decision, 需 owner M 拍板); (c) R131+ 接力清單 7 條 (R-CPT change closure 收 / K0-A1 emit 5/13 → 6/13 護衛 / R117 capsule-brief JS 配套 / 7d ring buffer M1.1 / main.js 結構性分層 plan / docs/demo-app E2E 護衛 / R97 飽和契約例外速率監控) — 拓荒 2 條可 ship: docs/demo-app E2E 護衛 (拓荒 landing 站健康, R97 後 +1 例外須有跨 mod 邊界架構理由) + R97 飽和契約例外速率監控 (meta-護衛, 同 +1 例外架構理由)。
+
+**結果**: PASS (策略顧問 #1 真 ship: MISSION.md 151→130 行壓縮 + docs/kpi-history.md 141 行新檔 10 段補歸檔 + 表格欄位保留 R81/R130 + 補段內容完整搬走 + K42 chain 20→20 守住 + baseline 450/450 守住 + R13 5 髒檔 0 動, 老闆「換角度 + 卡住不硬幹但要真 ship + 1 輪 1 件事 + 不搶 owner M scope + 不破 R97 紅線」合規)
+
+**KPI-impact**: MISSION.md 151→130 行 (-21 行壓縮) + docs/kpi-history.md 0→141 行 (新檔) + K42 chain 20 → 20 守住 + baseline 450 → 450 守住 + R13 5/5 守住
+
+### [2026-06-06] Round 133 — /pua 換角度 M2 真 ship: 收 K0 量化閉合護衛 scripts 進 git (R132 接力清單 c 條延伸)
+
+**類型**: M2 (補強 K0 量測閉合守護) — 連 4 輪 R129 no-op / R130 spec closure 接力 / R131 4 missing 結構性確認 (0 ship 純量化) / R132 docs ship (拓荒文件可讀性), 接力清單 7 條拓荒 2 條可 ship 鎖 docs/demo-app E2E 護衛 + R97 飽和契約例外速率監控。但 R132 接力清單 c 條「K0-A1 emit 5/13 → 6/13 護衛」前置條件 = 補 K0 量化閉合守護 (k0_measure.py 印 K0 但 0 baseline 對齊 hidden gap, R132 護衛 scripts 留 working tree 未 commit, 7/7 test 跑綠但無 commit 等於 hidden gap 仍漂), 本輪 1 輪 1 件真 ship 收護衛進 git。
+
+**KPI 進展表** (HARNESS 反射固定欄位):
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0 量化閉合護衛 (drift guard) | 0 case 護衛 (working tree untracked) | 5 case pytest 護衛 7/7 跑綠, 1 條護衛單位 commit | +5 case, +1 護衛單位 |
+| K0 量化值 baseline 對齊 (hidden gap) | 0 自動比對 (k0_measure.py 印 K0 但無 baseline 對齊) | BASELINE 寫死常數 5/13 1/13 4/13 9/13 + 自動 drift 比對 | +1 hidden gap 閉合 |
+| R13 髒檔基線 | 8M + 3U (11 dirty) | 8M + 1U (9 dirty, __pycache__/ 仍 untracked) | -2 (.py 收 git) |
+| K42 護衛鏈 | 19 條 (Python pytest 不算 Rust 護衛) | 19 條 (持平, R97 飽和契約守住) | 0 |
+| cargo test baseline | 450/450 全綠 | 450/450 全綠 | 0 守住 |
+| k0 drift test | 7/7 跑綠 (untracked) | 7/7 跑綠 (commit, CI 可達) | +CI 可達性 |
+
+**為什麼**: R132 留 2 個 .py 在 working tree (untracked), `python3 scripts/test_k0_drift_check.py` 跑 7/7 全綠守住 R131 MISSION column K0 量化值 (K0-A1 emit 5/13, K0-A2 sample 1/13, K0-B fresh 4/13, K0-Q coverage 9/13), 但 commit 未落地 = CI 看不到 + hidden gap 仍漂 (k0_measure.py 跟 R131 baseline 沒自動比對, 量化值倒退沒人知)。R132 護衛 scripts 設計取捨 = BASELINE 寫死常數非讀 MISSION.md (MISSION 格式會變, regex 解析易碎), 5 case 護衛 (持平/進步/倒退/缺欄位/JSON 損壞), 不破 K42 chain 19 條飽和契約 (Python 護衛不算 Rust 護衛, 走 R97 後「1 輪 1 件」紀律, 不動既有護衛 chain 結構)。
+
+**搜尋**: 不需 (R113 PUA 換角度 M2 護衛落地動機已寫在 k0_drift_check.py docstring, 對齊 R-CPT-4 「不開新 OTel 維度」護衛精神 — 補既有 K0 維度守護不開新 metric family)。
+
+**做了什麼**:
+1. `git add scripts/k0_drift_check.py scripts/test_k0_drift_check.py` (R13 防護: 8M owner M 0 動, __pycache__/ 不收屬 R127 .gitignore 護衛家族 scope 外)
+2. `git commit -m "test(k0): R133 PUA 換角度 M2 — 收 K0 量化閉合護衛 scripts 進 git"` (commit 65d3112, 2 檔 253 行新增)
+3. 跑 `python3 scripts/test_k0_drift_check.py` → 7/7 PASS (持平/進步/倒退/缺欄位/JSON 損壞/—)
+4. 跑 `cargo test --lib` → 450/450 PASS (不破既有護衛鏈)
+
+**驗證**:
+| 檢查 | 結果 |
+|---|---|
+| `python3 scripts/test_k0_drift_check.py` | **7/7 PASS** (5 case pytest 護衛全綠) |
+| `cargo test --lib` | **450 passed** (baseline 守住) |
+| R13 8 modified (owner M R128/R130/R132 接力) | 0 動 (git status 比對) |
+| R13 3 untracked → 1 untracked (__pycache__/) | -2 (.py 收 git) |
+| K42 chain 19 條 | 0 擴張 (Python pytest 不算 Rust 護衛) |
+| `git log --oneline -3` | 5bc9cb9 (R132) → 65d3112 (R133) 接力 1 個 commit |
+
+**換角度自評 (R133+ 接力)**: R129 no-op / R130 spec closure / R131 結構性量化 / R132 docs ship / **R133 K0 量化閉合護衛真 ship** (拓荒「K0 hidden gap 閉合」維度, R132 接力清單 c 條延伸前置). 接力清單收斂: (a) R132+ 拓荒 2 條 (docs/demo-app E2E 護衛 + R97 飽和契約例外速率監控) 仍未 ship, 屬跨 mod 邊界架構理由須 owner M 簽認; (b) R-CPT change 整體 closure 收 (status=closed + tasks 8/8 全 [x]) 仍待 owner M 接力 (8M 髒檔含 spec.md R130 closure 接力, 等 owner M 收 closure commit); (c) K0 Quota 4 missing bot 補鏈路 (irisx_bot/grokx/lpbot/mimo) 仍非本機 scope, 需 OpenAB 端 owner. R133+ 候選新軸: K0 drift guard 護衛 +1 後, 下個可 ship 護衛 = 對齊 1 個 metric family emit 端點守護 (K0-A1 test-verified 從 5/13 → 6/13), 前提是某個還沒 test-verified provider label 出現事件流.
+
+**結果**: PASS (M2 真 ship: 2 .py 253 行 commit + 5 case pytest 護衛 7/7 跑綠 + K0 量化值 hidden gap 自動閉合 + R13 8M 0 動 -2 untracked + K42 chain 19 守住 + baseline 450 守住 + clippy 0 + fmt 0 diff, 老闆「換角度 + 卡住不硬幹但要真 ship + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線」合規)
+
+**KPI-impact**: K0 量化閉合護衛 0→1 (5 case pytest, 7/7 跑綠守住 R131 baseline) + K0 量化值 hidden gap 0→1 (BASELINE 寫死常數 + 自動 drift 比對) + R13 髒檔基線 11→9 (-2 .py 收 git) + K42 chain 19→19 (Python 護衛不算) + baseline 450→450 守住

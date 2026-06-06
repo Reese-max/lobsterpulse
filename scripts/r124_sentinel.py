@@ -138,7 +138,7 @@ def check_k0_emit() -> CheckResult:
             name="k0_a1_emit",
             passed=False,
             actual="missing/.harness-k0.json",
-            threshold=f">= {K0_A_MIN}",
+            threshold=f">= {K0_A1_MIN}",
             note="k0_measure.py 沒跑過, 請先跑 scripts/k0_measure.py 建立 baseline",
         )
     data = json.loads(K0_JSON.read_text(encoding="utf-8"))

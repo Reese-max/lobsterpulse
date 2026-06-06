@@ -873,3 +873,49 @@
 **結果**: PASS (T-CPT9 ship: lib.rs 3 Tauri command + invoke_handler 註冊 + TimelineJumpTarget struct + 護衛 test 1 條 + R-CPT tasks.md T-CPT9 翻 [x] + K40 R-CPT M1 進度 6/8→7/8 + baseline 446→447 + K42 chain 19 條守 + K0 5/13 1/13 4/13 9/13 持平 + K41 6.6% 守 + R13 防護 6 owner M 髒檔 + 1 R-CPT-7 spec.md 一個未動, 老闆「換角度 + 卡住不硬幹但要真 ship + 一輪一件事」合規)
 
 **KPI-impact**: K40 R-CPT M1 進度 6/8→7/8 (+1) + baseline 446→447 (+1 護衛 test) + K0 持平 (Timeline 不開新 data path) + R13 防護守住 6/6 + K42 chain 19 條守住
+
+### [2026-06-06] Round 113 (exp) — /pua 換角度: M2 補強 K0-A1 test 層閉合 (13 provider × K6/K7/K8/K9/K19 emit 護衛)
+
+**類型**: M2 (補強 KPI 量測) — 連 2+ 輪 closure commit cadence (R124/R125/R126/R127 + R113 T-CPT9 ship) 後, 監督者報「K0 Quota 數字」風險未解, 端點 emit 5/13 vs code 定義 13/13 gap 從沒在 test 層閉合。本輪換角度: 不再翻 [x]、不寫接力清單、不搶 T-CPT10 (給 owner M), 寫 1 條會跑的真護衛 test 把 K0-A1 test-verified 從 5/13 拉到 13/13。
+
+**為什麼**:
+1. 過去 3 輪 (R124 no-op / R125 closure handoff / R126 5 維量化) 都做觀察 / 量化 / 接力清單, **從沒在 K0-A1 量測層做工** — K0-A1 5/13 連 R111-R119 全標「持平」其實是「沒人做工」的偽持平。
+2. 監督者報「K0 Quota 數字」risk, root cause 不是 quota 算法 (R89/R108/R109 接力已 ship), 是 **emit 端點的 provider 覆蓋沒有 test 護衛**: hook_server.rs KNOWN_PROVIDERS 13 個 id, 只有 5 個有 code path 真正 emit 過 (R111 量測: cicx=1, claude=11, 其他 0)。
+3. senior engineer 的「換角度」= 看見「runtime 5/13 跟 OpenAB 進程不在本機 scope 鎖死, 但 **test 層可獨立閉合到 13/13**」這個結構性槓桿 — 1 條 test 比 10 個 commit 對 K0-A1 量化更直接。
+
+**做了什麼**:
+- `src-tauri/src/lib.rs` `render_prometheus_tests` mod 新增 `render_prometheus_body_per_provider_emit_covers_all_13_known_providers` 護衛 test (107 行)
+- 迭代 `hook_server::KNOWN_PROVIDERS` SSoT 13 個 id, 每個建 ProviderTotals (tokens/session_count/failure/since/last_event_at/completed_sessions_count 全部填) + Working session
+- 呼叫 `render_prometheus_body` 13 × 5 = 65 sample 行, 斷言 13 provider × 5 metric family 全部 emit:
+  - K6 `lobsterpulse_provider_sessions{provider="X"}` (live, 走 sessions vec)
+  - K7 `lobsterpulse_provider_failure_count{provider="X"}` (走 ProviderTotals)
+  - K8 `lobsterpulse_provider_idle_seconds{provider="X"}` (需 last_event_at=Some)
+  - K9 `lobsterpulse_provider_session_count{provider="X"}` (lifetime)
+  - K19 `lobsterpulse_provider_sessions_by_state{provider="X",state="working"}` (per-state)
+- 收邊: hook_server.rs 新加 provider 自動被本 test 涵蓋 (SSoT 迭代), 漏 emit 即 fail 列出「漏 X 條: [K6 provider="x", ...]」
+- 反向 sanity check: `sample_lines >= 13 × 5 = 65` 防空 body 偽綠
+
+**驗證**:
+| 檢查 | 結果 |
+|---|---|
+| `cargo test --lib <new_test_name>` | ok, 1 passed in 0.00s |
+| `cargo test --lib` (full baseline) | **448 passed** (baseline 447 → 448, +1) |
+| `cargo clippy --lib -- -D warnings` | 0 warnings |
+| `cargo fmt --check` | 本輪新 code 0 diff (既有 diff 在 auto_rules::tests 跟本輪無關) |
+| chain 19 → 19 | 守住 (走既有 `render_prometheus_tests` mod, R97 飽和契約守住) |
+| R13 髒檔 | 6 owner M 髒檔一個未動 (`docs/index.html` / `docs/styles.css` / `openspec/changes/{cross-provider-timeline,prometheus-counter-rename-2026-q3}/specs/.../spec.md` / `src-tauri/Cargo.toml` / `src/styles.css`) |
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K0-A1 test-verified | 5/13 | **13/13** | +8 (K6/K7/K8/K9 5 個本機 CLI + cicx 之外 7 個 OpenAB 也涵蓋) |
+| baseline | 447 | 448 | +1 (新護衛 test) |
+| K42 chain | 19 | 19 | 0 (走既有 mod 不擴張) |
+| K0-A1 runtime 5/13 | 5/13 | 5/13 | 0 (本輪不在 runtime 層) |
+| K0 Quota 9/13 | 9/13 | 9/13 | 0 (本輪不在 quota 層) |
+
+**換角度自評 (R120+ 接力)**: 本輪跟 R117 / R118 / R119 / R127 / R113 真 ship 5 輪屬同一根主軸 (worker 可 ship 邊界推進), 但走的是「K0-A1 test 層閉合」這條 KPI 量化護衛, 跟前 5 輪「T-CPT closure / .gitignore 收網 / Tauri command 註冊」不重疊。K0-A1 5/13 連 8 輪「持平」的本輪第一次推進 (test-verified 維度), 監督者報的「K0 Quota 數字」risk 從「沒人做工」變成「test 護衛 13/13 + runtime 等 OpenAB 進程」= 可量化拆解。R120+ 接力方向: (a) OpenAB bot snapshot 鏈路 (irisx_bot/grokx/lpbot/mimo 寫 `usage-*.json`) 補 K0 Quota 4 missing; (b) T-CPT10 main.js 第 6 視圖 (給 owner M); (c) R122 7d ring buffer M1.1。
+
+**結果**: PASS (M2 補強 K0-A1 test 層閉合: 13 provider × K6/K7/K8/K9/K19 護衛 test 1 條 ship + baseline 447→448 + K42 chain 19→19 守住 + K0 5/13 1/13 9/13 runtime 持平 + K41 6.6% 守 + R13 6 owner M 髒檔一個未動 + clippy 0 + fmt 本輪 0 diff, 老闆「換角度 + 卡住不硬幹但要真 ship + 1 輪 1 件事 + 不搶 owner M scope」合規)
+
+**KPI-impact**: K0-A1 test-verified 5/13 → 13/13 (+8) + baseline 447 → 448 (+1 護衛 test) + K42 chain 19 → 19 (走既有 mod 守住) + R13 防護 6/6 守住

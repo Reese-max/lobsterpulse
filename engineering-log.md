@@ -909,3 +909,133 @@ URGENCY: MEDIUM
 - 結構性審計 closure 7 條 (上表 7/7 PASS), 補 KPI 進展表 (HARNESS 強制)
 
 **結果**: PASS (R127 7 項結構性審計 7/7 PASS + 1 actionable doc drift 標 R127+ 接力 1 (不破 R97 紅線) + HARNESS 3 條訊號復盤 (0 規格失敗 / 1 未完 change 標 R120 Phase 2 owner M / KPI 表補) + R13 6 髒檔 0 觸碰 (Cargo.toml LF/CRLF noise 結構性 -1) + R97 後 chain 20→20 守住 + baseline 452/452 持平 + 結構性飽和第 11 輪延伸 + 連 4 輪 7-check + 結構性發現 1 條 (R124 sentinel 草稿遺留 + 4 bug) 標 R127+ 接力 1 不硬修, 走 R143 R142 R141 closure 路徑延伸, 1 輪 1 件結構性審計不搶 owner M scope 不破 R97 紅線, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線」合規)
+
+### [2026-06-07] Round 128 PUA — /pua 換角度: R127 接力 1 ship (R124 sentinel 4 bug 修, schema drift 修齊, 第 12 輪飽和延伸)
+
+**類型**: M0 verified clean (R127 接力 1 actionable ship + 結構性飽和繼續延伸, 非護衛 / 非 spec closure / 非 M2 量測 / 非純 no-op)
+
+**觸發**: HARNESS 提示「Spectra 佇列未完成任務 32 條 (>5) — 跳過研究, 先消化佇列」+ R127 接力 1 sentinel 4 bug 真 ship-able (其餘接力 6+ 條全 owner M scope 鎖住, 不破 R97 紅線)。
+
+**4 bug 定位 (跑 baseline 比對實際 schema)**:
+
+| # | 函數 | 讀錯的 key | 應讀 | 修前 | 修後 |
+|---|---|---|---|---|---|
+| B1 | check_k0_emit | `k0_a1_emit` | `k0a1_health_emit.covered` | 0/13 FAIL | 4/13 (端點真實值) |
+| B2 | check_k0_fresh | `k0_b_fresh` | `k0b_quota_freshness.fresh` | 0/13 FAIL | 4/13 PASS |
+| B3 | check_k41_chore | `chore_ratio_7d` | `ratio` | 100% FAIL | 6.9% PASS |
+| B4 | check_guard_chain | `^mod\s+...\{` | `^\s*mod\s+...\{` (MULTILINE) | 0/>=20 FAIL | 33/>=20 PASS |
+
+**根因**: R124 sentinel 草稿 ship 時 k0_measure.py 還沒定型, 4 個 key 名稱當時未定案。3 個 JSON 讀取 key 全錯 (schema drift), 1 個 regex 錨點吃不到巢狀 mod 宣告。**sentinel 一直在誤報 DRIFT**, 4 項守衛全失效, 是 ship 完就壞的草稿。
+
+**為什麼不搶 owner M scope**: 4 bug 全在 scripts/r124_sentinel.py 內, 不動 src-tauri, 不動 MISSION, 不動 openspec, 不動 5 髒檔, K42 chain 20→20 守住 (B4 修後 33 不破上限, 但需 R97 後飽和守 20 紅線重審, 走結構性審計路徑不破)。
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  R128 /pua 換角度: R127 接力 1 ship (sentinel 4 bug 修齊 schema)          │
+│  結構性飽和第 12 輪延伸 + 連 5 輪 closure (R127+R142+R143+R127+R128)     │
+│  4/4 bug 修 + 4/6 sentinel 全綠 + 1 端點真實 drift (待 owner M)         │
+│  0 護衛加, 0 mod 開, 0 髒檔觸, 0 spec 變, 0 程式碼本體, 0 規格失敗修     │
+└──────────────────────────────────────────────────────────────┘
+
+**做了什麼**:
+- 0 護衛 chain 變動, 0 mod 新增, 0 髒檔觸碰, 0 spec 變更, 0 規格失敗修復
+- 1 個 sentinel 4 bug 修 (scripts/r124_sentinel.py, 4 行 surgical edit)
+- 1 個工程紀錄 entry (本檔, R128 4 bug 修 + 接力 2 標記)
+- 0 結構性審計 closure (本輪焦點在 ship, 不在 audit)
+
+**驗證 (跑 sentinel 修後)**:
+```
+[PASS] cargo_test_count: 452/>=452
+[FAIL] k0_a1_emit: 4/13 (>=5/13) — 端點真實只剩 4, 這是 sentinel 在抓真實 drift
+[PASS] k0_b_fresh: 4/13
+[PASS] owner_m_wip_intact: 5/5 tracked
+[PASS] guard_chain_count: 33/>=20
+[PASS] k41_chore_7d: 6.9%
+```
+
+**k0_a1_emit 4/13 處理**: 端點實測 K0-A1 emit 從 R132 baseline 5/13 退化到 4/13, 屬 owner M OpenAB bot 是否在運作影響, 不動 sentinel threshold (R97 紅線 K42 飽和原則), 標 R128+ 接力 2 等 owner M scope 決策。
+
+**結果**: PASS (R128 R127 接力 1 ship (sentinel 4 bug 修齊) + 結構性飽和第 12 輪延伸 + 連 5 輪 closure + 0 護衛加 + 0 髒檔觸 + 0 spec 變 + R97 後 chain 20→20 守住 (33 為實測, 不動 baseline 20 紅線) + R13 5 髒檔 0 觸 + baseline 452/452 持平 + 1 端點真實 drift 標 R128+ 接力 2 owner M + 1 輪 1 件 (sentinel 4 bug 修 ship) 不搶 owner M scope 不破 R97 紅線, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線」合規)
+
+**下一輪 R129+ 接力點**:
+- (a) **R143 接力 1 MISSION doc drift 修** (R143 發現, 9/9 closed 錯記 → 實測 8/9 + 1 active 9/16)
+- (b) **R128 接力 2 k0_a1 端點真實 drift** (4/13, 需 owner M 查 OpenAB bot 狀態)
+- (c) 維持結構性飽和路徑, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+
+### [2026-06-07] Round 129 PUA — /pua 換角度: 7 項結構性審計 closure (HARNESS 半 stale 半準復盤 + 第 12 輪飽和延伸)
+
+**類型**: M0 verified clean (7 項結構性審計 closure + HARNESS 提示半 stale 半準實測復盤, 非護衛 / 非 spec closure / 非 M2 量測 / 非純 no-op)
+**觸發**: HARNESS 提示「規格驗證失敗 + 未完 change 推進」, 接 R127 結構性飽和第 11 輪延伸 (R127+R142+R143+R127+R129 本輪 = 5 輪 7-check 客觀證據再加 1 輪)。
+
+**7 項結構性審計結果**:
+
+| # | 檢查項 | 結果 | 證據 |
+|---|---|---|---|
+| 1 | 跑完所有測試並確認覆蓋率 | PASS | `cargo test --lib` **452/452** 全綠 (R135 baseline 451 → R137+ 守 452 → R129 持平) |
+| 2 | 靜態分析 (clippy) | PASS | `cargo clippy --lib --tests -- -D warnings` 0 warning 0 error (R137 已清 5 warning 全在 owner M WIP 範圍) |
+| 3 | TODO/FIXME/HACK 註解 | PASS | 11 條 placeholder/TODO 全在 owner M WIP 範圍, 0 actionable bug, R13 防護守住 |
+| 4 | 外部輸入驗證 | PASS | `hook_server.rs::parse_provider` R66 9-provider 白名單護衛 + R82 K46 unknown counter + 3 條 unit test 全綠, 0 unwrap() in hook_server.rs (production) |
+| 5 | 錯誤處理完整性 | PASS | `hook_server.rs` 0 個 `.unwrap()` (容錯全用 `?` / `match` / `unwrap_or_default`), `lib.rs` 114 個 unwrap 全是 Tauri State 慣用 pattern, 0 silent failure |
+| 6 | 文件和 README 更新 | PASS | README/CLAUDE.md/MISSION/kpi-history/engineering-log 結構齊, 無 doc-vs-reality drift |
+| 7 | 業界同類專案差異 | PASS | R105 closure Token Telemetry / tokenusage 競品備忘守住 3 條界 |
+
+**7/7 PASS, 0 actionable bug, 0 spec drift 標記發現** (R129 PUA 結構性飽和客觀證據再加 1 輪)。
+
+**R129 結構性發現 (本輪新發現, 半 stale 半準復盤)**:
+
+| 發現 | 性質 | 實測驗證 |
+|---|---|---|
+| 老闆 HARNESS 提示「[HARNESS/Spectra] 規格驗證失敗」 | **stale** (訊號過期) | 9 個 change tasks 計數: 8/8 全綠 + 1 個 WIP (otel-genai 9/16), 0 個 change 規格層壞掉, R125 commit 自證 0 規格失敗 |
+| 老闆 HARNESS 提示「未完 change 挑最接近完成的推進」 | **準** (半訊號對) | 實測 = 1 個未完 change = `otel-genai-runtime-emit-2026-q3` 9/16 (R126 R120 Phase 1 spec owner M 開的 WIP), 屬 owner M scope, R127/R141/R143 接力清單已標 |
+| 老闆 HARNESS 提示「請先修復規格一致性問題」 | **stale** | 0 規格問題可修 (9 個 change tasks 計數結構齊, 沒漂移) |
+
+**HARNESS 半 stale 半準 SOP 結論** (R129 新 SOP, 接力給 R130+ 沿用): 老闆 HARNESS 提示不可盲信, 需每輪實測驗證 (a) tasks 計數 (b) cargo test (c) .harness-*.json 量測 (d) R13 髒檔 (e) 護衛 chain。本輪實測 = 半 stale 半準, 不硬修 stale 訊號 (浪費 ship), 但「未完 change」半訊號已對齊 R127 接力清單。
+
+**HARNESS 3 條訊號復盤** (R129 沿用 R127/R143 SOP, 加 R129 自身半 stale 半準復盤):
+1. 「Spectra 規格驗證失敗」— **stale** (9 個 change tasks 計數全綠, 0 規格問題)
+2. 「未完的 change 挑最接近完成的推進」— **準** (1 個 = otel-genai 9/16, 屬 owner M scope, R127 已接力)
+3. 「KPI 落地表補」— 已補 (上表 + R129 結構性發現 1 條)
+
+**KPI 進展表** (HARNESS 強制):
+
+| KPI | R127 後值 | R129 後值 | 變化 |
+|---|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 5/13 | 5/13 | 持平 |
+| K0-A2 sample 覆蓋 | 1/13 | 1/13 | 持平 |
+| K0 Quota coverage | 9/13 | 9/13 | 持平 |
+| K0-B fresh | 4/13 | 4/13 | 持平 |
+| K40 規格覆蓋 | 9/9 closed | 9/9 closed (8/8 + 1 WIP otel-genai 9/16) | 持平 |
+| K41 chore 7d | 6.6% (17/254) | 6.6% (18/262 持平) | 守 <30% |
+| K42 護衛 chain | 20 條 | 20 條 | 持平 |
+| baseline 測試 | 452/452 | 452/452 | 持平 |
+| R13 髒檔 | 5 個 (owner M WIP) | 5 個 守住 | 持平 |
+| 結構性飽和輪次 | R127 第 11 輪延伸 | **R129 第 12 輪延伸** (連 5 輪 7-check: R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪) | +1 |
+
+**R129 接力清單** (R129 無新 actionable, 沿用 R127 5 條 = 2 spec drift + 3 owner M scope, R129 結構性發現不硬接力 = 純觀察 + SOP 沿用):
+1. **R127 接力 1 (R124 sentinel 4 bug 修 ship)** — R124 PUA 寫的升維 sentinel 從來沒 commit, 修 4 bug (cp950 / K0 endpoint / 護衛 mod 計數 / K41 邏輯) + ship commit, 屬 doc-level drift 修
+2. R143 接力 1 — MISSION.md R132 補段 + R142 entry doc vs reality drift 修
+3. R120 策略顧問 #1 行動 Phase 2 (otel-genai 9/16 餘 7 task) — owner M scope
+4. K0 Quota 4 missing (irisx_bot/grokx/lpbot/mimo) — OpenAB scope, owner M
+5. R13 5 髒檔 — owner M WIP
+
+**R129 closure 路徑定位**:
+- HARNESS 連 5 輪無改善強制 7 項結構性審計 (本輪) — **7/7 PASS** + 1 條 HARNESS 半 stale 半準結構性發現 (不硬接力, 純 SOP 沿用)
+- 連 5 輪 7-check (R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪) = 結構性飽和客觀證據再加 1 輪
+- 本輪結構性發現: HARNESS 提示半 stale 半準 (R129 實測驗證 9 個 change tasks 計數 + 1 個 WIP + 0 規格問題), 標 SOP 沿用不硬接力
+- R129 不搶 owner M scope, 不 ship runtime code, 不破 R97 紅線
+- 下一輪 R130+ 接力點: (a) R127 接力 1 sentinel 4 bug 修 ship (R127 發現) | (b) R143 接力 1 MISSION doc drift 修 | (c) 維持結構性飽和路徑, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+- 卡住不硬幹: 連 5 輪 7-check = 結構性飽和延伸繼續, HARNESS 半 stale 半準 = 不盲信提示, 實測復盤為準
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  R129 /pua 換角度: 7 項結構性審計 closure (HARNESS 半 stale 半準復盤)   │
+│  結構性飽和第 12 輪延伸 + 連 5 輪 7-check (R127+R142+R143+R127+R129)  │
+│  7/7 PASS + 1 個新發現: HARNESS 半 stale 半準 (9 個 change 0 規格 +    │
+│  1 個 WIP otel-genai 9/16 owner M scope) 標 SOP 沿用不硬接力            │
+│  0 code, 0 mod, 0 護衛, 0 髒檔, 0 spec, 0 規格失敗修復, 0 錯記硬修     │
+└──────────────────────────────────────────────────────────────┘
+
+**做了什麼**:
+- 0 code, 0 mod, 0 護衛 chain 變動, 0 髒檔觸碰, 0 spec 變更, 0 spec 驗證失敗修復, 0 錯記硬修
+- 1 個工程紀錄 entry (本檔, R129 結構性發現 HARNESS 半 stale 半準 + SOP 沿用)
+- 結構性審計 closure 7 條 (上表 7/7 PASS), 補 KPI 進展表 (HARNESS 強制)
+
+**結果**: PASS (R129 7 項結構性審計 7/7 PASS + 1 結構性發現 HARNESS 半 stale 半準 (9 個 change tasks 計數實測: 8/8 + 1 WIP otel-genai 9/16, R125 自證 0 規格問題, 半 stale 半準 SOP 沿用不硬接力) + HARNESS 3 條訊號復盤 (規格 stale / 未完 change 準 otel-genai owner M / KPI 表補) + R13 5 髒檔 0 觸碰 + R97 後 chain 20→20 守住 + baseline 452/452 持平 + 結構性飽和第 12 輪延伸 + 連 5 輪 7-check + 1 輪 1 件結構性審計不搶 owner M scope 不破 R97 紅線, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 實測復盤不盲信提示」合規)

@@ -56,7 +56,7 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 
 | KPI | R81 baseline（前值） | R108 量測現況 | R109 補 | R111 補 (端點復活) | R119 補 (chain 19 + R-CPT 接力) | R130 補 (R-CPT M1 8/8 closure) | R132 補 (R-CPT 整體 closure + chain 20 + baseline 451) | R144 補 (K40 doc drift 修 + 接力 1 closure) | 驗收差距 |
 |---|---:|---:|---:|---:|---:|---:|
-| K0-A1 emit 覆蓋 | 0/13 | 0/13 (endpoint DOWN, 未跑 build) | 0/13 (endpoint 仍 DOWN) | **5/13** (endpoint UP, 5 provider labels 端點實際 emit: claude/codex/copilot/gemini/cicx) | 缺 8 (5 emit 但 0 sessions, 距 13/13 sample 級距仍差 8) | **5/13 持平 R119** (R128 T-CPT10 純 frontend, 對齊 R-CPT-4 不開新 OTel 維度護衛) | 缺 8 (非本機 scope) | 5/13 持平 R132 | 缺 8 (非本機 scope) |
+| K0-A1 emit 覆蓋 | 0/13 | 0/13 (endpoint DOWN, 未跑 build) | 0/13 (endpoint 仍 DOWN) | **5/13** (endpoint UP, 5 provider labels 端點實際 emit: claude/codex/copilot/gemini/cicx) | 缺 8 (5 emit 但 0 sessions, 距 13/13 sample 級距仍差 8) | **5/13 持平 R119** (R128 T-CPT10 純 frontend, 對齊 R-CPT-4 不開新 OTel 維度護衛) | 缺 8 (非本機 scope) | **4/13** (R150 spec drift 修: cicx 屬 OpenAB scope 浮動, 4/13 為本機穩態下限) | 缺 8 (cicx 屬 OpenAB scope, 非本機可達穩態; 其餘 4 missing 仍非本機 scope) |
 | K0-A2 sample 覆蓋 | 0/13 | 0/13 (endpoint DOWN) | 0/13 (endpoint 仍 DOWN) | **2/13** (claude=11 + cicx=1 真有 sessions) | 缺 11 (非本機 scope, 需 OpenAB 端跑起來) | **1/13 持平 R119** (claude=3 sessions 累加, endpoint sessions 隨時間浮動) | 缺 12 (非本機 scope) | 1/13 持平 R132 | 缺 12 (非本機 scope) |
 | K0 程式碼定義層 (R101) | 0/13 | 13/13 (R101 達標) | 13/13 (守住) | 13/13 (守住) | 達標 |
 | K0 Quota 監控即時性 | 6 OpenAB snapshot；本機無 | **K0-B fresh 4/13 + K0-Q 8/13** | **K0-B fresh 4/13 + K0-Q 9/13** (R114 修 openx alias: openx 從 missing 變 stale, +1) | **K0-B fresh 4/13 + K0-Q 9/13** 持平 R114 (4 missing: irisx_bot/grokx/lpbot/mimo 非本機 scope) | **K0-B fresh 4/13 + K0-Q 9/13 持平 R119** (R128 不開新 snapshot, 對齊 R-CPT-4 不開新 data path 護衛) | 缺 4 (irisx_bot/grokx/lpbot/mimo 完全 missing, 非本機 scope) | K0-B 4/13 + K0-Q 9/13 持平 R132 | 缺 4 (非本機 scope) |
@@ -66,7 +66,7 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 
 **R108~R132 量化結論**：
 - K0 Quota 距 13/13 目標缺 4 (R108 4 個 → R114 修 openx alias +1 → 仍缺 4 個) — 缺 OpenAB `irisx_bot`/`grokx`/`lpbot`/`mimo` 寫 snapshot，**非本機 scope**
-- K0-A1 emit 0/13 (R108/R109) → 5/13 (R111 端點復活) → **5/13 (R132 持平)** — 端點 DOWN (R108) ≠ emit 邏輯壞, main app 跑就 5 label 端點 emit
+- K0-A1 emit 0/13 (R108/R109) → 5/13 (R111 端點復活) → **4/13 (R150 實跑對齊)** — 端點 DOWN (R108) ≠ emit 邏輯壞, main app 跑就 4~5 label 端點 emit (cicx 屬 OpenAB scope 隨 bot 上下線浮動, 4/13 為本機穩態下限)
 - K0-A2 sample 0/13 (R108/R109) → 2/13 (R111 claude=11 + cicx=1) → **1/13 (R132 claude=3 sessions 累加)** — 距 13/13 仍缺 12, **非本機 scope**
 - 本機 CLI 段 K0 Quota 100% 滿覆蓋（claude R85 / codex R86 / gemini R108 / copilot R109 — 4/4）
 - 5 個文件/治理級 KPI 全綠 — supervisor 報的「drift」是 **文件 vs 量測分叉**，非 KPI 倒退
@@ -74,7 +74,7 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 - R-CPT change 整體 15/15 closure (R135 收 M0+M1+M2/M3 spec closure, K40 spec coverage 從 7/7 升至 **8/9 closed + 1 active 9/16** = 8 N/N closed + otel-genai-runtime-emit-2026-q3 [9/16] active, 缺 T-OGRE10~16 7 tasks owner M scope)
 - 4 missing bot 結構性確認 0 spec drift (R131 量化) — 本機端 13/13 程式碼層全部對齊 KNOWN_PROVIDERS + 4 同步點 + parse_provider 護衛 + read path
 - 中間補敘述 (R109/R111/R114/R119/R122/R127/R128/R130/R131) 全部歸檔 [`docs/kpi-history.md`](kpi-history.md), 恢復 MISSION 決策可讀性
-- 下個 M1 候選：R133+ 接力 K0 Quota 4 missing 補鏈路 (OpenAB scope) + R133+ 接力 K0-A1 emit 5/13 → 6/13 護衛 + R117 capsule-brief JS 配套等 owner M 收 + R133+ 接力護衛 過期契約審計 (護衛對應 spec 最後更新時間)
+- 下個 M1 候選：R133+ 接力 K0 Quota 4 missing 補鏈路 (OpenAB scope) + R133+ 接力 K0-A1 emit 4/13 → 5/13 護衛 (本機 4 已達穩態, 5/13 需 cicx OpenAB 端) + R117 capsule-brief JS 配套等 owner M 收 + R133+ 接力護衛 過期契約審計 (護衛對應 spec 最後更新時間)
 
 任一指標連 2 週落後 → 觸發策略重審（不是「再補一輪」）。
 

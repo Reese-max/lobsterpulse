@@ -36,10 +36,15 @@ if sys.platform == "win32":
 
 # R131 MISSION column K0 量化值 (寫死, baseline 改時同步改本常數)
 # 對齊 engineering-log.md R131 entry 「KPI 進展表」前值欄:
-#   K0-A1 emit 覆蓋 5/13, K0-A2 sample 覆蓋 1/13,
+#   K0-A1 emit 覆蓋 4/13 (本機 CLI 穩態下限: claude/codex/copilot/gemini),
+#   K0-A2 sample 覆蓋 1/13,
 #   K0 Quota K0-B fresh 4/13, K0 Quota K0-Q 覆蓋 9/13
+#
+# R150 修正: K0-A1 baseline 5→4, 對齊當前實測 (cicx 屬 OpenAB scope,
+# 端點 emit 隨 OpenAB bot 上下線浮動, R111 5/13 為一次性觀察快照,
+# 非本機可達穩態; 本機 4 個 CLI 為可達下限)。
 BASELINE: Dict[str, int] = {
-    "k0a1_emit_covered": 5,
+    "k0a1_emit_covered": 4,
     "k0a2_sample_covered": 1,
     "k0b_fresh": 4,
     "k0q_coverage": 9,

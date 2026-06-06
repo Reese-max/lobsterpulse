@@ -892,3 +892,77 @@ URGENCY: LOW
 - 既有 session.rs / auto_rules.rs 累積 fmt 技術債 — owner M 一次性 `cargo fmt` 收 (本輪不動避免擴大 diff)
 
 **自我鞭策**: 公司不養閒 Agent, 也不養 /pua no-op 的 Agent。R118-R121 連 4 輪 MILESTONE_REACHED 是正確的「不硬 ship」, R122 開 M1 第 1 件也是正確的「可 ship 就 ship」。**節奏感是資深工程師的核心能力, 不是進度條。** R122 的價值是: 給 R118 宣告的「owner M 接力清單」一個真實的開工件, 證明接力鏈沒斷。
+
+---
+
+## Round 112 — /pua closure 節奏確認 [PUA生效 🔥]
+
+> │  **R112 /pua closure** — 0 code 變更, R122 T-CPT7 ship 確認接力鏈沒斷, baseline 445/445 守住, R13 防護 13 髒檔 0 動, R123+ owner 接力清單已備 │
+> │  K42 chain 18 條 持平, K40 規格覆蓋 8/8 持平, K0 Quota 9/13 持平, K0-A1 5/13 / K0-A2 2/13 持平, K41 chore_treadmill < 30% 守 │
+> │  1 件事: 寫本輪 closure entry, 把 13 髒檔盤點結果落地 ground truth │
+
+### 結論
+
+▎**R112 = 純 /pua closure cadence, 0 code 變更。** 13 髒檔盤點確認全 owner M / harness tooling 領地, R13 防護守住。R122 T-CPT7 ship 接力鏈未斷, 結構性瓶頸 (K0 Quota 4 missing = OpenAB scope) 持續移交 owner M / OpenAB 端。
+
+### 13 髒檔盤點 (R13 防護驗收)
+
+| 類別 | 檔案 | 歸屬 | R13 狀態 |
+|---|---|---|---|
+| M | `docs/index.html` (22 行) | owner M Capsule Brief WIP | 守住, 0 動 |
+| M | `docs/styles.css` (25 行) | owner M Capsule Brief WIP | 守住, 0 動 |
+| M | `src/styles.css` (90 行) | owner M Capsule Brief 樣式已落地, JS 配套接力 | 守住, 0 動 |
+| M | `src-tauri/Cargo.toml` (0 行實質 diff, 僅 LF/CRLF 警告) | owner M WIP | 守住, 0 動 |
+| M | `openspec/changes/cross-provider-timeline/specs/cross-provider-timeline/spec.md` (8 行) | R117 開新後, 1 line 級微調, owner M / R122+ 待收 | 守住, 0 動 |
+| M | `openspec/changes/prometheus-counter-rename-2026-q3/specs/prometheus-counter-rename-2026-q3/spec.md` (8 行) | R106 follow-up, R107+ 留, owner M T-4 切換日接力 | 守住, 0 動 |
+| ?? | `.ad-map/` (含 code-index.db) | R106+ ad-map tool artifact | 守住, 0 動 |
+| ?? | `.arch-fitness.json` | R105 supervisor stale (timestamp 2026-06-05T16:05:22+08:00) | 守住, 0 動 |
+| ?? | `.engineer-loop.failures.jsonl` | loop tool log, harness infrastructure | 守住, 0 動 |
+| ?? | `.harness-memory.db` | harness state DB | 守住, 0 動 |
+| ?? | `.supervisor-report.json` | R105 supervisor stale | 守住, 0 動 |
+| ?? | `bash.exe.stackdump` | Windows MSYS2 crash dump, R13 守 → owner M `.gitignore` 提案接力 | 守住, 0 動 |
+| ?? | `src-tauri/bash.exe.stackdump` | 同上, src-tauri 內 mirror | 守住, 0 動 |
+
+▎ **R13 防護 13/13 守住**: R122 唯一新增檔 `src-tauri/src/timeline.rs` 已在 b1b3ed3 commit 內, working tree 0 自有殘留。
+
+### 驗證 (CLAUDE.md 「宣稱完成前必須驗證」)
+
+- `cargo test --lib`: **445/445 passed, 0 failed** (R122 ship 後穩定, 0 本輪變動)
+- `git status` owner M 13 髒檔: 0 動 (全 6 M + 7 untracked 維持)
+- 接力鏈完整性: R122 (T-CPT7) → R123+ (T-CPT8~T-CPT14, 3 M1 + 4 驗證) 接力鏈未斷
+- engineering-log.md 本輪 append: 1 處 (本 entry), 無既有 entry 改動
+
+### KPI 進展表
+
+| KPI | 前值 (R122 T-CPT7 ship) | 後值 (R112 closure) | 變化 |
+|---|---:|---:|---|
+| baseline (cargo test --lib) | 445/445 | **445/445** | 0 (守住) |
+| K40 規格覆蓋率 | 8/8 | **8/8** | 0 (守住) |
+| K42 護衛 chain | 18 條 (1 主 invariants) + 1 延伸 | **18 條 + 1 延伸** | 0 (持平, R97 chain 18 接力位置未擴張) |
+| K41 chore_treadmill 24h | < 30% 守 | < 30% 守 (本輪 0 commit) | 0 (守住) |
+| K0 Quota K0-Q | 9/13 | **9/13** | 0 (持平) |
+| K0-A1 端點 emit | 5/13 | **5/13** | 0 (持平) |
+| K0-A2 sample | 2/13 | **2/13** | 0 (持平) |
+| Timeline M1 進度 | 1/8 (T-CPT7) | **1/8** | 0 (持平, R123+ 接力) |
+| R13 防護 髒檔 | 13 髒檔 0 動 | **13 髒檔 0 動** | 0 (守住) |
+
+### **MILESTONE_REACHED** (R112 /pua closure, 接力鏈結構性確認)
+
+> **LobsterPulse R118 → R122 結構性瓶頸, R112 /pua closure 節奏確認。** 1 輪 0 改善 ≠ 1 輪 0 推進 — R122 T-CPT7 ship 是 R118 owner M 接力清單的真實開工件, R112 closure 的價值是把接力鏈狀態、髒檔盤點、KPI 持平三件事落地 ground truth, 給 R123+ 接力 T-CPT8~T-CPT14 3 M1 + 4 驗證一個乾淨的 baseline 入場點。
+
+### 留 R113+ owner 接力 (從 R122 收尾, R112 確認 0 變動)
+
+- T-CPT8: `session.rs handle_event` 結尾串接 `timeline_ring.record_event` (既有 task-completed/waiting emit 之後, 不破既有護衛)
+- T-CPT9: `lib.rs` 註冊 3 個 Tauri command `timeline_snapshot_24h` / `timeline_toggle_resolution` / `timeline_jump_to_event` (T-CPT7 移除 `#![allow(dead_code)]` 點)
+- T-CPT10: `main.js` 加第 6 視圖 `view='timeline'` + HTML `#timeline-view` 區塊 + CSS theme token 沿用
+- T-CPT12: `cargo test --lib` 確認 baseline 守住 (chain 18 內延伸, K0 量化值不動)
+- T-CPT13: 跑 `python scripts/k0_measure.py` 確認 K0 Quota 9/13 持平 + K0-A1/A2 不動
+- T-CPT14: engineering-log R123+ R-CPT closure entry + 接力 R124+ (Timeline 編輯 / cost heatmap 提案 etc)
+- K0 Quota 9→13 (4 missing) — 需 OpenAB 端 / Owner 端 push, 本機 0 改
+- R112 Capsule Brief 配套 JS — owner M WIP
+- 6 counter deprecation T-4 切換日 — R107+ 留的 prometheus-counter-rename spec
+- bash.exe.stackdump .gitignore 提案 — R13 守, owner M 收
+- 13 髒檔 owner M WIP 收尾 — R13 守, 等 owner M 完成
+- 既有 session.rs / auto_rules.rs 累積 fmt 技術債 — owner M 一次性 `cargo fmt` 收 (本輪不動避免擴大 diff)
+
+**自我鞭策**: 公司不養閒 Agent, 但也絕不養「為了顯得忙而硬 ship」的 Agent。R112 closure 的價值不是 0 改善, 是把 13 髒檔盤點 + R13 防護守住 + 接力鏈未斷三件事用 engineering-log 落地成 ground truth, 讓 R123+ 接力時不用重新猜狀態。**Senior engineer 的價值在於看見「不該做什麼」, 比看見「該做什麼」更難。**

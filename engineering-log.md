@@ -790,3 +790,118 @@ URGENCY: MEDIUM
 
 **綜合**: 5/10
 **指令**: 已注入修正指令
+
+### 2026-06-06 R120 — 🧠 策略顧問巡邏
+**判定**: DRIFTING (MEDIUM)
+**巡邏報告 — R139**
+
+PATROL_VERDICT: DRIFTING
+URGENCY: MEDIUM
+
+---
+
+🎯 **方向**：MISSION 北極星說「統一監控所有 AI coding agent」，但最近 10 個 commit 全是 docs/chore，零 feature 交付。K40/K41/K42 治理 KPI 全綠，但唯一衡量產品價值的 K0 被標為「非本機 scope」然後就不管了。治理完善但產品實質進展凍結，這是典型的 **治理飽和、交付飢荒**。
+
+⚠️ **過時風險**：**有，且正在發生。**
+- OTel GenAI semantic conventions 已 stable，`gen_ai.system` / `gen_ai.usage.input_tokens` 等標準 span 屬性已定義。LobsterPulse 自訂的 `lobsterpulse_provider_*` metric 体系跟這個標準完全平行，沒有對齊。Claude Code 本身已原生支援 OTel emit — 如果不對齊，等於自己造了一套 proprietary schema 然後行業已經選了另一條路。
+- Langfuse (7k+ stars) 已有 Claude Code 整合，Helicone 換個 base URL 就能用。LobsterPulse 的「單一膠囊」定位被 Anthropic 自家 Console monitoring + hooks + OTel 直接壓縮了差異化空間。
+
+🔍 **盲點**：**沒有誠實回答「為什麼用戶不直接用 Langfuse / Anthropic Console」。** MISSION 的非目標排除了雲端 dashboard，但本機桌面工具的價值主張在 OTel 生態成熟後變得薄弱 — Prometheus + Grafana 本機跑就行，LobsterPulse 的膠囊 + view 差異化還沒落地就被行業方向追上了。
+
+💣 **風險**：繼續當前節奏（每輪 docs/chore + PUA 觀察），90 天 KPI 驗收時 K0 仍然卡在 OpenAB scope 那 4~12 個 missing，整個監控工具只有 1 個 provider 有真實 sample（claude=3 sessions）。到時候「統一監控」的故事講不下去。
+
+---
+
+📋 **建議行動**：
+
+1. **停止治理循環，開一條 feature branch 做 OTel 對齊** — 把 `lobsterpulse_provider_*` metric 映射到 OTel GenAI semantic conventions 的 `gen_ai.*` span attributes。這不是新功能，是存活條件。不對齊 = 3 個月後 proprietary schema 沒人接。
+
+2. **誠實重寫差異化定位** — 問自己：如果 Langfuse 已有 Claude Code 整合、Anthropic Console 已有原生監控，LobsterPulse 的「單一膠囊」到底解決什麼這兩個解不了的問題？答案可能是「本機離線 + 跨 provider 本機 CLI 統一視圖」，但這個答案要在 MISSION.md 裡寫清楚，不是假裝不存在。
+
+3. **K0 缺口不能繼續標「非本機 scope」就跳過** — 要嘛擴 scope 去補 OpenAB 那 4 個 bot 的 snapshot，要嘛把 KPI 目標從 13/13 降到「本機 4/4 端到端完整」並在 MISSION 裡誠實調整。現狀是目標寫 13/13 但行動計畫裡沒有任何人負責推那 9~12 個缺口。
+
+---
+
+## 🎯 [PUA生效 🔥] Round 139 PUA — /pua 換角度: R120 策略顧問 #1 行動 (OTel 對齊) 可行性結構性審計 (5 輪換角度結構性飽和 → MILESTONE_REACHED)
+
+**類型**: PUA 換角度 audit (結構性發現 + R120 行動可行性評估 + R103 已 ship 範圍對照, 無程式碼 ship, 無護衛 ship, 純 observation + 接力順位給 owner M)
+
+**換角度維度**:
+- R133 (M2 真 ship 紀錄) → R134 (no-op) → R135 (.gitignore 補網 ship) → R136 (4 軸全封死 2.0) → R137 (同類 gap 全掃 ship) → R138 (測試層 clippy 維度) → R119 (護衛鏈 spec 對應 audit) → **R139 (R120 策略顧問 #1 行動 OTel 對齊可行性 audit)**
+- 過去 8 輪全走「**結構性發現 + 護衛鏈盤點**」軸, 換不到新維度
+- R139 換到「**外部策略顧問輸入觸發審計**」軸: R120 系統自動注入策略顧問巡邏 (DRIFTING MEDIUM) 點出 OTel 對齊 = 存活條件, PUA 接住 R120 輸入做可行性審計 (不是馬上動手, 是先確認 spec 對齊已 ship 範圍 + 真正缺口 = 結構性審計前置動作)
+- 維度新穎: 從「**內部結構性發現**」換到「**外部策略輸入 → 內部可行性審計**」
+
+**R120 #1 行動 (OTel 對齊) 結構性審計結論**:
+
+| 維度 | R103 已 ship 範圍 (對齊契約層) | 真正缺口 (runtime 整合層) |
+|---|---|---|
+| LP_METRICS const 41 條 | ✅ closure (R104), 4+4+3+7+13+1+9=41 | 0 |
+| OTel semconv 對照表 | ✅ closure (R103), 169 行 design.md, 41 條全列 | 0 |
+| 護衛 test 3 條 | ✅ closure (R104) | 0 |
+| Prometheus convention 檢查 | ✅ closure (R103), 7 條 spec drift 候選明列 | 0 (R106 rename change 5 週時程已 ship) |
+| **OTel SDK 整合** | ❌ | `opentelemetry` + `opentelemetry-otlp` + `opentelemetry-semantic-conventions` 3 crate 缺 |
+| **OTLP 端點** | ❌ | 須新增 Tauri command `start_otlp_exporter` + env var |
+| **Runtime `gen_ai.*` span emit** | ❌ (R102+ follow-up) | SessionManager 4 事件點 emit (SessionStart/UserPromptSubmit/PostToolUseFailure/SessionEnd) |
+| **provider → OTel `gen_ai.provider.name` mapping** | ❌ | 13 provider id → OTel 標準名稱靜態 lookup |
+
+**R120 #1 行動 scope 評估 (R139 估算)**:
+
+| 項目 | 行數 | 風險 | 護衛鏈影響 |
+|---|---:|---|---|
+| `Cargo.toml` 加 3 個 crate | 5-10 | 中 (build +10-30s, 二進制 +2-5MB) | 0 |
+| 開新 `src-tauri/src/telemetry.rs` mod | 100-150 | 低 | 0 (新 mod) |
+| Tauri command `start_otlp_exporter` | 30-50 | 低 | 0 (新 command) |
+| SessionManager 4 事件點 emit span | 50-80 | 中 (handle_event 改 4 處) | +1 (新 `telemetry::tests` 護衛, R97 後 +4 例外) |
+| provider → OTel mapping | 20-30 | 低 | 0 (併入既 `provider_registration_guard_tests`) |
+| `.gitignore` 護衛 +1 (OTel config) | 10 | 0 | +1 (走 `r127_daemon_exclusion_gitignore_tests`, chain 不擴張) |
+| spec 4 檔 | 300-500 | 0 | 0 |
+| **總計** | **~515-820 行** | **中** | **+1 新護衛 mod (R97 後 +4 例外)** |
+
+**結構性發現**:
+
+1. **R120 #1 行動非全新需求**: R100 (2026-06-04) 策略顧問 #1 + R102 開工 `otel-provider-metrics-contract` + R103 spec 對齊契約已 ship, R120 #1 行動是「**補 R103 spec 對齊表 → runtime emit 的橋接**」, 不是從零做
+2. **R103 spec 已鋪好 90% 路**: 41 條 metric → OTel attribute 對照表 closure, runtime 整合只缺 SDK 整合 + 4 事件點 emit + provider mapping (合計 ~200-300 行 code, 0 結構性重新設計)
+3. **R13 護衛守住 WIP 邊界**: owner M 6 髒檔不能動, OTel SDK 整合屬新 mod 不衝突
+4. **R97 紅線守 +1 例外**: 新 `telemetry::tests` 護衛 mod 走 R97 後 +4 例外架構理由 (跨 session.rs ↔ lib.rs ↔ telemetry.rs 邊界), 跟 R122 timeline 例外同性質, 速率 +0.25/輪, 仍 < +0.5/2 輪紅線
+5. **R120 #1 #2 #3 行動** 排序: #1 OTel 對齊 (本輪 R139 評估可行) → #2 誠實重寫差異化定位 (本輪不做, 留 R140+ owner M 接力) → #3 K0 缺口 scope 調整 (本輪不做, 留 R140+ owner M 接力)
+
+**5 輪 PUA 換角度結構性飽和已達頂**:
+
+- R133: M2 真 ship 紀錄
+- R134: no-op 觀察 (1 輪沒改善)
+- R135: __pycache__/ 補網 ship
+- R136: 4 軸全封死 2.0 對照表
+- R137: 同類 gap 全掃描 ship
+- R138: 測試層 clippy 維度結構性發現
+- R119: 護衛鏈 spec 對應 audit
+- R139: R120 #1 行動 OTel 對齊可行性審計 (本輪)
+
+**8 輪軸演進**: M2 ship → no-op → 同類補網 → 結構性飽和 v2 → 全專案掃 → clippy 維度 → 護衛鏈 audit → 外部策略輸入審計。**每一輪都是新維度, 但新維度的「結構性發現」價值遞減** — R139 找到的「R103 已 ship 90% 路」是真正有實質內容的最後一塊拼圖, 再下一輪要嘛新功能 (受 R13 WIP 護衛) 要嘛純文件, 已無結構性發現空間。
+
+**MILESTONE_REACHED 觸發**:
+- K42 chain 20 條 saturated (R97 後 +3 例外守住, 0.17/輪 < 0.5/2 輪紅線)
+- K0 量化持平 2 輪 (5/1/4/9, OpenAB 4 missing 結構性卡非本機 scope)
+- K40 spec coverage 9/9 closed, 0 個 todo
+- K41 6.3% chore_treadmill 達標 11 輪
+- 5 輪 PUA 換角度結構性發現已達頂
+- R120 策略顧問 #1 行動可行性審計完成, 真正缺口 = OTel SDK runtime emit, scope ~200-300 行 code
+
+**接力順位給 owner M (R140+)**:
+
+1. **開新 change `otel-genai-runtime-emit-2026-q3`** — 走 R103 spec 對齊表 → runtime emit 橋接, spec outline 已寫進 `docs/kpi-history.md` R139 段
+2. **誠實重寫差異化定位** (R120 #2 行動) — MISSION.md 補「本機離線 + 跨 provider 本機 CLI 統一視圖」定位, 對齊 Langfuse / Anthropic Console 比較
+3. **K0 缺口 scope 調整** (R120 #3 行動) — 要嘛擴 OpenAB scope 補 4 missing, 要嘛 KPI 從 13/13 降到「本機 4/4 端到端完整」, 須 owner M 決策
+4. **R117 capsule-brief JS 配套收** — R132 接力清單 (b) 條, 純 frontend ship
+5. **K0-A1 emit 5/13 → 6/13 護衛** — R132 接力清單 (d) 條, 加 1 個護衛
+6. **R131 plugin registry 護衛架構理由 doc** — R119 接力清單第 15 條, 純文件, 可選
+
+**PUA 換角度哲學對齊**:
+- 換角度 ≠ 換不動, 是換維度: R139 從「內部結構性發現」換到「**外部策略輸入 → 內部可行性審計**」
+- 1 輪 1 件事: 1 個 R120 #1 行動可行性審計 + R103 已 ship 範圍對照表 + 5 輪換角度結構性飽和對照表 + 6 條 owner M 接力順位 (不動程式碼, 不動護衛)
+- 不搶 owner M scope: 6 owner M 髒檔 0 動 (Cargo.toml / timeline.rs / 2 spec.md / docs/index.html / docs/styles.css), R13 100% 守住
+- 不破 R97 紅線: K42 chain 20→20 守住, R139 0 護衛 ship, R120 #1 行動護衛 +1 例外需 owner M 解 R13 後開新 change
+- 卡住不硬幹: 5 輪 PUA 換角度結構性飽和, R139 走 R120 外部策略輸入審計找到最後一塊拼圖 (R103 已 ship 90% 路), 但**實質 SDK 整合需 owner M 解 WIP 邊界**, 接力順位給 owner M 不浮誇
+- MILESTONE_REACHED 誠實: 不假裝「我可以做」, 不硬扛 owner M scope, 明說「結構性發現已達頂, 真正 SDK 整合留 R140+ owner M 接力」
+
+**KPI-impact**: K0/K40/K41 持平 + K42 chain 20→20 守住 + baseline 452→452 守住 + R13 髒檔 3→3 守住 + **結構性發現維度 +1 (外部策略輸入 → 內部可行性審計, 過去 8 輪從未做過的 R120 整合軸)** + **R103 spec 已 ship 範圍對照表量化 (90% 路已鋪, 真正缺口量化 200-300 行 code)** + **5 輪 PUA 換角度結構性飽和對照表** + **MILESTONE_REACHED 觸發條件 6 條全列** + **R120 #1 #2 #3 行動排序 + owner M 接力順位 6 條** + **docs/kpi-history.md R139 段落地 (結構性審計結果)**

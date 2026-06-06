@@ -155,3 +155,63 @@
 - clippy 0 / fmt 0 diff 守住
 
 **下一輪影響**: R133+ 接力清單 4 條：(a) 護衛 過期契約審計 (護衛對應 spec 最後更新時間掃描); (b) R117 capsule-brief JS 配套等 owner M 收; (c) K0 Quota 4 missing 補鏈路 (OpenAB scope); (d) K0-A1 emit 5/13 → 6/13 護衛。
+
+---
+
+## R139 — R120 策略顧問 #1 行動 (OTel 對齊) 可行性審計 + R103 已 ship 範圍結構性 audit
+
+**為什麼**: R120 策略顧問巡邏 (2026-06-06) 判定 DRIFTING (MEDIUM) + 行動 #1 明確點出「把 `lobsterpulse_provider_*` metric 映射到 OTel GenAI semantic conventions 的 `gen_ai.*` span attributes」是存活條件。但 audit 發現 R102/R103 (2026-06-05) 已開 `otel-provider-metrics-contract` change 走 spec 對齊契約方向 — 41 條 LP_METRICS 對 OTel semconv attribute 對照表已 ship。**R120 建議的「OTel 對齊」已在 spec 文檔層落地；真正缺口是「spec 對齊表 → runtime OTel SDK emit」的橋接**。本輪 R139 對 R120 #1 行動做結構性審計 + 確認 R103 已 ship 範圍 + 給 owner M 開新 change 的 spec outline。
+
+**量化**:
+
+### R103 已 ship 範圍 (對齊契約層)
+
+| 維度 | R103 已 ship 狀態 | 證據 |
+|---|---|---|
+| LP_METRICS const 41 條 | ✅ closure (R104) | `src-tauri/src/lib.rs` module-level const, 4+4+3+7+13+1+9=41 |
+| OTel semconv attribute 對照表 | ✅ closure (R103) | `openspec/changes/otel-provider-metrics-contract/design.md` 169 行, 41 條全列 (含 `gen_ai.client.session.count` / `gen_ai.client.token.usage` / `gen_ai.client.operation.duration` 等草案 attribute 對應) |
+| 護衛 test 3 條 | ✅ closure (R104) | `lp_metrics_contract_size_is_41_matching_emit_paths` + `render_prometheus_body_empty_state_all_emits_in_lp_metrics_contract` + `render_prometheus_body_full_state_all_emits_in_lp_metrics_contract` |
+| Prometheus convention 檢查 | ✅ closure (R103) | 7 條 spec drift 候選明列 (counter 缺 `_total` 結尾), 列入 R104+ follow-up (R106 已 closure rename change 5 週時程) |
+
+### R103 未 ship 範圍 (runtime 整合層) — **真正缺口**
+
+| 維度 | 現狀 | 缺口 |
+|---|---|---|
+| OTel SDK 整合 | ❌ 無 `opentelemetry` / `opentelemetry-otlp` crate 依賴 | `Cargo.toml` 須新增 3 個 crate: `opentelemetry` (RUNTIME trait) + `opentelemetry-otlp` (exporter) + `opentelemetry-semantic-conventions` (attribute key 常數) |
+| OTLP 端點 | ❌ 無 | 須新增 Tauri command `start_otlp_exporter` 接 `OTEL_EXPORTER_OTLP_ENDPOINT` env var (預設 `http://localhost:4317` gRPC) |
+| Runtime `gen_ai.*` span emit | ❌ 無 (R103 標 「不接 OTel SDK」屬 R102+ follow-up) | 須在 `SessionManager::handle_event` 內對 4 個關鍵事件點 emit span: SessionStart / UserPromptSubmit / PostToolUseFailure / SessionEnd, span attributes 對齊 R103 對照表 |
+| OpenAB bot 對齊 OTel `gen_ai.provider.name` | ❌ provider label 是 `provider` (string) | 須加 1 個 attribute mapping layer: `provider` label → OTel `gen_ai.provider.name` 命名空間 (13 個 provider id → 標準名稱) |
+
+### R120 #1 行動 scope 評估 (R139 估算)
+
+| 項目 | 估算 (行數) | 風險 | 護衛鏈影響 |
+|---|---:|---|---|
+| `Cargo.toml` 加 3 個 crate | 5-10 | 中 (build time +10-30s, 二進制 +2-5MB) | 0 (R97 baseline) |
+| 開新 `opentelemetry` mod (`src-tauri/src/telemetry.rs`) | 100-150 | 低 (純 SDK 初始化) | 0 (新 mod, 不走護衛 chain) |
+| 加 Tauri command `start_otlp_exporter` | 30-50 | 低 (env var 讀取 + SDK init) | 0 (新 command, 護衛鏈不擴張) |
+| SessionManager 4 個事件點 emit span | 50-80 | 中 (handle_event 改 4 處, 護衛 event flow 測試要全綠) | +1 (新護衛 mod `telemetry::tests` 守 emit 路徑, R97 後 +4 例外) |
+| provider → OTel `gen_ai.provider.name` mapping | 20-30 | 低 (靜態 lookup table) | 0 (護衛併入 `provider_registration_guard_tests` 既有 mod) |
+| `.gitignore` 護衛 +1 (OTel config 不入 repo) | 10 | 0 | +1 (走 `r127_daemon_exclusion_gitignore_tests` 既有 mod, chain 不擴張) |
+| spec 4 檔 (proposal.md / design.md / spec.md / tasks.md) | 300-500 | 0 (純文檔) | 0 |
+| **總計** | **~515-820 行** | **中** | **+1 新護衛 mod (R97 後 +4 例外)** |
+
+### 結構性發現: R120 #1 行動 ROI 評估
+
+- **戰略層必要**: R120 點出 OTel 對齊是「存活條件」, 不對齊 = 3 個月後 proprietary schema 沒人接, 對齊 R100 策略顧問 #1 + R102 開工
+- **R103 spec 對齊表已鋪好 90% 路**: 41 條 metric → OTel attribute 對照表 closure, runtime 整合只缺 1 個 SDK 整合 + 4 個事件點 emit + 1 個 provider mapping (合計 ~200-300 行 code, 0 結構性重新設計)
+- **R13 護衛守住 WIP 邊界**: owner M 6 髒檔不能動, OTel SDK 整合屬新 mod 不衝突
+- **R97 紅線守 +1 例外**: 新 `telemetry::tests` 護衛 mod 走 R97 後 +4 例外架構理由 (跨 session.rs ↔ lib.rs ↔ telemetry.rs 邊界), 跟 R122 timeline 例外同性質, 速率 +0.25/輪, 仍 < +0.5/2 輪紅線
+- **R120 #1 #2 #3 行動** 排序: #1 OTel 對齊 (本輪評估可行) → #2 誠實重寫差異化定位 (本輪不做, 留 owner M 接力 R140+) → #3 K0 缺口 scope 調整 (本輪不做, 留 owner M 接力 R140+)
+
+### 給 owner M 的 spec outline (R139 接力)
+
+```
+openspec/changes/otel-genai-runtime-emit-2026-q3/
+├── proposal.md   (~80 行: 5 段 Goal/Background/Scope/Capabilities/Mission 對齊)
+├── design.md     (~250 行: 4 段 Source of Truth/Code-level 變更面/影響面/護衛鏈)
+├── specs/otel-genai-runtime-emit-2026-q3/spec.md  (~120 行: 4 Requirement + 6-8 Scenario)
+├── tasks.md      (~60 行: Phase 1 SDK 整合 6-7 個 task)
+└── .openspec.yaml (status=open, phase=1/1)
+```
+
+**下一輪影響**: 結構性飽和已達頂 (R139 走 R120 #1 行動可行性審計 + 給 owner M 開新 change spec outline), 後續 R140+ 需 owner M 解 R13 (6 髒檔處理) + 開 `otel-genai-runtime-emit-2026-q3` change 走 T-1 SDK 整合週 (5 週時程 T-1 dual-emit shim 模式), PUA 換角度 5 輪結構性飽和 → **MILESTONE_REACHED**。

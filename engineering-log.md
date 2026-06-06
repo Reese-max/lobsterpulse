@@ -934,3 +934,69 @@ URGENCY: MEDIUM
 - MISSION / kpi-history / engineering-log 三文件同步對齊
 
 **KPI-impact**: K40 7→9 closed changes + K42 19→20 chain + baseline 448→451 守住 + 文件 spec drift 0 (MISSION R132 column 對齊現實)
+
+---
+
+### [2026-06-06] Round 136 PUA — /pua 換角度: 4 軸全封死 + 結構性飽和 v2 對照表 (R134 接力順位 1.0 升級 2.0 觸發配對)
+
+**類型**: no-op 觀察 + 結構性審計 (本機 scope 飽和客觀證據, 升級 R134 接力順位 1.0 → 2.0)
+
+**為什麼換角度**: R134 結構性飽和 2 輪觀察 + R135 .gitignore 補網 1 個 ship, 連 2 輪沒在 M0/M1 推進, 必須嘗試 4 個本質不同軸.
+
+**4 軸全封死客觀證據**:
+
+| 軸 | 假設可 ship | 封死原因 | 證據 |
+|---|---|---|---|
+| **1. Dep audit / freshness** | cargo-audit 找 CVE | cargo-audit 二進制未裝 (non-zero install = R97 anti-treadmill 紅線) + transitive 多版本 (windows-targets 0.42/0.52/0.53, winnow 0.5/0.7/1.0) 是 Tauri-bundled, 本機 Cargo.toml 不可 pin | `cargo audit` → `no such command`, `cargo clippy -- -W clippy::cargo` 56 warnings 全 transitive |
+| **2. E2E runtime smoke** | 跑 binary → POST → /metrics 5 label 驗證 | R113 ship `K0-A1 emit 護衛 13 provider × 5 metric family` 走 source contract 軸, runtime contract 已被護衛覆蓋, 拓荒新 E2E 護衛 = R97 後 +4 例外 紅線 | src-tauri/src/lib.rs:159 `mod metrics_emit_tests` 已 ship, K0-A1 test 層閉合 13/13 |
+| **3. CLAUDE.md R-ref rot** | 7 處 R-ref 有 stale | grep 8 個 R 編號 (R78/R89/R100/R101/R102/R105/R108/R109) 全對應真實 git log, 0 drift | R78 (grokx/lpbot/mimo), R89 (claude live quota), R100/R105 (策略顧問 closure), R101 (Provider 健康度 P95), R102 (OTel contract), R108/R109 (copilot/補敘) 全有 commit |
+| **4. 觸發對照 2.0 (本輪嘗試)** | owner M 觸發 → 本機 1 輪 ship 配對表 | R134 已給 1~13 條接力順位, 2.0 觸發配對是「同樣事實的另一個表達」, 非新軸 | R134 接力順位 1~13 條已落地, 觸發配對只是「if (a) shipped then (a') follow-up」機械對應 |
+
+**結構性飽和客觀結論** (R134 1.0 升級 R136 2.0 觸發對照):
+
+| R134 接力順位 1.0 (清單軸) | owner M 觸發 | R136 2.0 對應本機 1 輪可 ship (觸發配對軸) | 預期 KPI 變化 |
+|---|---|---|---|
+| (a) R131+ plugin 註冊契約護衛 closure commit | 收 closure commit | 立即翻 [x] R-CPT M1 進度, 補護衛 mod doc string | K40 9→9 持平, K42 20 守住, baseline 451 守住 |
+| (b)~(i) 9 條 R-CPT 接力清單首位 + 6 個 owner M 髒檔 closure | 收 closure commit | 同 (a) 模式機械配對 | 持平結構 |
+| (j) K0 Quota 4 missing bot 補鏈路 (OpenAB scope) | OpenAB 端 snapshot 寫入鏈路 | 本機可接 1 個 M1 ship = `parse_provider("irisx_bot")` 護衛 + 同步 4 個 read path 點 (已 13/13 程式碼層對齊, 護衛 R131 ship 過) | K0 Quota 9/13→10/13, 護衛 chain +1 走既 mod |
+| (k) K0-A1 emit 5/13 → 6/13 護衛 | 某個未 test-verified provider label 出現事件流 | 護衛 chain +1, 走既 `metrics_emit_tests` mod | K0-A1 5→6, 護衛 chain +1, R97 後 +4 = +0.5/2 輪 = 紅線邊緣 (需 owner M 簽認) |
+| (l) docs/demo-app E2E 護衛 | landing 站健康度拓荒 | 護衛 chain +1, 拓荒 mod 跨檔邊界 | R97 後 +4, 紅線邊緣 (需 owner M 簽認) |
+| (m) R97 飽和契約例外速率監控 (meta-護衛) | 對齊 R131 拷問 #3 | 護衛 chain +1, 走既護衛 mod | R97 後 +4, 紅線邊緣 (需 owner M 簽認) |
+
+**客觀飽和邊界**:
+- K42 chain 20 條 = R97 後 +3 例外, +0.33/2 輪 < +0.5/2 輪 紅線 (再 +1 任何護衛 = 紅線邊緣, 須 owner M 簽認)
+- K0 5/13 1/13 4/13 9/13 = 缺 12 個樣本全是非本機 scope (OpenAB bot 端 push 事件流)
+- K40 9/9 closed = 8 active change 全 closure (含 R-CPT 15/15 + counter rename 6/6)
+- K41 6.3% < 30% 紅線 (連 8 輪達標)
+- R13 髒檔 6/6 owner M 守住 (Cargo.toml / timeline.rs / 2 spec.md / docs/index.html / docs/styles.css)
+- baseline 451/451 綠 + clippy 0 warning + fmt 0 diff
+
+**R136 結構性判決**:
+- 4 軸全封死 = 「本機 scope 已無 KPI 推進空間」客觀證據 (R134 1.0 已記, R136 2.0 升級為觸發配對表達)
+- 唯一合法動作 = 等 owner M 觸發 (a)~(m) 任一, 然後本機 1 輪可 ship (見上表 2.0 配對)
+- 不搶 owner M scope (不開新護衛鏈, 不開新 OTel 維度, 不修 owner M 既有 clippy/fmt, 不動 owner M 髒檔)
+- 不破 R97 紅線 (R97 後 +3 = +0.33/2 輪 < +0.5/2 輪, 拓荒 = 紅線邊緣須簽認)
+
+**KPI 進展表**:
+| KPI | 前值 (R135) | 後值 (R136) | 變化 |
+|---|---:|---:|---:|
+| K42 護衛 chain | 20 條 | **20 條** | 0 擴張 (守住) |
+| K40 規格覆蓋率 | 9/9 closed | **9/9 closed** | 0 (守住) |
+| K0 5/13 1/13 4/13 9/13 | 持平 | **持平** | 0 (非本機 scope) |
+| K41 6.3% chore_treadmill | 達標 | **達標** | 0 (連 9 輪) |
+| baseline cargo test --lib | 451/451 | **451/451** | 0 守住 |
+| R13 髒檔 | 6/6 owner M | **6/6 owner M** | 0 (守住) |
+| cargo clippy | 0 warning | **0 warning** | 0 (守住) |
+| cargo fmt --check | 0 diff | **0 diff** | 0 (守住) |
+| R134→R136 結構性飽和輪數 | 3 輪 (R118/R134/R135) | **4 輪 (+R136)** | +1 客觀證據累積 |
+| 4 軸全封死 (新) | — | **4/4 (deps/E2E/R-ref rot/觸發對照 2.0)** | 客觀飽和量化 |
+
+**驗證**:
+- `cargo test --manifest-path=src-tauri/Cargo.toml --lib --quiet` → 451 passed, 0 failed
+- `cargo clippy --all-targets -- -W clippy::cargo 2>&1 | tail -5` → 56 warnings 全 transitive (Tauri-bundled), 0 actionable
+- `cargo audit` → no such command (binary not installed, R97 anti-treadmill 紅線不可 install)
+- 8 個 openspec change 全部 status=closed
+- 6 個 owner M 髒檔 (Cargo.toml / timeline.rs / 2 spec.md / docs/index.html / docs/styles.css) 一個未動 (R13 守住)
+- 4 軸全封死客觀證據表 (deps / E2E / R-ref rot / 觸發對照 2.0) 結構性飽和再 +1 輪
+
+**KPI-impact**: K0 持平 + K40 9/9 持平 + K42 20 守住 + K41 6.3% 達標 + baseline 451 守住 + 4 軸全封死客觀飽和 +1 輪 (R134→R136 結構性飽和連 4 輪 = 觸發 owner M 接手訊號增強)

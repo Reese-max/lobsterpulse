@@ -11740,3 +11740,54 @@ mod r74_play_sound_file_fallback_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
+
+// ---------------------------------------------------------------------
+// R127 daemon 噪音 .gitignore 收網護衛 (R13 髒檔防護 layer)
+// 架構理由 (R97 飽和契約例外): R13 治理 layer 跨既有 mod 邊界
+// (render_prom / auto_rules / timeline / session / hook_server / event / config
+// 都跟 git 路徑無關), 需獨立 mod 守「git status 不含 6 個 daemon path」
+// invariant。對齊 R115 開新 mod 模式 (R97 後第 1 個開新 mod 護衛)。
+//
+// 6 個 path 來源: R119 / R120 / R121 round-noop 觀察紀錄反覆提
+// 「bash.exe.stackdump × 2 .gitignore 提案 — owner M 收」, owner M 多輪未收,
+// R127 worker 代收 (換角度: R124-R126 都在觀察 / 量化 / 接力清單, 從沒在 R13
+// 防護線上做工作; R127 直擊 R13 防護線, 結構性降髒檔基線 13 → 7)。
+// ---------------------------------------------------------------------
+#[cfg(test)]
+mod r127_daemon_exclusion_gitignore_tests {
+    use std::path::PathBuf;
+
+    /// .gitignore 必須收齊這 6 個 daemon 噪音 path, 否則 `git status --short`
+    /// 會把它們當 untracked 一直列在工作樹, R13 髒檔基線永遠降不下來。
+    /// 既有 `.engineer-loop.pid` / `.engineer-loop.state.json` / `.harness-*.json`
+    /// 只覆蓋部分檔 (.engineer-loop.* 不含 .failures.jsonl; .harness-*.json
+    /// 不含 .db), 6 個新 path 是補網。
+    #[test]
+    fn r127_gitignore_contains_6_daemon_paths() {
+        // 從 src-tauri/ 上跳一級到專案根, 讀 .gitignore
+        let gitignore_path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", ".gitignore"]
+            .iter()
+            .collect();
+
+        let content = std::fs::read_to_string(&gitignore_path)
+            .unwrap_or_else(|e| panic!("read {} failed: {e}", gitignore_path.display()));
+
+        // 6 個 daemon 噪音 path, 任一不在 .gitignore 都會 fail。
+        // 行內匹配 (contains) 而非整行比對, 容許前後有註解 / 多個 path 同行
+        let required = [
+            ".ad-map/",                      // engineer-loop arch-fitness output dir
+            ".arch-fitness.json",            // arch-fitness sensor report
+            ".engineer-loop.failures.jsonl", // engineer-loop failure log
+            ".harness-memory.db",            // harness-memory SQLite
+            ".supervisor-report.json",       // supervisor session report
+            "bash.exe.stackdump",            // Windows Git Bash crash dump
+        ];
+        for path in required {
+            assert!(
+                content.contains(path),
+                ".gitignore 漏收 daemon 噪音 path `{path}`, 會被 `git status --short` \
+                 列為 untracked, R13 髒檔基線無法降。請在 .gitignore 加該行。"
+            );
+        }
+    }
+}

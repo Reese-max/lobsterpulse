@@ -27,3 +27,13 @@ dist/
 
 # Auto-dev per-round run records
 runs/
+
+# R127 daemon 噪音 (loop/sensor/supervisor/harness-memory 每 round 寫,
+# 不在 R13 防護線要追蹤的範圍; .engineer-loop.pid/.state.json + .harness-*.json
+# 既有行只覆蓋部分檔, 補 6 個 path 收齊)
+.ad-map/
+.arch-fitness.json
+.engineer-loop.failures.jsonl
+.harness-memory.db
+.supervisor-report.json
+bash.exe.stackdump

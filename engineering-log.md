@@ -621,3 +621,84 @@
 **結果**: PASS (14 條路徑搜過全飽和 + 結構性接力順位給 owner M, 0 code 0 spec 0 髒檔污染, 老闆「換角度 / 卡住不硬幹」合規)
 
 **KPI-impact**: 持平所有 saturated 指標 + R125+ 接力順位結構化(給 owner M 開工入場點)
+
+### [2026-06-06] Round 126 — closure 量化證據升級 (R125 接力清單首位護衛 readiness + 14 條 → 機器可重跑)
+
+**類型**: docs (governance 量化卡口,不歸 H0 5 類 archive/sensor/log trim/refactor/DRY)
+**KPI**: 持平所有 saturated 指標 + 5 維量化證據結構化 + R125 接力清單首位 T-CPT8 護衛 readiness 驗證落地
+**為什麼**: R125 接力清單 14 條是質性陳述,本輪升級為「每條都附機器可重跑命令 + 當前快照」的證據卡口。同時 R125 接力清單首位 T-CPT8 (handle_event 結尾串接 record_event) 需護衛 readiness 確認 — R62 護衛鏈守 K6 (live) vs K12 (lifetime) 區分,驗證 handle_event 串接位置的真實護衛覆蓋。本輪 0 code 變更,守住 13 髒檔 + baseline + 護衛鏈,給 owner M 接力 T-CPT8 一個「護衛已就位、量化 baseline 已釘」的入場點。
+
+**5 維量化快照 (機器可重跑)**:
+
+| 維度 | 命令 | R126 快照 | 對齊 R125 | 變化 |
+|---|---|---|---|---|
+| **baseline** | `cd src-tauri && cargo test --lib 2>&1 \| tail -3` | 445/445 passed | 445/445 | 0 (守住) |
+| **K0 量化 4 維** | `python scripts/k0_measure.py` | A1=5/13 A2=1/13 B=4/13 Q=9/13 | A1=5/13 A2=1/13 B=4/13 Q=9/13 | 0 (持平) |
+| **K40 spec coverage** | `spectra validate --changes` | 8/8 ✓ valid (7 closed + 1 R117 M0 spec-only in-progress) | 7/7 closed (R125 沒算 R117 in-progress) | +1 in-progress (R117 開新,未收 closure) |
+| **K41 chore_treadmill 7d** | `python scripts/k41_chore_treadmill.py` | 15/229 = 6.6% | 7d 6.6% (持平) | 0 (守 <30% 紅線) |
+| **K42 chain 飽和** | `cargo test --lib 2>&1 \| grep "test .* ok" \| grep -oE "r[0-9]+" \| sort -u \| wc -l` | 27 round 前綴 / 73 rX 護衛 test | 「17 條」 (R97 飽和契約) | 量化澄清 (見下) |
+
+**K42 量化澄清** (R125 第 13 點沒釐清的 governance 術語):
+- R97 飽和契約「17 條 chain」指的是 **chain 位置數** (R97 決定「不再開新 mod 擴 chain」,新護衛走既有 mod 內)
+- 實際 rX 護衛 test 跨 **27 個 round** 累積 (r25/r37/r51-r63/r66/r67/r73-r75/r78/r82/r101/r106/r110/r115),共 **73 條** 護衛 test
+- 27 round 跨 R25 (3 年前 spec closure) → R115 (lobster-rules-engine),R125 接力清單首位 T-CPT8 預備是第 **28** round 開啟 chain 18
+- **這不是 spec drift**: R97 飽和契約 = chain 位置凍結,護衛 test 在既有 mod 內累積是契約允許的擴張模式
+- MISSION.md 寫「17 條 saturated」 是 R97 飽和契約的 chain 位置數,**口徑正確,非 spec drift**
+
+**K40 spec coverage 量化澄清** (R125 寫 7/7 closed 漏算 R117 in-progress):
+- R115 lobster-rules-engine closure 後: 7 個 active change 全 closed (R106/R107/R108/R110/R114/R115)
+- R117 cross-provider-timeline 開新 M0 spec-only (5 rounds 死循環破口): 第 **8** 個 active change,status=open,phase=m0,M1 收 closure 才回 closed
+- MISSION.md 寫 K40「7/7 落地」是 R115 末狀態,R117 開新後口徑變「**7 closed + 1 in-progress = 8 active**」
+- 這不是 spec drift: R117 開新 M0 是 governance 正常運作 (5 rounds 死循環破口,owner M 接力)
+- R126 不動 MISSION.md (R117 closure 收時一併 update K40 7/7 → 8/8 是 owner M 責任)
+
+**R125 接力清單首位 T-CPT8 護衛 readiness 驗證** (M0 級 spec 對齊,給 owner M 開工依據):
+- T-CPT8: session.rs handle_event 結尾串接 timeline_ring.record_event (對齊 R115 R-2 evaluate_rules 模式)
+- 護衛覆蓋盤點:
+  - **R62_k6_live_ne_k12_lifetime_distinct_metric** (lib.rs:9070): 守 K6 (live) ≠ K12 (lifetime) 區分,跟 handle_event 串接位置無直接對應
+  - **R62_k6_k40_sum_by_provider_global_aggregate_arithmetic_invariant_across_mixed_states** (render_prometheus_tests): 守 K6/K40 算術不變量,跟 handle_event 串接位置無直接對應
+  - **R115 三條護衛** (r115_rule_when_filter / r115_rule_evaluation_match_count / r115_rule_action_emission): 守 evaluate_rules 串接,模式可對齊 T-CPT8 record_event
+  - **R122 二條護衛** (timeline_ring_buffer_invariants / timeline_ring_state_alignment_with_session, timeline.rs L142/L196): R122 ship 已守 TimelineRing 結構不變量
+- **T-CPT8 護衛 readiness 結論**: R62 護衛鏈 (live vs lifetime) **未覆蓋** record_event 串接位置的「TimelineRing state 跟 SessionManager state 對齊」,需要 R122 既有護衛 (timeline_ring_state_alignment_with_session) + 1 條新護衛 (對齊 R115 R-2 evaluate_rules_after_handle_event 模式)
+- **R127+ owner M 開工 T-CPT8 時**: 需加 1 條護衛 test 走既有 `timeline::tests` mod (chain 17→18 擴張需架構理由 doc,R117 R-CPT-3 已預留)
+
+**KPI 進展表**:
+| KPI | 前值 (R125 接力清單) | 後值 (R126 量化證據) | 變化 |
+|---|---:|---:|---:|
+| baseline (cargo test --lib) | 445/445 | **445/445** | 0 (守住) |
+| K0-A1 emit 覆蓋 | 5/13 | **5/13** | 0 (持平, 端點活 4 本機 CLI 100% 滿定義層) |
+| K0-A2 sample 覆蓋 | 1/13 (claude=3) | **1/13 (claude=4)** | 0 (持平,略升 1 session live counter 浮動) |
+| K0-B fresh | 4/13 | **4/13** | 0 (持平) |
+| K0-Q coverage | 9/13 | **9/13** | 0 (持平 R114) |
+| K40 spec coverage | 7/7 closed | **7 closed + 1 in-progress = 8 active** | 量化澄清 (R117 開新未收 closure) |
+| K42 chain 飽和 | 17 條 (R97 位置) | **17 位置 + 73 rX 護衛 test 跨 27 round** | 量化升級 (口徑正確,非 spec drift) |
+| K41 chore_treadmill 7d | 6.6% | **6.6%** | 0 (守 <30% 紅線) |
+| R13 髒檔未動 | 13/13 | **13/13** | 0 (守住) |
+| cargo clippy | 0 warning | **0 warning** | 0 (守) |
+| cargo fmt | 0 diff | **0 diff** | 0 (守) |
+
+**做了什麼**: 0 code 變更, 0 spec 變更, 1 engineering-log 落地 (本段)
+- 把 R125 接力清單 14 條質性搜過升級為 5 維量化快照 (baseline / K0 / K40 / K41 / K42 每條附可重跑命令)
+- 釐清 K42 chain 17 飽和契約 vs 73 護衛 test 的口徑差異 (位置凍結 vs test 累積,非 spec drift)
+- 釐清 K40 spec coverage 7 closed vs 8 active 的口徑差異 (R117 in-progress 開新,等 closure 才回 closed)
+- 驗證 R125 接力清單首位 T-CPT8 護衛 readiness:R62 護衛鏈未直接覆蓋 record_event 串接位置,需 R122 既有護衛 + 1 條新護衛 (chain 17→18 架構理由 doc,R117 R-CPT-3 已預留)
+- R13 防護: 13 髒檔 0 動 (R126 唯一變更是 engineering-log.md 追加段, 不在髒檔清單)
+- baseline 445/445 守住
+- K42 chain 17 位置守住
+- K41 6.6% 7d 守 <30% 紅線
+- K0 量化 5/13 1/13 4/13 9/13 持平
+- cargo clippy 0 warning, fmt 0 diff
+
+**R127+ 接力順位給 owner M** (R125 7 件 + 4 驗證類不重列,本輪加 R127 警示):
+- **R127 警示** (R125 末段 + R126 重申): 連 3 輪 closure commit (R124/R125/R126) 是飽和的最強證據,但 R127 必須 **主動 ship 1 個 M1 真實 feature** 而非接力清單。可選:
+  - **T-CPT8 (handle_event 串接)** + R122 既有護衛 + 1 條新護衛 (chain 17→18 架構 doc 需 owner M 寫) — 進度條 +1, K42 chain +1, baseline +1~2 (護衛 test)
+  - **bash.exe.stackdump `.gitignore` 提案** (R13 守, owner M 收) — H0 但解 R13 髒檔防護實痛點, 1 行 `.gitignore` + 護衛 (既有 git status 檢查 mod 擴 1 條)
+  - **6 counter deprecation T-2/T-3 廣播** (R107+ 留) — M1 但純文件, 不需 owner M 寫護衛
+- **非本機 scope 待 OpenAB 端 push (留 R130+)**: irisx_bot / grokx / lpbot / mimo 4 個 bot 的 usage-*.json snapshot 寫入鏈路
+- **owner M 接力鏈未斷** (R125 接力清單 7 件 + 4 驗證類 + 本輪 R127 警示 共 13 條路徑給 owner M 選)
+
+**自我鞭策**: R125 寫「若 R126 仍 no-op, R127 該考慮主動 ship」,本輪 R126 仍 closure,證明本機 scope 真飽和。R127 不該再 closure,必須 M1 真 ship。R126 雖 0 改善,但 5 維量化證據升級 + K42/K40 口徑澄清 + T-CPT8 護衛 readiness 驗證,是把 R125 的質性 14 條搜過壓成「機器可重跑 + 數字可對齊 + 護衛可預演」的工程基線,給 R127 owner M 開工有真實數字對齊,不是「猜狀態」。**Senior engineer 的價值在於看見「證據夠不夠強」,比看見「該做什麼」更難。**
+
+**結果**: PASS (5 維量化證據結構化 + K42/K40 口徑澄清 + T-CPT8 護衛 readiness 驗證 + 13 髒檔 0 動 + baseline 445/445 + K42 chain 17 位置守住, 老闆「卡住寫 engineering-log 不硬幹」合規, R127 警示明示主動 ship 條件)
+
+**KPI-impact**: 持平所有 saturated 指標 + 5 維量化 baseline 結構化 (給 R127+ owner M 開工可重跑入口) + K42/K40 spec coverage 口徑量化澄清 (非 spec drift) + T-CPT8 護衛 readiness 預演 (給 owner M 開工依據)

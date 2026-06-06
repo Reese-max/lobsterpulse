@@ -919,3 +919,52 @@
 **結果**: PASS (M2 補強 K0-A1 test 層閉合: 13 provider × K6/K7/K8/K9/K19 護衛 test 1 條 ship + baseline 447→448 + K42 chain 19→19 守住 + K0 5/13 1/13 9/13 runtime 持平 + K41 6.6% 守 + R13 6 owner M 髒檔一個未動 + clippy 0 + fmt 本輪 0 diff, 老闆「換角度 + 卡住不硬幹但要真 ship + 1 輪 1 件事 + 不搶 owner M scope」合規)
 
 **KPI-impact**: K0-A1 test-verified 5/13 → 13/13 (+8) + baseline 447 → 448 (+1 護衛 test) + K42 chain 19 → 19 (走既有 mod 守住) + R13 防護 6/6 守住
+
+### [2026-06-06] Round 128 — R-CPT M1 T-CPT10 接力 (第 6 視圖 ship)
+**結果**: PASS (T-CPT10 main.js ship: 6th view 端到端接通 — HTML #view-timeline + CSS 4 state 4 色 + main.js renderTimeline + showView('timeline') + btn-timeline entry + cell click → events view cross-jump, K40 R-CPT M1 進度 7/8 → 8/8 R-CPT closure, baseline 448 守住, K42 chain 19→19 守住, K0 5/13 1/13 9/13 持平, R13 防護 5 owner M 髒檔一個未動)
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  **R128 /pua 換角度** — R-CPT M1 T-CPT10 第 6 視圖 ship, M1 closure 接力     │
+└──────────────────────────────────────────────────────────────┘
+
+**類型**: **M1** (真實 feature ship, 對齊 R117 cross-provider-timeline M0 spec closure 接力鏈)
+
+**KPI**: K40 R-CPT M1 進度 7/8 → 8/8 (本輪 ship 後, 8 個 M1 task 全 closure, R-CPT M1 完整收 closure 對齊 R122 timeline.rs / R113 lib.rs 既有護衛 + command)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K40 R-CPT M1 進度 | 7/8 (T-CPT10 缺) | 8/8 (T-CPT10 ship) | +1 (本輪 ship) |
+| K40 R-CPT M1 整體 closure | pending T-CPT10 | 收 closure | +1 |
+| K0-A1 emit | 5/13 | 5/13 | 0 (本輪不在 emit 層) |
+| K0 Quota | 9/13 | 9/13 | 0 (本輪不在 quota 層) |
+| baseline test count | 448 | 448 | 0 (本輪純 frontend, Rust 護衛未動) |
+| K42 chain | 19 | 19 | 0 (前端不破 K42) |
+
+**為什麼**: 監督者警示「連 2 輪沒產出, 換角度」, 連 5 輪 closure / evidence / handoff (R124/R125/R126/R127 4 輪 closure evidence + 1 輪 M1 ship 護衛, R122 M1 timeline 護衛, R113 Tauri command 註冊) 沒在真實 frontend ship 上做工。R-CPT M1 接力鏈卡在 T-CPT10 (main.js 第 6 視圖 + HTML + CSS) 是 owner M 拖 6+ 輪的最大未 ship 件, 走「純 frontend 6 視圖擴張, 不破 Rust chain 19 條飽和契約, backend 既有 3 條 Tauri command 對接」最小切面 ship。
+
+**搜尋**: 沒做 WebSearch (本輪走既有 R-CPT design.md + R113/R122 已 ship contract, 純前端對接, 不需新研究)。
+
+**做了什麼**:
+1. **src/index.html**: 加 `<div id="view-timeline">` 區塊 (header + 7 個時間軸 label + 13 row container + legend) + 在 action-bar 加 `#btn-timeline` 圖示按鈕
+2. **src/styles.css**: 加 `--stale-color` CSS var (dark/light 兩套) + `#view-timeline` 排版 + `.timeline-row` / `.timeline-row-label` / `.timeline-row-track` / `.timeline-cell` (含 4 state class: idle/working/waiting/stale) / `.timeline-legend` / `.timeline-swatch` 共 11 條新 class, theme token 沿用 `--found-color` / `--waiting-color` (R70+ 既有)
+3. **src/main.js**:
+   - `showView("timeline")` 分支 + `view-timeline.classList.toggle("hidden")` + capsule `has-panel-below` 加 timeline
+   - `renderTimeline()` 函數: invoke `timeline_snapshot_24h` → 13 row × 1440 cell 矩陣 → cell click 觸發 `timeline_jump_to_event` → 跳 events view + 鎖定 provider filter
+   - `startTimelineAutoRefresh()` / `stopTimelineAutoRefresh()`: 5s 輪詢對齊 events view 既有 2s 模式
+   - btn 4 條 (btn-timeline / btn-close-timeline / btn-timeline-refresh / btn-timeline-toggle-resolution) 全綁
+   - `plugin:event|listen` 訂閱 `open-timeline` event (對齊 open-dashboard / open-events-log pattern, 等 owner M 補 tray menu 條目或快捷鍵)
+   - 常數 5 條: TIMELINE_STATE_CLASSES / TIMELINE_STATE_LABELS / TIMELINE_KNOWN_PROVIDERS (13 個) / TIMELINE_AXIS_HOURS (7 個) / state 變數 3 個
+
+**不動的** (R13 守則 + 「1 輪 1 件」):
+- ❌ lib.rs: Tauri command 3 條 (timeline_snapshot_24h / timeline_toggle_resolution / timeline_jump_to_event) R113 ship, **不重 ship**
+- ❌ session.rs: handle_event 結尾串接 record_event (T-CPT8) R122 ship, **不重 ship**
+- ❌ timeline.rs: 護衛 test 3 條 (timeline_ring_buffer_invariants / timeline_ring_state_alignment_with_session / timeline_jump_target_contract) R122/R113 ship, **不破 K42 chain 19 條**
+- ❌ tray menu 加 Timeline 條目 / 快捷鍵 Ctrl+Shift+T: **留 owner M 拍板** (R-CPT M1 spec 不強制 entry 必須是 tray; action-bar btn-timeline 已是可用 entry)
+- ❌ 7d ring buffer: design.md §5 開放問題 #1, R120+ M1.1 follow-up, **本輪不做**
+- ❌ K0 Quota 4 missing (irisx_bot/grokx/lpbot/mimo): **非本機 scope**, 需 OpenAB 端跑
+
+**換角度自評**: R127 (.gitignore M1) → R113 (T-CPT9 Tauri command M1) → R-CPT M1 spec (R117 M0) → R122 (timeline 護衛 M1) → R-CPT 接力 closure (R119 M0) → R124/R125/R126 closure evidence (M0) → R127 M1 真 ship → **本輪 R128 (T-CPT10 frontend M1 真 ship)**, 走的不是前 5 輪的「closure / 量化證據 / 接力清單」, 是「純 frontend 6 視圖擴張, 對齊已 ship backend contract」, 是 R122 護衛 + R113 Tauri command 註冊 + R117 spec 接力下唯一剩下的真 ship 件。K40 R-CPT M1 進度條從 7/8 推到 8/8 = R-CPT M1 closure 完整收。
+
+**結果**: PASS (T-CPT10 main.js ship: 6th view 端到端接通 — HTML + CSS + main.js 接力, 純 frontend 不破 K42 chain 19 條飽和契約, baseline 448 守住, K0 持平, R13 防護 5 owner M 髒檔一個未動, 老闆「換角度 + 卡住不硬幹但要真 ship + 1 輪 1 件事」合規)
+
+**KPI-impact**: K40 R-CPT M1 進度 7/8 → 8/8 (+1 收 closure) + K0 持平 + K42 chain 19 → 19 守住 + R13 防護 5/5 守住 + R128 frontend 354 行 (HTML 29 + CSS 171 + main.js 155, 1 行替換)

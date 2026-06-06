@@ -90,9 +90,10 @@ function showView(view) {
   $("view-settings").classList.toggle("hidden", view !== "settings");
   $("view-dashboard").classList.toggle("hidden", view !== "dashboard");
   $("view-events-log").classList.toggle("hidden", view !== "events");
+  $("view-timeline").classList.toggle("hidden", view !== "timeline");
   $("capsule").classList.toggle(
     "has-panel-below",
-    view === "expanded" || view === "settings" || view === "dashboard" || view === "events"
+    view === "expanded" || view === "settings" || view === "dashboard" || view === "events" || view === "timeline"
   );
   // PUA R112: 離開 capsule view 一定要收掉 brief（避免 brief 飄在 expanded view 上面）
   if (view !== "capsule") showCapsuleBrief(false);
@@ -112,6 +113,11 @@ function showView(view) {
     startEventsAutoRefresh();
   } else if (view !== "events" && prevView === "events") {
     stopEventsAutoRefresh();
+  }
+  if (view === "timeline" && prevView !== "timeline") {
+    startTimelineAutoRefresh();
+  } else if (view !== "timeline" && prevView === "timeline") {
+    stopTimelineAutoRefresh();
   }
 }
 
@@ -572,6 +578,31 @@ async function init() {
   $("btn-close-events").addEventListener("click", () => {
     showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
   });
+
+  // ─── R-CPT M1 T-CPT10 — Timeline 視圖 (6th view) ───
+  $("btn-timeline").addEventListener("click", () => {
+    showView("timeline");
+  });
+  $("btn-close-timeline").addEventListener("click", () => {
+    showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
+  });
+  $("btn-timeline-refresh").addEventListener("click", () => renderTimeline());
+  $("btn-timeline-toggle-resolution").addEventListener("click", async () => {
+    const next = timelineCurrentResolution === "24h" ? "7d" : "24h";
+    try {
+      const res = await invoke("timeline_toggle_resolution", { resolution: next });
+      timelineCurrentResolution = res;
+      $("btn-timeline-toggle-resolution").textContent = res;
+    } catch (e) {
+      console.warn("[timeline] toggle_resolution failed:", e);
+    }
+  });
+  // Tray / shortcut → Timeline (R-CPT 預備, 等 owner M 補 tray menu 條目或
+  // 快捷鍵, 前端 listener 先 hook 起來 — 對齊 open-dashboard / open-events-log pattern)
+  const openTimelineCb = window.__TAURI_INTERNALS__.transformCallback(() => {
+    showView("timeline");
+  });
+  invoke("plugin:event|listen", { event: "open-timeline", target: { kind: "Any" }, handler: openTimelineCb }).catch(() => {});
 
   // Settings tab switching
   document.querySelectorAll(".settings-tab").forEach(tab => {
@@ -1595,6 +1626,128 @@ function stopEventsAutoRefresh() {
   if (!eventsRefreshTimer) return;
   clearInterval(eventsRefreshTimer);
   eventsRefreshTimer = null;
+}
+
+// ─── Cross-Provider Timeline (R-CPT M1 T-CPT10) — 6th view ───
+// 4 state SSoT 對齊 session.rs / timeline.rs: 0=Idle / 1=Working /
+// 2=WaitingForUser / 3=Stale (R122 TimelineRing state_to_u8 順序)。
+const TIMELINE_STATE_CLASSES = ["timeline-cell-idle", "timeline-cell-working", "timeline-cell-waiting", "timeline-cell-stale"];
+const TIMELINE_STATE_LABELS = ["Idle", "Working", "WaitingForUser", "Stale"];
+const TIMELINE_KNOWN_PROVIDERS = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo", "claude", "codex", "copilot", "gemini"];
+const TIMELINE_AXIS_HOURS = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "24:00"];
+let timelineRefreshTimer = null;
+let timelineRenderInFlight = false;
+let timelineCurrentResolution = "24h";
+
+function timelineBuildAxis() {
+  const axis = $("timeline-axis");
+  if (!axis) return;
+  axis.innerHTML = TIMELINE_AXIS_HOURS.map(h => `<span>${h}</span>`).join("");
+}
+
+async function renderTimeline() {
+  if (timelineRenderInFlight) return;
+  timelineRenderInFlight = true;
+  const strip = $("timeline-strip");
+  const stats = $("timeline-stats");
+  if (!strip) { timelineRenderInFlight = false; return; }
+  let snap = [];
+  try {
+    snap = await invoke("timeline_snapshot_24h");
+  } catch (e) {
+    if (stats) stats.textContent = `載入失敗: ${e}`;
+    timelineRenderInFlight = false;
+    return;
+  }
+  if (!Array.isArray(snap) || snap.length === 0) {
+    if (stats) stats.textContent = "(空 snapshot — 尚未收到任何 event)";
+    strip.innerHTML = "";
+    timelineRenderInFlight = false;
+    return;
+  }
+  // 對齊 R-CPT-1 Scenario: 13 row × 1440 cell 24h strip
+  const rows = Math.min(snap.length, TIMELINE_KNOWN_PROVIDERS.length);
+  const totalCells = rows > 0 ? snap[0].length : 0;
+  // 統計 4 state 分布
+  const counts = [0, 0, 0, 0];
+  for (let r = 0; r < rows; r++) {
+    const row = snap[r];
+    for (let c = 0; c < row.length; c++) {
+      const s = row[c];
+      if (s >= 0 && s <= 3) counts[s]++;
+    }
+  }
+  const total = rows * totalCells;
+  if (stats) {
+    const pct = (n) => total > 0 ? `${(n / total * 100).toFixed(1)}%` : "0%";
+    stats.textContent = `${rows}×${totalCells} · Idle ${pct(counts[0])} · Working ${pct(counts[1])} · Wait ${pct(counts[2])} · Stale ${pct(counts[3])}`;
+  }
+  // 建 13 row (label + 1440 cell track)
+  const frag = document.createDocumentFragment();
+  for (let r = 0; r < rows; r++) {
+    const providerId = TIMELINE_KNOWN_PROVIDERS[r];
+    const row = snap[r];
+    const rowEl = document.createElement("div");
+    rowEl.className = "timeline-row";
+    const label = document.createElement("span");
+    label.className = "timeline-row-label";
+    label.textContent = providerId;
+    const track = document.createElement("div");
+    track.className = "timeline-row-track";
+    track.dataset.provider = providerId;
+    track.title = `${providerId} · ${row.length} cells`;
+    // 1440 cells, 直接用 flex 1 平均分配
+    const cellFrag = document.createDocumentFragment();
+    for (let c = 0; c < row.length; c++) {
+      const s = row[c];
+      const cell = document.createElement("div");
+      cell.className = "timeline-cell " + (TIMELINE_STATE_CLASSES[s] || "timeline-cell-idle");
+      cell.dataset.provider = providerId;
+      cell.dataset.minute = String(c);
+      cell.title = `${providerId} · ${TIMELINE_STATE_LABELS[s] || "Idle"} · minute ${c}`;
+      cellFrag.appendChild(cell);
+    }
+    track.appendChild(cellFrag);
+    rowEl.appendChild(label);
+    rowEl.appendChild(track);
+    frag.appendChild(rowEl);
+  }
+  strip.innerHTML = "";
+  strip.appendChild(frag);
+  // 綁定 cell click → timeline_jump_to_event
+  strip.querySelectorAll(".timeline-cell").forEach(cell => {
+    cell.addEventListener("click", async () => {
+      const provider = cell.dataset.provider;
+      const minute = parseInt(cell.dataset.minute || "0", 10);
+      try {
+        await invoke("timeline_jump_to_event", { provider, minute });
+        // 跳到 events view (對齊 design.md §5 開放問題 #3 簡化版)
+        showView("events");
+        // 設 filter 鎖定 provider
+        if (typeof eventsFilter !== "undefined") {
+          eventsFilter = provider;
+          try { await renderEventsLog(); } catch (e) {}
+        }
+      } catch (e) { console.warn("[timeline] jump failed:", e); }
+    });
+  });
+  timelineRenderInFlight = false;
+}
+
+function startTimelineAutoRefresh() {
+  if (timelineRefreshTimer) return;
+  timelineBuildAxis();
+  // 立即跑一次
+  renderTimeline();
+  timelineRefreshTimer = setInterval(() => {
+    if (currentView === "timeline") renderTimeline();
+  }, 5000);
+}
+
+function stopTimelineAutoRefresh() {
+  if (!timelineRefreshTimer) return;
+  clearInterval(timelineRefreshTimer);
+  timelineRefreshTimer = null;
 }
 
 // ─── /usage quota (雙資料源) ───

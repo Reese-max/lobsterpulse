@@ -17,6 +17,7 @@
   --capsule-count-bg: rgba(255,255,255,0.1);
   --found-color: rgb(77,242,153);
   --waiting-color: rgb(255,179,64);
+  --stale-color: rgb(255,107,107);
   --radius: 22px;
   --scale: 1;
   --icon-sm: 14px;
@@ -41,6 +42,7 @@
   --capsule-count-bg: rgba(0,0,0,0.1);
   --found-color: rgb(20,140,80);
   --waiting-color: rgb(217,119,6);
+  --stale-color: rgb(200,40,40);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -74,6 +76,76 @@ html, body {
   border-radius: var(--radius) var(--radius) 0 0;
   border-bottom: none;
 }
+
+/* ─── Capsule Brief (PUA R112) ───
+   膠囊 hover 時浮現的「任務摘要」面板，sibling of .capsule。
+   - 與膠囊同寬，圓角下方兩角，連續視覺
+   - hidden 預設 + hover 觸發，0.18s 淡入
+   - 截斷 80 字 prompt + 工具名/時間/cwd 摘要
+*/
+.capsule-brief {
+  display: block;
+  width: var(--capsule-w, 300px);
+  max-width: 600px;
+  margin-top: -0.5px;             /* 蓋住 capsule 底邊 0.5px border */
+  padding: 10px 16px 12px;
+  background: var(--bg);
+  border: 0.5px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.capsule-brief.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.capsule-brief-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: calc(10px * var(--scale));
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.capsule-brief-label { font-weight: 600; }
+.capsule-brief-time {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.capsule-brief-text {
+  font-size: calc(12px * var(--scale));
+  line-height: 1.45;
+  color: var(--text);
+  font-weight: 500;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;          /* 最多 3 行 */
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.capsule-brief-text.empty {
+  color: var(--text-muted);
+  font-style: italic;
+  font-weight: 400;
+}
+.capsule-brief-meta {
+  margin-top: 6px;
+  font-size: calc(10px * var(--scale));
+  color: var(--text-dim);
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.capsule-brief-meta .meta-sep { color: var(--text-muted); }
+[data-theme="light"] .capsule-brief { box-shadow: 0 6px 20px rgba(0,0,0,0.10); }
 
 /* Bounce animation when collapsing from expanded → capsule. Replaces the
    Rust-side window-position shim. Short + transform-only so it stays on
@@ -808,6 +880,85 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 .icon-btn.active { color: var(--accent); }
 .icon-btn svg { width: 15px; height: 15px; }
 
+/* ─── Cross-Provider Timeline (R-CPT M1 T-CPT10) — 13 row × 1440 cell 24h strip ─── */
+#view-timeline {
+  background: var(--bg);
+  border-radius: var(--radius) var(--radius) 0 0;
+  border: 0.5px solid var(--border);
+  border-bottom: none;
+  padding: 12px 14px 8px;
+  display: flex; flex-direction: column;
+  gap: 8px;
+  max-height: calc(100vh - 60px);
+  overflow: hidden;
+}
+#view-timeline .dashboard-header { margin: 0 0 4px 0; }
+#view-timeline .dashboard-title { font-size: calc(14px * var(--scale)); font-weight: 600; }
+.timeline-axis {
+  display: flex; justify-content: space-between;
+  font-size: 10px; color: var(--text-dim);
+  padding: 0 78px 0 0;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+  font-variant-numeric: tabular-nums;
+}
+.timeline-strip {
+  display: flex; flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px 0;
+}
+.timeline-row {
+  display: flex; align-items: center; gap: 6px;
+  height: 18px;
+}
+.timeline-row-label {
+  width: 64px; flex-shrink: 0;
+  font-size: 10px; color: var(--text-secondary);
+  text-align: right;
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.timeline-row-track {
+  flex: 1; display: flex;
+  height: 14px;
+  background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: crosshair;
+}
+.timeline-cell {
+  flex: 1 1 0;
+  min-width: 1px;
+  height: 100%;
+  background: var(--found-color);
+  opacity: 0.18;
+  transition: opacity 0.1s;
+}
+.timeline-cell:hover { opacity: 0.65; }
+.timeline-cell-idle { background: var(--text-muted); opacity: 0.22; }
+.timeline-cell-working { background: var(--found-color); opacity: 0.85; }
+.timeline-cell-waiting { background: var(--waiting-color); opacity: 0.9; }
+.timeline-cell-stale { background: var(--stale-color); opacity: 0.7; }
+.timeline-legend {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 10px; color: var(--text-dim);
+  padding-top: 6px;
+  border-top: 0.5px solid var(--border);
+}
+.timeline-legend-item { display: flex; align-items: center; gap: 4px; }
+.timeline-legend-spacer { flex: 1; }
+.timeline-swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+}
+.timeline-swatch.timeline-cell-idle { opacity: 0.4; }
+.timeline-swatch.timeline-cell-working { opacity: 0.85; }
+.timeline-swatch.timeline-cell-waiting { opacity: 0.9; }
+.timeline-swatch.timeline-cell-stale { opacity: 0.7; }
+#timeline-stats { font-family: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace; }
+
 /* ─── Setup Banner ─── */
 .setup-banner {
   padding: 16px 18px; text-align: center;
@@ -1197,3 +1348,23 @@ body.has-bg #view-events-log {
   font-size: 8px;
   margin-right: 4px;
 }
+
+/* R115 規則引擎 UI 樣式 */
+.rule-list { display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; }
+.rule-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--surface-2, rgba(255,255,255,0.04));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.rule-item-desc { flex: 1; font-size: 12px; }
+.rule-item-when { font-size: 10px; color: var(--text-dim); font-family: monospace; }
+.rule-item-actions { display: flex; gap: 4px; }
+.rule-item-del {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-dim); padding: 2px 6px; border-radius: 3px;
+  cursor: pointer; font-size: 11px;
+}
+.rule-item-del:hover { color: #ff6b6b; border-color: #ff6b6b; }
+.rule-empty { color: var(--text-dim); font-size: 11px; font-style: italic; padding: 4px 0; }

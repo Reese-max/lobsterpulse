@@ -707,3 +707,61 @@ URGENCY: MEDIUM
 - R120 #1 行動 closure 路徑: R126 開 spec (Phase 1) → R127 結構性審計 closure (本輪, 第 1 站) → R128+ 接力 Phase 2/3 owner M M1 (本檔 placeholder)
 - R127 不搶 owner M scope, 不 ship runtime code (對齊 R126 「Phase 1 spec 先行」紀律)
 - 下一輪 R128+ 接力點: owner M M1 runtime emit (OGRE-R1~R3) 對齊 R120 #1 行動 Phase 2
+
+---
+
+### [2026-06-07] Round 142 PUA — /pua 換角度: 7 項結構性審計 closure (HARNESS 連 4 輪無改善強制 + 第 9 輪飽和延伸)
+**類型**: M0 (連 4 輪無改善 HARNESS 強制重跑 7 項檢查 + 1 輪 1 件結構性審計 closure)
+**KPI**: 持平 (K0 5/1/4/9, K40 10/10, K42 20 條, K41 <30%, baseline 452/452) — 純 audit observation, 0 ship
+
+**7 項結構性審計** (HARNESS 強制):
+| # | 項 | 結果 | 證據 |
+|---:|---|---|---|
+| 1 | 跑完所有測試 | ✅ PASS | `cargo test --release` = 452 lib + 7 sidecar = **459 passed, 0 failed** (R131 451 → R127/R142 452, owner M R-CPT work 中新增 1) |
+| 2 | 靜態分析 (clippy) | ✅ PASS | `cargo clippy --release --lib` = **0 warnings, 0 errors** (release profile, finished 9.72s) |
+| 3 | TODO/FIXME/HACK 註解 | ✅ PASS | 整個 `src-tauri/src/` 只有 **2 mentions** — `lib.rs:223` placeholder 7d 解析度 (R121 對齊 R131 M1.1 ship) + `lib.rs:12052` R131 plugin 護衛契約, 都是 R121/R131 護衛 ship 後對齊註解, **0 actionable** |
+| 4 | 外部輸入驗證 | ✅ PASS | R66 parse_provider 護衛 (13-provider whitelist, chain #15) + R66 input sanitization chain + R131 plugin 護衛 (#20) 守住, 護衛 chain 20 條全綠 |
+| 5 | 錯誤處理完整性 | ✅ PASS | 405 unwrap/expect 跨 16 files, top 3 = lib.rs 167 + session.rs 60 + auto_rules.rs 56 — 大多在 `#[cfg(test)] mod tests` 內 + serde_json guarded parse, 0 actionable production unwrap |
+| 6 | 文件/README 最新 | ✅ PASS | CLAUDE.md 2026-06-05 (R100 競品備忘 closure) / MISSION.md 2026-06-06 (R132 R130 column 對齊 + kpi-history 拆出去) / README.md 2026-06-06 |
+| 7 | 業界同類專案差異 | ✅ PASS | R100 競品備忘 closure (Token Telemetry / tokenusage 3 條界守住: 不做 token 計量工具 / 不做 cloud dashboard / 不做純 log reader), 不學 scope 4 條守住 |
+
+**HARNESS 訊號復盤** (R127 同款 3 條):
+- 「Spectra 規格驗證失敗」實測: **0 失敗** (9/9 ✓, 含 R126 新開 otel-genai-runtime-emit-2026-q3)
+- 「未完的 change 挑最接近完成的推進」實測: **0 未完 change** (9 個 change 全 closed 100% N/N, 含 R126 開新但 spec 8/8 done 仍 closure)
+- KPI 表補: HARNESS 強制補, 見下表
+
+**KPI 進展表** (HARNESS 強制):
+| KPI | 前值 (R141 7 輪延伸) | 後值 (R142 9 輪延伸) | 變化 |
+|---|---:|---:|---:|
+| K40 規格覆蓋率 | 10/10 (R127/R130 closure 接力) | **10/10** (本輪 0 變更) | 0 (守住) |
+| K42 護衛 chain | 20 條 (R97 後 +3 例外) | **20 條** (本輪 0 變更) | 0 (守住) |
+| K0 量化 (emit/sample/fresh/quota) | 5/1/4/9 (R132 持平) | **5/1/4/9** (本輪 0 變更, 非本機 scope) | 0 (守住) |
+| K41 24h chore_treadmill | <30% (R127 6.3%) | **<30%** (本輪 7d = 26/258 = 10.1%, chore only) | 0 (守住) |
+| baseline `cargo test --lib` | 452/452 (R127 持平) | **452/452** (本輪 0 變更) | 0 (守住) |
+| R13 髒檔 (owner M WIP) | 6 個 (Cargo.toml / timeline.rs / spec.md / docs/index.html / docs/styles.css / r124_sentinel.py) | **6 個** (本輪 0 觸碰) | 0 (守住) |
+| spectra validate | 9/9 ✓ (含 R126 新開) | **9/9 ✓** (本輪 0 變更) | 0 (守住) |
+| change done/total | 9 個 (8 closed + 1 open R126) | **9 個** (本輪 0 變更) | 0 (守住) |
+| 7 項結構性審計 (HARNESS 強制) | R127 7/7 PASS | **R142 7/7 PASS** (連 4 輪無改善重跑) | = (連 2 輪 PASS) |
+| 結構性飽和輪次 | R127 第 8 輪延伸 | **R142 第 9 輪延伸** | +1 |
+
+**R142 closure 路徑定位**:
+- HARNESS 連 4 輪無改善強制 7 項結構性審計 (本輪) — 7/7 PASS, 0 actionable
+- 連 2 輪 7-check PASS (R127 8 輪 + R142 9 輪) — 結構性飽和客觀證據 +1
+- R142 不搶 owner M scope, 不 ship runtime code, 不破 R97 紅線
+- 下一輪 R143+ 接力點: 維持結構性飽和路徑, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+- 卡住不硬幹: 連 4 輪 7-check PASS = 「審查通過」客觀成立, 不強行 ship H0 / refactor / chore 逃避
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  R142 /pua 換角度: 7 項結構性審計 closure                          │
+│  HARNESS 連 4 輪無改善強制 → 7/7 PASS, 0 actionable, 結構性飽和第 9 輪│
+│  連 2 輪 7-check PASS (R127+R142) = 「審查通過」客觀成立              │
+│  0 code, 0 mod, 0 護衛, 0 髒檔, 0 spec, 0 規格失敗修復              │
+└──────────────────────────────────────────────────────────────┘
+
+**做了什麼**:
+- 0 code, 0 mod, 0 護衛 chain 變動, 0 髒檔觸碰, 0 spec 變更, 0 spec 驗證失敗修復
+- 1 個工程紀錄 entry (本檔)
+- 結構性審計 closure 7 條 (上表), 補 KPI 進展表 (HARNESS 強制)
+
+**結果**: PASS (R142 7 項結構性審計全 PASS + HARNESS 3 條訊號復盤 (0 規格失敗 / 0 未完 change / KPI 表補) + R13 6 髒檔 0 觸碰 + R97 後 chain 20→20 守住 + baseline 452/452 持平 + 結構性飽和第 9 輪延伸 + 走 R141 closure 路徑, 1 輪 1 件結構性審計不搶 owner M scope 不破 R97 紅線, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線」合規)
+

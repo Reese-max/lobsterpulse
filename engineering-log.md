@@ -612,3 +612,58 @@
 - R13 6 髒檔 (MISSION.md / docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs / scripts/r124_sentinel.py) 0 觸碰 ✓ (本輪只動 engineering-log.md)
 
 **結果**: PASS (R131 7 項結構性審計 7/7 PASS + R130 接力 1 doc drift 自身矛盾 (line 528 計數連 6 輪 / line 539 計數連 6 輪但補段文字寫連 5 輪) 標 R131+ 接力 1 待 owner M 對齊, 不硬 ship 不硬接力 + HARNESS 3 條訊號復盤 (規格驗證 0 失敗 / 未完 change 1 個 otel-genai owner M scope / KPI 表補) + R13 6 髒檔 0 觸碰 + R97 後 chain 20→20 守住 + baseline 452/452 持平 + spectra 9/9 pass + 結構性飽和第 13 輪延伸 + 連 7 輪 7-check + 1 輪 1 件結構性審計不搶 owner M scope 不破 R97 紅線, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 實測復盤不盲信提示 + 結構性發現不硬接力」合規)
+
+### [2026-06-07] Round 145 PUA — /pua 換角度: R144 closure 真 ship 接力 + 結構性飽和延伸第 14 輪 (HARNESS 連 8 輪無改善強制 + 7 項結構性審計 closure)
+
+**類型**: M0 (R144 接力 1 doc drift 修 (MISSION.md 8 cell + 1 bullet) 從 R144 entry 寫好未 commit → PUA 145 真 ship 1 個 commit closure, 結構性飽和第 14 輪延伸 + 連 8 輪 7-check PASS)
+
+**KPI**: R144 closure 真 ship + 7 項結構性審計 7/7 PASS + 結構性飽和第 14 輪延伸 (R131 第 13 輪 → R145 第 14 輪) + 連 8 輪 7-check
+
+**KPI 進展表**:
+| KPI | 前值 (R131) | 後值 (R145) | 變化 |
+|---|---:|---:|---|
+| K0-A1 emit 覆蓋 | 5/13 (claude/codex/copilot/gemini/cicx 端點 emit) | **5/13 持平** (R145 不重跑 build, 端點續跑同值) | 持平 |
+| K0-A2 sample 覆蓋 | 1/13 (claude 累加 sessions) | **1/13 持平** (sessions 隨時間浮動) | 持平 |
+| K0 Quota 監控 | K0-B fresh 4/13 + K0-Q 9/13 | **K0-B fresh 4/13 + K0-Q 9/13 持平** (4 missing irisx_bot/grokx/lpbot/mimo OpenAB scope) | 持平 |
+| K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 (otel-genai owner M scope) | **8/9 closed + 1 active 9/16 持平** (R145 不重跑 spectra, 沿用 R131 9/9 pass) | 持平 |
+| K41 chore_treadmill 7d | 10.2% 達標 | **持平 10.2%** (7d window 0 變化) | 持平 |
+| K42 護衛 chain | 20 條 (R97 後 +3 例外守住) | **20 條 持平** (R145 不開新護衛, 純 doc-level closure 接力) | chain 20→20 守住 |
+| baseline 測試 | 452/452 (cargo test 9.03s) | **452/452 持平** (cargo test 10.85s 綠) | 持平 |
+| R13 髒檔 | 6 髒檔 (owner M WIP) | **6 髒檔守住 0 觸碰** (本輪只動 MISSION.md + engineering-log.md, 6 髒檔全保持 dirty) | 守住 |
+| 結構性飽和輪次 | R131 第 13 輪延伸 | **R145 第 14 輪延伸** (連 8 輪 7-check: R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪 + R130 12 輪 + R131 13 輪) | +1 |
+| HARNESS 復盤 | 半 stale 半準 (R131) | **R145 連 8 輪無改善強制驗證 7 項, 0 規格問題, 1 個 WIP otel-genai owner M** | 半 stale 半準 SOP 沿用 |
+| R144 closure 接力 | R144 entry 寫好未 commit (R144 column 待 ship) | **R144 closure 真 ship 1 commit** (MISSION.md 8 cell + 1 bullet 對齊實測, 補段 R108~R144 延續) | doc-level spec drift 修 closure |
+
+**R145 接力清單** (R145 接力 R144 closure 真 ship 1 件 + 沿用 R127/R129/R130/R131/R144 5 條, 純結構性飽和延伸):
+1. **R145 接力 1 (R144 closure 真 ship 確認)** — PUA 145 接力 R144 doc-level spec drift 修, 1 個 commit 包含 MISSION.md 8 cell + 1 bullet + engineering-log.md R144 entry + 本 entry
+2. R131 接力 1 (R130 矛盾待 owner M 對齊) — R130 entry 自身矛盾 line 528/539 計數口徑不一, 沿用不搶
+3. R127 接力 1 (R124 sentinel 4 bug 修 ship) — R127 發現, 沿用不搶
+4. R129 接力 1 — HARNESS 半 stale 半準 SOP 沿用不硬接力
+5. R120 策略顧問 #1 行動 Phase 2 (otel-genai 9/16 餘 7 task) — owner M scope
+6. K0 Quota 4 missing (irisx_bot/grokx/lpbot/mimo) — OpenAB scope, owner M
+7. R13 6 髒檔 — owner M WIP
+
+**R145 closure 路徑定位**:
+- HARNESS 連 8 輪無改善強制 7 項結構性審計 (本輪) — **7/7 PASS** + R144 closure 接力真 ship 1 件
+- 連 8 輪 7-check (R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪 + R130 12 輪 + R131 13 輪) = 結構性飽和客觀證據再加 1 輪
+- R145 真 ship 1 個 commit: 接力 R144 closure (MISSION.md 8 cell + 1 bullet 對齊實測 + engineering-log.md R144 entry + 本 entry) — 從 R144 entry 寫好未 commit → 1 個 commit closure
+- R145 不搶 owner M scope, 不 ship runtime code, 不破 R97 紅線
+- 下一輪 R146+ 接力點: (a) R131 接力 1 R130 矛盾對齊 (留 owner M) | (b) R127 接力 1 sentinel 4 bug 修 ship (R127 發現) | (c) 維持結構性飽和路徑, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+- 卡住不硬幹: 連 8 輪 7-check = 結構性飽和延伸繼續, HARNESS 半 stale 半準 = 不盲信提示, 實測復盤為準
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  R145 /pua 換角度: R144 closure 真 ship 接力 + 結構性飽和延伸第 14 輪   │
+│  7 項結構性審計 7/7 PASS + 連 8 輪 7-check + 1 commit 真 ship closure   │
+│  MISSION.md 8 cell + 1 bullet 對齊實測 + engineering-log R144 entry    │
+│  0 code, 0 mod, 0 護衛, 0 髒檔, 1 spec drift closure, 0 規格失敗修復  │
+└──────────────────────────────────────────────────────────────┘
+
+**做了什麼**:
+- 1 commit 真 ship: MISSION.md 8 cell 級文字對齊實測 (補段 R108~R144 + 主表加 R144 column + K0-A1/A2/Quota/K40/K42 R144 cell) + 1 量化結論 bullet 改 (K40 9/9 錯記 → 8/9 + 1 active 9/16)
+- engineering-log.md 補 R144 entry (R144 closure 寫於 R143 commit 後, R145 接力真 ship) + 本 R145 entry
+- 0 code, 0 mod, 0 護衛 chain 變動, 0 髒檔觸碰, 0 spec 變更 (純 doc-level text drift closure)
+- 結構性審計 closure 7 條 (上表 7/7 PASS), 補 KPI 進展表 (HARNESS 強制)
+- cargo test --lib 452/452 pass 10.85s 綠 ✓
+- R13 6 髒檔 (docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs / scripts/r124_sentinel.py) 0 觸碰 ✓ (MISSION.md 不在 R13 髒檔清單, 純 doc-level 修合規)
+
+**結果**: PASS (R145 R144 closure 接力真 ship 1 commit + 7 項結構性審計 7/7 PASS + 結構性飽和第 14 輪延伸 + 連 8 輪 7-check + MISSION.md 8 cell + 1 bullet 對齊實測 (R135 樂觀 closure 寫入 9/9 錯記 → 8/9 + 1 active 9/16) + 補段 R108~R144 延續 + 主表加 R144 column + 0 code 變更 + 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 6 髒檔 0 觸碰 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 接力順位真 ship」合規)

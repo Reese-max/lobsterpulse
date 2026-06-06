@@ -11681,6 +11681,113 @@ mod render_prometheus_tests {
             );
         }
     }
+
+    /// R113 PUA 換角度: 補強 K0-A1 KPI 量測 — 13 provider × K6/K7/K8/K9 emit 護衛
+    ///
+    /// 對齊 MISSION.md R111 column K0-A1 量化口徑: 端點 emit 5/13 是受 OpenAB
+    /// 進程不在本機 scope 影響 (cicx=1, claude=11 真有 sessions, 其他 0); 但
+    /// 「code 定義 13/13 ↔ runtime emit 5/13」這個 gap 必須在 test 層閉合, 證明
+    /// hook_server.rs KNOWN_PROVIDERS SSoT 13 個 id 經 render_prometheus_body
+    /// 都會 emit 對應 provider label, 不留 dead code path。
+    ///
+    /// 護衛場景:
+    ///   - K6  `lobsterpulse_provider_sessions{provider="X"}` (live, 走 sessions vec)
+    ///   - K7  `lobsterpulse_provider_failure_count{provider="X"}` (走 ProviderTotals)
+    ///   - K8  `lobsterpulse_provider_idle_seconds{provider="X"}` (需 last_event_at)
+    ///   - K9  `lobsterpulse_provider_session_count{provider="X"}` (走 ProviderTotals)
+    ///   - K19 `lobsterpulse_provider_sessions_by_state{provider="X",state="..."}` (live)
+    ///
+    /// 收邊: hook_server.rs 新加 provider id 自動被本 test 涵蓋 (KNOWN_PROVIDERS
+    /// SSoT 迭代), 若新 provider 的 render path 漏 emit 對應 label, 本 test 會
+    /// fail 列出「漏 X 條」+ 反向 sanity check 確保不是空 body 偽綠。
+    #[test]
+    fn render_prometheus_body_per_provider_emit_covers_all_13_known_providers() {
+        let mut totals = HashMap::<String, ProviderTotals>::new();
+        let mut sessions = Vec::with_capacity(hook_server::KNOWN_PROVIDERS.len());
+        for (idx, provider) in hook_server::KNOWN_PROVIDERS.iter().enumerate() {
+            let i = (idx as u64) + 1;
+            totals.insert(
+                provider.to_string(),
+                ProviderTotals {
+                    tokens_input: i * 100,
+                    tokens_output: i * 50,
+                    session_count: i * 3,                // K9 lifetime 不為 0
+                    failure_count: idx as u64,            // K7 區分 provider (0 仍 emit 0)
+                    events_total: i * 5,
+                    event_type_counts: std::collections::BTreeMap::new(),
+                    since: Some(Utc::now() - chrono::Duration::seconds(60 * (i as i64))),
+                    last_event_at: Some(Utc::now() - chrono::Duration::seconds(i as i64)),
+                    last_completed_session_age_secs: Some(i as i64 * 10),
+                    completed_sessions_count: i,
+                    ..Default::default()
+                },
+            );
+            // K6 + K19 必須有 live session 才 emit sample
+            sessions.push(info_with_state(provider, true, SessionState::Working));
+        }
+
+        let body = render_prometheus_body(
+            &sessions,
+            sessions.len() as u64,
+            sessions.len() as u64,
+            &totals,
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+
+        // 對 13 provider × 5 metric family 全部斷言 emit
+        let mut missing: Vec<String> = Vec::new();
+        for provider in hook_server::KNOWN_PROVIDERS {
+            // K6 live: lobsterpulse_provider_sessions{provider="X"} <count>
+            let k6 = format!("lobsterpulse_provider_sessions{{provider=\"{provider}\"}}");
+            if !body.contains(&k6) {
+                missing.push(format!("K6 {k6}"));
+            }
+            // K7 lifetime: lobsterpulse_provider_failure_count{provider="X"} <n>
+            let k7 = format!("lobsterpulse_provider_failure_count{{provider=\"{provider}\"}}");
+            if !body.contains(&k7) {
+                missing.push(format!("K7 {k7}"));
+            }
+            // K8 gauge: 需 last_event_at=Some(...) 才 emit
+            let k8 = format!("lobsterpulse_provider_idle_seconds{{provider=\"{provider}\"}}");
+            if !body.contains(&k8) {
+                missing.push(format!("K8 {k8}"));
+            }
+            // K9 lifetime: lobsterpulse_provider_session_count{provider="X"} <n>
+            let k9 = format!("lobsterpulse_provider_session_count{{provider=\"{provider}\"}}");
+            if !body.contains(&k9) {
+                missing.push(format!("K9 {k9}"));
+            }
+            // K19 per-state: Working 必 emit
+            let k19 = format!(
+                "lobsterpulse_provider_sessions_by_state{{provider=\"{provider}\",state=\"working\"}}"
+            );
+            if !body.contains(&k19) {
+                missing.push(format!("K19 {k19}"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "R113 PUA 13 provider × K6/K7/K8/K9/K19 emit 漏 {} 條, 對齊 K0-A1 test 層閉合: 漏列 {missing:?}",
+            missing.len()
+        );
+
+        // 反向 sanity: 至少 13 provider × 5 metric family = 65 行 sample, 防空 body 偽綠
+        let sample_lines = body
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with("# "))
+            .count();
+        assert!(
+            sample_lines >= hook_server::KNOWN_PROVIDERS.len() * 5,
+            "13 provider × 5 metric family 預期至少 {} 行 sample, 實際 {sample_lines}, test 可能在空 body 偽綠",
+            hook_server::KNOWN_PROVIDERS.len() * 5
+        );
+    }
 }
 
 #[cfg(test)]

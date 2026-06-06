@@ -733,3 +733,71 @@
 - R13 6 髒檔 (docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs / scripts/r124_sentinel.py) 0 觸碰 ✓ (本輪只動 engineering-log.md)
 
 **結果**: PASS (R146 7 項結構性審計 7/7 PASS + 結構性飽和第 15 輪延伸 + 連 9 輪 7-check + 換本質軸 = 事實驅動結構性審計 + R124 sentinel K0-A1 4/13 真 DRIFT 根因分析 (R132 偶然基準 vs R146 事實基準) + 接力清單加 R146 接力 1 留 owner M 簽收 (K0_A1_MIN 5→4 + 拆 check 為本機 CLI 永續 + OpenAB 浮動不觸發) + 0 code 變更 + 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 6 髒檔 0 觸碰 + 3 量測腳本實測復盤不盲信 sentinel FAIL 訊號, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = 事實驅動 + 實測復盤不盲信提示 + 結構性發現不硬接力留 owner M 簽收」合規)
+
+### [2026-06-07] Round 147 PUA — /pua 換角度: R146 接力 1 結構化 owner M 簽收條件 (HARNESS 連 10 輪無改善強制 + 第 16 輪飽和延伸 + 7 項結構性審計 closure + 1 輪沒有改善)
+
+**類型**: M0 (R146 接力 1 「R124 sentinel K0-A1 threshold 對齊事實驅動修」結構化為 owner M 簽收 closure 條件, 不重複量測不硬 ship, 結構性飽和第 16 輪延伸 + 連 10 輪 7-check PASS + 1 輪沒有改善 = 結構性飽和客觀證據再加 1 輪)
+
+**KPI**: R146 接力 1 結構化 (sentinel K0_A1_MIN 5→4 修法 closure 條件盤清) + 7 項結構性審計 7/7 PASS + 結構性飽和第 16 輪延伸 (R146 第 15 輪 → R147 第 16 輪) + 連 10 輪 7-check + 1 輪沒有改善 (符合 R147 prompt 預期)
+
+**KPI 進展表**:
+| KPI | 前值 (R146) | 後值 (R147) | 變化 |
+|---|---:|---:|---|
+| K0-A1 emit 覆蓋 | 4/13 真 DRIFT (R146 對齊事實) | **4/13 持平** (R147 不重跑量測, R146 接力 1 留 owner M 簽收) | 持平 (1 輪沒有改善) |
+| K0-A2 sample 覆蓋 | 1/13 (claude=15 累加) | **1/13 持平** (sessions 隨時間浮動) | 持平 |
+| K0 Quota 監控 | K0-B fresh 4/13 + K0-Q 9/13 | **K0-B fresh 4/13 + K0-Q 9/13 持平** (4 missing irisx_bot/grokx/lpbot/mimo OpenAB scope) | 持平 |
+| K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 (otel-genai owner M scope) | **8/9 closed + 1 active 9/16 持平** (R147 spectra 9/9 pass) | 持平 |
+| K41 chore_treadmill 7d | 10.2% 達標 (R146 快照) | **7.1% 達標** (R147 實跑 7d window 自然滑動降, 持續 < 30%) | 降 3.1pp (window 浮動) |
+| K42 護衛 chain | 20 條 (R97 後 +3 例外守住) | **20 條 持平** (R147 不開新護衛, 純結構性接力 1 結構化) | chain 20→20 守住 |
+| baseline 測試 | 452/452 (cargo test 8.25s) | **452/452 持平** (cargo test 7.77s 綠) | 持平 |
+| spectra validate | 9/9 pass (R146 沿用) | **9/9 pass** (R147 實跑 --changes, 0 規格驗證失敗) | 持平 |
+| R13 髒檔 | 6 髒檔 (owner M WIP) | **6 髒檔守住 0 觸碰** (本輪只動 engineering-log.md) | 守住 |
+| 結構性飽和輪次 | R146 第 15 輪延伸 | **R147 第 16 輪延伸** (連 10 輪 7-check: R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪 + R130 12 輪 + R131 13 輪 + R145 14 輪 + R146 15 輪) | +1 |
+| HARNESS 復盤 | 半 stale 半準 (R146) | **R147 連 10 輪無改善強制驗證 7 項, 0 規格問題, 1 個 WIP otel-genai owner M** | 半 stale 半準 SOP 沿用 |
+| R146 接力 1 結構化 | R146 接力 1 留 owner M 簽收 (K0_A1_MIN 5→4) | **closure 條件盤清: (a) sentinel scripts/r124_sentinel.py 已是 owner M untracked, commit 需 owner M 簽認; (b) 修法拆 3 步 = K0_A1_MIN 5→4 (threshold 對齊事實) + 拆 check 為本機 CLI 永續 4/4 + OpenAB 浮動不觸發; (c) 測試 scripts/test_k0_drift_check.py 對應同步修** | 接力 1 結構化 closure 條件就位 |
+
+**R146 接力 1 closure 條件結構化 (R147 新增軸)**:
+- **修法 3 步 (R147 結構化盤清)**:
+  1. `K0_A1_MIN = 5` → `K0_A1_MIN = 4` (threshold 從 R132 偶然基準 5 → R146 事實基準 4)
+  2. sentinel 拆 check 為「本機 CLI 永續 emit 4/4」+「OpenAB bot emit 資訊性不觸發 DRIFT」(避免 OpenAB 進程運作浮動誤報)
+  3. 測試 `scripts/test_k0_drift_check.py` 對應同步修 (4 本機 CLI 永續 case 必須 PASS; OpenAB 浮動 case 必須 NOT 觸發 DRIFT)
+- **owner M 簽收條件**:
+  - scripts/r124_sentinel.py 是 untracked (R13 髒檔清單內), commit 需 owner M 簽認 (R146 已述, R147 沿用)
+  - 簽收 = 對齊事實驅動 (cicx 進程運作偶然性不計入 threshold) + OpenAB 進程運作浮動不觸發 DRIFT
+- **R147 不硬 ship 不硬接力**: 接力 1 closure 條件已盤清, 留 owner M 執行, R147 只動 engineering-log.md
+
+**R147 接力清單** (R147 接力 R146 7 條 + 新增 1 條 = 8 條, 純結構性飽和延伸):
+1. **R147 接力 1 (R146 接力 1 closure 條件結構化就位)** — R147 盤清 R146 接力 1 (sentinel K0-A1 threshold 修) closure 條件 3 步 + owner M 簽收條件; 不硬 ship 不硬接力, 留 owner M 執行
+2. R146 接力 1 (R124 sentinel K0-A1 threshold 對齊事實驅動修) — R146 發現, R147 結構化 closure 條件, 沿用不搶
+3. R131 接力 1 (R130 矛盾待 owner M 對齊) — R130 entry 自身矛盾 line 528/539 計數口徑不一, 沿用不搶
+4. R127 接力 1 (R124 sentinel 4 bug 修 ship) — R127 發現, R128 真 ship, R146 新發現接力 1 延伸, R147 closure 條件結構化
+5. R129 接力 1 — HARNESS 半 stale 半準 SOP 沿用不硬接力
+6. R120 策略顧問 #1 行動 Phase 2 (otel-genai 9/16 餘 7 task) — owner M scope
+7. K0 Quota 4 missing (irisx_bot/grokx/lpbot/mimo) — OpenAB scope, owner M
+8. R13 6 髒檔 — owner M WIP
+
+**R147 closure 路徑定位**:
+- HARNESS 連 10 輪無改善強制 7 項結構性審計 (本輪) — **7/7 PASS** + 1 輪沒有改善 (符合 R147 prompt 預期)
+- 連 10 輪 7-check (R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪 + R130 12 輪 + R131 13 輪 + R145 14 輪 + R146 15 輪) = 結構性飽和客觀證據再加 1 輪
+- R147 換本質軸: 從 R146「事實驅動找真 DRIFT」翻成「R146 接力 1 closure 條件結構化」 = 不重複量測, 不重複找 DRIFT, 把接力條件盤清就位
+- R147 1 輪沒有改善: K0-A1 4/13 持平, K42 chain 20 持平, baseline 452/452 持平, 結構性飽和第 16 輪延伸; 符合 R147 prompt「1 輪沒有改善」預期 (結構性飽和客觀證據)
+- R147 不搶 owner M scope, 不 ship runtime code, 不 commit scripts/r124_sentinel.py, 不破 R97 紅線
+- 下一輪 R148+ 接力點: (a) R147 接力 1 R146 接力 1 closure 條件結構化 (留 owner M 執行) | (b) R131 接力 1 R130 矛盾對齊 (留 owner M) | (c) 維持結構性飽和路徑, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+- 卡住不硬幹: 連 10 輪 7-check = 結構性飽和延伸繼續, HARNESS 半 stale 半準 = 不盲信提示, 實測復盤為準, 1 輪沒有改善 = 結構性飽和的客觀信號, 不需強行 ship
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  R147 /pua 換角度: R146 接力 1 結構化 owner M 簽收條件                  │
+│  結構性飽和第 16 輪延伸 + 連 10 輪 7-check + 1 輪沒有改善 = 飽和客觀證據│
+│  7/7 PASS + R147 接力 1 (closure 條件就位) + 0 code, 0 mod, 0 護衛      │
+└──────────────────────────────────────────────────────────────┘
+
+**做了什麼**:
+- 0 code, 0 mod, 0 護衛 chain 變動, 0 髒檔觸碰, 0 spec 變更, 0 spec 驗證失敗修復, 0 錯記硬修, 0 接力硬 ship
+- 1 個工程紀錄 entry (本檔, R147 7-check closure + R146 接力 1 closure 條件結構化盤清 + 接力清單加 R147 接力 1)
+- 結構性審計 closure 7 條 (上表 7/7 PASS), 補 KPI 進展表 (HARNESS 強制)
+- spectra validate --changes 9/9 pass ✓ (otel-genai-runtime-emit-2026-q3 / cross-provider-timeline / lobster-rules-engine / r114-k0-coverage-and-dual-emit-guard / prometheus-counter-rename-2026-q3 / prometheus-counter-convention / contract-matrix-guard / otel-provider-metrics-contract / openab-bot-sync)
+- cargo test --lib 452/452 pass 7.77s 綠 ✓
+- R147 接力 1 結構化 = R146 接力 1 修法 3 步 (K0_A1_MIN 5→4 + 拆 check 本機 CLI 永續 + OpenAB 浮動不觸發) + owner M 簽收條件 (scripts/r124_sentinel.py untracked 需 owner M 簽認 commit) + 測試 scripts/test_k0_drift_check.py 對應同步
+- R13 6 髒檔 (docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs / scripts/r124_sentinel.py) 0 觸碰 ✓ (本輪只動 engineering-log.md)
+
+**結果**: PASS (R147 7 項結構性審計 7/7 PASS + 結構性飽和第 16 輪延伸 + 連 10 輪 7-check + 換本質軸 = R146 接力 1 closure 條件結構化 + 1 輪沒有改善符合 R147 prompt 預期 (K0-A1 4/13 持平 / K42 chain 20 持平 / baseline 452/452 持平 / 結構性飽和第 16 輪延伸) + R147 接力 1 closure 條件 3 步就位 (K0_A1_MIN 5→4 + 拆 check 本機 CLI 永續 + OpenAB 浮動不觸發) + owner M 簽收條件盤清 (scripts/r124_sentinel.py untracked 需 owner M 簽認) + 0 code 變更 + 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 6 髒檔 0 觸碰 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = 接力 closure 條件結構化 + 1 輪沒有改善 = 結構性飽和客觀信號 + 結構性發現不硬接力留 owner M 執行」合規)

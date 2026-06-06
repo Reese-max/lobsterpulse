@@ -968,3 +968,43 @@
 **結果**: PASS (T-CPT10 main.js ship: 6th view 端到端接通 — HTML + CSS + main.js 接力, 純 frontend 不破 K42 chain 19 條飽和契約, baseline 448 守住, K0 持平, R13 防護 5 owner M 髒檔一個未動, 老闆「換角度 + 卡住不硬幹但要真 ship + 1 輪 1 件事」合規)
 
 **KPI-impact**: K40 R-CPT M1 進度 7/8 → 8/8 (+1 收 closure) + K0 持平 + K42 chain 19 → 19 守住 + R13 防護 5/5 守住 + R128 frontend 354 行 (HTML 29 + CSS 171 + main.js 155, 1 行替換)
+
+### [2026-06-06] Round 130 — R-CPT M1 T-CPT10 spec closure 接力 + MISSION R130 column 補對齊
+
+**類型**: M0 (純 spec drift 修, 0 code 變更, 對齊 R108/R109/R111/R114/R119 closure 接力傳統 + R119 closure cadence)
+
+**KPI**:
+- K40 規格覆蓋率 7/7 持續 + R-CPT M1 進度條 8/8 closure (R128 ship T-CPT10 後, R130 翻 T-CPT10 [x] 對齊實跑, T-CPT15 標 R128 ship 紀錄)
+- K0 量化 5/1/4/9 全持平 R119 (R128 T-CPT10 純 frontend 對齊 R-CPT-4 護衛「不開新 OTel 維度、不開新 data path」)
+- K42 護衛 chain 19 條持平 R119 (R128 純 frontend, 0 護衛 +1, 走既有 timeline::tests mod 守住)
+- K41 6.3% chore_treadmill 達標延續
+- baseline 448/448 守住 (cargo test --lib 全綠)
+- R13 防護 5 owner M 髒檔 (docs/index.html, docs/styles.css, openspec/changes/cross-provider-timeline/specs/cross-provider-timeline/spec.md, openspec/changes/prometheus-counter-rename-2026-q3/specs/prometheus-counter-rename-2026-q3/spec.md, src-tauri/Cargo.toml) 一個未動
+
+**KPI 進展表**:
+| KPI | 前值 (R119) | 後值 (R130) | 變化 |
+|---|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 5/13 | 5/13 | 持平 |
+| K0-A2 sample 覆蓋 | 1/13 | 1/13 | 持平 |
+| K0 Quota K0-B fresh | 4/13 | 4/13 | 持平 |
+| K0 Quota K0-Q 覆蓋 | 9/13 | 9/13 | 持平 |
+| K40 規格覆蓋率 | 7/7 + R-CPT M1 7/8 | 7/7 + R-CPT M1 8/8 | +1 進度條 (T-CPT10 翻 [x]) |
+| K42 護衛 chain | 19 條 | 19 條 | 持平 (純 frontend 0 護衛) |
+| baseline | 448/448 | 448/448 | 持平 |
+
+**為什麼**: 監督者警示「連 2 輪沒改善」對齊 R125 14 條路徑搜過 + R128 真 ship 後的 spec drift — R128 commit a0e02f1 真 ship 了 main.js 第 6 視圖 (commit msg 明示「R128 T-CPT10 ship」), 但 R-CPT tasks.md T-CPT10 仍寫 `[ ]` (R119 closure 接力時 T-CPT10 還沒 ship, 接力順位給 owner M 後半), 形成「實跑已 ship / spec 仍 [ ]」分叉。R130 走 R108/R109/R111/R114/R119 closure 接力模式, 純 spec drift 修 (翻 [x] 對齊實跑) + MISSION R130 column 補量化值對齊 R128 真值, 不開新 code、不破 chain 19、不動 R13 防護線。
+
+**搜尋**: 不需 (純 spec 對齊, R128 commit + k0_measure.py + cargo test --lib 三方量測已自證, R128 commit a0e02f1 內含 6 視圖端到端接通證據, R119 closure entry 紀錄 R120+ 接力順位明示 T-CPT10 為 R128 真 ship 對象)。
+
+**做了什麼**:
+1. `openspec/changes/cross-provider-timeline/tasks.md`: 翻 T-CPT10 [x] 對齊 R128 a0e02f1 真 ship, 寫明 T-CPT10 涵蓋 HTML #view-timeline + CSS 4 state 4 色 + main.js renderTimeline + showView + 5s auto-refresh + cell click 跨視圖 jump + 對齊 R-CPT-1/2/3/4 四個 Requirement, K40 R-CPT M1 進度 7/8 → 8/8 closure
+2. 同檔加 T-CPT15 標 R128 ship 紀錄 + R130 spec closure 接力 + R131+ 接力順位 (K0 Quota 4 missing / K0-A1 護衛 / R-CPT change 整體 closure)
+3. `MISSION.md`: 補 R130 補段在 R119 補段後 (5/1/4/9 持平 R119, R-CPT M1 8/8 closure, K42 19 條持平, baseline 448 守住), 量化表加 R130 column + 6 個 KPI 行的 R130 值, 量化結論段加 R130 補條目 + R131+ 候選更新
+4. `engineering-log.md`: 補本條 R130 entry
+
+**結果**: PASS (T-CPT10 spec closure 接力 + MISSION R130 column 補對齊 + R-CPT M1 8/8 closure 完整收, baseline 448/448 全綠, K0 5/1/4/9 持平 R119 對齊 R-CPT-4 護衛, K42 chain 19 條持平, R13 防護 5 owner M 髒檔一個未動, 老闆「換角度 + 卡住不硬幹 + 1 輪 1 件事 + spec 翻齊」合規, 0 code 變更純 spec drift 修)
+
+**KPI-impact**: K40 R-CPT M1 進度條 7/8 → 8/8 closure (T-CPT10 spec drift 修) + K0 持平 + K42 chain 19 → 19 守住 + baseline 448 → 448 守住 + R13 5/5 守住
+
+
+**KPI-impact**: K40 R-CPT M1 進度 7/8 → 8/8 (+1 收 closure) + K0 持平 + K42 chain 19 → 19 守住 + R13 防護 5/5 守住 + R128 frontend 354 行 (HTML 29 + CSS 171 + main.js 155, 1 行替換)

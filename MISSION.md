@@ -67,16 +67,25 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 > 9/13 持平 R114 (4 fresh + 5 stale, 4 missing 仍 irisx_bot/grokx/lpbot/mimo 寫
 > snapshot，非本機 scope)。R115 lobster-rules-engine spec closure (R116 接力) 進
 > closed 集，K40 6/6 → 7/7。
+>
+> **R130 補**：R-CPT M1 T-CPT10 真 ship (R128 a0e02f1, main.js 第 6 視圖 view='timeline'
+> + HTML #view-timeline + CSS 4 state 4 色 + renderTimeline + 5s auto-refresh + cell
+> click 跨視圖 jump) → R-CPT M1 進度條 7/8 → 8/8 closure, R130 接力翻 T-CPT10 [x]
+> spec closure 對齊實跑, R-CPT change 整體待 R131+ 收 closure。K0 量化 5/1/4/9 全
+> 持平 R119, 對齊 R-CPT-4 護衛「Timeline 不開新 OTel 維度、不開新 data path」。K42
+> chain 19 條持平 (R128 T-CPT10 純 frontend 對接已 ship backend, 走既有 timeline::tests
+> mod, 0 護衛 +1)。baseline 448/448 守住 (R128 0 護衛, R113 T-CPT9 lib.rs 護衛 1 條
+> 446→447 接力, R122 timeline::tests mod 護衛 2 條 447→448 接力, 守住 R97 後 +2 例外)。
 
-| KPI | R81 baseline（前值） | R108 量測現況 | R109 補 | R111 補 (端點復活) | R119 補 (chain 19 + R-CPT 接力) | 驗收差距 |
+| KPI | R81 baseline（前值） | R108 量測現況 | R109 補 | R111 補 (端點復活) | R119 補 (chain 19 + R-CPT 接力) | R130 補 (R-CPT M1 8/8 closure) | 驗收差距 |
 |---|---:|---:|---:|---:|---:|---:|
-| K0-A1 emit 覆蓋 | 0/13 | 0/13 (endpoint DOWN, 未跑 build) | 0/13 (endpoint 仍 DOWN) | **5/13** (endpoint UP, 5 provider labels 端點實際 emit: claude/codex/copilot/gemini/cicx) | 缺 8 (5 emit 但 0 sessions, 距 13/13 sample 級距仍差 8) |
-| K0-A2 sample 覆蓋 | 0/13 | 0/13 (endpoint DOWN) | 0/13 (endpoint 仍 DOWN) | **2/13** (claude=11 + cicx=1 真有 sessions) | 缺 11 (非本機 scope, 需 OpenAB 端跑起來) |
+| K0-A1 emit 覆蓋 | 0/13 | 0/13 (endpoint DOWN, 未跑 build) | 0/13 (endpoint 仍 DOWN) | **5/13** (endpoint UP, 5 provider labels 端點實際 emit: claude/codex/copilot/gemini/cicx) | 缺 8 (5 emit 但 0 sessions, 距 13/13 sample 級距仍差 8) | **5/13 持平 R119** (R128 T-CPT10 純 frontend, 對齊 R-CPT-4 不開新 OTel 維度護衛) | 缺 8 (非本機 scope) |
+| K0-A2 sample 覆蓋 | 0/13 | 0/13 (endpoint DOWN) | 0/13 (endpoint 仍 DOWN) | **2/13** (claude=11 + cicx=1 真有 sessions) | 缺 11 (非本機 scope, 需 OpenAB 端跑起來) | **1/13 持平 R119** (claude=3 sessions 累加, endpoint sessions 隨時間浮動) | 缺 12 (非本機 scope) |
 | K0 程式碼定義層 (R101) | 0/13 | 13/13 (R101 達標) | 13/13 (守住) | 13/13 (守住) | 達標 |
-| K0 Quota 監控即時性 | 6 OpenAB snapshot；本機無 | **K0-B fresh 4/13 + K0-Q 8/13** | **K0-B fresh 4/13 + K0-Q 9/13** (R114 修 openx alias: openx 從 missing 變 stale, +1) | **K0-B fresh 4/13 + K0-Q 9/13** 持平 R114 (4 missing: irisx_bot/grokx/lpbot/mimo 非本機 scope) | 缺 4 (irisx_bot/grokx/lpbot/mimo 完全 missing) |
-| K40 規格覆蓋率 | 1/1 (openab-bot-sync 12/12) | 5/5 active change 全 closed (43/43 tasks) | 5/5 持續 closed | **7/7** (R116 R115 lobster-rules-engine closure 接力) | 達標 |
+| K0 Quota 監控即時性 | 6 OpenAB snapshot；本機無 | **K0-B fresh 4/13 + K0-Q 8/13** | **K0-B fresh 4/13 + K0-Q 9/13** (R114 修 openx alias: openx 從 missing 變 stale, +1) | **K0-B fresh 4/13 + K0-Q 9/13** 持平 R114 (4 missing: irisx_bot/grokx/lpbot/mimo 非本機 scope) | **K0-B fresh 4/13 + K0-Q 9/13 持平 R119** (R128 不開新 snapshot, 對齊 R-CPT-4 不開新 data path 護衛) | 缺 4 (irisx_bot/grokx/lpbot/mimo 完全 missing, 非本機 scope) |
+| K40 規格覆蓋率 | 1/1 (openab-bot-sync 12/12) | 5/5 active change 全 closed (43/43 tasks) | 5/5 持續 closed | **7/7** (R116 R115 lobster-rules-engine closure 接力) | **7/7 持續 + R-CPT M1 進度條 8/8 closure** (R128 ship T-CPT10, R-CPT change 整體待 R131+ 收 closure 接力) | 達標 |
 | K41 chore_treadmill 24h | 55% | **R108 k41_chore_treadmill.py 7d: 13/206 = 6.3%** | 達標延續 | 達標延續 | 達標 (<30%) |
-| K42 護衛 chain | 17 條 | 17 條 (R113.1 owner M dual-emit value guard 提案中) | 17 條 (R114 落地 dual-emit value guard 進既有 `render_prometheus_tests` mod, chain 17→17 不擴張守住) | 17 條 持平 (R115 護衛 test 三條加進既 `auto_rules::tests` mod, 走既有 mod 17→17) | **19 條** (R122 ship `timeline::tests` mod 走 R97 飽和契約例外 +1, R127 ship `.gitignore` 護衛 +1, R97 後 +2 例外架構理由明確; baseline 446/446 全綠) | 達標 (R97 後 +2 例外守住) |
+| K42 護衛 chain | 17 條 | 17 條 (R113.1 owner M dual-emit value guard 提案中) | 17 條 (R114 落地 dual-emit value guard 進既有 `render_prometheus_tests` mod, chain 17→17 不擴張守住) | 17 條 持平 (R115 護衛 test 三條加進既 `auto_rules::tests` mod, 走既有 mod 17→17) | **19 條** (R122 ship `timeline::tests` mod 走 R97 飽和契約例外 +1, R127 ship `.gitignore` 護衛 +1, R97 後 +2 例外架構理由明確; baseline 446/446 全綠) | **19 條 持平 R119** (R128 T-CPT10 純 frontend 對接已 ship backend, 0 護衛 +1, 走既有 timeline::tests mod 守住) | 達標 (R97 後 +2 例外守住) |
 
 **R108+R109+R114+R111 量化結論**：
 - K0 Quota 距 13/13 目標缺 4 (R108 4 個, R109 補無變, R114 修 openx alias +1 但仍缺 4 個, R111 持平, **R119 持平**)
@@ -85,8 +94,9 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 - K0-A2 sample 0/13 (R108/R109) → 2/13 (R111 claude=11 + cicx=1) → **1/13 (R119 endpoint sessions 隨時間遞減, claude=4)** — 距 13/13 仍缺 12, **非本機 scope** (需 OpenAB 端跑起來)
 - 本機 CLI 段 K0 Quota 100% 滿覆蓋（claude R85 / codex R86 / gemini R108 / copilot R109 — 4/4）
 - 5 個文件/治理級 KPI 全綠 — supervisor 報的「drift」是 **文件 vs 量測分叉**，非 KPI 倒退
-- **R119 補**：K42 護衛鏈 17→19 (R122 ship `timeline::tests` mod + R127 ship `.gitignore` 護衛, R97 後 +2 例外架構理由明確, baseline 446/446 全綠守住)
-- 下個 M1 候選：R120+ 接力 K0 Quota 4 missing 補鏈路（OpenAB scope）+ R120+ 接力 CPT M1 後半 T-CPT9 (lib.rs Tauri command 註冊 3 條) + T-CPT10 (main.js 第 6 視圖 view='timeline' + HTML/CSS) + R117 capsule-brief JS 配套等 owner M 收
+- **R119 補**：K42 護衛鏈 17→19 (R122 ship `timeline::tests` mod + R127 ship `.gitignore` 護衛, R97 後 +2 例例架構理由明確, baseline 446/446 全綠守住)
+- **R130 補**：R-CPT M1 T-CPT10 真 ship (R128 a0e02f1) → M1 進度條 7/8 → 8/8 closure, R130 接力翻 T-CPT10 [x] spec closure 對齊實跑, R-CPT change 整體待 R131+ 收 closure。K0 量化 5/1/4/9 全持平 R119 (對齊 R-CPT-4 護衛)。K42 19 條持平 R119 (R128 純 frontend 對接, 0 護衛 +1)。baseline 448/448 守住。
+- 下個 M1 候選：R131+ 接力 R-CPT change 整體 closure 收 (R130 spec closure 後 change `.openspec.yaml` status flipped 收 closed) + R131+ 接力 K0 Quota 4 missing 補鏈路（OpenAB scope）+ R131+ 接力 K0-A1 emit 5/13 → 6/13 護衛 (補 1 個本機可 ship emit 端點) + R117 capsule-brief JS 配套等 owner M 收
 
 任一指標連 2 週落後 → 觸發策略重審（不是「再補一輪」）。
 

@@ -58,8 +58,26 @@
   `timeline_jump_target_contract` 加進 timeline::tests 既有 mod (R122 T-CPT11 ship 護衛
   2 條同 mod), 不破 K42 chain 19 條飽和契約。K40 R-CPT M1 進度 6/8 → 7/8, baseline
   446 → 447。
-- [ ] **T-CPT10: main.js 加第 6 視圖 view='timeline'** + HTML `#timeline-view` 區塊
-  + CSS 沿用 theme token (--working-color 等)
+- [x] **T-CPT10: main.js 加第 6 視圖 view='timeline'** + HTML `#timeline-view` 區塊
+  + CSS 沿用 theme token (--working-color 等) — R128 ship (a0e02f1, 走純 frontend
+  對接已 ship backend contract, 不破 K42 chain 19 條飽和契約)
+  - 涵蓋 src/index.html #view-timeline 區塊 (header + 7 時間軸 label + 13 row
+    container + legend, +29 行) + src/styles.css #view-timeline 排版 +
+    .timeline-row/label/track/cell (4 state class) + .timeline-legend 11 條新
+    class + --stale-color CSS var (dark/light, +171 行) + src/main.js
+    showView('timeline') 分支 + renderTimeline() 對接 timeline_snapshot_24h +
+    start/stopTimelineAutoRefresh 5s 輪詢 + btn-timeline entry + cell click
+    → events view cross-jump
+  - 對齊 R-CPT-1 (24h ring buffer snapshot 透過 timeline_snapshot_24h
+    command 從 R113 Tauri command 拿) + R-CPT-2 (第 6 視圖不取代既有 5
+    views) + R-CPT-3 (0 新護衛, 走 R122 timeline::tests mod 既有 chain
+    19 條) + R-CPT-4 (Timeline 不開新 OTel 維度, 不開新 data path)
+  - 驗證: R128 commit a0e02f1 落地 + 6 視圖端到端接通 (HTML view-timeline +
+    CSS 4 state 4 色 + main.js renderTimeline + showView) + cell click
+    跨視圖 jump 對齊 spec §「click-to-jump 跨視圖」scenario
+  - K40 R-CPT M1 進度 7/8 → 8/8 (R128 ship 後 8 個 M1 task 全 closure),
+    對齊 R-CPT-2 wire 對齊 + R-CPT-3 護衛 chain 19 守住 + R-CPT-4 不開
+    新 OTel/data path
 - [x] **T-CPT11: 加 1 條獨立護衛 test `timeline_ring_buffer_invariants`** —
   R122 ship (b1b3ed3, `src-tauri/src/timeline.rs:141-194`), 走新 mod
   `timeline::tests` (架構理由 doc 同檔 131-137 寫齊 R97 飽和契約例外 +
@@ -75,3 +93,8 @@
   path 對齊 R-CPT-4 護衛)
 - [x] **T-CPT14: engineering-log R119 R-CPT closure entry** — 收 closure + 接力
   R120+ (T-CPT9 lib.rs Tauri command 註冊 + T-CPT10 main.js 第 6 視圖 ship)
+- [x] **T-CPT15: R128 ship T-CPT10 main.js 第 6 視圖** — R128 ship (a0e02f1)
+  收 R-CPT M1 進度 7/8 → 8/8 closure, 對齊 T-CPT14 接力鏈 R120+ 後半。
+  R130 spec closure 接力翻 T-CPT10 [x] 對齊實跑, R-CPT M1 收 closure。
+  R130 接力 R131+: 開新 K0 Quota 4 missing 補鏈路 (OpenAB scope) 或 K0-A1
+  emit 護衛補鏈路, 對齊 R-CPT M1 closure 釋放 capacity。

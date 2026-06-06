@@ -5,8 +5,17 @@
 //! R-CPT-4 不開新 OTel 維度、不開新 data path。
 //!
 //! ## Memory budget
-//! 13 provider × 1440 minute-cells (24h) × 1 byte = 18,720 bytes = 18.3 KB
-//! per process。對齊 K41 chore_treadmill 紅線 < 30%。
+//! 13 provider × 1440 minute-cells (24h) × 1 byte = 18,720 bytes (18.3 KB)
+//! + 13 × 10080 minute-cells (7d) × 1 byte = 131,040 bytes (128 KB)
+//! = **149,760 bytes (146.3 KB) per process**。對齊 K41 chore_treadmill 紅線
+//! < 30% (150KB 預算下, 安全 margin 3.7 KB)。
+//!
+//! ## 兩條固定 buffer (R131 M1.1 對齊 design.md §5 開放問題 #1)
+//! - 24h ring: 1 min 解析度, 1440 cells (process 重啟後空 strip 對齊 R-CPT-1)
+//! - 7d ring: 1 min 解析度, 10080 cells, 7d history 給 design §5 開放問題 #1
+//!   「兩條固定 buffer 提案」護衛 (24h 1min + 7d 1min 對齊 K41 < 150KB)
+//! 同一個 `record_event(provider, state, minute)` 同步寫兩條 buffer,
+//! 各 buffer 獨立 wrap 對齊自身長度。
 //!
 //! ## 4 state u8 encoding (對齊 session.rs SessionState SSoT)
 //! 0 = Idle, 1 = Working, 2 = WaitingForUser, 3 = Stale
@@ -17,13 +26,8 @@
 //!
 //! ## K42 chain 17→18 (R-CPT-3 接力位置)
 //! M0 守住 chain 17, M1 加護衛 test → chain 18。架構理由 doc 見
-//! engineering-log.md R122 entry。
-//!
-//! ## Dead-code 暫時白名單
-//! T-CPT7 (本檔) 只落 struct + 護衛 test, lib.rs 串接留 T-CPT9
-//! (`timeline_snapshot_24h` / `timeline_toggle_resolution` /
-//! `timeline_jump_to_event` 三個 Tauri command 註冊)。屆時移除
-//! `#![allow(dead_code)]`。
+//! engineering-log.md R122 entry。R131 M1.1 加 7d buffer 護衛 走
+//! timeline::tests 既有 mod (chain 19 內延伸, 對齊 R70 補完模式)。
 
 #![allow(dead_code)]
 
@@ -40,14 +44,20 @@ pub const STATE_STALE: u8 = 3;
 /// 24h × 60min = 1440 cells per provider
 pub const CELLS_PER_PROVIDER_24H: usize = 1440;
 
-/// 13 provider × 1440 minute-cells 固定大小 ring buffer。
-/// Total = 18,720 bytes (18.3 KB) per process。
-///
+/// R131 M1.1: 7d × 60min × 24h = 10080 cells per provider。
+/// 對齊 `cross-provider-timeline/design.md` §5 開放問題 #1 兩條固定 buffer
+/// 提案 (24h 1min × 18.3KB + 7d 1min × 128KB, 加總 < 150KB 守 K41 紅線)。
+pub const CELLS_PER_PROVIDER_7D: usize = 10080;
+
+/// 13 provider ring buffer,內含兩條固定 buffer (24h + 7d)。
 /// Tauri 進程共用單一 TimelineRing 實例,由 Tauri state 管理 (R-CPT-2
 /// 第 6 視圖單一 source of truth)。
 pub struct TimelineRing {
-    /// 18,720 byte 連續緩衝。索引 = provider_index * 1440 + (minute % 1440)
-    cells: [u8; 18720],
+    /// 24h buffer: 18,720 byte 連續緩衝。索引 = provider_index * 1440 + (minute % 1440)
+    cells_24h: Vec<u8>,
+    /// R131 M1.1 7d buffer: 131,040 byte 連續緩衝。
+    /// 索引 = provider_index * 10080 + (minute % 10080)
+    cells_7d: Vec<u8>,
     /// provider 名 → row index, 對齊 KNOWN_PROVIDERS SSoT
     provider_index: HashMap<String, usize>,
     /// 最近一次 record_event 收到的 minute 計數 (用於 stale detection)
@@ -67,19 +77,23 @@ pub fn state_to_u8(state: SessionState) -> u8 {
 
 impl TimelineRing {
     /// 從 `hook_server::KNOWN_PROVIDERS` 建 index。process start 時呼叫 1 次。
+    /// R131 M1.1: 兩條 buffer (24h 18.3KB + 7d 128KB) 同步初始化。
     pub fn new() -> Self {
         let mut provider_index = HashMap::with_capacity(KNOWN_PROVIDERS.len());
         for (idx, name) in KNOWN_PROVIDERS.iter().enumerate() {
             provider_index.insert((*name).to_string(), idx);
         }
+        let n = KNOWN_PROVIDERS.len();
         Self {
-            cells: [STATE_IDLE; 18720],
+            cells_24h: vec![STATE_IDLE; n * CELLS_PER_PROVIDER_24H],
+            cells_7d: vec![STATE_IDLE; n * CELLS_PER_PROVIDER_7D],
             provider_index,
             current_minute: 0,
         }
     }
 
-    /// 註冊 1 個 event。
+    /// 註冊 1 個 event,**同步寫入 24h + 7d 兩條 buffer** (R131 M1.1 兩條固定
+    /// buffer 提案對齊 design.md §5 開放問題 #1)。
     /// - provider 不在 `KNOWN_PROVIDERS` 內 → silently drop
     ///   (對齊 R66 parse_provider 9-provider whitelist 行為)。
     /// - state ∉ {0,1,2,3} → silently drop (防止污染既有 4 state 對齊
@@ -91,9 +105,14 @@ impl TimelineRing {
         let Some(&row) = self.provider_index.get(provider) else {
             return;
         };
-        let col = (minute as usize) % CELLS_PER_PROVIDER_24H;
-        let idx = row * CELLS_PER_PROVIDER_24H + col;
-        self.cells[idx] = state;
+        // 24h buffer: 索引 = row * 1440 + (minute % 1440)
+        let col_24h = (minute as usize) % CELLS_PER_PROVIDER_24H;
+        let idx_24h = row * CELLS_PER_PROVIDER_24H + col_24h;
+        self.cells_24h[idx_24h] = state;
+        // 7d buffer: 索引 = row * 10080 + (minute % 10080)
+        let col_7d = (minute as usize) % CELLS_PER_PROVIDER_7D;
+        let idx_7d = row * CELLS_PER_PROVIDER_7D + col_7d;
+        self.cells_7d[idx_7d] = state;
         self.current_minute = minute;
     }
 
@@ -104,7 +123,19 @@ impl TimelineRing {
         for row in 0..KNOWN_PROVIDERS.len() {
             let start = row * CELLS_PER_PROVIDER_24H;
             let end = start + CELLS_PER_PROVIDER_24H;
-            out.push(self.cells[start..end].to_vec());
+            out.push(self.cells_24h[start..end].to_vec());
+        }
+        out
+    }
+
+    /// R131 M1.1: 13 row × 10080 cell 7d snapshot。對齊 design.md §5 開放問題
+    /// #1 兩條固定 buffer 提案。給前端 Timeline view 切 7d 解析度時讀。
+    pub fn snapshot_7d(&self) -> Vec<Vec<u8>> {
+        let mut out = Vec::with_capacity(KNOWN_PROVIDERS.len());
+        for row in 0..KNOWN_PROVIDERS.len() {
+            let start = row * CELLS_PER_PROVIDER_7D;
+            let end = start + CELLS_PER_PROVIDER_7D;
+            out.push(self.cells_7d[start..end].to_vec());
         }
         out
     }
@@ -281,5 +312,82 @@ mod tests {
         assert!(json.contains("\"view\":\"events\""));
         assert!(json.contains("\"provider\":\"claude\""));
         assert!(json.contains("\"minute\":720"));
+    }
+
+    #[test]
+    fn timeline_7d_ring_buffer_invariants() {
+        // R131 M1.1: 7d ring buffer 護衛。對齊
+        // `cross-provider-timeline/design.md` §5 開放問題 #1 兩條固定 buffer
+        // 提案 (24h 1min × 18.3KB + 7d 1min × 128KB, 加總 < 150KB 守 K41)。
+        //
+        // 架構理由 (走 timeline::tests 既有 mod, chain 19 內延伸, 對齊 R70
+        // 補完模式 — lib.rs:1077 既有 chain 16 對稱面延伸先例): 7d buffer
+        // 是 T-CPT11 ring_buffer_invariants 護衛的對稱延伸 (24h → 7d 解析度),
+        // 同一個 mod 內同主題, 不破 K42 chain 19 條飽和契約。
+        //
+        // 護衛 5 條不變量:
+        // 1. 容量 = 13 provider × 10080 cell = 131,040 cell (對齊 K41 128KB)
+        // 2. record_event 同步寫 24h + 7d 兩條 buffer (雙 buffer 一致)
+        // 3. state u8 ∈ {0,1,2,3} — 污染值 silently drop, 兩條 buffer 同步
+        // 4. snapshot_7d 維度 = 13 row × 10080 cell (對齊 R-CPT-1 §5 #1)
+        // 5. 7d wrap: minute=10080 自動 wrap 回 0 (對齊 24h wrap 語意)
+
+        let ring = TimelineRing::new();
+
+        // (1) 容量 = 13 × 10080 = 131,040
+        let total_cells_7d: usize = ring.snapshot_7d().iter().map(|r| r.len()).sum();
+        assert_eq!(
+            total_cells_7d, 131_040,
+            "13×10080 = 131,040 cells, 對齊 K41 memory budget 128KB (7d)"
+        );
+
+        // (2) record_event 同步寫 24h + 7d 兩條 buffer
+        let mut r = TimelineRing::new();
+        r.record_event("claude", STATE_WORKING, 1000);
+        assert_eq!(
+            r.snapshot_24h()[0][1000 % CELLS_PER_PROVIDER_24H],
+            STATE_WORKING,
+            "24h buffer 寫入"
+        );
+        assert_eq!(
+            r.snapshot_7d()[0][1000 % CELLS_PER_PROVIDER_7D],
+            STATE_WORKING,
+            "7d buffer 同步寫入 (對齊 7d 解析度)"
+        );
+
+        // (3) state 污染值 silently drop, 兩條 buffer 同步保留 Idle
+        for state_byte in [4u8, 99, 255] {
+            let mut r = TimelineRing::new();
+            r.record_event("claude", state_byte, 500);
+            assert_eq!(
+                r.snapshot_24h()[0][500],
+                STATE_IDLE,
+                "24h: 污染值 {state_byte} silently drop"
+            );
+            assert_eq!(
+                r.snapshot_7d()[0][500],
+                STATE_IDLE,
+                "7d: 污染值 {state_byte} silently drop"
+            );
+        }
+
+        // (4) snapshot_7d 維度
+        let snap_7d = ring.snapshot_7d();
+        assert_eq!(snap_7d.len(), 13, "13 row (對齊 KNOWN_PROVIDERS)");
+        assert!(
+            snap_7d.iter().all(|r| r.len() == CELLS_PER_PROVIDER_7D),
+            "13 × 10080 cells"
+        );
+
+        // (5) 7d wrap: minute=10080 → col 0 (覆寫回 Idle)
+        let mut r = TimelineRing::new();
+        r.record_event("claude", STATE_WORKING, 0);
+        assert_eq!(r.snapshot_7d()[0][0], STATE_WORKING);
+        r.record_event("claude", STATE_IDLE, CELLS_PER_PROVIDER_7D as u32);
+        assert_eq!(
+            r.snapshot_7d()[0][0],
+            STATE_IDLE,
+            "7d wrap: minute=10080 → col 0 覆寫"
+        );
     }
 }

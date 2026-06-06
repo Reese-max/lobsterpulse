@@ -5,7 +5,7 @@
 
 ## ADDED Requirements
 
-### R-CPT-1: Timeline 24h × 13 provider ring buffer is the single source of truth for historical activity distribution
+### Requirement: R-CPT-1 — Timeline 24h × 13 provider ring buffer is the single source of truth for historical activity distribution
 
 The Timeline view MUST read from a single in-memory ring buffer
 (`TimelineRing`) that records every `SessionManager.handle_event` outcome.
@@ -37,7 +37,7 @@ each cell 1 byte encoding state ∈ {`Idle=0`, `Working=1`, `WaitingForUser=2`,
 - **AND** SessionManager handle_event 第一個 event 進來後, 對應 cell 寫入
   `Working=1` 並觸發 Timeline 即時 refresh
 
-### R-CPT-2: Timeline 視圖是第 6 視圖, 不取代既有 5 views, 對齊 MISSION 北極星 3 條
+### Requirement: R-CPT-2 — Timeline 視圖是第 6 視圖, 不取代既有 5 views, 對齊 MISSION 北極星 3 條
 
 Timeline 視圖 MUST 跟既有 5 views (膠囊 / 展開面板 / Bot 總覽 / 事件診斷 /
 設定) 並存, 不取代任何一個。對齊 MISSION.md 北極星 3 條:
@@ -64,7 +64,7 @@ Timeline 視圖 MUST 跟既有 5 views (膠囊 / 展開面板 / Bot 總覽 / 事
 - **AND** 不做純 log reader (Timeline 用 SessionManager 即時累加, emit
   task-completed/waiting 同步觸發 hover detail)
 
-### R-CPT-3: Timeline 護衛不破 K42 chain 17 條飽和契約 (M0 不加 test, M1 加 1 條獨立護衛)
+### Requirement: R-CPT-3 — Timeline 護衛不破 K42 chain 17 條飽和契約 (M0 不加 test, M1 加 1 條獨立護衛)
 
 Timeline spec MUST 走既有 K42 chain 17 條飽和契約, M0 階段**不加 test**。M1 階
 段加 1 條獨立護衛 `timeline_ring_buffer_invariants` 收 closure 時 K42 chain
@@ -85,7 +85,7 @@ Timeline spec MUST 走既有 K42 chain 17 條飽和契約, M0 階段**不加 tes
 - **AND** K42 chain 17→18, baseline 443→444 (+1 護衛 test)
 - **AND** 架構理由 doc 解 R114 後的 chain 18 (對齊 R114 R111+ 接力位置)
 
-### R-CPT-4: Timeline 對齊 K0 既有 metric (不開新 OTel 維度, 不開新 data path)
+### Requirement: R-CPT-4 — Timeline 對齊 K0 既有 metric (不開新 OTel 維度, 不開新 data path)
 
 Timeline 視圖 MUST 用既有 K0-A1/A2 metric (`lobsterpulse_provider_sessions` /
 `lobsterpulse_provider_*{provider="X"}` 等 R102/R103 41 條 metric), 不開新

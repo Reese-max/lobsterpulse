@@ -54,8 +54,9 @@ GUARD_MOD_MIN: Final[int] = 20
 # MISSION 90 天 KPI: 7d chore_treadmill < 30%
 K41_CHORE_RATIO_MAX: Final[float] = 0.30
 
-# R124 護衛的 6 髒檔 (owner M WIP + sentinel 自身, R131 結構性發現 5→6 對齊事實)
-# 6 = 5 owner M 真 WIP + 1 sentinel 自身 (R149 closure 路徑選項 C 收編前暫列)
+# R124 護衛的 5 髒檔 (owner M WIP, sentinel 應守住 0 動 = tracked dirty)
+# R131 走 R149 closure 路徑選項 C 純版: commit sentinel 進 git 後從 tuple 移除 (commit 後不再是 WIP)
+# R149 結構性發現 5→6 是「commit 前」的對齊事實, commit 後回歸 5 (sentinel 自身已收編)
 OWNER_M_WIP_FILES: Final[tuple[str, ...]] = (
     "docs/index.html",
     "docs/styles.css",
@@ -63,7 +64,6 @@ OWNER_M_WIP_FILES: Final[tuple[str, ...]] = (
     "prometheus-counter-rename-2026-q3/spec.md",
     "src-tauri/Cargo.toml",
     "src-tauri/src/timeline.rs",
-    "scripts/r124_sentinel.py",
 )
 
 

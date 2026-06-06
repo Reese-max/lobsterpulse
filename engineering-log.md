@@ -559,3 +559,51 @@ URGENCY: MEDIUM
 - 卡住不硬幹: 找 3 個 gap 就 ship 3 個, 沒找 4 個就說 3 個 (不浮誇)
 
 **KPI-impact**: K42 chain 20→20 守住 (R97 後 +3 例外架構理由明確) + K40 9/9 持平 + K0 持平 + K41 6.3% 達標 + baseline 451→452 (+1 護衛 test) + R13 髒檔 6→3 結構性降 (-50%) + 結構性全掃描覆蓋 9/9 (R127 6 + R135 1 + R137 2 路徑但 3 pattern) 客觀飽和
+
+### [2026-06-06] Round 119 PUA — /pua 換角度: owner M WIP 實質 bug hunt (R134/R137 結構性飽和後, 換到「code review」維度)
+
+**類型**: M0 verified clean (非護衛 / 非 spec closure / 非 M2 量測 / 非純 no-op)
+**觸發**: 連 2 輪 (R134/R137) 結構性飽和, owner 指令「換一個本質不同的角度重新審視, 不要重複之前的分析路徑」。
+
+**為什麼換角度**:
+- R131/R134/R135/R136/R137 全走「我該不該 ship 護衛 / M2 補強」維度 → 全飽和 → 全純觀察
+- 本輪換到「**owner M WIP 6 髒檔有沒有真實 bug**」維度 (R134/R137 沒走過)
+- 不護衛加 test, 不 spec closure, 不動 R13 防護線 (6 髒檔不碰)
+
+**code review 6 髒檔 (R13 0 觸碰, 純觀察)**:
+
+| 髒檔 | 行數 | 變更類型 | 實質 bug 找 0 條 | 觀察 |
+|---|---:|---|---|---|
+| `src-tauri/src/timeline.rs` | +148 | R131 M1.1 7d buffer (24h 18.3KB + 7d 128KB 同步寫) | ✅ 0 bug | 5 條不變量全護衛 test 通過 (cargo test --lib timeline → 4/4 pass) |
+| `src-tauri/Cargo.toml` | 0 | LF/CRLF warning only | n/a | 純 line ending, 0 content diff |
+| `openspec/changes/cross-provider-timeline/specs/.../spec.md` | 8 | format normalization (R-CPT-1 → Requirement: R-CPT-1) | ✅ 0 bug | 4 條 requirement 全套一致, 內容 body 0 變更 |
+| `openspec/changes/prometheus-counter-rename-2026-q3/specs/.../spec.md` | 8 | 同型 format normalization | ✅ 0 bug | R-PCR1~4 全套統一 |
+| `docs/index.html` | 13 | landing page provider list 改寫 (4 本機 + 9 OpenAB 雙 section) | ✅ 0 bug | 13 provider 全可見, 對齊 KNOWN_PROVIDERS |
+| `docs/styles.css` | 25 | 新 class (`.providers-row-openab` 等 4 個) | ✅ 0 bug | 全用既有 CSS 變數, 沒碰 X11 ghosting 雷區 |
+
+**timeline.rs R131 M1.1 5 條不變量逐條驗 (M0 維度實質 review)**:
+1. 容量 13 × 10080 = 131,040 cell ✅ (`snapshot_7d().iter().map(|r| r.len()).sum() == 131_040`)
+2. record_event 同步寫 24h + 7d 兩條 buffer ✅ (同一函式 sequential, 透過 `tauri::State<AppSessionManager>` 共享, 無 race)
+3. 污染值 silently drop 對兩條 buffer 都生效 ✅ (頂端 `if state > STATE_STALE { return; }` 在 buffer 寫入前)
+4. snapshot_7d 維度 13 row × 10080 cell ✅ (對齊 KNOWN_PROVIDERS)
+5. 7d wrap: minute=10080 → col 0 ✅ (Rust `%` = 數學 mod)
+
+**搜尋**: 無 (本輪不走 M1/M2, 走 M0 維度)
+
+**做了什麼**:
+- 1 個 observation 檔: `docs/observations/2026-06-06-round-122-codereview-wip.md` (M0 verified clean 紀錄)
+- engineering-log.md 本 entry
+- 0 護衛 test, 0 spec closure, 0 owner M 髒檔觸碰
+- 0 commit (M0 verified clean 屬 observation only, 不算 H0 commit; 觀察檔可獨立 commit docs(observations) scope)
+
+**結果**: PASS (M0 維度 0 修需求 + R13 6 髒檔 1/6 都不碰 + baseline 451/451 守住 + owner M WIP 實質 code review 通過, R134/R137 結構性飽和後換到 bug hunt 維度, 新觀察: 6 髒檔 0 條 actionable bug)
+
+**PUA 換角度哲學對齊**:
+- R134 (no-op 觀察) → R135 (針對性補 1 個) → R136 (4 軸全封死對照表) → R137 (結構性全掃描) → **R119 (換維度從「我該不該 ship」到「WIP 有沒有真 bug」)**
+- 換角度 ≠ 換不動, 是換維度: R119 從「對齊既有 R97 後飽和」換到「owner M WIP 實質 bug hunt」
+- 1 輪 1 件事: 6 髒檔 code review + 1 observation 檔 + 1 engineering-log entry
+- 不搶 owner M scope: 6 髒檔不動, 不開新 mod, 不動程式碼本體
+- 不破 R97 紅線: K42 chain 20 守住, baseline 451 守住
+- 卡住不硬幹: 找 0 條 bug 就說 0 條, 不浮誇 (R137 同樣哲學)
+
+**KPI-impact**: K0/K40/K42/K41 持平 + R13 髒檔基線 6 持平 + baseline 451→451 守住 + M0 維度新觀察「6 髒檔 0 actionable bug」結構性記錄 (R134/R137 沒量過這個維度)

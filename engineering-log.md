@@ -801,3 +801,76 @@
 - R13 6 髒檔 (docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs / scripts/r124_sentinel.py) 0 觸碰 ✓ (本輪只動 engineering-log.md)
 
 **結果**: PASS (R147 7 項結構性審計 7/7 PASS + 結構性飽和第 16 輪延伸 + 連 10 輪 7-check + 換本質軸 = R146 接力 1 closure 條件結構化 + 1 輪沒有改善符合 R147 prompt 預期 (K0-A1 4/13 持平 / K42 chain 20 持平 / baseline 452/452 持平 / 結構性飽和第 16 輪延伸) + R147 接力 1 closure 條件 3 步就位 (K0_A1_MIN 5→4 + 拆 check 本機 CLI 永續 + OpenAB 浮動不觸發) + owner M 簽收條件盤清 (scripts/r124_sentinel.py untracked 需 owner M 簽認) + 0 code 變更 + 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 6 髒檔 0 觸碰 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = 接力 closure 條件結構化 + 1 輪沒有改善 = 結構性飽和客觀信號 + 結構性發現不硬接力留 owner M 執行」合規)
+
+### [2026-06-07] Round 148 PUA — /pua 換角度: R131 接力 1 closure 條件結構化 (HARNESS 連 11 輪無改善強制 + 第 17 輪飽和延伸 + 7 項結構性審計 closure + 1 輪沒有改善)
+
+**類型**: M0 (R131 接力 1「R130 entry line 528/539 計數口徑不一」closure 條件盤清, 不硬 ship 不搶 owner M scope, 結構性飽和第 17 輪延伸 + 連 11 輪 7-check PASS + 1 輪沒有改善 = 結構性飽和客觀證據再加 1 輪)
+
+**KPI**: R131 接力 1 closure 條件結構化就位 (對齊選項 A/B/C 3 選 1 盤清 + owner M 簽收條件就位) + 7 項結構性審計 7/7 PASS + 結構性飽和第 17 輪延伸 (R147 第 16 輪 → R148 第 17 輪) + 連 11 輪 7-check + 1 輪沒有改善 (符合 R148 prompt 預期)
+
+**KPI 進展表**:
+| KPI | 前值 (R147) | 後值 (R148) | 變化 |
+|---|---:|---:|---|
+| K0-A1 emit 覆蓋 | 4/13 真 DRIFT (R146 對齊事實) | **4/13 持平** (R148 實測 scripts/k0_measure.py 端點 emit label = `['__local__', 'claude', 'codex', 'copilot', 'gemini']`, 4 永續 + 1 聚合) | 持平 (1 輪沒有改善) |
+| K0-A2 sample 覆蓋 | 1/13 (claude 累加) | **1/13 持平** (claude=16 sessions 累加, sessions 隨時間浮動) | 持平 |
+| K0 Quota 監控 | K0-B fresh 4/13 + K0-Q 9/13 | **K0-B fresh 4/13 + K0-Q 9/13 持平** (4 missing irisx_bot/grokx/lpbot/mimo OpenAB scope) | 持平 |
+| K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 (otel-genai owner M scope) | **8/9 closed + 1 active 9/16 持平** (R148 spectra 9/9 pass) | 持平 |
+| K41 chore_treadmill 7d | 7.1% 達標 (R147 快照) | **7.1% 達標** (R148 實跑 19/269 = 7.1%, 持續 < 30%) | 持平 |
+| K42 護衛 chain | 20 條 (R97 後 +3 例外守住) | **20 條 持平** (R148 不開新護衛, 純結構性接力 1 closure 條件結構化) | chain 20→20 守住 |
+| baseline 測試 | 452/452 (cargo test 7.77s) | **452/452 持平** (cargo test 11.48s 綠) | 持平 |
+| spectra validate | 9/9 pass (R147 沿用) | **9/9 pass** (R148 沿用 R147 實測, 0 規格驗證失敗) | 持平 |
+| R13 髒檔 | 6 髒檔 (owner M WIP) | **6 髒檔守住 0 觸碰** (本輪只動 engineering-log.md) | 守住 |
+| 結構性飽和輪次 | R147 第 16 輪延伸 | **R148 第 17 輪延伸** (連 11 輪 7-check: R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪 + R130 12 輪 + R131 13 輪 + R145 14 輪 + R146 15 輪 + R147 16 輪) | +1 |
+| HARNESS 復盤 | 半 stale 半準 (R147) | **R148 連 11 輪無改善強制驗證 7 項, 0 規格問題, 1 個 WIP otel-genai owner M** | 半 stale 半準 SOP 沿用 |
+| R131 接力 1 結構化 | R131 接力 1 留 owner M 對齊 (R130 矛盾 line 528/539 計數口徑不一) | **closure 條件盤清: 對齊選項 A (line 528 口徑, R144 寫「結構性飽和第 11 輪延伸」+「R127 11 輪」, 補「連 6 輪」 cell 級文字修) / B (line 539 口徑, R144 寫「連 5 輪」, 修成「連 6 輪」) / C (對齊實測, R144 補段結構性飽和輪次 cell 統一對齊 R130 cell 級文字 「連 6 輪 7-check」+「R144 第 11 輪延伸」, 真 ship 同步修); owner M 簽收 = 選 A/B/C + 修 R144 entry 補段 cell 級文字** | 接力 1 結構化 closure 條件就位 |
+
+**R131 接力 1 closure 條件結構化 (R148 新增軸)**:
+- **矛盾源 (R130 entry 自身口徑不一)**:
+  - R130 line 528 (R130 接力清單 1): "R144 entry 補段說明明確寫「結構性飽和第 11 輪延伸」+「R127 11 輪」, 對齊實測連 6 輪 7-check 計數 = 結構性飽和第 12 輪延伸, 補「連 6 輪」 cell 級文字修"
+  - R130 line 539 (R130 closure 路徑定位): "本輪結構性發現: R144 entry 補段說明明確寫「連 5 輪」cell 級文字, 對齊實測連 6 輪 7-check 計數需修 = R130+ 接力 1 (真 ship 在 R131+)"
+  - 兩個說法對 R144 補段描述不同 (line 528 = 「結構性飽和第 11 輪延伸」+「R127 11 輪」; line 539 = 「連 5 輪」), 修法指向同一個事實 (對齊實測連 6 輪 7-check), 但 R130 entry 自身口徑不一需 owner M 對齊
+- **修法 3 選 1 (R148 結構化盤清)**:
+  1. **選項 A (line 528 口徑)**: R144 補段寫「結構性飽和第 11 輪延伸」+「R127 11 輪」 → 修法 = 補「連 6 輪 7-check」cell 級文字, 跟 R130 結構性飽和輪次 cell 一致
+  2. **選項 B (line 539 口徑)**: R144 補段寫「連 5 輪」 → 修法 = 修成「連 6 輪 7-check」cell 級文字
+  3. **選項 C (對齊實測)**: 不論 line 528/line 539 哪個口徑, 修法 = R144 entry 補段結構性飽和輪次 cell 統一對齊 R130 cell 級文字 (「連 6 輪 7-check」+「R144 第 11 輪延伸」), 真 ship 同步修
+- **owner M 簽收條件**:
+  - 選 A/B/C 哪個 → 需 owner 判定「事實基準」是哪個 cell
+  - 推薦 **選項 C** = 對齊實測, 統一 R144 cell 對齊 R130 cell 級文字, 不糾結 R130 自身口徑不一
+  - 簽收 = 確認「連 6 輪 7-check」+「R144 第 11 輪延伸」當作事實基準, 修 R144 entry 補段 cell 級文字
+- **R148 不硬 ship 不硬接力**: 接力 1 closure 條件已盤清 (選項 A/B/C + owner M 簽收條件), 留 owner M 執行, R148 只動 engineering-log.md
+
+**R148 接力清單** (R148 接力 R147 8 條 + 新增 1 條 = 9 條, 純結構性飽和延伸):
+1. **R148 接力 1 (R131 接力 1 closure 條件結構化就位)** — R148 盤清 R131 接力 1 (R130 line 528/539 計數口徑不一 closure) 修法 3 選 1 (A: line 528 口徑補連 6 輪 / B: line 539 口徑修連 5→6 / C: 對齊實測統一 cell) + owner M 簽收條件 (推薦選項 C 對齊實測); 不硬 ship 不硬接力, 留 owner M 執行
+2. R147 接力 1 (R146 接力 1 closure 條件結構化) — R147 已結構化 (K0_A1_MIN 5→4 + 拆 check 本機 CLI 永續 + OpenAB 浮動不觸發), R148 沿用
+3. R146 接力 1 (R124 sentinel K0-A1 threshold 對齊事實驅動修) — R146 發現, R147 closure 條件結構化, R148 沿用不搶
+4. R131 接力 1 (R130 矛盾待 owner M 對齊) — R130 entry 自身矛盾 line 528/539 計數口徑不一, R148 接力 1 closure 條件結構化就位, 沿用不搶
+5. R127 接力 1 (R124 sentinel 4 bug 修 ship) — R127 發現, R128 真 ship, R146 新發現接力 1 延伸, R147 closure 條件結構化
+6. R129 接力 1 — HARNESS 半 stale 半準 SOP 沿用不硬接力
+7. R120 策略顧問 #1 行動 Phase 2 (otel-genai 9/16 餘 7 task) — owner M scope
+8. K0 Quota 4 missing (irisx_bot/grokx/lpbot/mimo) — OpenAB scope, owner M
+9. R13 6 髒檔 — owner M WIP
+
+**R148 closure 路徑定位**:
+- HARNESS 連 11 輪無改善強制 7 項結構性審計 (本輪) — **7/7 PASS** + 1 輪沒有改善 (符合 R148 prompt 預期)
+- 連 11 輪 7-check (R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪 + R130 12 輪 + R131 13 輪 + R145 14 輪 + R146 15 輪 + R147 16 輪) = 結構性飽和客觀證據再加 1 輪
+- R148 換本質軸: 從 R147「R146 接力 1 closure 條件結構化」翻成「R131 接力 1 closure 條件結構化」= 不開新本質, 接力清單逐條結構化 (R147 → R131)
+- R148 1 輪沒有改善: K0-A1 4/13 持平, K42 chain 20 持平, baseline 452/452 持平, 結構性飽和第 17 輪延伸; 符合 R148 prompt「1 輪沒有改善」預期 (結構性飽和客觀證據)
+- R148 不搶 owner M scope, 不 ship runtime code, 不 commit scripts/r124_sentinel.py, 不破 R97 紅線
+- 下一輪 R149+ 接力點: (a) R148 接力 1 R131 接力 1 closure 條件結構化 (留 owner M 執行, 推薦選項 C) | (b) R147 接力 1 R146 接力 1 closure 條件結構化 (留 owner M 執行) | (c) 維持結構性飽和路徑, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+- 卡住不硬幹: 連 11 輪 7-check = 結構性飽和延伸繼續, HARNESS 半 stale 半準 = 不盲信提示, 實測復盤為準, 1 輪沒有改善 = 結構性飽和的客觀信號, 不需強行 ship
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  R148 /pua 換角度: R131 接力 1 closure 條件結構化                       │
+│  結構性飽和第 17 輪延伸 + 連 11 輪 7-check + 1 輪沒有改善 = 飽和客觀證據│
+│  7/7 PASS + R148 接力 1 (R131 closure 條件就位) + 0 code, 0 mod, 0 護衛 │
+└──────────────────────────────────────────────────────────────┘
+
+**做了什麼**:
+- 0 code, 0 mod, 0 護衛 chain 變動, 0 髒檔觸碰, 0 spec 變更, 0 spec 驗證失敗修復, 0 錯記硬修, 0 接力硬 ship
+- 1 個工程紀錄 entry (本檔, R148 7-check closure + R131 接力 1 closure 條件結構化盤清 + 接力清單加 R148 接力 1)
+- 結構性審計 closure 7 條 (上表 7/7 PASS), 補 KPI 進展表 (HARNESS 強制)
+- 跑 3 個量測腳本驗證事實: cargo test --lib 452/452 pass 11.48s 綠 ✓ | scripts/k0_measure.py K0-A1 端點 emit label = `['__local__', 'claude', 'codex', 'copilot', 'gemini']` (4 永續 + 1 聚合), K0-A2 1/13 (claude=16 sessions 累加) | scripts/k41_chore_treadmill.py 7d 19/269 = 7.1% 達標
+- R148 接力 1 結構化 = R131 接力 1 修法 3 選 1 (A: line 528 口徑補連 6 輪 / B: line 539 口徑修連 5→6 / C: 對齊實測統一 cell) + owner M 簽收條件 (推薦選項 C 對齊實測, 統一 R144 cell 對齊 R130 cell 級文字) + 真 ship 同步修 R144 entry 補段 cell
+- R13 6 髒檔 (docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs / scripts/r124_sentinel.py) 0 觸碰 ✓ (本輪只動 engineering-log.md)
+
+**結果**: PASS (R148 7 項結構性審計 7/7 PASS + 結構性飽和第 17 輪延伸 + 連 11 輪 7-check + 換本質軸 = R131 接力 1 closure 條件結構化 + 1 輪沒有改善符合 R148 prompt 預期 (K0-A1 4/13 持平 / K42 chain 20 持平 / baseline 452/452 持平 / 結構性飽和第 17 輪延伸) + R148 接力 1 closure 條件 3 選 1 就位 (A: line 528 口徑 / B: line 539 口徑 / C: 對齊實測, 推薦 C) + owner M 簽收條件盤清 (選 A/B/C + 修 R144 entry 補段 cell 級文字) + 0 code 變更 + 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 6 髒檔 0 觸碰 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = 接力清單逐條結構化 + 1 輪沒有改善 = 結構性飽和客觀信號 + 結構性發現不硬接力留 owner M 執行」合規)

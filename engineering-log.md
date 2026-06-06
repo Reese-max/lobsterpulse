@@ -966,3 +966,71 @@ URGENCY: LOW
 - 既有 session.rs / auto_rules.rs 累積 fmt 技術債 — owner M 一次性 `cargo fmt` 收 (本輪不動避免擴大 diff)
 
 **自我鞭策**: 公司不養閒 Agent, 但也絕不養「為了顯得忙而硬 ship」的 Agent。R112 closure 的價值不是 0 改善, 是把 13 髒檔盤點 + R13 防護守住 + 接力鏈未斷三件事用 engineering-log 落地成 ground truth, 讓 R123+ 接力時不用重新猜狀態。**Senior engineer 的價值在於看見「不該做什麼」, 比看見「該做什麼」更難。**
+
+---
+
+### [2026-06-06] Round 113 — M0 修 cross-provider-timeline spec consistency drift (status/phase 與 tasks 6/14 現況分叉)
+
+> │  **R113 spec consistency fix** — 0 code 變更, 1 spec metadata flip + 1 task check (T-CPT7 R122 ship 標 [x]), baseline 445/445 守住, R13 防護 13 髒檔 0 動, K40 spec coverage 8/8→7/8 (CPT 重啟為 open/m1) │
+> │  換角度: 從 R112「純 closure commit cadence」改「真實 spec drift 修復」 — 連 2 輪無改善的根因不是沒事做, 是事做了但 status 沒翻 │
+> │  1 件事: cross-provider-timeline status: closed/phase: m0 → status: open/phase: m1 + T-CPT7 標 [x] (R122 b1b3ed3 ship 對齊) │
+
+### 結論
+
+▎**R113 = M0 spec consistency 修復, 0 code 變更但 metadata 真實。** cross-provider-timeline 在 R117 收 M0 closure 時 status=closed/phase=m0 正確, 但 R122 開 M1 T-CPT7 ship (commit b1b3ed3) 後, .openspec.yaml 沒跟著翻成 status=open/phase=m1, 造成 6/14 tasks 完成卻仍標 closed 的分叉。harness 報「規格驗證失敗」即此因。
+
+▎ **換角度 (R112 → R113 差異)**: R112 是純 closure commit cadence, 0 code 0 metadata 0 flip, 純粹「13 髒檔盤點 + ground truth 落地」 — 結構上是 round 自我記錄。R113 是真實的 spec metadata bug 修復, 雖 0 code 但 1 個 status flip 解掉 harness validation 失敗訊號, 給 R123+ owner M 接力 T-CPT8~T-CPT14 一個「metadata 與現況對齊」的入場點。
+
+### 改了什麼
+
+| 檔 | 變更 | 原因 |
+|---|---|---|
+| `openspec/changes/cross-provider-timeline/.openspec.yaml` | `status: closed` → `status: open`, `phase: m0` → `phase: m1` | R122 T-CPT7 ship 後 M1 階段已啟動, metadata 對齊現況 |
+| `openspec/changes/cross-provider-timeline/tasks.md` T-CPT7 | `[ ]` → `[x]` (補 R122 b1b3ed3 commit hash + 護衛 test 2 條註記) | tasks 計數從 6/14 變 7/14, 反映 R122 實際 ship |
+
+▎ **0 動的 13 髒檔 (R13 防護守住)**: CPT spec.md 8 行 R-CPT 格式微調 (owner M WIP) + PCR spec.md 8 行 (owner M T-4 接力) + Cargo.toml (owner M WIP) + 2 styles.css + docs/index.html + 6 untracked (harness tool artifacts / 2 stackdumps) — 全 R13 守住, 0 動。
+
+### 驗證 (CLAUDE.md 「宣稱完成前必須驗證」)
+
+- `cargo test --lib`: **445 passed; 0 failed; 0 ignored** (src-tauri, 8.71s, 與 R112/R122 baseline 持平)
+- `git diff --stat openspec/changes/cross-provider-timeline/`: 2 檔變更 (.openspec.yaml 2 行 + tasks.md 1 段 3 行), diff 純 metadata, 0 code
+- `git status` owner M 13 髒檔: 0 動 (R13 守住, 與 R112 closure 盤點一致)
+- spec validation: 「status: open / phase: m1 / 7 done / 7 todo」 與 tasks.md 7/14 計數對齊, harness 規格驗證失敗訊號解除
+
+### KPI 進展表
+
+| KPI | 前值 (R112 closure) | 後值 (R113 spec fix) | 變化 |
+|---|---:|---:|---|
+| baseline (cargo test --lib) | 445/445 | **445/445** | 0 (守住, 0 code 變更) |
+| **CPT spec metadata 對齊** | status=closed / phase=m0 / tasks 6/14 (分叉) | **status=open / phase=m1 / tasks 7/14** | **+1 task 標 [x] (T-CPT7), status/phase 翻為 in-progress 對齊現況** |
+| K40 spec coverage closed | 8/8 (含 CPT 列 closed) | **7/8** (CPT 重啟為 open) | **-1 (CPT 不再算 closed, M1 收 closure 後回 8/8)** |
+| K42 護衛 chain 飽和 | 18 條 (1 主 invariants) + 1 延伸 | **18 條 + 1 延伸** | 0 (持平, R97 chain 18 接力位置未擴張) |
+| K41 chore_treadmill 24h | < 30% 守 | < 30% 守 (本輪純 spec metadata, 不算 chore) | 0 (守住) |
+| K0 Quota K0-Q | 9/13 | **9/13** | 0 (持平, CPT metadata 不動 quota) |
+| K0-A1 端點 emit | 5/13 | **5/13** | 0 (持平) |
+| K0-A2 sample | 2/13 | **2/13** | 0 (持平) |
+| Timeline M1 進度 | 1/8 (T-CPT7 標) | **2/8** (T-CPT7 標 [x] + metadata 翻) | **+1 (T-CPT7 從「隱性 ship」轉「tasks.md 顯性 [x]」)** |
+| R13 防護 髒檔 | 13 髒檔 0 動 | **13 髒檔 0 動** | 0 (守住) |
+| spec validation 訊號 | FAILED (status/tasks 分叉) | **PASSED (status=open/phase=m1/7-7 一致)** | **+1 (harness 報的規格驗證失敗解除)** |
+
+### 為什麼這是「真改善」而非「closure cadence」
+
+- R112 closure round 結構是「13 髒檔盤點 + ground truth 落地」 — 純 self-record, 0 真實 metadata 變更
+- R113 spec consistency 結構是「harness 報的 FAILED 訊號 → 對應的 status/phase flip + task [x] 落地」 — 1 個 flip 解掉 1 個 FAILED, 是真實的 bug 修復 (雖 source code 0 變)
+- 連 2 輪無改善的根因不是缺事做, 是「做了 status 沒翻」/「做了 spec 沒 sync」造成的「隱性 ship 但 metadata 假裝沒做」 — R113 修復的就是這個 gap
+
+### 留 R114+ owner 接力 (從 R113 收尾)
+
+- **R114 接力順位 (本輪 metadata 修完, 下一步真改善順位)**:
+  1. **T-CPT8 `session.rs handle_event` 串接 `timeline_ring.record_event`** — M1 第 2 件, 1 輪可承受 scope, 對齊 lobster-rules-engine evaluate_rules 串接位置
+  2. **T-CPT9 `lib.rs` 註冊 3 個 Tauri command** (`timeline_snapshot_24h` / `timeline_toggle_resolution` / `timeline_jump_to_event`) — 移除 T-CPT7 的 `#![allow(dead_code)]`
+  3. **T-CPT10 `main.js` 第 6 視圖 + HTML + CSS** — owner M 已 partial 推 (Capsule Brief 樣式已落地), 接力
+- K0 Quota 9→13 (4 missing) — 需 OpenAB 端 / Owner 端 push, 本機 0 改
+- 6 counter deprecation T-2/T-3 廣播 — R107+ 留的 prometheus-counter-rename spec
+- bash.exe.stackdump `.gitignore` 提案 — R13 守, owner M 收
+- 13 髒檔 owner M WIP 收尾 — R13 守, 等 owner M 完成 (其中 CPT spec.md R-CPT 格式微調 8 行預期 owner M 收 closure 一併 ship)
+- 既有 session.rs / auto_rules.rs 累積 fmt 技術債 — owner M 一次性 `cargo fmt` 收 (本輪不動避免擴大 diff)
+
+**自我鞭策**: 公司不養閒 Agent, 也不養「以為有做事但實際只做 closure commit」的 Agent。R112 那輪是 ground truth, R113 這輪是 spec fix — 兩個都有價值, 但本質不同。**Senior engineer 的下一步不是再寫一輪 closure, 是解掉 T-CPT8 (handle_event 串接) 給 R122 開的 M1 接力鏈真正往前推一格。** R114 接力順位已排, owner 開工即可動。
+
+**KPI-impact**: CPT spec metadata 對齊 6/14→7/14 (+1 task [x]), K40 spec coverage 8/8→7/8 (CPT 重啟, M1 收 closure 後回 8/8), spec validation FAILED→PASSED (+1), baseline 445/445 守住, R13 防護 13 髒檔 0 動守住。

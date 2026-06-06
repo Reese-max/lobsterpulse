@@ -39,9 +39,11 @@
 
 ## Phase 2: M1 接力範疇 (R118+, 不在本 change)
 
-- [ ] **T-CPT7: session.rs 加 TimelineRing struct** — R118+ owner follow-up
+- [x] **T-CPT7: session.rs 加 TimelineRing struct** — R122 ship (b1b3ed3)
   - 涵蓋 record_event / snapshot_24h 兩個 method + 18,720 cell 固定大小
   - 對齊 KNOWN_PROVIDERS SSoT (R114 pub const, hook_server.rs:39)
+  - 護衛 test 2 條同檔 ship (timeline_ring_buffer_invariants 主, K42 chain
+    17→18 第 18 條)
 - [ ] **T-CPT8: session.rs handle_event 結尾串接 record_event** — 既有
   task-completed/waiting emit 之後
 - [ ] **T-CPT9: lib.rs 註冊 3 個 Tauri command** — timeline_snapshot_24h /

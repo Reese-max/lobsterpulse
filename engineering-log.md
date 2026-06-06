@@ -643,3 +643,52 @@ URGENCY: LOW
 - K0-A2 0→13 (同上, sample 級距)
 - R112 Capsule Brief 配套 JS 接力 (owner M WIP)
 - 6 counter deprecation T-4 切換日 (R116+ 留的 prometheus-counter-rename spec)
+
+### [2026-06-06] Round 111 (exp) — M0 MISSION.md R108/R109/R114 補 R111 column 對齊端點復活 spec drift
+
+**類型**: M0 (spec drift 修, 不動 code, 跟 R108/R109/R114 closure 接力同型)
+**KPI**: K0-A1 emit 0/13 (R108/R109 凍結) → **5/13** (R111 端點復活) + K0-A2 sample 0/13 → **2/13** + K40 規格覆蓋率 6/6 → **7/7** (R115 lobster-rules-engine closure, R116 接力)
+**對齊 spec**: `MISSION.md` (Strategy anchor)
+**為什麼**: R111 端點復活 (R116 接力跑 main app → `/metrics` 200 OK) 是 supervisor 量測 vs MISSION 量化值分叉的根因, 跟 R108 R-series spec closure 接力同型 — 量化值不停在 R81 也不停 R108/R109 凍結, 需 R111 補 column 反映 R116 端點復活真實值。R111 (實驗 round) 接力 R111 (工程 round closure 接力) 觀察的「端點復活」量測結果, 把量化值對齊現實。
+**搜尋**: MISSION.md R108 量測快照 (補: 避免 R81 前值凍結誤導) 的 chain 模式 + k0_measure.py 跑出 K0-A1 5/13 (claude/codex/copilot/gemini/cicx 5 label 端點 emit) + K0-A2 2/13 (claude=11 + cicx=1 真有 sessions) 真實數字。
+**做了什麼** (3 patch 全在 MISSION.md, 1 commit):
+1. **MISSION.md L57-59 R114 補註解段** 補 R111 補 1 段: 端點復活敘事 + K0-A1/A2 數字 + 剩 11 個 provider 需事件流過 (非本機 scope) + K0 Quota K0-Q 9/13 持平 + K40 6/6→7/7 (R116 R115 closure)
+2. **MISSION.md L61-69 量化表** 加 R111 補 (端點復活) column + 每 row 補 R111 補 cell: K0-A1 0/13→5/13, K0-A2 0/13→2/13, K40 6/6→7/7, K42 17 條 持平
+3. **MISSION.md L71-77 結論段** 改標題 `R108+R109+R114 量化結論` → `R108+R109+R114+R111 量化結論` + L72-77 結論段加 K0-A1 5/13 + K0-A2 2/13 端點復活敘事 + 下個 M1 候選補 R112 Capsule Brief 樣式已落地 JS 配套等 owner M 收 R117+
+4. **engineering-log.md** 本 entry 追加 (R13 守住 owner M 11 髒檔: docs/index.html/docs/styles.css/src/styles.css/src-tauri/Cargo.toml 4 modified + 7 untracked tooling/crash 一個未動)
+
+**驗證**:
+- `cargo test --lib` 連 1 次: **443 passed; 0 failed; 0 flake 全綠** (8.87s) — MISSION.md 不動 code, baseline 持平 R116
+- `python scripts/k0_measure.py` 跑: K0-A1 **5/13** (38.5%, 5 label 端點實際 emit) + K0-A2 **2/13** (15.4%, claude=11 + cicx=1) + K0-B fresh 4/13 + K0-Q 9/13 (4 fresh + 5 stale) — 對齊 MISSION 改後值
+- `git status --porcelain` 確認: MISSION.md 改 26/15 + engineering-log.md append, 其他 4 modified (docs/index.html, docs/styles.css, src/styles.css, src-tauri/Cargo.toml) + 7 untracked 一個未動 (R13 守 owner M 5 個真正 WIP + 5 個 tooling state + 2 個 bash crash dump)
+- K42 chain 17→17 不擴張 (M0 spec closure, 護衛 chain 沒動)
+- K41 chore_treadmill 24h: 0% 守 (本輪 1 fix, 不算 chore)
+
+**KPI 進展表**:
+| KPI | 前值 (R116 量測) | 後值 (R111 MISSION spec 對齊) | 變化 |
+|---|---:|---:|---|
+| MISSION K0-A1 量化值 (spec) | 0/13 (R108/R109 凍結) | **5/13** (R111 補 column 對齊端點復活) | +5 (spec 對齊現實) |
+| MISSION K0-A2 量化值 (spec) | 0/13 (R108/R109 凍結) | **2/13** (R111 補 column 對齊 claude=11 + cicx=1) | +2 (spec 對齊現實) |
+| MISSION K40 量化值 (spec) | 6/6 (R111 closure 接力時) | **7/7** (R116 R115 closure 接力補) | +1 (spec 對齊現實) |
+| MISSION K42 量化值 (spec) | 17 條 (R114 守住) | 17 條 持平 (R115 護衛 test 走既有 mod 17→17) | 0 (守住, spec 一致) |
+| baseline (cargo test --lib) | 443/443 (R116) | **443/443** (M0 不動 code) | 0 (持平) |
+| R13 防護 | 守住 owner M 11 髒檔 (R116) | 守住 owner M 11 髒檔 (R111 接力) | 0 (守住) |
+
+**結果**: PASS (M0 MISSION.md R111 補 column 對齊端點復活 + K0-A1 5/13 + K0-A2 2/13 + K40 7/7 spec drift 修, baseline 443/443 守住, R13 守住 owner M 11 髒檔一個未動, K42 chain 17→17 持平, K41 0% 守)
+
+**KPI-impact: K-Foundation 量化值 +3 (K0-A1 spec 0→5, K0-A2 spec 0→2, K40 spec 6→7, MISSION spec 對齊現實 R116 端點復活真實值)**
+
+**觀察 (不推進 KPI, 留 R112+ 接力)**:
+- K0-A1 5/13 emit 但 0 sessions 的 3 個 (codex/copilot/gemini): 端點 emit 邏輯有, 但 session 累加要 hook event 流過。本機 CLI 需實際跑才會累加, 現 baseline 守住沒實際跑 hook event 進 → codex=0, copilot=0, gemini=0 sessions
+- 6 counter deprecation T-4 切換日 (R107+ 留): spec 已 closure 但實際 5-week broadcast timeline 需 R112+ 接力
+- 4 個 untracked tooling state (.ad-map/ .arch-fitness.json .engineer-loop.failures.jsonl .harness-memory.db .supervisor-report.json) 是 engine-loop 工具狀態, 不該 commit (R13 守)
+- 2 個 bash.exe.stackdump 是 MSYS2 crash dump, 不該 commit, 可考慮加 .gitignore (留 owner M 決策)
+
+**留 R112+ owner 接力**:
+- K0 Quota 9→13 (4 missing: irisx_bot/grokx/lpbot/mimo, 需 OpenAB 端 snapshot 寫入鏈路, 非本機 scope)
+- K0-A1 5→13 (需 11 個其他 provider 事件流過, OpenAB 端跑起來)
+- K0-A2 2→13 (同上, sample 級距)
+- K42 chain 18 提案: owner M R110 護欄 cross-module test (lib.rs R110 OPENAB_BOT_IDS ⊆ hook_server::KNOWN_PROVIDERS) 已在 dirty, 走既有 mod 也 chain 17→17, 收 R117 接力
+- R112 Capsule Brief 樣式已落地 (src/styles.css), JS 配套等 owner M 收 R117
+- MISSION R81 baseline K42 chain 17 條 飽和契約 vs R113.1/R114 dual-emit value guard 護衛走既有 mod 17→17 不擴張: spec doc 需要 R117 接力 (R110+ 留的架構 doc 待 owner)
+- bash.exe.stackdump 2 個: 加 .gitignore 提案 (現 R13 守, 但 repo clone 別人會生, owner M 收)

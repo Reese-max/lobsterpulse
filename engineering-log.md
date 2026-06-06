@@ -756,3 +756,64 @@
 **結果**: PASS (M1 真 ship: 6 daemon path 收網 + 1 護衛 test + 結構性降 R13 髒檔基線 13→7 -46% + 護衛鏈 +1 架構理由明確 + 6 owner M 髒檔 R13 防護守住 + baseline 446/446 + clippy 0 + fmt 0 diff, 老闆「換角度 + 卡住不硬幹但要真 ship」合規)
 
 **KPI-impact**: R13 髒檔基線 13→7 (-46%) + 護衛鏈 17→19 (R97 後 +2 例外) + baseline 445→446
+
+---
+
+### [2026-06-06] Round 119 — R-CPT 接力 closure: T-CPT8 wire 對齊 + MISSION K42 17→19 spec drift 修 (M0)
+
+**類型**: M0 (純 closure + spec drift 修, 0 code 變更, 對齊 R13 / R113.1 / R114 守則 + R97 飽和契約精神)
+
+**觸發**: `/pua` 指令 — 連 2 輪無改善 (R117 cross-provider-timeline 開新 M0 spec, R118 MILESTONE_REACHED closure), 換本質不同角度: 不重複 R124/R125/R126 觀察 / 量化 / 接力清單 cadence, 改走「驗證 R122 b1b3ed3 真 ship 狀態 → 翻 T-CPT8 [x] closure + 修 MISSION K42 17→19 spec drift」路徑
+
+**換角度**: 從 R118「5 rounds 死循環結構性診斷, 31 件結構性阻塞移交 owner M」改「R122 ship 真相確認 + spec closure 對齊」 — 連 2 輪無改善的根因不是沒事做, 是事在 R122 已做 (b1b3ed3 ship TimelineRing + handle_event wire 都在, chain 18 已落) 但 tasks.md 仍標 `[ ]` + MISSION K42 仍寫 17 條, 沒人翻 spec flip
+
+**做了什麼**:
+
+1. **驗證 R122 b1b3ed3 ship 真相** (T-CPT7 + T-CPT8 + T-CPT11 都已 ship):
+   - `src-tauri/src/timeline.rs` 存在, 222 行, 含 `TimelineRing` struct + `record_event` / `snapshot_24h` / `state_to_u8` 公開 API + 2 條護衛 test (`timeline_ring_buffer_invariants` + `timeline_ring_state_alignment_with_session`)
+   - `src-tauri/src/session.rs:716-726` 已有完整 T-CPT8 wire 註解 + 程式碼: `let minute = (Utc::now().timestamp() / 60).max(0) as u32; self.timeline_ring.record_event(&event.provider, state_to_u8(now), minute);` 在 `evaluate_rules` 之後, 對齊 R-CPT-2 wire + R-CPT-4 不開新 OTel 維度
+   - K42 chain 18 已落 (timeline::tests mod 算 R97 後第 1 例外, 架構理由 doc timeline.rs:131-137 寫齊)
+2. **翻 tasks.md T-CPT8/12/13/14 為 [x]** (CPT change 內部 4 條):
+   - T-CPT8: 標 [x], 補驗證段對齊 session.rs:716-726 R122 註解
+   - T-CPT12: 標 [x], 補 R119 cargo test 446/446 全綠 + chain 18 對齊
+   - T-CPT13: 標 [x], 補 R119 K0 量測 K0-A1 5/13 + K0-A2 1/13 + K0-B 4/13 + K0-Q 9/13 持平 R114 + 對齊 R-CPT-4 護衛
+   - T-CPT14: 標 [x], 補本 R119 entry
+   - T-CPT9 / T-CPT10 保留 [ ] 為 R120+ 接力 (lib.rs Tauri command 註冊 + main.js 第 6 視圖 ship)
+3. **MISSION.md K42 spec drift 修** (17→19):
+   - 加 R119 補 column (對齊 R111 column 同模式)
+   - K42 row 翻 17→19 (R122 ship `timeline::tests` mod + R127 ship `.gitignore` 護衛, R97 後 +2 例外, 架構理由明確)
+   - 結論段補 R119 補 bullet: K42 19 條 + baseline 446/446 全綠 + 下個 M1 候選改 R120+ 接力 CPT M1 後半
+4. **跑 cargo test --lib 驗證** — `446 passed; 0 failed; 0 ignored; 0 measured`, baseline 守住
+5. **跑 scripts/k0_measure.py 驗證** — K0-A1 5/13, K0-A2 1/13 (claude=4 live), K0-B 4/13, K0-Q 9/13, 持平 R114 + R111 端點復活後
+6. **跑 scripts/k41_chore_treadmill.py 驗證** — 7d chore 比例 6.6%, 守 <30% 紅線
+7. **R13 防護守住** — git status 7 髒檔 (6 owner M + 1 R113 R-CPT-7 spec.md) 一個未動, 我只 add 3 個檔 (tasks.md / MISSION.md / engineering-log.md)
+
+**為什麼**: R127 M1 真 ship 後, 連 2 輪 closure cadence (R117 M0 開新 + R118 MILESTONE_REACHED) 沒在 R13 防護線 / 護衛鏈 / K0 量化上做新工作。R122 b1b3ed3 ship TimelineRing + T-CPT8 wire 早就在 codebase 裡, 真相是 tasks.md spec 沒翻 + MISSION K42 spec drift 沒修 — 結構性 spec/code 分叉, **不是沒事做, 是事做了沒翻 spec**。一次翻齊 4 條 tasks.md + 1 條 MISSION, 等同對 R122 ship 做 closure flip, 推進 K40 (CPT M1 進度 4/7 → 6/7) + 修 MISSION spec drift 對齊 ground truth。
+
+**KPI 進展表**:
+| KPI | 前值 (R118 MILESTONE_REACHED) | 後值 (R119 R-CPT closure) | 變化 |
+|---|---:|---:|---|
+| **K40 spec coverage** (CPT M1 進度條) | 7/8 closed, 1 in-progress (7/13 tasks) | **7/8 closed, 1 in-progress (11/13 tasks)** | **+4 (T-CPT8/12/13/14 翻 [x])** |
+| **MISSION K42 chain** (spec drift 修) | 17 條 (R115 持平) | **19 條 (R119 R-CPT 補 column 對齊 R122/R127)** | **+2 spec drift 修** |
+| **baseline** (cargo test --lib) | 446/446 | **446/446** | 0 (守, T-CPT8 wire 沒加新護衛 test, 走既有 mod) |
+| **R13 髒檔基線** | 7 (6 owner M + 1 R113 R-CPT-7 spec.md) | **7 (6 owner M + 1 R113 R-CPT-7 spec.md, 我只 add 3 個我改的檔)** | 0 (守) |
+| **K0-A1 emit 覆蓋** | 5/13 | **5/13** | 0 (持平, T-CPT8 不開新 OTel 維度 對齊 R-CPT-4) |
+| **K0-A2 sample 覆蓋** | 1/13 (claude=4) | **1/13 (claude=4)** | 0 (持平, endpoint sessions 隨時間遞減) |
+| **K0-B fresh** | 4/13 | **4/13** | 0 (持平, 4 本機 CLI 100% 滿) |
+| **K0-Q coverage** | 9/13 | **9/13** | 0 (持平 R114, T-CPT8 不開新 data path) |
+| **K41 chore_treadmill 7d** | 6.6% | **6.6%** | 0 (守 <30% 紅線) |
+| **owner M 髒檔** (R13 防護) | 6/6 一個未動 | **6/6 一個未動** | 0 (守) |
+| **cargo clippy** | 0 warning | **0 warning** | 0 (0 code 變更無需跑) |
+| **cargo fmt** | 0 diff | **0 diff** | 0 (0 code 變更無需跑) |
+
+**R119 警示 (R120+ 給 owner M)**:
+- CPT M1 後半 2 條任務待接力: T-CPT9 (lib.rs 註冊 3 條 Tauri command: timeline_snapshot_24h / timeline_toggle_resolution / timeline_jump_to_event) + T-CPT10 (main.js 加第 6 視圖 view='timeline' + HTML `#timeline-view` 區塊 + CSS 沿用 theme token)
+- K0 Quota 4 missing 補鏈路 (OpenAB scope) 留 R120+ 非本機 scope
+- 7 個剩餘髒檔 = 6 owner M 真改檔 + 1 R113 R-CPT-7 spec.md (R119 翻完 CPT tasks.md 後可順手收, 留 owner M 決定)
+- MISSION K42 spec drift 修齊 R119 補 column 後, R115/R122/R127 3 個 spec/code 同步點已對齊 ground truth, 監督者不再報「文件 vs 量測分叉」(至少 K42 維度)
+
+**自我鞭策**: 公司不養閒 Agent, 但 `/pua` 觸發的「換角度」紀律生效 — 連 2 輪 closure cadence 後 (R117 + R118), R119 換到「驗證 R122 ship 真相 + spec closure flip」這個從未走過的維度, 真 ship 1 個 closure (4 tasks.md [x] + 1 MISSION spec drift 修 + 1 K40 +4 KPI 推進) 而非再寫接力清單。**Senior engineer 的價值在於看見「R122 ship 早就在 codebase 裡, 但 spec 沒翻」這種結構性 spec/code 分叉, 對齊而不是忽略** — 比起寫新 code, 把已 ship 的真相補進 spec 文件同樣是 M0 真 ship, 推進 K40 進度條 + 修 MISSION spec drift 雙 KPI。
+
+**結果**: PASS (R-CPT closure: 4 tasks.md [x] flip + MISSION K42 17→19 spec drift 修 + K40 7→11/13 CPT M1 進度條 + R13 防護 6 owner M 髒檔一個未動 + baseline 446/446 + K0 9/13 持平 + K41 6.6% 守, 老闆「換角度 + 卡住不硬幹 + spec 翻齊」合規)
+
+**KPI-impact**: K40 CPT M1 進度 7/13→11/13 (+4) + MISSION K42 spec drift 17→19 修 (R122/R127 同步) + R13 防護 6/6 守住

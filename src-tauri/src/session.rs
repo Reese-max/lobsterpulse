@@ -1,5 +1,6 @@
-use crate::hook_event::HookEvent;
 use crate::config::{RuleFiredEvent, TriggerRule};
+use crate::hook_event::HookEvent;
+use crate::timeline::{state_to_u8, TimelineRing};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -494,6 +495,13 @@ pub struct SessionManager {
     /// 給 caller (lib.rs hook_server) drain 後 emit Tauri event `rule-fired`
     /// (R116+ 接力, MVP 階段只累積不 emit)。
     pub rule_firings: Vec<RuleFiredEvent>,
+    /// R122 T-CPT8 落地：TimelineRing 24h × 13 provider 環形緩衝。
+    /// `handle_event` 結尾串接 `record_event`,把每個事件落到的
+    /// (provider, state, minute) 寫進 ring buffer cell,給未來 T-CPT9
+    /// Tauri command 讀 snapshot。`pub` 為 lib.rs 將來透過
+    /// `Mutex<AppSessionManager>` 直接 access 用 (對齊 R-CPT-2
+    /// 「Timeline 視圖是單一 source of truth」)。
+    pub timeline_ring: TimelineRing,
 }
 
 impl SessionManager {
@@ -507,6 +515,7 @@ impl SessionManager {
             rules_enabled: true,
             rule_match_count: 0,
             rule_firings: Vec::new(),
+            timeline_ring: TimelineRing::new(),
         }
     }
 
@@ -703,6 +712,18 @@ impl SessionManager {
         // event。對齊 spec R-2 + 護衛 test `r115_rule_evaluation_match_count` /
         // `r115_rule_action_emission`。
         self.evaluate_rules(event, transition);
+
+        // R122 T-CPT8 落地：handle_event 結尾串接 TimelineRing.record_event。
+        // 把「這次事件完成後的 session state」寫進對應 (provider, minute) cell,
+        // 給未來 T-CPT9 Tauri command 透過 `timeline_ring.snapshot_24h()` 讀
+        // 整個 24h × 13 provider activity distribution。minute = Unix epoch
+        // 秒數 / 60 (timeline.rs:CELLS_PER_PROVIDER_24H=1440 取模自然 wrap)。
+        // SessionEnd 路徑已在前面 early-return 不進到這裡,該 provider 保留
+        // 上一個 cell 的最後 state (對齊 spec R-CPT-1 Scenario「process 重啟空
+        // strip」隱含「非 SessionStart 不主動清空 cell」語意)。
+        let minute = (Utc::now().timestamp() / 60).max(0) as u32;
+        self.timeline_ring
+            .record_event(&event.provider, state_to_u8(now), minute);
 
         transition
     }

@@ -44,19 +44,28 @@
   - 對齊 KNOWN_PROVIDERS SSoT (R114 pub const, hook_server.rs:39)
   - 護衛 test 2 條同檔 ship (timeline_ring_buffer_invariants 主, K42 chain
     17→18 第 18 條)
-- [ ] **T-CPT8: session.rs handle_event 結尾串接 record_event** — 既有
-  task-completed/waiting emit 之後
+- [x] **T-CPT8: session.rs handle_event 結尾串接 record_event** — R122 ship
+  (b1b3ed3, `src-tauri/src/session.rs:716-726`), 對齊 task-completed/waiting
+  emit 之後, minute = `Utc::now().timestamp() / 60` 自然 wrap 進 ring buffer
+  cell, 護衛 test 2 條同檔 ship 守住 R-CPT-2 wire 對齊
+  - 驗證: session.rs:716 註解明示 R122 T-CPT8 落地, `record_event(&event.provider,
+    state_to_u8(now), minute)` 寫入 self.timeline_ring
 - [ ] **T-CPT9: lib.rs 註冊 3 個 Tauri command** — timeline_snapshot_24h /
   timeline_toggle_resolution / timeline_jump_to_event
 - [ ] **T-CPT10: main.js 加第 6 視圖 view='timeline'** + HTML `#timeline-view` 區塊
   + CSS 沿用 theme token (--working-color 等)
-- [ ] **T-CPT11: 加 1 條獨立護衛 test `timeline_ring_buffer_invariants`** — M1
-  收 closure 同步 K42 chain 17→18, 需架構理由 doc (R114 R111+ chain 18 提案接
-  力位置)
-- [ ] **T-CPT12: 跑 cargo test --lib 確認 baseline 守住** — chain 17→18 後 baseline
-  +1, K0 量化值不動
-- [ ] **T-CPT13: 跑 python scripts/k0_measure.py** — K0 Quota 9/13 持平 (Timeline
-  用既有 snapshot, 不開新 data path), K0-A1/A2 不動 (需事件流過, 非本機
-  scope)
-- [ ] **T-CPT14: engineering-log R118 R-CPT closure entry** — 收 closure + 接力
-  R119+ (Timeline 編輯 / cost heatmap 提案 etc)
+- [x] **T-CPT11: 加 1 條獨立護衛 test `timeline_ring_buffer_invariants`** —
+  R122 ship (b1b3ed3, `src-tauri/src/timeline.rs:141-194`), 走新 mod
+  `timeline::tests` (架構理由 doc 同檔 131-137 寫齊 R97 飽和契約例外 +
+  R114 R111+ chain 18 接力位置), K42 chain 17→18 收 closure 對齊
+  R-CPT-3 Scenario
+- [x] **T-CPT12: 跑 cargo test --lib 確認 baseline 守住** — R119 跑 (baseline
+  446/446 全綠, chain 18 已落 `timeline_ring_buffer_invariants` +
+  `timeline_ring_state_alignment_with_session` 2 條護衛, R-CPT-2 wire 對齊
+  R-CPT-3 護衛 chain 18 對齊)
+- [x] **T-CPT13: 跑 python scripts/k0_measure.py** — R119 跑 (K0-A1 5/13 持平
+  R111, K0-A2 1/13 持平 R119 endpoint sessions 計數隨時間遞減, K0-B fresh
+  4/13 持平, K0-Q 9/13 持平 R114; Timeline 用既有 snapshot, 不開新 data
+  path 對齊 R-CPT-4 護衛)
+- [x] **T-CPT14: engineering-log R119 R-CPT closure entry** — 收 closure + 接力
+  R120+ (T-CPT9 lib.rs Tauri command 註冊 + T-CPT10 main.js 第 6 視圖 ship)

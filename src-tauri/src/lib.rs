@@ -8,6 +8,7 @@ mod openab_bridge;
 mod quota;
 mod quota_history;
 mod session;
+mod timeline;
 
 use chrono::{DateTime, Utc};
 use config::{detect_providers, load_config, save_config, AppConfig};

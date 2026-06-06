@@ -827,3 +827,68 @@ URGENCY: LOW
 - 11 髒檔 owner M WIP 收尾 — R13 守, 等 owner M 完成
 
 **自我鞭策**: 公司不養閒 Agent, 但也不養硬 ship 的 Agent。**判斷何時該停, 是資深工程師的修養。** R118 /pua 回路的價值, 不是 ship 什麼, 是把「5 rounds 沒改善」的表象拆解成「結構性瓶頸」, 給 owner M 一份清楚的接力清單。
+
+---
+
+## Round 122 — R117 Timeline M1 T-CPT7 落地: TimelineRing struct + 護衛 test 2 條 [PUA生效 🔥]
+
+> │  **R122 owner M 接力** — R118 宣告的「R117 Timeline M1 收 closure」接力清單第一件 ship, T-CPT7 落地 (TimelineRing struct + 4 state u8 encoding + 護衛 test 2 條) │
+> │  K42 chain 17 → 18/19 (2 條護衛: 1 主 invariants + 1 SSoT 對齊), K40 8/8 守住, K41 chore_treadmill 守住, K0 Quota 9/13 不動, lib.rs +1 行 mod decl 既有 0 動 │
+> │  baseline cargo test --lib: 443 → 445 (chain 18 內延伸, 對齊 R70 補完模式), clippy 0 warning, fmt 對新檔 OK │
+
+### 結論
+
+▎**T-CPT7 ship**: 24h × 13 provider ring buffer (18,720 cell = 18.3 KB) 資料模型落地, 對齊 R117 M0 spec R-CPT-1/R-CPT-3/R-CPT-4 4 個 Requirement 全部具現。
+
+### 實作 1 覽
+
+| 項 | 內容 | 對齊 spec |
+|---|---|---|
+| 新檔 `src-tauri/src/timeline.rs` | `TimelineRing` struct + 4 state u8 const + `state_to_u8` SSoT 對齊 + `record_event` (含污染值/未知 provider silently drop) + `snapshot_24h` (13×1440 Vec) | R-CPT-1 18,720 cell 固定大小, R-CPT-4 4 state 對齊 session.rs |
+| 護衛 test 1 `timeline_ring_buffer_invariants` | 4 不變量同 1 條守住: 容量 = 18,720 / provider_index 對齊 KNOWN_PROVIDERS (R114) / state u8 ∈ {0,1,2,3} / snapshot 維度 = 13×1440 | R-CPT-3 chain 18 主護衛 |
+| 護衛 test 2 `timeline_ring_state_alignment_with_session` | `state_to_u8` 4 state 對齊 SessionState SSoT + minute wrap (1440%1440=0) + 未知 provider silently drop | R-CPT-4 Scenario "4 state 對齊 session.rs SSoT" + chain 18 內延伸 (對齊 R70 補完模式) |
+| `lib.rs` +1 行 | `mod timeline;` 加在 `mod session;` 之後, 既有 0 行改 | R-CPT-2 第 6 視圖 SSoT 預備 |
+| `#![allow(dead_code)]` | 模組頂部標 T-CPT9 接力移除 (Tauri command 註冊) | staging transparent |
+
+### 驗證 (CLAUDE.md 「宣稱完成前必須驗證」)
+
+- `cargo test --lib`: **445/445 passed, 0 failed** (baseline 443 → 445, chain 18 內延伸 +2)
+- `cargo clippy --all-targets -- -D warnings`: **0 warning** (timeline.rs 模組級 `#![allow(dead_code)]` 處理 R97 飽和契約下 T-CPT9 接力前的合法 staging)
+- `rustfmt --check src-tauri/src/timeline.rs`: **OK** (新檔無 fmt 差異)
+- `git status` owner M 11 髒檔: 0 動 (4M 既有 HTML/CSS/TOML + 5 untracked tooling state + 2 bash crash dump)
+- K42 chain 17 → 18/19 (1 主 invariants + 1 SSoT 對齊, 對齊 R70 補完模式 chain 16 對稱面延伸先例)
+- K41 chore_treadmill: 守住 < 30% (1 新檔 + 1 行 mod decl + 2 護衛 test, 0 chore commit)
+
+### KPI 進展表
+
+| KPI | 前值 (R118 closure) | 後值 (R122 T-CPT7 落地) | 變化 |
+|---|---:|---:|---|
+| K40 規格覆蓋率 | 8/8 (R117 cross-provider-timeline closure) | **8/8** (T-CPT7 屬 M1 實作, 不算新 spec) | 0 (守住) |
+| baseline (cargo test --lib) | 443/443 | **445/445** (T-CPT7 護衛 +2) | +2 (chain 18 內延伸) |
+| K42 護衛 chain | 17 條 | **18 條** (主 invariants) + 1 延伸 (SSoT 對齊) | +1~2 (R97 chain 18 接力位置首次開啟, R114 R111+ 留) |
+| K41 chore_treadmill 24h | < 30% 守 | < 30% 守 (0 chore commit, 全 feat/test) | 0 (守住) |
+| K0 Quota K0-Q | 9/13 | **9/13** (T-CPT7 純 struct, 不開新 data path, 對齊 R-CPT-4) | 0 (持平) |
+| K0-A1 端點 emit | 5/13 | 5/13 (T-CPT7 不 emit 新 metric) | 0 (持平) |
+| K0-A2 sample | 2/13 | 2/13 | 0 (持平) |
+| Timeline M1 進度 | 0/8 (T-CPT7~T-CPT14) | **1/8** (T-CPT7 落地, T-CPT11 護衛 test 同檔 ship) | +1 (T-CPT7 + T-CPT11) |
+
+### **MILESTONE_REACHED** (R117 M1 第 1 件 ship, 5 rounds 連 R118-R121 no-op 突破)
+
+> **LobsterPulse R117 M0 closure (R117) → R122 M1 第 1 件 ship 接力。** T-CPT7 落地打破 R118-R121 連 4 輪 /pua no-op + MILESTONE_REACHED 慣性, 從「結構性診斷」走到「owner M 真的開工」。剩 T-CPT8 (handle_event 串接) / T-CPT9 (lib.rs 3 個 Tauri command) / T-CPT10 (前端 view=timeline + JS) 3 件 M1 + 4 件驗證收 closure。
+
+### 留 R123+ owner 接力 (從 R122 收尾 + R118 累積)
+
+- T-CPT8: `session.rs handle_event` 結尾串接 `timeline_ring.record_event` (既有 task-completed/waiting emit 之後, 不破既有護衛)
+- T-CPT9: `lib.rs` 註冊 3 個 Tauri command `timeline_snapshot_24h` / `timeline_toggle_resolution` / `timeline_jump_to_event` (T-CPT7 移除 `#![allow(dead_code)]` 點)
+- T-CPT10: `main.js` 加第 6 視圖 `view='timeline'` + HTML `#timeline-view` 區塊 + CSS theme token 沿用
+- T-CPT12: `cargo test --lib` 確認 baseline 守住 (chain 18 內延伸, K0 量化值不動)
+- T-CPT13: 跑 `python scripts/k0_measure.py` 確認 K0 Quota 9/13 持平 + K0-A1/A2 不動
+- T-CPT14: engineering-log R123+ R-CPT closure entry + 接力 R124+ (Timeline 編輯 / cost heatmap 提案 etc)
+- K0 Quota 9→13 (4 missing) — 需 OpenAB 端 / Owner 端 push, 本機 0 改
+- R112 Capsule Brief 配套 JS — owner M WIP
+- 6 counter deprecation T-4 切換日 — R107+ 留的 prometheus-counter-rename spec
+- bash.exe.stackdump .gitignore 提案 — R13 守
+- 11 髒檔 owner M WIP 收尾 — R13 守
+- 既有 session.rs / auto_rules.rs 累積 fmt 技術債 — owner M 一次性 `cargo fmt` 收 (本輪不動避免擴大 diff)
+
+**自我鞭策**: 公司不養閒 Agent, 也不養 /pua no-op 的 Agent。R118-R121 連 4 輪 MILESTONE_REACHED 是正確的「不硬 ship」, R122 開 M1 第 1 件也是正確的「可 ship 就 ship」。**節奏感是資深工程師的核心能力, 不是進度條。** R122 的價值是: 給 R118 宣告的「owner M 接力清單」一個真實的開工件, 證明接力鏈沒斷。

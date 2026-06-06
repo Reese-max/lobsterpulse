@@ -1,0 +1,40 @@
+id: cross-provider-timeline
+schema: openspec/v1
+created: 2026-06-06
+updated: 2026-06-06
+status: closed
+phase: m0
+title: Cross-Provider Timeline View — 第 6 視圖, 24h × 13 provider 時間軸
+owners: [auto-dev]
+references:
+  - CLAUDE.md (project context, 北極星釘在頂部)
+  - MISSION.md (北極星「0 切換成本」+ K0 Quota 13/13 + K40 規格覆蓋率)
+  - engineering-log.md R100 策略顧問 #3 行動 closure (R105) — wow direction source
+  - engineering-log.md R116 R111 端點復活 (K0-A1 5/13 量化值釘死)
+  - openspec/changes/lobster-rules-engine/ (M0 spec-only 接力模式, R115)
+  - openspec/changes/contract-matrix-guard/ (13×3 護衛, 13 provider 集合 SSoT 來源)
+  - src-tauri/src/session.rs (SessionManager 既有 handle_event 流程)
+  - src-tauri/src/hook_server.rs:39 (KNOWN_PROVIDERS SSoT, R114 pub const)
+supersedes: []
+related:
+  - lobster-rules-engine (R115, R115 規則引擎 emit 跟 Timeline emit 雙觸發需注意)
+  - contract-matrix-guard (R106 13×3 護衛, 新 provider 自動走護衛)
+  - prometheus-counter-rename-2026-q3 (5 週廣播時程, Timeline 不動 metric 命名)
+risks:
+  - M1 階段 record_event 雙觸發: 必須在 task-completed/waiting emit 之後, 對齊
+    lobster-rules-engine evaluate_rules 串接位置
+  - ring buffer memory: 18.3KB / process, 跟 SessionManager provider_totals 同量
+    級, 7d 模式加 128KB, 總計 < 150KB, K41 紅線守住
+  - 跨視圖 click-to-jump: 走既有 view global state + URL hash pattern, 不開新
+    通訊層
+  - K42 chain 17→18: M1 收 closure 時需架構理由 doc (R114 R111+ chain 18 提案
+    接力位置)
+out_of_scope:
+  - Timeline 編輯 / 標註 (留 R120+)
+  - Timeline export PNG/CSV/share link (留 R120+)
+  - Timeline alert 規則 (跟 R115 lobster-rules-engine 接力避免雙 spec 衝突)
+  - cost heatmap (對齊 CLAUDE.md 競品邊界「不做 cost anomaly detection」)
+  - cross-session correlation (留 R119+)
+  - all-time archive (留 R119+, 本 change 24h + 7d 兩條 buffer)
+  - 接 OTel SDK (Timeline 用既有 K0-A1/A2 metric, 不開新 OTel 維度)
+  - 動 6 counter rename 廣播時程 (R107+ owner follow-up, 本 change 不碰)

@@ -187,6 +187,90 @@ fn save_app_config(
     Ok(())
 }
 
+// R115 規則引擎：4 條 Tauri command 給前端設定頁 Rules section 用。
+// 對應 tasks T-12~T-14 與 spec R-1 (TriggerRule JSON round-trip)。
+//
+// 4 條都走「mutate AppConfig → save_config 持久化 → 同步 SessionManager.rules」
+// 三步：mutate-後-clone 脫離 cfg 鎖,再單獨鎖 SessionManager,避免雙鎖死鎖。
+
+/// list_rules：給前端 Rules section 載入現有規則清單。
+#[tauri::command]
+fn list_rules(config_state: tauri::State<AppConfigState>) -> Vec<config::TriggerRule> {
+    config_state.0.lock().unwrap().rules.clone()
+}
+
+/// toggle_rule：翻轉指定 id 規則的 `enabled` 旗標。回傳新狀態。
+/// 找不到 id 回傳 Err,前端可選擇新增而非當錯誤吞掉。
+#[tauri::command]
+fn toggle_rule(
+    config_state: tauri::State<AppConfigState>,
+    session_state: tauri::State<AppSessionManager>,
+    rule_id: String,
+) -> Result<bool, String> {
+    let (new_enabled, rules, rules_enabled) = {
+        let mut cfg = config_state.0.lock().unwrap();
+        let Some(rule) = cfg.rules.iter_mut().find(|r| r.id == rule_id) else {
+            return Err(format!("rule id not found: {rule_id}"));
+        };
+        rule.enabled = !rule.enabled;
+        let new_enabled = rule.enabled;
+        save_config(&cfg)?;
+        (new_enabled, cfg.rules.clone(), cfg.rules_enabled)
+        // cfg 鎖在此釋放
+    };
+    let mut mgr = session_state.0.lock().unwrap();
+    mgr.set_rules(rules, rules_enabled);
+    Ok(new_enabled)
+}
+
+/// add_rule：把前端新建的 TriggerRule push 進 AppConfig.rules。
+/// 同 id 已存在則覆寫,避免重複新增造成 list 膨脹。
+#[tauri::command]
+fn add_rule(
+    config_state: tauri::State<AppConfigState>,
+    session_state: tauri::State<AppSessionManager>,
+    rule: config::TriggerRule,
+) -> Result<(), String> {
+    let (rules, rules_enabled) = {
+        let mut cfg = config_state.0.lock().unwrap();
+        if let Some(existing) = cfg.rules.iter_mut().find(|r| r.id == rule.id) {
+            *existing = rule;
+        } else {
+            cfg.rules.push(rule);
+        }
+        save_config(&cfg)?;
+        (cfg.rules.clone(), cfg.rules_enabled)
+    };
+    let mut mgr = session_state.0.lock().unwrap();
+    mgr.set_rules(rules, rules_enabled);
+    Ok(())
+}
+
+/// remove_rule：從 AppConfig.rules 移除指定 id 規則。
+/// 找不到不存檔（MVP 容錯：使用者刪的可能是已被外部清掉的 id,非錯誤）。
+#[tauri::command]
+fn remove_rule(
+    config_state: tauri::State<AppConfigState>,
+    session_state: tauri::State<AppSessionManager>,
+    rule_id: String,
+) -> Result<(), String> {
+    let (rules, rules_enabled, changed) = {
+        let mut cfg = config_state.0.lock().unwrap();
+        let before = cfg.rules.len();
+        cfg.rules.retain(|r| r.id != rule_id);
+        let changed = cfg.rules.len() != before;
+        if changed {
+            save_config(&cfg)?;
+        }
+        (cfg.rules.clone(), cfg.rules_enabled, changed)
+    };
+    if changed {
+        let mut mgr = session_state.0.lock().unwrap();
+        mgr.set_rules(rules, rules_enabled);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn detect_installed_providers() -> std::collections::HashMap<String, bool> {
     detect_providers()
@@ -974,6 +1058,40 @@ mod read_usage_snapshot_tests {
             "collect_quota_snapshot_mtimes 應產出 9 OpenAB + __local__ = 10 slot,實際 {}",
             out_mtimes.len()
         );
+    }
+
+    /// R110 護欄：跨模組對稱 — `OPENAB_BOT_IDS` (lib.rs) 必須是
+    /// `hook_server::KNOWN_PROVIDERS` 的子集。
+    ///
+    /// 為何必要:R70 spec drift 正是「加了 `irisx_bot` 到 config.rs 4 同步點
+    /// (`default_providers` / `default_provider_sounds` /
+    /// `default_provider_waiting_sounds` / `detect_providers`) 但漏了第 5 同步點
+    /// `hook_server::KNOWN_PROVIDERS`」,IRISX 事件 POST `/hook/irisx_bot` 走完
+    /// parse_provider fallback "claude",K40 metric
+    /// `lobsterpulse_provider_sessions{provider="irisx_bot"}` 永遠 0。
+    ///
+    /// R73 才補完第 5 同步點。本護欄是 R73 護欄 chain 16 對稱面延伸到「OpenAB
+    /// bot id 子集 ⊆ hook 白名單」的不變式 — 將來加 bot 漏同步 hook_server 白名單
+    /// 會在 lib.rs build 時 fail (constant 引用,非運行時檢查,提早 fail)。
+    ///
+    /// 算 chain 17 內:R70 spec drift 既有對稱面 + R73 補完的延伸,屬既有 chain
+    /// 16 對稱面 (R97 凍結決策),不擴張 chain 17。
+    #[test]
+    fn r110_openab_bot_ids_subset_of_hook_server_known_providers() {
+        use crate::hook_server::KNOWN_PROVIDERS;
+
+        let known: std::collections::HashSet<&str> = KNOWN_PROVIDERS.iter().copied().collect();
+        for bot in OPENAB_BOT_IDS {
+            assert!(
+                known.contains(bot),
+                "OPENAB_BOT_IDS 含 {bot:?} 但 hook_server::KNOWN_PROVIDERS 沒有, \
+                 對齊 R70/R73 spec drift 修:任何 OpenAB bot id 必須同時登錄 \
+                 KNOWN_PROVIDERS 白名單,缺同步會讓 parse_provider 走 fallback \
+                 \"claude\" 害 K40 metric provider=\"{bot}\" 永遠 0 \
+                 (KNOWN_PROVIDERS = {:?})",
+                KNOWN_PROVIDERS
+            );
+        }
     }
 }
 
@@ -3192,9 +3310,14 @@ pub fn run() {
                         tokio::spawn(async move {
                             while let Some(event) = rx.recv().await {
                                 let mgr = h.state::<AppSessionManager>();
-                                let transition = {
+                                let (transition, firings) = {
                                     let mut m = mgr.0.lock().unwrap();
-                                    m.handle_event(&event)
+                                    let t = m.handle_event(&event);
+                                    // R115: drain handle_event 內 evaluate_rules 累積的
+                                    // RuleFiredEvent, 給前端 emit `rule-fired` Tauri event
+                                    // 觸發 Toast / Sound / Log action。
+                                    let f = std::mem::take(&mut m.rule_firings);
+                                    (t, f)
                                 };
                                 let _ = h.emit("session-update", ());
                                 match transition {
@@ -3205,6 +3328,9 @@ pub fn run() {
                                         let _ = h.emit("task-waiting", event.provider.clone());
                                     }
                                     session::SessionTransition::None => {}
+                                }
+                                for f in firings {
+                                    let _ = h.emit("rule-fired", f);
                                 }
                             }
                         });
@@ -3682,6 +3808,10 @@ pub fn run() {
             rebuild_and_relaunch,
             test_toast,
             get_live_quota_snapshot,
+            list_rules,
+            toggle_rule,
+            add_rule,
+            remove_rule,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LobsterPulse");

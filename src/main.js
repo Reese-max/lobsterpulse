@@ -94,6 +94,8 @@ function showView(view) {
     "has-panel-below",
     view === "expanded" || view === "settings" || view === "dashboard" || view === "events"
   );
+  // PUA R112: 離開 capsule view 一定要收掉 brief（避免 brief 飄在 expanded view 上面）
+  if (view !== "capsule") showCapsuleBrief(false);
   fitWindow();
   if (view === "capsule" && wasExpanded) {
     collapsedAt = Date.now();
@@ -122,6 +124,119 @@ function providerIconHtml(providerId, size = 16) {
 
 // #10 Multi-provider capsule tab —— frontend 覆寫 active_session
 let manualActiveProvider = null;
+
+// ─── R115 規則引擎 UI ───
+// 載入 + render 規則清單, 綁定 toggle / 新增 / 刪除按鈕
+async function initRulesUI() {
+  const listEl = $("rules-list");
+  const countEl = $("rules-count");
+  const toggleEl = $("toggle-rules-enabled");
+  const newBtn = $("btn-add-rule");
+  if (!listEl) return;
+
+  // 從 config 讀 rules_enabled 旗標, 綁定變更 → 存回 config
+  toggleEl.checked = !!appConfig.rules_enabled;
+  toggleEl.addEventListener("change", async () => {
+    appConfig.rules_enabled = toggleEl.checked;
+    try {
+      await invoke("save_app_config", { newConfig: appConfig });
+    } catch (e) {
+      console.warn("[R115] save rules_enabled failed:", e);
+    }
+  });
+
+  // 載入 provider dropdown
+  const provSel = $("new-rule-provider");
+  const knownProviders = (appConfig.providers && typeof appConfig.providers === "object")
+    ? Object.keys(appConfig.providers)
+    : ["claude", "codex", "copilot", "gemini", "cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo"];
+  for (const p of knownProviders) {
+    const opt = document.createElement("option");
+    opt.value = p;
+    opt.textContent = p;
+    provSel.appendChild(opt);
+  }
+
+  async function refresh() {
+    let rules = [];
+    try {
+      rules = await invoke("list_rules");
+    } catch (e) {
+      console.warn("[R115] list_rules failed:", e);
+      listEl.innerHTML = `<div class="rule-empty">載入失敗: ${e}</div>`;
+      return;
+    }
+    countEl.textContent = `(${rules.length} 條)`;
+    if (rules.length === 0) {
+      listEl.innerHTML = `<div class="rule-empty">尚無規則, 點下方「➕ 新增」建立第一條</div>`;
+      return;
+    }
+    listEl.innerHTML = "";
+    for (const r of rules) {
+      const whenDesc = [
+        r.when?.provider ? `provider=${r.when.provider}` : "provider=*",
+        r.when?.event ? `event=${r.when.event}` : "event=*",
+        r.when?.state_to ? `→${r.when.state_to}` : "→*",
+      ].join(" · ");
+      const actionsDesc = (r.then || []).map(a => {
+        if (a.Toast) return "Toast";
+        if (a.Sound) return `Sound(${a.Sound.clip})`;
+        if (a.Log) return `Log(${a.Log.file})`;
+        return "?";
+      }).join("+");
+      const row = document.createElement("div");
+      row.className = "rule-item";
+      row.innerHTML = `
+        <label class="toggle"><input type="checkbox" ${r.enabled ? "checked" : ""} data-id="${r.id}" class="rule-toggle"/><span class="toggle-slider"></span></label>
+        <div style="flex:1">
+          <div class="rule-item-desc">${escapeHtml(r.description || r.id)}</div>
+          <div class="rule-item-when">when: ${escapeHtml(whenDesc)} → ${escapeHtml(actionsDesc)}</div>
+        </div>
+        <button class="rule-item-del" data-id="${r.id}" title="刪除此規則">🗑</button>
+      `;
+      listEl.appendChild(row);
+    }
+    listEl.querySelectorAll(".rule-toggle").forEach(el => {
+      el.addEventListener("change", async () => {
+        try { await invoke("toggle_rule", { ruleId: el.dataset.id }); }
+        catch (e) { console.warn("[R115] toggle_rule failed:", e); el.checked = !el.checked; }
+      });
+    });
+    listEl.querySelectorAll(".rule-item-del").forEach(el => {
+      el.addEventListener("click", async () => {
+        try { await invoke("remove_rule", { ruleId: el.dataset.id }); await refresh(); }
+        catch (e) { console.warn("[R115] remove_rule failed:", e); }
+      });
+    });
+  }
+
+  newBtn.addEventListener("click", async () => {
+    const desc = ($("new-rule-desc").value || "").trim() || "(未命名規則)";
+    const provider = $("new-rule-provider").value || null;
+    const event = $("new-rule-event").value || null;
+    const stateTo = $("new-rule-state").value || null;
+    const rule = {
+      id: `r115-user-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      enabled: true,
+      description: desc,
+      when: { provider, event, state_to: stateTo },
+      then: [{
+        Toast: { title: `⚡ ${desc}`, body: `${provider || "any"} ${event || ""} → ${stateTo || "any"}` },
+      }],
+    };
+    try {
+      await invoke("add_rule", { rule });
+      $("new-rule-desc").value = "";
+      await refresh();
+    } catch (e) { console.warn("[R115] add_rule failed:", e); }
+  });
+
+  await refresh();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 
 // ─── Init ───
 async function init() {
@@ -182,6 +297,28 @@ async function init() {
     if (currentView === "capsule" && !appConfig.appearance.pin_expanded && (Date.now() - collapsedAt > 500)) {
       showView("expanded");
     }
+  });
+
+  // PUA R112 Capsule Brief: 膠囊本體 hover 時 toggle brief 面板
+  // - 與 showView("expanded") 解耦：expanded 由上面 mouseenter 觸發, brief 這裡
+  //   獨立控制, 這樣 brief 也能在 expanded view 之外的時機用
+  // - 300ms debounce: 避免快速 hover 進出時 brief 閃爍
+  let briefHoverTimer = null;
+  $("capsule").addEventListener("mouseenter", () => {
+    if (currentView !== "capsule") return;
+    clearTimeout(briefHoverTimer);
+    briefHoverTimer = setTimeout(() => showCapsuleBrief(true), 300);
+  });
+  $("capsule").addEventListener("mouseleave", () => {
+    clearTimeout(briefHoverTimer);
+    showCapsuleBrief(false);
+  });
+  // brief 本身也要 support hover（讓使用者移到 brief 讀內容時不收掉）
+  $("capsule-brief").addEventListener("mouseenter", () => {
+    clearTimeout(briefHoverTimer);
+  });
+  $("capsule-brief").addEventListener("mouseleave", () => {
+    showCapsuleBrief(false);
   });
 
   // Collapse via cursor-left
@@ -447,6 +584,18 @@ async function init() {
       fitWindow();
     });
   });
+
+  // ── R115 規則引擎 UI ───────────────────────────────────────
+  // 載入現有規則, render list, 綁定 toggle / 新增 / 刪除按鈕
+  await initRulesUI();
+
+  // 監聽 rule-fired 事件, MVP 階段: 命中時 console.log + 視覺提示
+  window.__TAURI_INTERNALS__.event
+    ? window.__TAURI_INTERNALS__.event.listen("rule-fired", (e) => {
+        const p = e.payload;
+        console.log(`[R115 rule-fired] ${p.rule_id} (${p.provider}/${p.event_name} → ${p.state_to})`, p.action);
+      })
+    : null;
 
   // 初始化 3 個 threshold input
   $("idle-secs").value = appConfig.appearance.idle_threshold_secs ?? 30;
@@ -1308,7 +1457,10 @@ function renderDashboardGrid(gridId, dashboardBots, sessions) {
 }
 
 // ─── Events log view ───
-let eventsFilter = "all"; // all | cicx | gitx | giminix | codex_bot | claude | codex | copilot | gemini
+// R110: 對齊 R78 補齊事件診斷 view OpenAB bot 列表 (6→9, 含 grokx/lpbot/mimo),
+// 跟 hook_server.rs KNOWN_PROVIDERS 13 個保持一致。Tab 數: 1 all + 1 errors +
+// 9 OpenAB + 4 本機 = 15 (4 本機 count=0 時動態隱藏)。
+let eventsFilter = "all"; // all | errors | cicx | gitx | giminix | codex_bot | openx | irisx_bot | grokx | lpbot | mimo | claude | codex | copilot | gemini
 let eventsRefreshTimer = null;
 
 const EVENT_CLASS = {
@@ -1334,6 +1486,11 @@ const PROVIDER_LABEL = {
   codex_bot: "CODEX",
   openx: "OPENX",
   irisx_bot: "IRISX",
+  // R110: 對齊 R78 補齊 R78 T-BOT11 (grokx) / T-BOT12 (lpbot) / T-BOT5 (mimo) 標籤,
+  // 避免事件診斷 tab 走 `PROVIDER_LABEL[p] || p` fallback 顯示 raw id
+  grokx: "GROKX",
+  lpbot: "LPBOT",
+  mimo: "MIMO",
   claude: "claude",
   codex: "codex",
   copilot: "copilot",
@@ -1361,7 +1518,10 @@ async function renderEventsLog() {
     // OpenAB bot 永遠顯示（即使 count=0，讓用戶知道 bot 存在但尚無事件）；
     // 本機 CLI 只在有事件時顯示，避免 tab 列過長。
     // 「errors」專 tab 匯集所有 provider 的 PostToolUseFailure
-    const openabBots = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot"];
+    // R110: 對齊 R78 KNOWN_PROVIDERS 13 個補齊 grokx (T-BOT11) / lpbot (T-BOT12) / mimo (T-BOT5),
+    // 避免事件診斷 view 漏接 R78 後新增的 3 個 OpenAB bot (grokx/lpbot enabled, mimo disabled 但仍
+    // 應顯示 tab 跟 R78 「known 13」一致)。Total tab 數: 1 all + 1 errors + 9 OpenAB + 4 本機 = 15。
+    const openabBots = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo"];
     const localClis = ["claude", "codex", "copilot", "gemini"];
     const counts = {};
     for (const e of events) counts[e.provider] = (counts[e.provider] || 0) + 1;
@@ -1875,6 +2035,86 @@ function renderCapsule(st) {
 
   // 顶层设计：capsule 顯示最緊 provider 的剩餘 %（snapshots.__local__ 由 refreshQuotas 填）
   updateCapsuleQuota();
+
+  // PUA R112 Capsule Brief: 同步更新 brief 內容（hover 才顯示，但內容隨 state 持續更新）
+  updateCapsuleBrief(s);
+}
+
+// PUA R112: 把當前 active session 的 last_prompt 摘要渲染到 #capsule-brief
+// - 純前端 transform, 0 後端改（session.last_prompt 已在 hook_event.rs:69-70 capture）
+// - 多行 prompt 壓平成單行；>80 字截斷到 77 + "…"
+// - 工具名 + cwd + duration 拼到 meta 行
+function updateCapsuleBrief(s) {
+  const briefEl = $("capsule-brief");
+  const textEl = $("capsule-brief-text");
+  const metaEl = $("capsule-brief-meta");
+  const timeEl = $("capsule-brief-time");
+  if (!briefEl || !textEl || !metaEl || !timeEl) return;
+
+  if (!s) {
+    textEl.textContent = "（無 active session）";
+    textEl.classList.add("empty");
+    metaEl.textContent = "";
+    timeEl.textContent = "";
+    return;
+  }
+
+  // prompt 截斷：去掉多餘換行 + 截到 80 字
+  const rawPrompt = (s.last_prompt || "").replace(/\s+/g, " ").trim();
+  const MAX_PROMPT = 80;
+  if (rawPrompt) {
+    textEl.textContent = rawPrompt.length > MAX_PROMPT
+      ? rawPrompt.slice(0, MAX_PROMPT - 1) + "…"
+      : rawPrompt;
+    textEl.classList.remove("empty");
+  } else {
+    textEl.textContent = "（此 session 還沒有 prompt）";
+    textEl.classList.add("empty");
+  }
+
+  // meta: provider · state · tool · cwd short · duration
+  const parts = [];
+  parts.push(s.provider);
+  if (s.state) {
+    const stateMap = { working: "執行中", waiting_for_user: "等你回", idle: "閒置", stale: "過期" };
+    parts.push(stateMap[s.state] || s.state);
+  }
+  if (s.last_tool_name) parts.push(`🔧 ${s.last_tool_name}`);
+  if (s.cwd) {
+    const cwdShort = s.cwd.length > 24 ? "…" + s.cwd.slice(-22) : s.cwd;
+    parts.push(`📁 ${cwdShort}`);
+  }
+  if (s.is_active && s.formatted_time) parts.push(`⏱ ${s.formatted_time}`);
+  metaEl.innerHTML = parts.map((p, i) =>
+    (i > 0 ? '<span class="meta-sep">·</span>' : "") +
+    `<span>${esc(p)}</span>`
+  ).join("");
+
+  // head time 顯示最近事件時間（精簡, optional）
+  if (s.is_active && s.formatted_time) {
+    timeEl.textContent = s.formatted_time;
+  } else {
+    timeEl.textContent = "";
+  }
+
+  // 同步 CSS var 給 brief 寬度（讓 brief 跟 capsule 同寬）
+  const w = appConfig.appearance.capsule_width || 300;
+  briefEl.style.setProperty("--capsule-w", `${w}px`);
+}
+
+// PUA R112: toggle Capsule Brief 顯示（hover 觸發）
+function showCapsuleBrief(visible) {
+  const el = $("capsule-brief");
+  if (!el) return;
+  if (visible) {
+    el.classList.remove("hidden");
+    el.classList.add("visible");
+    el.setAttribute("aria-hidden", "false");
+  } else {
+    el.classList.remove("visible");
+    el.classList.add("hidden");
+    el.setAttribute("aria-hidden", "true");
+  }
 }
 
 // 掃所有 local runner 的 raw 欄位找「最緊」配額（<100 的最小值），顯示在 capsule

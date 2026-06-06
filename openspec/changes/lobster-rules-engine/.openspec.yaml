@@ -1,0 +1,30 @@
+id: lobster-rules-engine
+schema: openspec/v1
+created: 2026-06-06
+status: drafting
+phase: m0
+title: Lobster Rules Engine — 使用者自訂 event → action
+owners: [auto-dev]
+references:
+  - CLAUDE.md (project context, 北極星釘在頂部)
+  - MISSION.md (K0 Quota / 13 provider / 狀態機 三大釘子)
+  - engineering-log.md R100 策略顧問 #3 行動 closure
+  - openspec/changes/contract-matrix-guard/ (spec 範本, R106)
+  - openspec/changes/prometheus-counter-rename-2026-q3/ (rename 護衛對齊)
+  - src-tauri/src/config.rs (AppConfig SSoT)
+  - src-tauri/src/session.rs (SessionManager 既有 handle_event 流程)
+  - src-tauri/src/lib.rs (Tauri command 註冊位置)
+supersedes: []
+related:
+  - contract-matrix-guard (R106 13×3 護衛, 13 provider 集合 SSoT 來源)
+  - prometheus-counter-convention (K0 emit 不變, 規則引擎不影響 metric 名)
+risks:
+  - config forward migration: 已用 .and_modify 對齊 R114 pattern
+  - emit 雙觸發: evaluate_rules 必須在 task-completed/waiting emit 之後
+  - toast spam: 加 rules_enabled master switch, 預設 true 但 user 可關
+out_of_scope:
+  - Webhook action (留 R116+)
+  - Cooldown / 去重 (留 R116+)
+  - Aggregate trigger (留 R117+)
+  - 規則 import/export (留 R118+)
+  - 規則視覺化編輯器 (留 R119+)

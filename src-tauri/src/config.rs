@@ -10,6 +10,14 @@ pub struct AppConfig {
     pub appearance: AppearanceConfig,
     #[serde(default = "default_providers")]
     pub providers: HashMap<String, ProviderConfig>,
+    // R115 規則引擎：使用者自訂 event → action。forward migration 對齊
+    // 既有的 load_config provider loop pattern（見下方）。
+    #[serde(default = "default_rules")]
+    pub rules: Vec<TriggerRule>,
+    /// 規則引擎 master switch（預設 true）。設 false = 整個 evaluate_rules
+    /// 直接 early return（既不匹配也不 emit），給使用者一鍵關閉的逃生門。
+    #[serde(default = "default_rules_enabled")]
+    pub rules_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -500,6 +508,8 @@ impl Default for AppConfig {
             setup_done: false,
             appearance: AppearanceConfig::default(),
             providers: default_providers(),
+            rules: default_rules(),
+            rules_enabled: default_rules_enabled(),
         }
     }
 }
@@ -524,6 +534,12 @@ pub fn load_config() -> AppConfig {
                 existing.name = default_p.name.clone();
             })
             .or_insert(default_p);
+    }
+    // R115 規則引擎 forward migration：既有 config.json 缺 `rules` 欄位時
+    // 補上 3 條預設；使用者已有自訂 rules 時**保留不覆寫**（對齊 R114
+    // load_config provider migration pattern, 守使用者設定）。
+    if config.rules.is_empty() {
+        config.rules = default_rules();
     }
     config
 }
@@ -1244,5 +1260,244 @@ mod r75_giminix_backend_label_tests {
             "T-BOT10 fail: giminix name {:?} 不應含 'Gemini'，後端已換 Antigravity",
             giminix.name
         );
+    }
+}
+
+// =====================================================================
+// R115 規則引擎（lobster-rules-engine）— 使用者自訂 event → action
+// =====================================================================
+// 對應 spec: openspec/changes/lobster-rules-engine/{proposal,design,spec}.md
+// 對應 3 同步點: AppConfig.rules (config.rs) / SessionManager.evaluate_rules
+// (session.rs) / lib.rs hook_server emit (R116+ 接力, MVP 鎖 backend)
+// 護衛: r115_rule_evaluation_match_count / r115_rule_action_emission /
+// r115_rule_when_filter (見 session.rs 尾端 tests module)
+
+/// 一條完整的觸發規則：`when` 三欄位 AND 匹配 → 執行 `then` 內所有 action。
+///
+/// 序列化進 `AppConfig.rules` 後由 `SessionManager::handle_event` 結尾
+/// 呼叫 `evaluate_rules` 評估。MVP 鎖 `then` action 種類 = 3
+/// (Toast / Sound / Log), 留 R116+ 擴 Webhook / Cooldown 等進階功能。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TriggerRule {
+    /// 穩定 id（uuid v4 字串）。caller 自行生成；同 id 重複 add 回 Err。
+    pub id: String,
+    /// 單條規則開關。`false` = 跳過該條（不匹配、不 emit）。
+    pub enabled: bool,
+    /// 使用者可自填的 label（顯示在設定頁 Rules section）。
+    pub description: String,
+    /// 三欄位 AND 匹配條件。任一欄位 `None` = 跳過該欄位（萬用）。
+    pub when: RuleWhen,
+    /// 命中時執行的動作清單（1 條規則可同時觸發多個 action）。
+    pub then: Vec<RuleAction>,
+}
+
+/// 規則匹配條件。`None` = 該維度不過濾（any）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RuleWhen {
+    /// 對齊 13 provider id (`cicx` / `claude` / ...)。None = 任何 provider。
+    pub provider: Option<String>,
+    /// HookEvent name (`Stop` / `SessionStart` / `PostToolUseFailure` / ...)。
+    /// None = 任何 event。
+    pub event: Option<String>,
+    /// SessionTransition 字串 (`Completed` / `StartedWaiting` / `None`)。
+    /// None = 任何 transition。
+    pub state_to: Option<String>,
+}
+
+impl RuleWhen {
+    /// 三欄位 AND 比對。任一欄位 None 跳過該欄位。
+    /// 對齊 spec R-3 Scenario 4 條護衛。
+    pub fn matches(&self, provider: &str, event_name: &str, state_to: &str) -> bool {
+        if let Some(ref p) = self.provider {
+            if p != provider {
+                return false;
+            }
+        }
+        if let Some(ref e) = self.event {
+            if e != event_name {
+                return false;
+            }
+        }
+        if let Some(ref s) = self.state_to {
+            if s != state_to {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// 規則觸發的動作。MVP 鎖 3 種變體, 不擴張（見 design.md out-of-scope）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuleAction {
+    /// 跳 Windows toast（已對齊既有 `auto_rules::send_toast` 路徑, R116+ 接
+    /// Tauri emit 觸發; MVP 階段 evaluate_rules 只 log 佔位, 不實際跳 toast）。
+    Toast { title: String, body: String },
+    /// 播音效。`clip` 對齊 `default_provider_sounds` 既有 key; `volume` 0.0~1.0。
+    Sound { clip: String, volume: f32 },
+    /// 追加寫入檔案。`format` 限 `Jsonl` / `Plain`。
+    Log { file: String, format: LogFormat },
+}
+
+/// Log action 格式。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum LogFormat {
+    /// 每行一筆 JSON object（含 rule_id / provider / event / state_to /
+    /// timestamp / payload）。
+    Jsonl,
+    /// 每行一筆 plain text（`<timestamp> <provider> <event> <state_to>`）。
+    Plain,
+}
+
+/// evaluate_rules 命中時回傳的事件 payload。`SessionManager` 累積在
+/// `rule_firings` 欄位, 給 caller (lib.rs hook_server) drain 後 emit Tauri
+/// event `rule-fired` (R116+ 接力, MVP 鎖 backend 不 emit)。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuleFiredEvent {
+    pub rule_id: String,
+    pub provider: String,
+    pub event_name: String,
+    pub state_to: String,
+    pub action: RuleAction,
+}
+
+fn default_rules_enabled() -> bool {
+    true
+}
+
+/// 3 條預設規則 SSoT（對齊 design.md 表）。id 前綴 `r115-default-*` 守護
+/// 護衛 test `r115_rule_evaluation_match_count` 的 id 期望值。
+pub fn default_rules() -> Vec<TriggerRule> {
+    vec![
+        TriggerRule {
+            id: "r115-default-claude-completed".into(),
+            enabled: true,
+            description: "Claude Stop → 提醒我回來看".into(),
+            when: RuleWhen {
+                provider: Some("claude".into()),
+                event: Some("Stop".into()),
+                state_to: Some("Completed".into()),
+            },
+            then: vec![
+                RuleAction::Toast {
+                    title: "✅ Claude 完成".into(),
+                    body: "{project_name}".into(),
+                },
+                RuleAction::Sound {
+                    clip: "claude.mp3".into(),
+                    volume: 1.0,
+                },
+            ],
+        },
+        TriggerRule {
+            id: "r115-default-waiting-toast".into(),
+            enabled: true,
+            description: "任何 provider 進入 WaitingForUser → toast".into(),
+            when: RuleWhen {
+                provider: None,
+                event: None,
+                state_to: Some("StartedWaiting".into()),
+            },
+            then: vec![RuleAction::Toast {
+                title: "⏳ {provider} 在等你回".into(),
+                body: "{project_name}".into(),
+            }],
+        },
+        TriggerRule {
+            id: "r115-default-failure-log".into(),
+            enabled: true,
+            description: "任何 provider PostToolUseFailure → 寫 log".into(),
+            when: RuleWhen {
+                provider: None,
+                event: Some("PostToolUseFailure".into()),
+                state_to: None,
+            },
+            then: vec![RuleAction::Log {
+                file: "~/.lobsterpulse/audit.jsonl".into(),
+                format: LogFormat::Jsonl,
+            }],
+        },
+    ]
+}
+
+// ---------------------------------------------------------------------
+// R115 規則引擎單元測試（純 config 型別層, 不碰 SessionManager）
+// 護衛鏈策略: 對齊 R113.1「chain 飽和契約」, 走 3 條獨立 test module,
+// 不併入 R66/R82。
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod r115_rule_engine_config_tests {
+    use super::*;
+
+    /// 對應 spec R-1 Scenario 1: TriggerRule JSON round-trip 保留所有欄位。
+    #[test]
+    fn r115_trigger_rule_json_round_trip_preserves_all_fields() {
+        let original = TriggerRule {
+            id: "test-1".into(),
+            enabled: false,
+            description: "edge case".into(),
+            when: RuleWhen {
+                provider: Some("cicx".into()),
+                event: None,
+                state_to: Some("Completed".into()),
+            },
+            then: vec![],
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: TriggerRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, parsed, "round-trip 丟欄位");
+    }
+
+    /// 對應 spec R-1 Scenario 2: AppConfig.rules 預設 3 條。
+    #[test]
+    fn r115_app_config_default_has_three_rules() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.rules.len(), 3, "預設規則數 != 3");
+        let ids: Vec<&str> = cfg.rules.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"r115-default-claude-completed"));
+        assert!(ids.contains(&"r115-default-waiting-toast"));
+        assert!(ids.contains(&"r115-default-failure-log"));
+    }
+
+    /// 對應 spec R-3 RuleWhen::matches 三條件 AND。
+    /// 護衛 test 名: r115_rule_when_filter (對齊 spec 護衛鏈命名契約)。
+    /// 8 條組合 × 對應/不對應配對, 對齊 spec R-3 4 條 Scenario。
+    #[test]
+    fn r115_rule_when_filter() {
+        // provider=Some("cicx") 不匹配 event.provider_id="claude"
+        let w_provider = RuleWhen {
+            provider: Some("cicx".into()),
+            event: None,
+            state_to: None,
+        };
+        assert!(!w_provider.matches("claude", "Stop", "Completed"));
+        assert!(w_provider.matches("cicx", "Stop", "Completed"));
+
+        // event=Some("Stop") 不匹配 event_name="SessionStart"
+        let w_event = RuleWhen {
+            provider: None,
+            event: Some("Stop".into()),
+            state_to: None,
+        };
+        assert!(!w_event.matches("cicx", "SessionStart", "Completed"));
+        assert!(w_event.matches("cicx", "Stop", "Completed"));
+
+        // state_to=Some("Completed") 不匹配 transition=StartedWaiting
+        let w_state = RuleWhen {
+            provider: None,
+            event: None,
+            state_to: Some("Completed".into()),
+        };
+        assert!(!w_state.matches("cicx", "Stop", "StartedWaiting"));
+        assert!(w_state.matches("cicx", "Stop", "Completed"));
+
+        // 三欄位全 None = 萬用, 任何 event 都匹配
+        let w_any = RuleWhen::default();
+        assert!(w_any.matches("cicx", "Stop", "Completed"));
+        assert!(w_any.matches("claude", "SessionStart", "StartedWaiting"));
+        assert!(w_any.matches("mimo", "PostToolUseFailure", "None"));
     }
 }

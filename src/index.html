@@ -37,6 +37,19 @@
       <span id="capsule-error-dot" class="capsule-error-dot hidden" title="近 10 分鐘內失敗事件數"></span>
     </div>
 
+    <!-- Capsule brief (PUA R112 Session Brief — hover 浮現的 prompt 摘要)
+         - 與 capsule 同寬，sibling 而非 child，避免污染 capsule 內部 flex
+         - hidden 為預設，hover 才 fade in
+         - 後端不動：複用 session.last_prompt（hook_event.rs:69-70 已 capture） -->
+    <div id="capsule-brief" class="capsule-brief hidden" aria-hidden="true">
+      <div class="capsule-brief-head">
+        <span class="capsule-brief-label">任務摘要</span>
+        <span class="capsule-brief-time" id="capsule-brief-time"></span>
+      </div>
+      <div class="capsule-brief-text" id="capsule-brief-text"></div>
+      <div class="capsule-brief-meta" id="capsule-brief-meta"></div>
+    </div>
+
     <!-- Expanded view (sessions) -->
     <div id="view-expanded" class="hidden">
       <div id="filter-bar" class="filter-bar hidden"></div>
@@ -124,6 +137,7 @@
           <button class="settings-tab" data-tab="appearance">外觀</button>
           <button class="settings-tab" data-tab="runners">📦 Runners</button>
           <button class="settings-tab" data-tab="automation">🔔 自動化</button>
+          <button class="settings-tab" data-tab="rules">⚡ Rules</button>
         </div>
         <button id="btn-close-settings" class="icon-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -362,6 +376,67 @@
             </div>
           </div>
 
+        </div>
+
+        <!-- ⚡ Rules Tab —— R115 規則引擎 UI：toggle / 新增 / 刪除 TriggerRule -->
+        <div class="settings-tab-panel" data-panel="rules">
+          <div class="setting-group">
+            <div>
+              <div class="setting-main-label">規則引擎總開關</div>
+              <div class="setting-sub-label">啟用後 SessionManager 會在每個 event 結尾 evaluate_rules,<br>命中規則時觸發 Toast / Sound / Log 動作</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="toggle-rules-enabled" /><span class="toggle-slider"></span></label>
+          </div>
+
+          <div class="setting-group-col">
+            <label class="setting-label">現有規則 <span id="rules-count" class="threshold-label"></span></label>
+            <div id="rules-list" class="rule-list"></div>
+          </div>
+
+          <div class="setting-group-col">
+            <label class="setting-label">➕ 新增規則</label>
+            <div class="threshold-row">
+              <div style="flex:1">
+                <span class="threshold-label">描述（label）</span>
+                <input type="text" id="new-rule-desc" placeholder="例：cicx 失敗時跳 toast" class="text-input">
+              </div>
+            </div>
+            <div class="threshold-row">
+              <div>
+                <span class="threshold-label">Provider（None=任何）</span>
+                <select id="new-rule-provider" class="text-input">
+                  <option value="">— 任何 —</option>
+                </select>
+              </div>
+              <div>
+                <span class="threshold-label">Event（None=任何）</span>
+                <select id="new-rule-event" class="text-input">
+                  <option value="">— 任何 —</option>
+                  <option>SessionStart</option>
+                  <option>UserPromptSubmit</option>
+                  <option>PreToolUse</option>
+                  <option>PostToolUse</option>
+                  <option>PostToolUseFailure</option>
+                  <option>Notification</option>
+                  <option>Stop</option>
+                  <option>SessionEnd</option>
+                </select>
+              </div>
+              <div>
+                <span class="threshold-label">轉移至（None=任何）</span>
+                <select id="new-rule-state" class="text-input">
+                  <option value="">— 任何 —</option>
+                  <option>Completed</option>
+                  <option>StartedWaiting</option>
+                  <option>None</option>
+                </select>
+              </div>
+            </div>
+            <div class="threshold-row" style="margin-top:6px">
+              <div><button id="btn-add-rule" class="mini-btn">➕ 新增</button></div>
+              <div><span class="threshold-label">預設動作：跳 Windows toast（title=⚡ {description}, body={provider}）</span></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

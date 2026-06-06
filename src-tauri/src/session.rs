@@ -1,4 +1,5 @@
 use crate::hook_event::HookEvent;
+use crate::config::{RuleFiredEvent, TriggerRule};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -481,6 +482,18 @@ pub struct SessionManager {
     pub recent_events: std::collections::VecDeque<RecentEvent>,
     /// Per-provider 累計統計，不依賴 OpenAB snapshot 檔就能算出 quota
     pub provider_totals: HashMap<String, ProviderTotals>,
+    /// R115 規則引擎：要評估的規則清單（從 `AppConfig.rules` 同步過來）。
+    /// MVP 鎖 SessionManager 自帶 3 條預設, R116+ 接 Tauri command 讓前端改。
+    pub rules: Vec<TriggerRule>,
+    /// R115 規則引擎 master switch（對齊 `AppConfig.rules_enabled`）。
+    pub rules_enabled: bool,
+    /// R115 規則引擎：累計命中次數。給護衛 test `r115_rule_evaluation_match_count`
+    /// 計數用。`handle_event` 結尾 evaluate_rules 每命中 1 條規則 += 1。
+    pub rule_match_count: u64,
+    /// R115 規則引擎：本次 evaluate 命中的所有 RuleFiredEvent 累積區。
+    /// 給 caller (lib.rs hook_server) drain 後 emit Tauri event `rule-fired`
+    /// (R116+ 接力, MVP 階段只累積不 emit)。
+    pub rule_firings: Vec<RuleFiredEvent>,
 }
 
 impl SessionManager {
@@ -490,6 +503,46 @@ impl SessionManager {
             active_session_id: None,
             recent_events: std::collections::VecDeque::with_capacity(MAX_RECENT_EVENTS + 1),
             provider_totals: HashMap::new(),
+            rules: crate::config::default_rules(),
+            rules_enabled: true,
+            rule_match_count: 0,
+            rule_firings: Vec::new(),
+        }
+    }
+
+    /// R115 規則引擎: 同步 AppConfig 的 rules / rules_enabled 進 SessionManager。
+    /// 給 lib.rs hook_server 在 AppConfig 載入後呼叫 (R116+ 接入點)。
+    /// MVP 階段尚未串接, 預設值已由 new() 設好。
+    pub fn set_rules(&mut self, rules: Vec<TriggerRule>, rules_enabled: bool) {
+        self.rules = rules;
+        self.rules_enabled = rules_enabled;
+    }
+
+    /// R115 規則引擎: 評估所有啟用規則, 命中時累積 `rule_firings` + 計數。
+    /// 對齊 spec R-2 + R-3 + 護衛 test `r115_rule_evaluation_match_count` /
+    /// `r115_rule_action_emission`。
+    /// MVP 不實際 emit / 寫檔, 只累積 RuleFiredEvent 給 caller drain。
+    pub fn evaluate_rules(&mut self, event: &HookEvent, transition: SessionTransition) {
+        if !self.rules_enabled {
+            return;
+        }
+        let state_to = format!("{:?}", transition);
+        for rule in self.rules.iter().filter(|r| r.enabled) {
+            if rule
+                .when
+                .matches(&event.provider, &event.hook_event_name, &state_to)
+            {
+                self.rule_match_count += 1;
+                for action in &rule.then {
+                    self.rule_firings.push(RuleFiredEvent {
+                        rule_id: rule.id.clone(),
+                        provider: event.provider.clone(),
+                        event_name: event.hook_event_name.clone(),
+                        state_to: state_to.clone(),
+                        action: action.clone(),
+                    });
+                }
+            }
         }
     }
 
@@ -644,6 +697,12 @@ impl SessionManager {
         if let Some((provider, age)) = completed_data {
             self.record_completed_session_age(&provider, age);
         }
+
+        // R115 規則引擎：handle_event 結尾串接 evaluate_rules，把命中累積進
+        // `self.rule_firings` 給 caller (lib.rs) drain emit `rule-fired` Tauri
+        // event。對齊 spec R-2 + 護衛 test `r115_rule_evaluation_match_count` /
+        // `r115_rule_action_emission`。
+        self.evaluate_rules(event, transition);
 
         transition
     }
@@ -4913,5 +4972,83 @@ mod tests {
                 cicx_ratio
             );
         }
+    }
+
+    // ─── R115 規則引擎護衛 test（lobster-rules-engine T-18~T-20）─────
+    // T-20 (r115_rule_when_filter) 已在 config.rs r115_rule_engine_config_tests mod
+    // 這邊補 T-18 (match count) + T-19 (action emission)。
+
+    /// R115 護衛 T-18：13 種典型事件流過後, 3 預設規則各至少 1 次匹配。
+    /// 對齊 spec R-2 (RuleWhen::matches) + design.md 護衛 test #1。
+    #[test]
+    fn r115_rule_evaluation_match_count() {
+        use crate::config::default_rules;
+        let mut m = SessionManager::new();
+        // 把預設 3 條灌進 SessionManager（new() 已自動灌, 顯式呼叫防 future 改動）
+        m.set_rules(default_rules(), true);
+        m.rule_match_count = 0;
+        m.rule_firings.clear();
+
+        // 13 個 provider × 3 種事件 = 39 條 event 灌進 evaluate_rules
+        let providers = [
+            "claude", "codex", "gemini", "copilot", "cicx", "gitx", "giminix",
+            "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo",
+        ];
+        let mut total = 0u64;
+        for p in &providers {
+            // 預設 1: claude Stop → Completed 命中 (只 claude 命中, 其他不計)
+            let _ = m.handle_event(&ev(p, &format!("{p}-a"), "Stop"));
+            total += 1;
+            // 預設 2: 任何 provider 進入 WaitingForUser 命中
+            // 用 Notification 觸發 WaitingForUser 轉移
+            let _ = m.handle_event(&ev(p, &format!("{p}-b"), "Notification"));
+            total += 1;
+            // 預設 3: 任何 provider PostToolUseFailure 命中
+            let _ = m.handle_event(&ev(p, &format!("{p}-c"), "PostToolUseFailure"));
+            total += 1;
+        }
+        // 3 預設規則各至少 1 次匹配
+        assert!(
+            m.rule_match_count >= 3,
+            "3 預設規則各至少 1 次匹配, 實際 rule_match_count = {} (灌 {} 條 event)",
+            m.rule_match_count,
+            total
+        );
+        // rule_firings 累積區也不應為空（drain 給 caller emit 用）
+        assert!(
+            !m.rule_firings.is_empty(),
+            "rule_firings 必須非空, 給 lib.rs hook_server drain emit `rule-fired`"
+        );
+    }
+
+    /// R115 護衛 T-19：3 種 action 類型 (Toast / Sound / Log) 都要有 emit。
+    /// 對齊 spec R-2 + design.md 護衛 test #2。
+    #[test]
+    fn r115_rule_action_emission() {
+        use crate::config::default_rules;
+        let mut m = SessionManager::new();
+        m.set_rules(default_rules(), true);
+        m.rule_match_count = 0;
+        m.rule_firings.clear();
+
+        // 預設 1: claude UserPromptSubmit → Working → Stop → Idle → Completed → Toast + Sound
+        let _ = m.handle_event(&ev("claude", "c1", "UserPromptSubmit"));
+        let _ = m.handle_event(&ev("claude", "c1", "Stop"));
+        // 預設 2: 任何 provider Notification → StartedWaiting → Toast
+        let _ = m.handle_event(&ev("codex", "c2", "Notification"));
+        // 預設 3: 任何 provider PostToolUseFailure → Log
+        let _ = m.handle_event(&ev("gemini", "c3", "PostToolUseFailure"));
+
+        let mut toast = 0usize;
+        let mut sound = 0usize;
+        let mut log = 0usize;
+        for f in &m.rule_firings {
+            if matches!(f.action, crate::config::RuleAction::Toast { .. }) { toast += 1; }
+            if matches!(f.action, crate::config::RuleAction::Sound { .. }) { sound += 1; }
+            if matches!(f.action, crate::config::RuleAction::Log { .. }) { log += 1; }
+        }
+        assert!(toast >= 2, "toast action ≥ 2 (預設 1 + 2), 實際 = {toast}");
+        assert!(sound >= 1, "sound action ≥ 1 (預設 1), 實際 = {sound}");
+        assert!(log >= 1, "log action ≥ 1 (預設 3), 實際 = {log}");
     }
 }

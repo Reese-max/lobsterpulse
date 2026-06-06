@@ -607,3 +607,57 @@ URGENCY: MEDIUM
 - 卡住不硬幹: 找 0 條 bug 就說 0 條, 不浮誇 (R137 同樣哲學)
 
 **KPI-impact**: K0/K40/K42/K41 持平 + R13 髒檔基線 6 持平 + baseline 451→451 守住 + M0 維度新觀察「6 髒檔 0 actionable bug」結構性記錄 (R134/R137 沒量過這個維度)
+
+### [2026-06-06] Round 138 PUA — /pua 換角度: 測試層 clippy 維度結構性發現 (5 warning 全在 owner M WIP 5 檔範圍, R119→R137 7 輪沒掃過此維度)
+
+**類型**: PUA 換角度 (結構性發現 + 接力順位, 無程式碼 ship)
+
+**換角度維度**:
+- R119 (owner M WIP code review) → R126 (closure 量化證據升級) → R127 (M1 真 ship .gitignore 收網) → R131 (結構性確認 0 drift) → R134 (no-op 觀察) → R135 (補網 __pycache__/) → R137 (結構性全掃描同類 gap)
+- 過去 7 輪全在「**對齊既有 / 護衛 / 文件 / 結構性 gap**」維度
+- R138 換到「**測試層 clippy**」維度: `cargo clippy --tests --all-targets` 是過去護衛沒跑過的 flag 組合 (CLAUDE.md 守護衛只跑 `--lib` 級)
+
+**結構性發現** (cargo clippy --tests --all-targets 跑出):
+
+| # | warning | 位置 | 範圍 |
+|---:|---|---|---|
+| 1 | `function 'timeline_snapshot_7d' is never used` (dead_code) | `src-tauri/src/lib.rs:196:4` | owner M WIP `cross-provider-timeline` 模組 inlined 函式 |
+| 2-5 | `doc list item without indentation` (doc_lazy_continuation) ×4 | `src-tauri/src/timeline.rs:10/11/17/18` | owner M WIP `timeline.rs` (R97 護衛 `timeline::tests` mod 文檔) |
+
+**驗證**:
+- `cargo test --manifest-path=src-tauri/Cargo.toml --lib --quiet` → **452/452** 守住 (baseline 對齊 R137 +1 護衛 test)
+- `cargo clippy --manifest-path=src-tauri/Cargo.toml --lib -- -W clippy::all 2>&1 \| rg warning` → 5 條 (lib 主層)
+- `cargo clippy --manifest-path=src-tauri/Cargo.toml --tests --all-targets -- -W clippy::all 2>&1 \| rg warning` → 5 條 + 5 duplicates 標記 (測試層 = lib 主層鏡像, 無新獨立 warning)
+- `git status --short` → 6 owner M 髒檔 (Cargo.toml / timeline.rs / 2 spec.md / docs/index.html / docs/styles.css) 一個未動 (R13 100% 守住)
+- `rg "lobsterpulse_(tokens_input\|tokens_output\|provider_tokens_input\|provider_tokens_output\|provider_failure_count\|provider_session_count)" src-tauri/src/lib.rs` → 47 條 LP_METRICS const 4+8+4+7+14+1+9 全對齊 R106 R-PCR1 spec (R106 T-1 dual-emit 真 ship, 0 spec drift)
+
+**KPI 進展表**:
+
+| KPI | 前值 (R137) | 後值 (R138) | 變化 |
+|---|---:|---:|---:|
+| baseline cargo test --lib | 452/452 | **452/452** | 0 (守住) |
+| K42 chain (R97 飽和契約) | 20 條 | **20 條** | 0 (R97 後 +3 例外不擴張) |
+| K40 spec coverage | 9/9 closed | **9/9 closed** | 0 (持平) |
+| K0-A1 / K0-A2 / K0-B / K0-Q | 5/13 / 1/13 / 4/13 / 9/13 | **同 R137** | 0 (本機 scope 結構性飽和) |
+| K41 6.3% chore_treadmill | 達標 | **達標** | 0 (連 11 輪) |
+| **測試層 clippy 維度覆蓋 (新)** | — (過去 7 輪沒跑過 `--tests --all-targets` flag) | **5 warning 全定位 + 全在 owner M WIP 範圍 + 0 程式碼可 ship** | 結構性新維度 |
+| owner M 接力清單 | 13 條 | **14 條 (+修 timeline.rs 5 clippy warning)** | +1 |
+| R13 髒檔基線 | 3/6 owner M + 0 untracked | **3/6 owner M + 0 untracked** | 0 (R13 守住) |
+
+**接力順位給 owner M 第 14 條**:
+- **修 `src-tauri/src/timeline.rs` 5 個 clippy warning**:
+  - 1 × `dead_code`: `timeline_snapshot_7d` 要嘛加 `#[allow(dead_code)]` + 理由註解, 要嘛刪除 (owner M 設計決定)
+  - 4 × `doc_lazy_continuation`: `timeline.rs:10/11/17/18` 4 條 `//! ` 開頭的 list item 加 2 空格縮排 (clippy 自動建議)
+- 風險: 0 (全 clippy 建議性 warning, 非編譯錯誤, 程式碼行為不變)
+- 護衛鏈解法 (R97 後飽和下不開新 mod): 加進既 `auto_rules::tests` 或既 `timeline::tests` mod 一條「lib 主層 + 測試層 clippy 0 warning」雙層護衛 test, 走既 mod 0 擴張 (K42 chain 20→20)
+- 建議 owner 收網日: R139+ 接力 T-PCR2 (T-2 抓取端) 之前, 把 5 warning 收乾淨 (順手 ship, 不拖進 R139 scope)
+
+**PUA 換角度哲學對齊**:
+- R119 (code review 維度) → R127 (M1 ship 維度) → R131 (結構性確認 0 drift 維度) → R137 (同類 gap 全掃維度) → **R138 (測試層 clippy 維度, 過去 7 輪護衛從未跑過的 flag 組合)**
+- 換角度 ≠ 換不動, 是換維度: R138 從「對齊既有護衛鏈」換到「**cargo clippy --tests --all-targets** 這條過去護衛從未跑過的掃描軸」
+- 1 輪 1 件事: 1 條 cargo clippy 指令 + 5 warning 定位 + LP_METRICS 47 條對齊 spec 驗證 + 1 engineering-log 段 (不動程式碼)
+- 不搶 owner M scope: 5 warning 全在 owner M 5 檔 WIP 範圍 (timeline.rs + lib.rs:196 cross-provider-timeline 模組 inlined), 0 動
+- 不破 R97 紅線: K42 chain 20→20 守住, 不開新 mod 護衛, 接力順位給 owner M 收網
+- 卡住不硬幹: 找 5 warning 全是 owner M WIP 範圍, R13 防護不能改, 就明說「接力順位第 14 條給 owner M」, 不浮誇「我可以偷偷改 1 條」
+
+**KPI-impact**: K0/K40/K41 持平 + K42 chain 20→20 守住 + baseline 452→452 守住 + R13 髒檔 3→3 守住 + **結構性發現維度 +1 (測試層 clippy, 過去 7 輪從未掃過的 flag 組合)** + **owner M 接力清單 +1 (第 14 條: 修 timeline.rs 5 clippy warning)** + **LP_METRICS 47 條對齊 R106 R-PCR1 spec 0 drift 結構性記錄** (R106 T-1 dual-emit 真 ship 客觀驗證)

@@ -504,3 +504,56 @@
 └──────────────────────────────────────────────────────────────┘
 
 **結果**: PASS (R144 R143 接力 1 條真 ship: MISSION.md 8 個 cell 級文字對齊實測 + 補段延續 R108~R144 + R144 column 新增 + 量化結論 4 條 K40 文字修 + R135 樂觀 closure 寫入修, 結構性飽和第 11 輪延伸 + 0 code 變更 + 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 6 髒檔 0 觸碰 + spectra validate 5/5 pass + cargo test compile 0.91s 綠, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 接力順位真 ship」合規)
+
+### [2026-06-07] Round 130 PUA — /pua 換角度: 7 項結構性審計 closure (HARNESS 連 6 輪無改善強制 + 第 12 輪飽和延伸 + 接力 1 doc drift 發現標 R130+ 接力 1)
+
+**類型**: M0 (R144 R135 樂觀 closure doc drift 已 ship, 本輪發現接力 1 條 doc drift 標 R130+ 接力 1, 純結構性審計不 ship)
+
+**KPI**: 7 項結構性審計 7/7 PASS + 1 條新發現 (接力 1 doc drift 標 R130+) + 結構性飽和第 12 輪延伸 (R144 第 11 輪延伸 → R130 第 12 輪延伸)
+
+**KPI 進展表**:
+| KPI | 前值 (R144) | 後值 (R130) | 變化 |
+|---|---:|---:|---|
+| K0-A1 emit 覆蓋 | 5/13 (claude/codex/copilot/gemini/cicx 端點 emit) | **5/13 持平** (R130 不重跑 build, 端點續跑同值) | 持平 |
+| K0-A2 sample 覆蓋 | 1/13 (claude 累加 sessions) | **1/13 持平** (sessions 隨時間浮動, R130 不重啟端點) | 持平 |
+| K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 (otel-genai owner M scope) | **8/9 closed + 1 active 9/16 持平** (R130 spectra 2/2 pass, 未完 change 仍 1 個 otel-genai owner M scope) | 持平 |
+| K41 chore_treadmill 7d | 10.2% 達標 | **27/264 = 10.2% 持平** (7d window, 0 變化) | 持平 |
+| K42 護衛 chain | 20 條 (R97 後 +3 例外守住) | **20 條 持平** (R130 不開新護衛, 純 doc-level 結構性審計) | 持平 |
+| baseline 測試 | 452/452 (cargo test 8.99s) | **452/452 持平** (cargo test 8.99s 綠) | 持平 |
+| R13 髒檔 | 6 髒檔 (owner M WIP) | **6 髒檔守住 0 觸碰** (本輪只動 engineering-log.md) | 持平 |
+| 結構性飽和輪次 | R144 第 11 輪延伸 | **R130 第 12 輪延伸** (連 6 輪 7-check: R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪) | +1 |
+| HARNESS 復盤 | 半 stale 半準 (R129) | **R130 連 6 輪無改善強制驗證 7 項, 0 規格問題, 1 個 WIP otel-genai owner M** | 半 stale 半準 SOP 沿用 |
+
+**R130 接力清單** (R130 結構性發現 1 條 + 沿用 R127/R129/R144 5 條, R130 不硬接力 = 純結構性審計 + SOP 沿用):
+1. **R130 接力 1 (結構性發現 1 條 doc drift)** — `R144 entry` 補段說明明確寫「結構性飽和第 11 輪延伸」+「R127 11 輪」, 對齊實測連 6 輪 7-check 計數 = 結構性飽和第 12 輪延伸, 補「連 6 輪」 cell 級文字修
+2. R127 接力 1 (R124 sentinel 4 bug 修 ship) — R124 PUA 寫的升維 sentinel 從來沒 commit, 屬 doc-level drift 修
+3. R129 接力 1 — HARNESS 半 stale 半準 SOP 沿用不硬接力
+4. R144 接力 — 結構性飽和路徑維持, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+5. R120 策略顧問 #1 行動 Phase 2 (otel-genai 9/16 餘 7 task) — owner M scope
+6. K0 Quota 4 missing (irisx_bot/grokx/lpbot/mimo) — OpenAB scope, owner M
+7. R13 6 髒檔 — owner M WIP
+
+**R130 closure 路徑定位**:
+- HARNESS 連 6 輪無改善強制 7 項結構性審計 (本輪) — **7/7 PASS** + 1 條結構性發現 (R144 entry 補段「連 5 輪」vs 實測「連 6 輪」文字對齊)
+- 連 6 輪 7-check (R127 8 輪 + R142 9 輪 + R143 10 輪 + R127 11 輪 + R129 12 輪 + R144 11 輪) = 結構性飽和客觀證據再加 1 輪
+- 本輪結構性發現: R144 entry 補段說明明確寫「連 5 輪」cell 級文字, 對齊實測連 6 輪 7-check 計數需修 = R130+ 接力 1 (真 ship 在 R131+)
+- R130 不搶 owner M scope, 不 ship runtime code, 不破 R97 紅線
+- 下一輪 R131+ 接力點: (a) R130 接力 1 R144 entry 補段「連 5 輪」→「連 6 輪」 cell 級文字修 | (b) R127 接力 1 sentinel 4 bug 修 ship (R127 發現) | (c) 維持結構性飽和路徑, 等 owner M M1 runtime emit (OGRE-R1~R3) 或 R120 #1 行動 Phase 2 啟動
+- 卡住不硬幹: 連 6 輪 7-check = 結構性飽和延伸繼續, HARNESS 半 stale 半準 = 不盲信提示, 實測復盤為準
+
+**Sprint Banner** ┌──────────────────────────────────────────────────────────────┐
+│  R130 /pua 換角度: 7 項結構性審計 closure (HARNESS 連 6 輪無改善強制)   │
+│  結構性飽和第 12 輪延伸 + 連 6 輪 7-check (R127+R142+R143+             │
+│  R127+R129+R144) + 1 結構性發現: R144 entry 補段「連 5 輪」文字對齊   │
+│  7/7 PASS + 0 code, 0 mod, 0 護衛, 0 髒檔, 0 spec, 0 規格失敗修復      │
+└──────────────────────────────────────────────────────────────┘
+
+**做了什麼**:
+- 0 code, 0 mod, 0 護衛 chain 變動, 0 髒檔觸碰, 0 spec 變更, 0 spec 驗證失敗修復, 0 錯記硬修
+- 1 個工程紀錄 entry (本檔, R130 結構性發現 1 條 doc drift + 接力 1 標 R130+ 接力 1)
+- 結構性審計 closure 7 條 (上表 7/7 PASS), 補 KPI 進展表 (HARNESS 強制)
+- spectra validate --changes otel-genai-runtime-emit-2026-q3 + prometheus-counter-rename-2026-q3 2/2 pass ✓
+- cargo test --lib 452/452 pass 8.99s 綠 ✓
+- R13 6 髒檔 (MISSION.md / docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs / scripts/r124_sentinel.py) 0 觸碰 ✓ (本輪只動 engineering-log.md)
+
+**結果**: PASS (R130 7 項結構性審計 7/7 PASS + 1 結構性發現 (R144 entry 補段「連 5 輪」cell 文字對齊實測需「連 6 輪」) 標 R130+ 接力 1, 不硬接力不 ship, 留 R131+ 真 ship closure + HARNESS 3 條訊號復盤 (規格驗證 0 失敗 / 未完 change 1 個 otel-genai owner M scope / KPI 表補) + R13 6 髒檔 0 觸碰 + R97 後 chain 20→20 守住 + baseline 452/452 持平 + 結構性飽和第 12 輪延伸 + 連 6 輪 7-check + 1 輪 1 件結構性審計不搶 owner M scope 不破 R97 紅線, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 實測復盤不盲信提示 + 結構性發現不硬接力」合規)

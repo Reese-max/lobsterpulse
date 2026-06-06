@@ -11982,6 +11982,40 @@ mod r127_daemon_exclusion_gitignore_tests {
              列為 untracked, R13 髒檔基線無法降。請在 .gitignore 加該行。"
         );
     }
+
+    // R137 follow-up: 結構性全掃描「同類 gap」(從 R127 6 daemon path + R135
+    // __pycache__/ 反推同類特徵: test runtime 產物 + supervisor daemon 產物),
+    // 找到 3 個遺漏: .pytest_cache/ (pytest cache, 跟 __pycache__/ 同源, R135
+    // 漏同源路徑) + .supervisor-history.log + .supervisor-k4-alert.log
+    // (supervisor daemon log, 跟 R127 6 path 同類但 R127 漏 .log 副檔名)。
+    // 補 1 個護衛 test 走既有 mod, 護衛 chain 20→20 不擴張, baseline +1。
+    // 架構理由: 跟 R135 同模式 (R97 飽和契約例外, 既 mod 內 +1 test),
+    // 不開新 mod, 不搶 owner M scope。
+    #[test]
+    fn r137_gitignore_contains_3_sibling_gap_paths() {
+        let gitignore_path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", ".gitignore"]
+            .iter()
+            .collect();
+
+        let content = std::fs::read_to_string(&gitignore_path)
+            .unwrap_or_else(|e| panic!("read {} failed: {e}", gitignore_path.display()));
+
+        // 3 個結構性全掃描發現的同類 gap: 既有 R127/R135 護衛 6+1 個 path 都
+        // 不收這 3 個, R137 worker 補網閉合 R13 防護線同類特徵全集
+        let required = [
+            ".pytest_cache/",        // pytest cache, 跟 __pycache__/ 同源
+            ".supervisor-*.log",     // supervisor daemon log (history + k4-alert)
+            // 行內匹配 + 雙星模式, 跟 R127/R135 護衛風格一致
+        ];
+        for pattern in required {
+            assert!(
+                content.contains(pattern),
+                ".gitignore 漏收 R137 結構性全掃描同類 gap `{pattern}`, \
+                 會被 `git status --short` 列為 untracked, R13 髒檔基線無法降。\
+                 請在 .gitignore 加該行 (跟 R127 6 path + R135 __pycache__/ 補網同模式)。"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------

@@ -42,3 +42,10 @@ bash.exe.stackdump
 # 跟 R127 daemon 噪音同類 — 不在 R13 防護線要追蹤的範圍, 補網)
 __pycache__/
 **/__pycache__/
+
+# R137 結構性全掃描同類補網 (R127 收網 6 daemon path 漏 .log 副檔名,
+# R135 補網 __pycache__/ 漏同源 .pytest_cache/ — 兩個都是 test runtime
+# / supervisor daemon 產物但 pattern 不被既有 glob 覆蓋, 補網閉合 R13 防護線)
+.pytest_cache/
+**/.pytest_cache/
+.supervisor-*.log

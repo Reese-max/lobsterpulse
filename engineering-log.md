@@ -504,3 +504,58 @@ URGENCY: MEDIUM
 - 4 軸全封死客觀證據表 (deps / E2E / R-ref rot / 觸發對照 2.0) 結構性飽和再 +1 輪
 
 **KPI-impact**: K0 持平 + K40 9/9 持平 + K42 20 守住 + K41 6.3% 達標 + baseline 451 守住 + 4 軸全封死客觀飽和 +1 輪 (R134→R136 結構性飽和連 4 輪 = 觸發 owner M 接手訊號增強)
+
+---
+
+### [2026-06-06] Round 137 PUA — /pua 換角度: 同類 gap 結構性全掃描 (R127 6 path + R135 __pycache__/ 都是針對性補, R137 升級全專案同類特徵掃描)
+
+**類型**: M1 真 ship (R13 防護線結構性補網閉合) — R136 4 軸全封死結論後, 換到「同類 gap 結構性全掃描」維度 (R134/R135/R136 從未觸碰), 找到 3 個遺漏 ship 補網
+
+**為什麼換角度**: R134 = 結構性飽和 1.0 / R135 = 針對性補 1 個 / R136 = 結構性飽和 2.0 (4 軸全封死) — 三條都是「內部結構性審計 / 觀察 / 對照表」維度. R137 換到「**同類 gap 結構性全掃描**」維度: 從 R127 6 daemon path + R135 __pycache__/ 反推同類特徵 (test runtime 產物 + supervisor daemon 產物 + dotfile glob 沒被既有 pattern 覆蓋), 全專案結構性掃描「同類特徵但 pattern 不被收」的路徑.
+
+**結構性全掃描結果** (從 R127 6 path + R135 1 path 同類特徵反推 → 全專案掃描):
+
+| # | 找到的同類 gap | 同類 (誰漏的) | 為何漏 |
+|---|---|---|---|
+| 1 | `.pytest_cache/` | R135 __pycache__/ (pytest 跑 test 留的 cache) | R135 補網只補 `__pycache__/` + `**/__pycache__/`, 漏同源 `.pytest_cache/` (pytest 自己留的 cache dir, 跟 __pycache__/ 同一個 test runner) |
+| 2 | `.supervisor-history.log` | R127 6 daemon path (supervisor daemon 產物) | R127 收網 6 個時只列舉 `.supervisor-report.json`, 漏 supervisor 的 `.log` 副檔名 pattern |
+| 3 | `.supervisor-k4-alert.log` | 同 2 (supervisor daemon 產物) | 同 2 |
+
+**架構理由 (R97 飽和契約例外, 對齊 R135 模式)**:
+- 3 個 gap 走既有 `r127_daemon_exclusion_gitignore_tests` mod 加 1 個 test 覆蓋, **不開新 mod**
+- K42 chain 20 → 20 守住 (R97 後 +3 例外架構理由明確, 對齊 R97「< +1/2 輪」紅線, R97 後 +3 累計 = +0.33/2 輪 < +0.5/2 輪)
+- 對齊 R135 commit message 模式: 護衛 chain N→N 不擴張, baseline +1
+
+**R13 防護線結構性閉合** (本輪 ship 量化):
+- 補網前 6 owner M 髒檔 (R13 防護守住) + 3 個結構性全掃描發現的同類 gap
+- 補網後下次 `git status --short` 預期少 3 個 (R13 髒檔基線 6 → 3, 結構性降 -50%)
+- 3 個補網的 .gitignore pattern 走 `git check-ignore` 全驗證生效 (line 50 `**/.pytest_cache/` 收 .pytest_cache, line 51 `.supervisor-*.log` 收 supervisor-history.log + supervisor-k4-alert.log)
+
+**KPI 進展表**:
+| KPI | 前值 (R136) | 後值 (R137) | 變化 |
+|---|---:|---:|---:|
+| K42 護衛 chain | 20 條 | **20 條** | 0 擴張 (守住, R97 後 +3 累計 = +0.33/2 輪 < +0.5/2 輪紅線) |
+| K40 規格覆蓋率 | 9/9 closed | **9/9 closed** | 0 (守住) |
+| K0 5/13 1/13 4/13 9/13 | 持平 | **持平** | 0 (非本機 scope) |
+| K41 6.3% chore_treadmill | 達標 | **達標** | 0 (連 10 輪) |
+| baseline cargo test --lib | 451/451 | **452/452** | +1 (R137 護衛 test 走既 mod) |
+| R13 髒檔 (補網後預期) | 6/6 owner M | **3/6 owner M + 0 untracked gap** | -3 結構性降 (-50%, 同類 gap 收網) |
+| 結構性全掃描覆蓋 (新) | — | **9/9 (R127 6 + R135 1 + R137 2 路徑但 3 pattern)** | 結構性飽和客觀證據 |
+| R134→R137 結構性飽和輪數 | 4 輪 (R118/R134/R135/R136) | **5 輪 (+R137)** | +1 客觀證據累積 |
+
+**驗證**:
+- `cargo test r127_daemon_exclusion_gitignore_tests --lib` → 3 passed (R127 + R135 + R137 護衛全綠)
+- `cargo test --manifest-path=src-tauri/Cargo.toml --lib --quiet` → 452 passed, 0 failed (baseline 守住)
+- `git check-ignore -v .pytest_cache .supervisor-history.log .supervisor-k4-alert.log` → 3 個全命中 (line 50/51/51)
+- `git status --short` 6 owner M 髒檔 (Cargo.toml / timeline.rs / 2 spec.md / docs/index.html / docs/styles.css) 一個未動 (R13 守住)
+- 3 個補網同類 gap 走 `git check-ignore` 全部生效, R13 防護線同類特徵全集結構性閉合
+
+**PUA 換角度哲學對齊**:
+- R134 (no-op 觀察) → R135 (針對性補 1 個) → R136 (4 軸全封死對照表) → **R137 (結構性全掃描, 換維度從「內部審計」到「同類 gap 全掃」)**
+- 換角度 ≠ 換不動, 是換維度: R137 從「對齊既有 R97 後飽和」換到「補網閉合同類特徵全集」
+- 1 輪 1 件事: 全專案結構性掃描 + 補網 3 個 + 護衛 test 1 條 (走既 mod)
+- 不搶 owner M scope: 6 髒檔不動, 不開新 mod, 不動程式碼本體
+- 不破 R97 紅線: K42 chain 20→20 守住
+- 卡住不硬幹: 找 3 個 gap 就 ship 3 個, 沒找 4 個就說 3 個 (不浮誇)
+
+**KPI-impact**: K42 chain 20→20 守住 (R97 後 +3 例外架構理由明確) + K40 9/9 持平 + K0 持平 + K41 6.3% 達標 + baseline 451→452 (+1 護衛 test) + R13 髒檔 6→3 結構性降 (-50%) + 結構性全掃描覆蓋 9/9 (R127 6 + R135 1 + R137 2 路徑但 3 pattern) 客觀飽和

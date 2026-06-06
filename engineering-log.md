@@ -781,3 +781,37 @@ URGENCY: MEDIUM
 **結果**: PASS (1 輪沒有改善, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線」合規, 結構性接力順位給 owner M 1~9 條)
 
 **KPI-impact**: K0 持平 (5/13 1/13 4/13 9/13) + K40 持平 (7/7 closed) + K41 持平 (6.3% 達標) + K42 持平 (20 條守住) + baseline 450→450 守住 + R13 7/7 守住 (0 code 0 spec 0 髒檔污染)
+
+### [2026-06-06] Round 135 — /pua 換角度: R127 .gitignore 補網 __pycache__/ (R13 髒檔基線 7→6 + 護衛 +1 test 不擴 chain)
+
+**類型**: M0 (R13 治理 bug: pytest 跑完留 .pyc 在 scripts/__pycache__/ 被 git status 列 untracked, 跟 R127 daemon 噪音同類, R127 收網 6 path 漏 Python bytecode cache)
+
+**KPI 進展表**:
+| KPI | 前值 (R134) | 後值 (R135) | 變化 |
+|---|---:|---:|---:|
+| K42 護衛 chain | 20 條 | 20 條 (R97 後 +3 持平, +1 test 走既有 r127 mod) | 0 |
+| K42 護衛 test 總數 | 450 條 | 451 條 | +1 |
+| R13 髒檔基線 | 7 (R127 後) | 6 | -1 |
+| baseline cargo test --lib | 450/450 | 451/451 | +1 |
+
+**為什麼**: R134 no-op 觀察接力清單首位是「接 R127 .gitignore 收網 6 daemon path 真 ship」延伸 — 接力順位暗示「R13 防護線上還有同類 gap」。`git status --short` 顯示 `scripts/__pycache__/` 仍在 untracked (R127 收網漏 Python bytecode cache, 同類 test runtime 產物), 結構性補網閉合 R127 未盡事項。R97 後護衛 chain +3 已用 (+0.33/2 輪, < +0.5/2 輪紅線), 不開新 mod 護衛, 走「同 r127_daemon_exclusion_gitignore_tests mod 內 +1 test」模式 (chain 20→20 守住, test 450→451)。
+
+**搜尋**: 不需 (R127 commit 4cf3bd9 已示範 .gitignore 收網 + 護衛 test 模式, R135 是同模式 follower)
+
+**做了什麼**:
+- `.gitignore` 末段加 2 行 (R127 段註解後) — `__pycache__/` + `**/__pycache__/` 雙模式, 對齊 pytest 預設輸出路徑 (scripts/__pycache__/ + 未來子目錄擴展)
+- `src-tauri/src/lib.rs` 在既有 `r127_daemon_exclusion_gitignore_tests` mod 內加 1 個 test `r135_gitignore_contains_pycache_exclusion` — 護衛 `.gitignore` 必含 `__pycache__/` token, 漏收 fail-fast 報行
+- 不擴 K42 chain (R97 後 +3 例外守住), 不搶 owner M 6 WIP 檔 (timeline.rs / Cargo.toml / docs / 2 spec — 全部 dirty 0 動, R13 防護 7→7)
+- 不修既有 5 個 clippy 錯誤 (timeline.rs dead_code `timeline_snapshot_7d` 是 owner M WIP, 4 個 doc-list-item indentation 在 lib.rs L196 都不是本輪改的) — 對齊 CLAUDE.md「不做沒列的 refactor」
+
+**驗證方式**:
+- `cargo test --lib` 451/451 (R127 護衛 6 path 仍 ok + R135 新護衛 1 test ok)
+- `git status --short` `?? scripts/__pycache__/` 消失, `M .gitignore` + `M src-tauri/src/lib.rs` 進入 tracked diff
+- owner M 6 WIP 檔 0 動 (docs/index.html / docs/styles.css / 2 spec / Cargo.toml / timeline.rs 全保持 dirty, R13 防護 7→7 守住)
+- R135 護衛 test 本身跑通, `__pycache__/` token 確認在 .gitignore
+- clippy/fmt 既有 5/多 diff 都不是本輪引入 (驗證: 4 個 lib.rs clippy 都在 L196 遠離 R135 改的 L11960+, timeline.rs dead_code 是 owner M WIP)
+
+**結果**: PASS (R13 髒檔基線 7→6 -14% + 護衛 chain 20→20 守住 + 護衛 test 450→451 + 不搶 owner M scope + 不破 R97 紅線 + 不修 owner M 既有 clippy/fmt + baseline 守住)
+
+**KPI-impact**: K42 chain 20→20 守住 + R13 髒檔基線 7→6 (-14%) + baseline 450→451 (+1 護衛 test)
+

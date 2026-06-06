@@ -37,3 +37,8 @@ runs/
 .harness-memory.db
 .supervisor-report.json
 bash.exe.stackdump
+
+# R135 pytest runtime 產物 (scripts/test_k0_drift_check.py 跑完 pytest 留 .pyc,
+# 跟 R127 daemon 噪音同類 — 不在 R13 防護線要追蹤的範圍, 補網)
+__pycache__/
+**/__pycache__/

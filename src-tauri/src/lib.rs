@@ -187,6 +187,16 @@ fn timeline_snapshot_24h(manager: tauri::State<AppSessionManager>) -> Vec<Vec<u8
     manager.0.lock().unwrap().timeline_ring.snapshot_24h()
 }
 
+/// R131 M1.1: timeline_snapshot_7d — 對齊 `cross-provider-timeline/design.md`
+/// §5 開放問題 #1 兩條固定 buffer 提案 (24h 1min × 18.3KB + 7d 1min × 128KB,
+/// 加總 < 150KB 守 K41 紅線)。前端 Timeline view 切 7d 解析度時呼叫,
+/// 與 `timeline_snapshot_24h` 對稱走 Tauri state。Memory = 13 × 10080 × 1 byte
+/// = 131,040 bytes (128 KB) per snapshot, 對齊 design §5 開放問題 #1 預算。
+#[tauri::command]
+fn timeline_snapshot_7d(manager: tauri::State<AppSessionManager>) -> Vec<Vec<u8>> {
+    manager.0.lock().unwrap().timeline_ring.snapshot_7d()
+}
+
 /// timeline_toggle_resolution: 切換 24h ↔ 7d 解析度 (placeholder 階段)。
 /// 24h ring buffer 已 ship (T-CPT7/T-CPT11, R122 b1b3ed3);
 /// 7d ring buffer 留 M1.1 follow-up 對齊 `design.md` §5 開放問題 #1
@@ -11949,5 +11959,111 @@ mod r127_daemon_exclusion_gitignore_tests {
                  列為 untracked, R13 髒檔基線無法降。請在 .gitignore 加該行。"
             );
         }
+    }
+
+    // R135 follow-up: pytest 跑 scripts/test_k0_drift_check.py 會留 .pyc 在
+    // scripts/__pycache__/。R127 護衛 6 個 daemon 噪音 path 但漏 Python bytecode
+    // cache (同類 test runtime 產物, 不在 R13 防護線要追蹤的範圍)。補 1 個
+    // 護衛 test 在既有 mod 內, 護衛 chain 19→19 不擴張, baseline +1。
+    #[test]
+    fn r135_gitignore_contains_pycache_exclusion() {
+        let gitignore_path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", ".gitignore"]
+            .iter()
+            .collect();
+
+        let content = std::fs::read_to_string(&gitignore_path)
+            .unwrap_or_else(|e| panic!("read {} failed: {e}", gitignore_path.display()));
+
+        // 行內匹配: `__pycache__/` 出現即視為收網 (含 `**/__pycache__/` 雙星模式)
+        assert!(
+            content.contains("__pycache__/"),
+            ".gitignore 漏收 Python bytecode cache `__pycache__/`, \
+             pytest 跑完會留 .pyc 在 scripts/__pycache__/ 被 `git status --short` \
+             列為 untracked, R13 髒檔基線無法降。請在 .gitignore 加該行。"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// R131 plugin 註冊契約護衛 (對齊 R97 後 +2 例外 → +3 例外模式, K42 chain 19→20)
+// 架構理由: Tauri 5 plugin 啟動失敗檢測 (single_instance / autostart /
+// notification / global_shortcut / log) — 跨既有 mod 邊界 (render_prom /
+// auto_rules / timeline / session / hook_server / event / config 都跟
+// plugin 註冊契約無關), 需獨立 mod 護衛「5 個 plugin 都透過
+// `builder.plugin(...)` 註冊進 run()」 invariant。對齊 R127 .gitignore
+// 護衛模式: 讀 source file (lib.rs) 確認契約 token 出現。
+//
+// R131+ 監督: K42 飽和契約例外速率需量化 (R131 拷問發現 #3 — 7d/30d 例外
+// 頻率監控), 本例外佔 R97 後 +3/2, 守住「< +1/2 輪」紅線才能再擴。
+// ---------------------------------------------------------------------
+#[cfg(test)]
+mod r131_plugin_registry_tests {
+    use std::path::PathBuf;
+
+    /// 5 個 plugin 都必須在 `pub fn run()` 內透過 `builder.plugin(...)` 註冊
+    /// (CLAUDE.md Plugin 清單 + L3240-3303 落地); 任一漏註冊 → Tauri 啟動 panic,
+    /// 等於 R0 級別阻斷。護衛契約: source 內必須有對應 `tauri_plugin_XXX::init` /
+    /// `::Builder::...` token, 漏一個即 fail 並列名單。
+    #[test]
+    fn r131_run_function_registers_all_5_tauri_plugins() {
+        // 從 src-tauri/ 內讀 src/lib.rs
+        let lib_rs_path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "src", "lib.rs"]
+            .iter()
+            .collect();
+
+        let src = std::fs::read_to_string(&lib_rs_path)
+            .unwrap_or_else(|e| panic!("read {} failed: {e}", lib_rs_path.display()));
+
+        // 5 個 plugin 註冊 token, 任一漏註冊 → fail
+        let required: &[(&str, &str)] = &[
+            (
+                "tauri_plugin_single_instance::init",
+                "single_instance plugin",
+            ),
+            ("tauri_plugin_autostart::init", "autostart plugin"),
+            ("tauri_plugin_notification::init", "notification plugin"),
+            (
+                "tauri_plugin_global_shortcut::Builder::new",
+                "global_shortcut plugin",
+            ),
+            (
+                "tauri_plugin_log::Builder::default",
+                "log plugin (dev mode conditional)",
+            ),
+        ];
+        let mut missing: Vec<&str> = Vec::new();
+        for (token, label) in required {
+            if !src.contains(token) {
+                missing.push(label);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "lib.rs 漏註冊 {} 個 plugin: {:?}。Tauri 啟動會 panic, R0 級阻斷。\
+             請在 `pub fn run()` 內加 `builder = builder.plugin(...)`",
+            missing.len(),
+            missing
+        );
+
+        // 額外 sanity: `pub fn run()` 內 `builder = builder.plugin(` 至少出現 4 次
+        // (4 個 desktop plugin 在 run() top-level 註冊: single_instance /
+        // autostart / notification / global_shortcut; 第 5 個 log 在 setup()
+        // conditional debug_assertions 內註冊 — 5 token 護衛已涵蓋, 不重複計)
+        let run_start = src
+            .find("pub fn run()")
+            .expect("lib.rs 應有 `pub fn run()` entry");
+        let run_end = src[run_start..]
+            .find(".run(tauri::generate_context!())")
+            .map(|off| run_start + off)
+            .unwrap_or(src.len())
+            .min(src.len());
+        let run_body = &src[run_start..run_end];
+        let plugin_count = run_body.matches("builder = builder.plugin(").count();
+        assert!(
+            plugin_count >= 4,
+            "lib.rs run() top-level 內 `builder = builder.plugin(` 應 ≥ 4 次 \
+             (4 desktop plugin: single_instance / autostart / notification / global_shortcut),\
+             實際 {plugin_count}。可能 plugin 被搬到 fn 外、被 conditional 蓋掉或被註解。"
+        );
     }
 }

@@ -192,6 +192,14 @@ fn timeline_snapshot_24h(manager: tauri::State<AppSessionManager>) -> Vec<Vec<u8
 /// 加總 < 150KB 守 K41 紅線)。前端 Timeline view 切 7d 解析度時呼叫,
 /// 與 `timeline_snapshot_24h` 對稱走 Tauri state。Memory = 13 × 10080 × 1 byte
 /// = 131,040 bytes (128 KB) per snapshot, 對齊 design §5 開放問題 #1 預算。
+///
+/// R121 PUA 閉合: 護衛 ship 紀錄描述「給前端讀」, 實際 frontend 僅 wire 24h 版本
+/// (main.js:1656 `timeline_snapshot_24h`), 7d wrapper 暫為孤兒。TimelineRing
+/// `snapshot_7d()` method 仍由 R131 護衛 test 5 invariants 守住 (timeline.rs 內),
+/// 此 wrapper 待 frontend Timeline view 切 7d 解析度時 (R128 T-CPT10 接力) 註冊
+/// invoke_handler 即可 wire。`#[allow(dead_code)]` 標 M1.1 placeholder 設計意圖,
+/// 不破壞 R131 ship 護衛鏈。
+#[allow(dead_code)]
 #[tauri::command]
 fn timeline_snapshot_7d(manager: tauri::State<AppSessionManager>) -> Vec<Vec<u8>> {
     manager.0.lock().unwrap().timeline_ring.snapshot_7d()
@@ -213,6 +221,11 @@ fn timeline_toggle_resolution(
         return Err(format!("resolution 必須是 {allowed:?}, 收到 {resolution}"));
     }
     // placeholder: 7d 留 TODO, 回傳當前解析度給前端對齊。
+    // R121 對齊: 7d ring buffer 已 ship (R131 M1.1), 護衛 test 守住 TimelineRing
+    // 雙 buffer invariants; 但 `timeline_snapshot_7d` Tauri command wrapper 暫為
+    // 孤兒 (frontend 僅 wire 24h, 詳見 lib.rs:196 註解)。前端切 7d 解析度時,
+    // 此 handler 收到 "7d" 後回傳給前端, 前端再 invoke `timeline_snapshot_7d` —
+    // 屆時拿掉 wrapper 的 `#[allow(dead_code)]` + 註冊 invoke_handler 即可。
     Ok(resolution)
 }
 

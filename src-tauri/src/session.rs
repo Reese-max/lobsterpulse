@@ -5064,9 +5064,15 @@ mod tests {
         let mut sound = 0usize;
         let mut log = 0usize;
         for f in &m.rule_firings {
-            if matches!(f.action, crate::config::RuleAction::Toast { .. }) { toast += 1; }
-            if matches!(f.action, crate::config::RuleAction::Sound { .. }) { sound += 1; }
-            if matches!(f.action, crate::config::RuleAction::Log { .. }) { log += 1; }
+            if matches!(f.action, crate::config::RuleAction::Toast { .. }) {
+                toast += 1;
+            }
+            if matches!(f.action, crate::config::RuleAction::Sound { .. }) {
+                sound += 1;
+            }
+            if matches!(f.action, crate::config::RuleAction::Log { .. }) {
+                log += 1;
+            }
         }
         assert!(toast >= 2, "toast action ≥ 2 (預設 1 + 2), 實際 = {toast}");
         assert!(sound >= 1, "sound action ≥ 1 (預設 1), 實際 = {sound}");

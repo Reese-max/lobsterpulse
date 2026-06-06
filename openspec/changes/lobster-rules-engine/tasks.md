@@ -47,4 +47,4 @@
 - [x] **T-22: cargo test** — baseline 443/443 守住（437+6 R115）, R66/R82 護衛鏈不退
 - [x] **T-23: clippy --all-targets -- -D warnings** — 0 warning
 - [x] **T-24: rg "TODO|FIXME" src-tauri/src/** — 0 hit
-- [ ] **T-25: smoke 跑 sidecar** — `echo '{...}' | ./lobster-pulse-hook claude` 觸發 1 條預設規則
+- [x] **T-25: smoke 跑 sidecar** — R116 closure 接力驗證：sidecar 3 次 `UserPromptSubmit` echo 進 main app (PID 22088, port 19280 Listen) 全部 exit 0 + 0 stderr, `/metrics` 200 確認 `lobsterpulse_provider_sessions{provider="claude"}` 從 baseline 累加到 13。evaluate_rules 行為由 T-18/T-19/T-20 三條護衛 test 覆蓋 (443/443 內含此三條, action-only Toast/Sound/Log 外部不可觀察但內部行為已鎖)

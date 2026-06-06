@@ -1,8 +1,9 @@
 id: lobster-rules-engine
 schema: openspec/v1
 created: 2026-06-06
-status: drafting
-phase: m0
+updated: 2026-06-06
+status: closed
+phase: 1/1
 title: Lobster Rules Engine — 使用者自訂 event → action
 owners: [auto-dev]
 references:

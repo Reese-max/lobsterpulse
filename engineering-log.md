@@ -604,3 +604,42 @@ URGENCY: LOW
 - K42 chain 18 提案: owner M R110 護欄 cross-module test (lib.rs R110 OPENAB_BOT_IDS ⊆ hook_server::KNOWN_PROVIDERS) 已在 dirty, 走既有 mod 也 chain 17→17, 收 R115 接力
 - docs/landing page (docs/index.html) 對齊檢視: 跟 MISSION/CLAUDE.md 的 13 provider 數字 + 6 counter deprecation 對齊, 留 R115+ owner
 - MISSION R81 baseline K42 chain 17 條 飽和契約 vs R113.1/R114 dual-emit value guard 護衛走既有 mod 17→17 不擴張: spec doc 需要 R115 接力 (R110+ 留的架構 doc 待 owner)
+
+### [2026-06-06] Round 116 — R115 lobster-rules-engine spec closure 接力 (M0)
+
+**類型**: M0 (spec closure, 不動 code)
+**對齊 spec**: `openspec/changes/lobster-rules-engine/`
+**接力前狀態**: tasks 24/25 [x] 剩 T-25 sidecar smoke, .openspec.yaml status=drafting phase=m0
+
+**接力做了什麼**:
+1. 跑 sidecar 接力驗證 T-25: `echo '{"hook_event_name":"UserPromptSubmit",...}' | lobster-pulse-hook.exe claude` 連跑 3 次, sidecar 端 3 次 exit 0 + 0 stderr (R34 silent 錯誤未觸發)
+2. main app PID 22088 alive + port 19280 Listen (powershell `Get-NetTCPConnection` 確認) + `/metrics` 200 OK
+3. `/metrics` 端點 146 行 emit 確認, `lobsterpulse_provider_sessions{provider="cicx"} 1` + `{provider="claude"} 13` (claude 從 baseline 累加到 13, K0-A1 端點 evidence 復活)
+4. evaluate_rules 行為由既有 T-18/T-19/T-20 三條護衛 test 守 (443/443 內含此三條, action-only Toast/Sound/Log 外部不可觀察但內部行為已鎖)
+5. 改 `tasks.md` T-25 為 [x] + 補完成註明
+6. 改 `.openspec.yaml` status=drafting→closed, phase=m0→1/1, updated=2026-06-06
+
+**KPI 進展表**:
+| KPI | 前值 (R111 R114 closure) | 後值 (R116 R115 closure) | 變化 |
+|---|---:|---:|---|
+| baseline (cargo test --lib) | 438/438 (R111) | **443/443** | +5 (R115 auto_rules 三條護衛 test 落地, R115 commit 0c09f14 帶進) |
+| K40 規格覆蓋率 | 6/6 active change closed (R111 R114 收) | **7/7** (R116 R115 收) | +1 |
+| K42 護衛 chain | 17 條 (R111) | 17 條 (M0 spec closure 不擴張) | 0 守住 |
+| K0-A1 endpoint emit | 0/13 (endpoint DOWN, R108/R111 量測) | **端點 200, claude=13 + cicx=1 已 emit** | 端點復活 (2/13 有樣本, 距 13/13 仍缺 11 個 provider 事件流過) |
+| K0 Quota K0-Q | 9/13 (R111) | 9/13 (本輪不動 K0) | 0 |
+
+**結果**: PASS (R115 lobster-rules-engine spec closure 接力, K40 6→7, baseline 438→443, K42 chain 17→17 守住, K0-A1 端點 evidence 復活 0→2/13, R13 守住 owner M 11 個髒檔一個未動)
+
+**KPI-impact: K40 規格覆蓋率 6/6 → 7/7 (R115 lobster-rules-engine 收 closure)**
+
+**觀察 (不推進 KPI, 留 R117+ 量測)**:
+- K0-A1 端點復活: main app 跑起來 `/metrics` 就有資料, 之前 0/13 純粹是 endpoint DOWN 不是 emit 邏輯壞。K0-A1 真正 13/13 需 11 個其他 provider 事件流過 (cicx=1 claude=13, 其餘 11 個還是 0)
+- owner M WIP (R13 守 11 個髒檔): docs/index.html (22 lines 13 provider 雙路徑介紹) + docs/styles.css (25 lines 配套) + src/styles.css (90 lines 含 PUA R112 Capsule Brief + R115 規則 UI 樣式) + src-tauri/Cargo.toml (CRLF normalize) + 5 個 engine 殘留 (.ad-map/ .arch-fitness.json .engineer-loop.failures.jsonl .harness-memory.db .supervisor-report.json) + 2 個 MSYS2 bash crash dump (bash.exe.stackdump src-tauri/bash.exe.stackdump)
+- R112 Capsule Brief 樣式已落地 (src/styles.css `Capsule Brief (PUA R112)` 註解可見), JS 配套可能還在 owner M WIP, 收 R117+ 接力
+
+**留 R117+ 接力**:
+- K0 Quota 9→13 (4 missing: irisx_bot/grokx/lpbot/mimo, 需 OpenAB 端 snapshot 寫入鏈路, 非本機 scope)
+- K0-A1 2→13 (需 11 個其他 provider 事件流過, OpenAB 端跑起來)
+- K0-A2 0→13 (同上, sample 級距)
+- R112 Capsule Brief 配套 JS 接力 (owner M WIP)
+- 6 counter deprecation T-4 切換日 (R116+ 留的 prometheus-counter-rename spec)

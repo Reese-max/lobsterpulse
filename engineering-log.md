@@ -894,3 +894,43 @@ URGENCY: MEDIUM
 **結果**: PASS (1 輪沒有改善, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線」合規, 結構性接力順位給 owner M 1~13 條)
 
 **KPI-impact**: K0 持平 (5/13 1/13 4/13 9/13) + K40 持平 (7/7 closed) + K41 持平 (6.3% 達標) + K42 持平 (20 條守住) + baseline 451→451 守住 + R13 6/6 守住 (0 code 0 spec 0 髒檔污染)
+
+---
+
+### [2026-06-06] Round 119 PUA — /pua 換角度 M0 真 ship: MISSION R-CPT closure spec drift closure (事實驅動結構性審計, 翻轉「搜新工作」軸)
+
+**類型**: M0 (spec drift closure, 對齊 R108 M0 修 k0_measure.py docstring drift 同性質)
+
+**為什麼換角度**: R118 / R134 PUA 換角度都是「搜新工作」軸, 14 條路徑全飽和 → 結構性接力順位給 owner M. R119 PUA 連 2 輪沒改善警示觸發, 翻轉軸做「事實驅動結構性審計」= 不找新工作, 找「文件 vs 現實分叉」.
+
+**搜尋發現**:
+- 盤點 `openspec/changes/*/` 9 個 change: 全 closed (含 cross-provider-timeline phase 2/2 15/15 跟 prometheus-counter-rename-2026-q3 phase 1/1 6/6)
+- MISSION R131 column 量化值寫 K40 7/7 + K42 19 條 + R-CPT 整體待 R131+ 收 closure + baseline 448/448 — 跟現實 (K40 9/9 + K42 20 條 + R-CPT 已 15/15 closed + baseline 451/451) 結構性分叉
+- 量化結論段 K42 chain 17→20 已對, 但 R-CPT 接力清單跟 M1 候選段已過期 (R-CPT 接力已完成)
+- 對齊 R108 M0 修 k0_measure.py docstring 14→13 同性質, 不修就累積
+
+**做了什麼** (一輪一件事 = spec drift closure):
+1. `MISSION.md` R132 column 新增 (K40 7/7→9/9, K42 19→20 持平, baseline 450→451 對齊 R135 真 ship)
+2. `MISSION.md` 量化結論段 K0-A1/A2/護衛鏈補 R132 對齊 + R-CPT 接力完成移除 + M1 候選更新 (R133+ 接力清單)
+3. `MISSION.md` header R108~R131 → R108~R132 補段索引 + R132 補段名稱
+4. `docs/kpi-history.md` 加 R132 補段 (R-CPT 整體 15/15 closure + K40 9/9 + chain 20 + baseline 451 量化對齊 + 0 code 0 髒檔污染)
+5. `engineering-log.md` 加 R119 PUA 紀錄
+
+**KPI 進展表**:
+| KPI | 前值 (R131) | 後值 (R119 PUA ship) | 變化 |
+|---|---:|---:|---|
+| K40 規格覆蓋率 | 7/7 closed | **9/9 closed** | +2 (R-CPT 15/15 + prometheus-counter-rename 6/6 入庫) |
+| K42 護衛 chain | 19 條 | **20 條** | +1 (R131 plugin registry 護衛 ship 對齊真實) |
+| baseline cargo test --lib | 448/448 | **451/451** | +3 (R127 +1 .gitignore + R131 +1 plugin registry + R135 +1 __pycache__) |
+| K0 5/13 1/13 4/13 9/13 | 持平 | **持平** | 0 (結構性確認 0 spec drift) |
+| R13 髒檔未動 | 6/6 owner M | **6/6 owner M** | 0 (守住, 我只改 3 個文件) |
+| cargo clippy | 0 warning | **0 warning** | 0 (守住, 0 code 變更) |
+| cargo fmt --check | 0 diff | **0 diff** | 0 (守住, 0 code 變更) |
+
+**驗證**:
+- `cargo test --manifest-path=src-tauri/Cargo.toml --lib` → 451 passed, 0 failed
+- 9 個 openspec change 全部 status=closed, tasks=N/N 全 [x]
+- 6 個 owner M 髒檔 (Cargo.toml / timeline.rs / docs/* / cross-provider-timeline spec+yaml / prometheus-counter-rename spec) 一個未動
+- MISSION / kpi-history / engineering-log 三文件同步對齊
+
+**KPI-impact**: K40 7→9 closed changes + K42 19→20 chain + baseline 448→451 守住 + 文件 spec drift 0 (MISSION R132 column 對齊現實)

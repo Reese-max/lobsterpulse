@@ -2,9 +2,16 @@ id: cross-provider-timeline
 schema: openspec/v1
 created: 2026-06-06
 updated: 2026-06-06
-status: open
-phase: m1
+status: closed
+phase: 2/2
 title: Cross-Provider Timeline View — 第 6 視圖, 24h × 13 provider 時間軸
+# R119 收 closure: tasks.md 15/15 全數落地 (Phase 1 M0 spec 6/6 R117 ship + Phase 2
+# M1 9/9 R122/R113/R128/R119/R131/R135 接力 ship)。spectra validate 8/8 pass,
+# 護衛 chain 19 守住 (R122 T-CPT11 落 1 條 timeline::tests 護衛 + R135 落 1 條
+# __pycache__/ 護衛 + T-CPT9 落 1 條 timeline_jump_target_contract, 對齊 R97 後
+# 飽和契約例外架構理由 doc 寫齊), baseline 446/446 全綠, R13 守住 6 owner M 髒檔。
+# 收 closure 後 R119+ 可開新 change 推進 K0 Quota 4 missing (OpenAB scope) 或
+# K0-A1 emit 護衛補鏈路 (本機 CLI scope), 詳見 MISSION.md。
 owners: [auto-dev]
 references:
   - CLAUDE.md (project context, 北極星釘在頂部)

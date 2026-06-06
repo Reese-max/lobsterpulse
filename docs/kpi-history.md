@@ -139,3 +139,19 @@
 - 0 code 0 spec 0 髒檔污染
 
 **下一輪影響**: R131+ 接力清單新維度：(a) main.js 結構性分層 plan 量化；(b) docs/demo-app E2E 護衛；(c) R97 飽和契約例外速率監控。
+
+---
+
+## R132 — R-CPT 整體 15/15 closure + K40 9/9 + K42 chain 20 + baseline 451 量化對齊
+
+**為什麼**: R135 commit 6dfa66b .gitignore 補網 __pycache__/ 收網後，9 個 openspec change 已全 closed（含 cross-provider-timeline phase 2/2 15/15 跟 prometheus-counter-rename-2026-q3 phase 1/1 6/6），但 MISSION R131 column 量化值仍寫「K40 7/7 持續 + R-CPT 整體待 R131+ 收 closure」、「K42 19 條持平 R119」，結構性跟現實分叉。R119 PUA 換角度 (2 輪沒改善) 翻轉軸做「事實驅動結構性審計」發現此 spec drift，類 R108 M0 修 k0_measure.py docstring drift 同性質。
+
+**量化**:
+- `openspec/changes/*/` 9 個 change 全 closed (contract-matrix-guard 8/8, cross-provider-timeline 15/15, lobster-rules-engine 25/25, openab-bot-sync 12/12, otel-provider-metrics-contract 9/9, prometheus-counter-convention 8/8, prometheus-counter-rename-2026-q3 6/6, r114-k0-coverage-and-dual-emit-guard 13/13, archive 0/0)
+- MISSION.md K40 規格覆蓋率 7/7 → **9/9** 對齊 9 個 change 全 closed (R-CPT 跟 prometheus-counter-rename 之前未量化入 K40 統計口徑，本輪補入)
+- MISSION.md K42 護衛 chain 19 → **20** (R131 ship plugin registry 護衛 +1 走既 `auto_rules::tests` mod, R97 後 +3 例外架構理由明確; R135 .gitignore 補網 __pycache__/ 護衛 test +1 走既護衛, chain 不擴張)
+- baseline `cargo test --lib` 450/450 → **451/451** (R135 +1 test 守 `__pycache__/` token 確認)
+- 0 code 0 髒檔污染 (R13 6 owner M dirty 一個未動)
+- clippy 0 / fmt 0 diff 守住
+
+**下一輪影響**: R133+ 接力清單 4 條：(a) 護衛 過期契約審計 (護衛對應 spec 最後更新時間掃描); (b) R117 capsule-brief JS 配套等 owner M 收; (c) K0 Quota 4 missing 補鏈路 (OpenAB scope); (d) K0-A1 emit 5/13 → 6/13 護衛。

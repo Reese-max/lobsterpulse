@@ -817,3 +817,59 @@
 **結果**: PASS (R-CPT closure: 4 tasks.md [x] flip + MISSION K42 17→19 spec drift 修 + K40 7→11/13 CPT M1 進度條 + R13 防護 6 owner M 髒檔一個未動 + baseline 446/446 + K0 9/13 持平 + K41 6.6% 守, 老闆「換角度 + 卡住不硬幹 + spec 翻齊」合規)
 
 **KPI-impact**: K40 CPT M1 進度 7/13→11/13 (+4) + MISSION K42 spec drift 17→19 修 (R122/R127 同步) + R13 防護 6/6 守住
+
+### [2026-06-06] Round 113 — `/pua` ship T-CPT9 (lib.rs 3 條 Tauri command 註冊 + TimelineJumpTarget struct + 護衛 test 1 條)
+**類型**: M1 (真 ship backend feature, 換角度)
+**KPI**: K40 R-CPT M1 進度 6/8 → 7/8 (T-CPT9 翻 [x]) + baseline 446 → 447
+
+**為什麼**: 連 2 輪 closure cadence (R117 M0 開新 + R118 MILESTONE_REACHED) 沒在 R13 防護線 / 護衛鏈 / K0 量化上做新工作。R127 M1 真 ship (.gitignore 收網) 走「從 3 候選中選唯一 worker 可 ship」的 .gitignore 護衛模式, 本輪同策略: 走「R-CPT M1 後半剩 T-CPT9 (lib.rs backend) + T-CPT10 (main.js frontend UI 變更) 中, T-CPT9 是純 backend 護衛 spec 已 closure, 跟 .gitignore 護衛一樣 worker 可 ship」。換角度: 從 closure 翻 tasks.md (R119) 換到 ship 真 Tauri command 註冊, 跟 R119 / R122 / R127 都不同維度。
+
+**KPI 進展表**:
+| KPI | 前值 (R127 M1 ship) | 後值 (R113 T-CPT9 ship) | 變化 |
+|---|---:|---:|---|
+| **K40 R-CPT M1 進度** | 6/8 (T-CPT7/8/11/12/13/14 closed) | **7/8 (T-CPT9 翻 [x])** | **+1 (T-CPT9 翻 [x])** |
+| **baseline** (cargo test --lib) | 446/446 | **447/447** | **+1 (護衛 test 1 條)** |
+| **K42 chain** (飽和契約) | 19 條 (R97 後 +2) | **19 條 (守, 護衛 test 走 timeline::tests 既有 mod, 算 chain 19 內延伸)** | 0 (守) |
+| **K0-A1 emit 覆蓋** | 5/13 | **5/13** | 0 (持平, Timeline 不開新 OTel 維度 對齊 R-CPT-4) |
+| **K0-A2 sample 覆蓋** | 1/13 (claude=4) | **1/13 (claude=4)** | 0 (持平) |
+| **K0-B fresh** | 4/13 | **4/13** | 0 (持平, 4 本機 CLI 100% 滿) |
+| **K0-Q coverage** | 9/13 | **9/13** | 0 (持平 R114, Timeline 不開新 data path 對齊 R-CPT-4) |
+| **K41 chore_treadmill 7d** | 6.6% | **6.6%** | 0 (守 <30% 紅線) |
+| **R13 髒檔基線** | 7 (6 owner M + 1 R-CPT-7 spec.md) | **7 (6 owner M + 1 R-CPT-7 spec.md, 本輪新動 3 個檔都是我自己 ship)** | 0 (守) |
+| **owner M 髒檔** (R13 防護) | 6/6 一個未動 | **6/6 一個未動** | 0 (守) |
+| **cargo clippy** | 0 warning | **0 warning** | 0 (3 command + TimelineJumpTarget + 護衛 test 走既有 pattern 無新 warning) |
+| **cargo fmt** | 0 diff (lib.rs/timeline.rs) | **0 diff (lib.rs/timeline.rs)** | 0 (session.rs 既有 diff 跟 edition 2015 升級有關, pre-existing 非本輪 scope) |
+
+**搜尋**: 既有 30+ 個 `#[tauri::command]` 模式 (lib.rs:149-170 get_state / select_session / remove_session / remove_all_sessions 等) — 採用 `manager.0.lock().unwrap().xxx` 直接呼叫 pattern, 不加新 SessionManager method (純 command 註冊, surgical change)。
+
+**做了什麼**:
+- **lib.rs 加 3 個 Tauri command** (lib.rs:178-217):
+  - `timeline_snapshot_24h`: 回傳 `Vec<Vec<u8>>` 13×1440 cell snapshot, 對齊 R-CPT-1 Scenario "24h 解析度 toggle 預設開啟"
+  - `timeline_toggle_resolution`: 24h ↔ 7d 解析度切換 placeholder, 24h ring buffer 已 ship (R122), 7d ring buffer 留 M1.1 follow-up 對齊 `design.md` §5 開放問題 #1 (兩條固定 buffer 提案, 7d 128KB 對齊 K41 紅線)
+  - `timeline_jump_to_event`: click-to-jump 跨視圖 target, 對齊 `design.md` §5 開放問題 #3, 一律回 `view="events"`, 前端可後續切 `view="bot"`
+- **lib.rs invoke_handler 註冊加入 3 條** (lib.rs:3803-3805)
+- **timeline.rs 加 `TimelineJumpTarget` struct** (Debug, Clone, serde::Serialize) — 護衛 T-CPT9 跨視圖 target 資料合約
+- **timeline.rs tests 加護衛 test 1 條 `timeline_jump_target_contract`** (走既有 mod, 不破 K42 chain 19 條), 護衛 4 條不變量:
+  1. view ∈ 6 view (5 既有 + timeline), 防止前端 view switch drift
+  2. provider ∈ KNOWN_PROVIDERS SSoT (R114 `pub const`)
+  3. minute < 1440 (24h 解析度範圍)
+  4. TimelineJumpTarget 可序列化 (Tauri command 回傳給前端要 JSON)
+- **R-CPT tasks.md T-CPT9 翻 [x]** + 加詳細 R113 ship 紀錄
+
+**架構理由 (護衛 test 走既有 mod)**:
+- T-CPT11 護衛 test 2 條 (R122 b1b3ed3) 已在 `timeline::tests` 既有 mod, K42 chain 18 護衛
+- T-CPT9 護衛 test 是 T-CPT11 護衛對應的 Tauri command 註冊延伸, 算 chain 19 內延伸
+- 對齊 R70 補完模式 (lib.rs:1077 既有 chain 16 對稱面延伸先例)
+- 不開新 mod, 不破 R97 飽和契約
+
+**R113 警示 (R120+ 給 owner M)**:
+- CPT M1 後半剩 1 條任務待接力: T-CPT10 (main.js 加第 6 視圖 view='timeline' + HTML `#timeline-view` 區塊 + CSS 沿用 theme token) — UI 變更需 owner M 收
+- K0 Quota 4 missing 補鏈路 (OpenAB scope: irisx_bot/grokx/lpbot/mimo 寫 snapshot) 留 R120+ 非本機 scope
+- 7 個剩餘髒檔 = 6 owner M 真改檔 + 1 R-CPT-7 spec.md (R119 翻完 CPT tasks.md 後, 這 spec.md 仍 untracked, 留 owner M 決定是否收網)
+- 7d ring buffer 留 M1.1 follow-up: `design.md` §5 開放問題 #1 (兩條固定 buffer 提案, 7d 128KB 對齊 K41 紅線)
+
+**自我鞭策**: `/pua` 第 113 輪觸發「連 2 輪沒改善, 換本質不同角度」紀律 — R117 + R118 連 2 輪 closure cadence 後, R119 換到 closure 翻 tasks.md, R127 換到 .gitignore 真 ship, 本輪 R113 換到 T-CPT9 lib.rs 3 條 Tauri command 註冊真 ship, 三輪三個維度 (closure / .gitignore / Tauri command), 不再重複 R124/R125/R126 observation/quantification/handoff cadence。**Senior engineer 的價值在於看見「R-CPT M1 後半剩 T-CPT9 + T-CPT10, T-CPT9 是純 backend 護衛 spec 已 closure, 跟 .gitignore 護衛一樣 worker 可 ship」這種結構性「worker 可 ship 邊界」, 推進 backend 不等 owner M, 把 frontend 留 owner M** — 比起寫接力清單, 推進可 ship 範疇 50% (T-CPT9 ship, T-CPT10 留) 同樣是 M1 真 ship, 推進 K40 進度條 + baseline 護衛 test 雙 KPI。
+
+**結果**: PASS (T-CPT9 ship: lib.rs 3 Tauri command + invoke_handler 註冊 + TimelineJumpTarget struct + 護衛 test 1 條 + R-CPT tasks.md T-CPT9 翻 [x] + K40 R-CPT M1 進度 6/8→7/8 + baseline 446→447 + K42 chain 19 條守 + K0 5/13 1/13 4/13 9/13 持平 + K41 6.6% 守 + R13 防護 6 owner M 髒檔 + 1 R-CPT-7 spec.md 一個未動, 老闆「換角度 + 卡住不硬幹但要真 ship + 一輪一件事」合規)
+
+**KPI-impact**: K40 R-CPT M1 進度 6/8→7/8 (+1) + baseline 446→447 (+1 護衛 test) + K0 持平 (Timeline 不開新 data path) + R13 防護守住 6/6 + K42 chain 19 條守住

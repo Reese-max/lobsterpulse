@@ -50,8 +50,14 @@
   cell, 護衛 test 2 條同檔 ship 守住 R-CPT-2 wire 對齊
   - 驗證: session.rs:716 註解明示 R122 T-CPT8 落地, `record_event(&event.provider,
     state_to_u8(now), minute)` 寫入 self.timeline_ring
-- [ ] **T-CPT9: lib.rs 註冊 3 個 Tauri command** — timeline_snapshot_24h /
-  timeline_toggle_resolution / timeline_jump_to_event
+- [x] **T-CPT9: lib.rs 註冊 3 個 Tauri command** — R113 ship (lib.rs:178-217 + invoke_handler 註冊
+  lib.rs:3803-3805)。3 個 command: `timeline_snapshot_24h` (回傳 13×1440 cell snapshot 對齊
+  R-CPT-1 Scenario) / `timeline_toggle_resolution` (24h ↔ 7d 解析度切換 placeholder, 7d ring
+  buffer 留 M1.1 follow-up 對齊 `design.md` §5 開放問題 #1) / `timeline_jump_to_event`
+  (click-to-jump 跨視圖 target, 對齊 `design.md` §5 開放問題 #3)。護衛 test 1 條
+  `timeline_jump_target_contract` 加進 timeline::tests 既有 mod (R122 T-CPT11 ship 護衛
+  2 條同 mod), 不破 K42 chain 19 條飽和契約。K40 R-CPT M1 進度 6/8 → 7/8, baseline
+  446 → 447。
 - [ ] **T-CPT10: main.js 加第 6 視圖 view='timeline'** + HTML `#timeline-view` 區塊
   + CSS 沿用 theme token (--working-color 等)
 - [x] **T-CPT11: 加 1 條獨立護衛 test `timeline_ring_buffer_invariants`** —

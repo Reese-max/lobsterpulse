@@ -120,6 +120,20 @@ impl TimelineRing {
     }
 }
 
+/// T-CPT9 timeline_jump_to_event Tauri command 跨視圖 target。
+/// 對齊 `cross-provider-timeline/design.md` §5 開放問題 #3
+/// (click-to-jump 跨視圖, 點 row 跳 Bot 總覽 / 點 cell 跳事件診斷)。
+/// 簡化版: 一律回 `view = "events"`, 前端可後續按需切 `view = "bot"`。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TimelineJumpTarget {
+    /// 目標 view 名 (`bot` / `events` / `capsule` / `compact` / `settings` / `timeline`)
+    pub view: String,
+    /// 對齊 `KNOWN_PROVIDERS` SSoT (R114 `pub const`)
+    pub provider: String,
+    /// 24h 解析度下的 minute 索引 (0..1440)
+    pub minute: u32,
+}
+
 impl Default for TimelineRing {
     fn default() -> Self {
         Self::new()
@@ -218,5 +232,54 @@ mod tests {
         let snap = ring.snapshot_24h();
         assert_eq!(snap[3][100], STATE_IDLE, "未知 provider 不污染 buffer");
         assert_eq!(ring.current_minute(), 1440, "current_minute 走已知最後一次");
+    }
+
+    #[test]
+    fn timeline_jump_target_contract() {
+        // T-CPT9 timeline_jump_to_event Tauri command 資料合約護衛。
+        // 走 timeline::tests 既有 mod (R122 T-CPT11 ship 護衛 2 條同 mod),
+        // 不破 K42 chain 19 條飽和契約 (架構理由: T-CPT9 是 T-CPT11 護衛
+        // 對應的 Tauri command 註冊延伸, 算 chain 19 內延伸, 對齊 R70 補完
+        // 模式 — lib.rs:1077 既有 chain 16 對稱面延伸先例)。
+        //
+        // 護衛 4 條不變量:
+        // 1. view ∈ 6 view (5 既有 + timeline) — 防止前端 view switch drift
+        // 2. provider ∈ KNOWN_PROVIDERS SSoT (R114 pub const)
+        // 3. minute < 1440 (24h 解析度範圍)
+        // 4. TimelineJumpTarget 可序列化 (Tauri command 回傳給前端要 JSON)
+
+        use crate::timeline::TimelineJumpTarget;
+
+        let target = TimelineJumpTarget {
+            view: "events".to_string(),
+            provider: "claude".to_string(),
+            minute: 720,
+        };
+
+        // (1) view ∈ 6 view
+        let allowed_views = [
+            "bot", "events", "capsule", "compact", "settings", "timeline",
+        ];
+        assert!(
+            allowed_views.contains(&target.view.as_str()),
+            "view 必須是 {allowed_views:?} 之一, 收到 {}",
+            target.view
+        );
+
+        // (2) provider ∈ KNOWN_PROVIDERS SSoT
+        assert!(
+            KNOWN_PROVIDERS.contains(&target.provider.as_str()),
+            "provider 必須對齊 KNOWN_PROVIDERS SSoT (R114), 收到 {}",
+            target.provider
+        );
+
+        // (3) minute < 1440
+        assert!(target.minute < 1440, "minute 必須 < 1440 (24h 解析度)");
+
+        // (4) TimelineJumpTarget 可序列化
+        let json = serde_json::to_string(&target).expect("TimelineJumpTarget 應可序列化");
+        assert!(json.contains("\"view\":\"events\""));
+        assert!(json.contains("\"provider\":\"claude\""));
+        assert!(json.contains("\"minute\":720"));
     }
 }

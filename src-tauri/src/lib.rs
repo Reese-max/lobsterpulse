@@ -173,6 +173,56 @@ fn remove_all_sessions(manager: tauri::State<AppSessionManager>) {
     m.active_session_id = None;
 }
 
+// T-CPT9 (R-CPT M1 後半): Timeline 視圖 3 條 Tauri command 註冊。
+// 對齊 `cross-provider-timeline/design.md` §3.2 lib.rs 整合點 + R-CPT-1/2/3
+// 護衛。R122 b1b3ed3 已 ship TimelineRing struct + 護衛 test 2 條
+// (`timeline_ring_buffer_invariants` + `timeline_ring_state_alignment_with_session`),
+// 本輪補 3 條 Tauri command 註冊讓前端可叫。Tauri state: 直接讀
+// `manager.0.lock().unwrap().timeline_ring` (R122 timeline_ring field 為 pub)。
+
+/// timeline_snapshot_24h: 回傳 13 provider × 1440 minute-cell 24h snapshot。
+/// 對齊 R-CPT-1 Scenario "24h 解析度 toggle 預設開啟"。
+#[tauri::command]
+fn timeline_snapshot_24h(manager: tauri::State<AppSessionManager>) -> Vec<Vec<u8>> {
+    manager.0.lock().unwrap().timeline_ring.snapshot_24h()
+}
+
+/// timeline_toggle_resolution: 切換 24h ↔ 7d 解析度 (placeholder 階段)。
+/// 24h ring buffer 已 ship (T-CPT7/T-CPT11, R122 b1b3ed3);
+/// 7d ring buffer 留 M1.1 follow-up 對齊 `design.md` §5 開放問題 #1
+/// (兩條固定 buffer 提案, 7d 128KB 對齊 K41 紅線)。
+/// 本輪 handler placeholder 通過 resolution 解析度切換驗證, 真實 ring buffer
+/// 擴充留 M1.1。前端收到回傳解析度字串後可走對應 UI 邏輯。
+#[tauri::command]
+fn timeline_toggle_resolution(
+    _manager: tauri::State<AppSessionManager>,
+    resolution: String,
+) -> Result<String, String> {
+    let allowed = ["24h", "7d"];
+    if !allowed.contains(&resolution.as_str()) {
+        return Err(format!("resolution 必須是 {allowed:?}, 收到 {resolution}"));
+    }
+    // placeholder: 7d 留 TODO, 回傳當前解析度給前端對齊。
+    Ok(resolution)
+}
+
+/// timeline_jump_to_event: click-to-jump 跨視圖 target。
+/// 對齊 `design.md` §5 開放問題 #3 (點 row 跳 Bot 總覽, 點 cell 跳事件診斷)。
+/// 簡化版: 都跳 `events` view (前端可後續按需切 view='bot')。
+/// 跨視圖 state 走既有 `view` global state + URL hash (R40 既有 pattern)。
+#[tauri::command]
+fn timeline_jump_to_event(
+    _manager: tauri::State<AppSessionManager>,
+    provider: String,
+    minute: u32,
+) -> crate::timeline::TimelineJumpTarget {
+    crate::timeline::TimelineJumpTarget {
+        view: "events".to_string(),
+        provider,
+        minute,
+    }
+}
+
 #[tauri::command]
 fn get_config(config_state: tauri::State<AppConfigState>) -> AppConfig {
     config_state.0.lock().unwrap().clone()
@@ -3800,6 +3850,9 @@ pub fn run() {
             test_usage_runner,
             get_quota_history,
             remove_all_sessions,
+            timeline_snapshot_24h,
+            timeline_toggle_resolution,
+            timeline_jump_to_event,
             open_configurator,
             open_help_page,
             import_appearance_json,

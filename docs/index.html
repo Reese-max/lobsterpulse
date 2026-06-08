@@ -90,13 +90,26 @@
 
   <section class="providers">
     <div class="container">
-      <div class="providers-label">主要助手</div>
+      <div class="providers-label">本機 CLI · 4</div>
       <div class="providers-row">
         <span>Claude Code</span>
         <span>Codex CLI</span>
         <span>GitHub Copilot CLI</span>
         <span>Gemini CLI</span>
       </div>
+      <div class="providers-label providers-label-secondary">OpenAB bot · 9</div>
+      <div class="providers-row providers-row-openab">
+        <span>CICX</span>
+        <span>GITX</span>
+        <span>GIMINIX</span>
+        <span>CODEX_BOT</span>
+        <span>OPENX</span>
+        <span>IRISX_BOT</span>
+        <span>GROKX</span>
+        <span>LPBOT</span>
+        <span>MIMO</span>
+      </div>
+      <p class="providers-footnote">共 13 個 provider · 雙路徑監控（本機 CLI hook sidecar + OpenAB HTTP <code>POST /hook/{provider}</code>）</p>
     </div>
   </section>
 
@@ -204,10 +217,11 @@ src-tauri\icons\android\</code></pre>
           <div class="download-badge">可重建</div>
           <h3>原始碼建置</h3>
           <p>如果你之後要打新的 release 或 bundle，直接從 repo 內重建，不需要回頭依賴上游產物。</p>
+          <p class="download-note">⚠️ <strong>release 必須走 <code>cargo tauri build --no-bundle</code></strong>，不可純 <code>cargo build --release</code>（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。前置 <code>cargo install tauri-cli --locked</code>。</p>
           <pre><code>cd src-tauri
-cargo build --release
-cargo tauri build</code></pre>
-          <p class="download-note">第二行需要先安裝 <code>tauri-cli</code>；純 release exe 只要第一行。</p>
+cargo tauri build --no-bundle    # 快速驗證：exe + embed frontend，無 installer
+cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage（需 tauri-cli）</code></pre>
+          <p class="download-note">三方對齊 <code>README.md</code> + <code>CLAUDE.md</code>「Build SOP（重要）」段 + <code>build.sh</code>。</p>
         </article>
       </div>
     </div>

@@ -352,6 +352,31 @@ nav .container { display: flex; align-items: center; justify-content: space-betw
   font-size: 16px;
   font-weight: 500;
 }
+.providers-row-openab {
+  gap: 22px;
+  font-size: 14px;
+  color: var(--text-dim);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+.providers-label-secondary {
+  margin-top: 24px;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+.providers-footnote {
+  margin-top: 22px;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+.providers-footnote code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 12px;
+}
 .providers-row > span {
   display: inline-flex;
   align-items: center;

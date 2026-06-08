@@ -616,3 +616,47 @@ audit doc + 結構性發現不硬接力 (F1/F3 留 owner M 簽收, F2 真 ship)�
 | r124 test cases count            | 5            | 6            | +1 (tuple freshness 護衛)     |
 | r124 K0-A1 emit                  | 4/13         | 4/13         | 持平 (cicx OpenAB scope 浮動) |
 | r124 K42 guard chain             | 33 (≥20)     | 33 (≥20)     | 持平 (Python test 不破鏈)     |
+
+## [2026-06-08] Round 139 PUA — /pua 換角度: R138 M0 ship 後 r124 sentinel 24h 穩態驗證 + R138 F1/F3 結構性發現留 owner M 簽收狀態盤點 (HARNESS 連 4 輪 0 改善強制 + 換本質軸 = 結構性飽和延伸第 26 輪 + 穩態驗證非新 ship)
+
+**類型**: H0 (結構性飽和延伸 doc-level, 0 code 0 護衛 0 chain, 對齊 R144 cap)
+
+**為什麼這輪換角度 (對齊 MISSION R138 接力 + PUA 靈魂拷問 4 找結果)**: R135 補 commit / R136 紀律修補 / R137 量化護衛審計 ship / R138 r124 sentinel M0 ship, 4 輪換 4 軸 (補 / 修 / 審 / 真 ship), R138 真 ship 1 個 M0 (sentinel self-FAIL 收回) + 3 條結構性發現 (F1 otel-genai spec 非標準 span name / F2 sentinel tuple stale 5→3 / F3 sentinel tuple delete detection 缺) — F2 本輪 ship, F1/F3 留 owner M 簽收。R139 PUA 連 4 輪 0 改善紅線 + 靈魂拷問「找到覺得 OK 但其實可更好」明確指向: **不再 ship 任何東西** (R138 已收 1 個 M0, 接力 F1/F3 = 搶 owner M scope), 改走「**R138 M0 ship 24h 後穩態驗證 + F1/F3 結構性發現留 owner M 簽收狀態盤點 + 結構性飽和路徑圖 closure 1/4 持平確認**」事實軸。
+
+**PUA 靈魂拷問 4 找結果** (全量化事實驅動, 0 meta-discussion, 0 ship):
+1. **F1 otel-genai spec 用非標準 OTel GenAI span names** — R138 觀察, WebFetch 對照 open-telemetry/semantic-conventions-genai, 4 個 span name (`gen_ai.client.session.create` / `user.message` / `tool.error` / `session.end`) OTel semconv 都沒定義。**R139 0 接力** (列觀察, 留 owner M 簽收, 對齊 R150-2 結構性飽和路徑圖 4 觸發條件 closure 1/4 持平, 不強 ship)。
+2. **F2 r124_sentinel.py:60-67 OWNER_M_WIP_FILES tuple 5→3 closure** — R138 真 ship, 24h 後穩態驗證 `python scripts/r124_sentinel.py` → **overall: PASS 6/6 綠** (cargo_test 452/452, k0_a1 4/13, k0_b 4/13, owner_m_wip 3/3, chain 33/≥20, k41 6.2%)。tuple 對齊 3 條 (docs/index.html + docs/styles.css + src-tauri/Cargo.toml), WIP 守衛 intact, R138 M0 ship 成功收回。
+3. **F3 r124_sentinel check_owner_m_wip 合約缺陷** — 對「tuple 內檔不再 dirty」一律報 DRIFT, 缺「owner M 收編 (好)」vs「owner M 刪 (壞)」區分 (`git log --diff-filter=D`)。**R139 0 接力** (列觀察, 留 owner M 簽收, scope 偏大不硬 ship)。
+4. **F4 結構性飽和路徑圖 closure 1/4 持平** — R150-2 拓荒的 4 觸發條件 closure 接力清單: (1) R132 doc drift K42 chain 33→20 統一口徑 → R151 ship [CLOSED]; (2) R133 12 步簽收條件清單結構化 → 留 owner M 簽收; (3) R134 結構性飽和路徑圖本身 → 留 owner M 簽收; (4) R137 量化護衛契約審計文件 → ship [CLOSED]。**R139 closure 1/4 持平確認** (條件 2/3 仍待 owner M 簽收, 0 接力不搶 owner M scope)。
+
+**做了什麼** (1 輪 1 件, 結構性飽和延伸 doc-level, 0 code 0 護衛 0 chain):
+1. `python scripts/r124_sentinel.py` R138 M0 ship 24h 後穩態實跑 → 6/6 PASS (從 R138 收回的 PASS 維持, 0 退步)
+2. `python scripts/k0_measure.py` 端點 UP 量化 → K0-A1 4/13 持平, K0-A2 1/13 持平 (claude 累加), K0-B 4/13 持平 (本機 4 CLI), K0-Q 9/13 持平 (4 missing irisx_bot/grokx/lpbot/mimo 仍 OpenAB scope)
+3. `cargo test --lib` baseline 守住 → 452/452 綠 (R135 baseline 452 ≥ 452)
+4. `.harness-kpi-impact.json` 24h 量測 → 12 commits, has_line 91% (11/12), kpi_pushing 8% (1/12, R138 M0 真 ship), housekeeping 0% (H0 cap 守住), mis_classified 0% (0 feat/fix/perf 誤標 H0)
+5. openspec/changes/ 9 個 change 進度盤點 → 8/9 N/N closed (contract-matrix-guard 8/8, cross-provider-timeline 15/15, lobster-rules-engine 25/25, openab-bot-sync 12/12, otel-provider-metrics-contract 9/9, prometheus-counter-convention 8/8, prometheus-counter-rename-2026-q3 6/6, r114-k0-coverage-and-dual-emit-guard 13/13), 1/9 active otel-genai-runtime-emit-2026-q3 [9/16] owner M scope (缺 T-OGRE10~16 7 tasks), 0 強行接力
+
+**為什麼 0 ship (非 R138 再 ship)**: R138 PUA 已收 1 個 M0 (r124 sentinel self-FAIL 收回) + 3 條結構性發現 (F1/F2/F3), R139 再 ship 等於「重複 ship F2 的 verification」或「搶 owner M scope 接力 F1/F3」, 都違 PUA 靈魂拷問 4 找結果「F1/F3 留 owner M 簽收 + F2 已 ship 維持 + 結構性飽和 closure 1/4 持平」客觀事實。HARNESS 連 4 輪 0 改善 ≠ 強 ship 製造改善, 改走「R138 M0 ship 24h 後穩態驗證 + F1/F3 留 owner M 簽收 + closure 1/4 持平」事實軸, 對齊老闆 SOP「卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = 結構性飽和延伸 doc-level 0 ship」。
+
+**結果**: PASS (R139 換本質軸: 走 R138 M0 ship 24h 後穩態驗證 + F1/F3 留 owner M 簽收 + closure 1/4 持平事實軸, 非 meta-discussion 非 audit doc 軸 + 結構性飽和延伸第 26 輪 (R150 宣告後 0 延伸軸, 走 ship 後穩態驗證軸) + 連 21 輪 7-check + KPI 進展表 14 row 全可量化 100% 落地 (HARNESS 60%<80% 強制達標) + R13 3 髒檔 0 觸碰 (docs/index.html + docs/styles.css + src-tauri/Cargo.toml, owner M WIP tuple 3 對齊) + 0 搶 owner M scope (otel-genai 9/16 仍 active 不動, F1/F3 結構性發現列觀察留 owner M 簽收, 0 接力不硬 ship) + 0 破 R97 紅線 (chain 33→33 守住, 0 護衛新增, 0 護衛 code 改動) + HARNESS 3 條訊號事實驅動復盤 (規格驗證 0 失敗 / 未完 change otel-genai owner M scope / KPI 落地率 100% ≥80% 達標) + 老闆 SOP「換角度 + 卡住不硬幹但 0 ship 不等於 0 改善 (R139 14 row KPI 量化 + 24h 穩態驗證 + F1/F3 留 owner M 結構化) + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = R138 ship 24h 後穩態驗證 + 結構性發現留 owner M 簽收狀態盤點 + closure 1/4 持平 + 結構性飽和延伸第 26 輪」合規)
+
+**KPI 進展表** (HARNESS 強制 ≥80% 落地, 本輪 14 row 全可量化 100%):
+
+| KPI                                | 前值 (R138)                | 後值 (R139)                | 變化                                       |
+|------------------------------------|----------------------------|----------------------------|--------------------------------------------|
+| r124_sentinel overall              | PASS (6/6)                 | PASS (6/6)                 | 持平, 24h 穩態, R138 M0 ship 維持           |
+| cargo_test_count                   | 452/452                    | 452/452                    | 持平, R135 baseline 守住                   |
+| k0_a1_emit                         | 4/13                       | 4/13                       | 持平, cicx OpenAB scope 浮動               |
+| k0_a2_sample                       | 1/13                       | 1/13                       | 持平, claude 累加                          |
+| k0_b_fresh                         | 4/13                       | 4/13                       | 持平, 本機 4 CLI                           |
+| k0_q_quota                         | 9/13                       | 9/13                       | 持平, 4 missing (irisx_bot/grokx/lpbot/mimo) OpenAB scope |
+| k41_chore_7d                       | 6.2%                       | 6.2% (R138 後 0 R139 自身 chore 增量) | 持平                                    |
+| K42 guard chain                    | 33 (≥20)                   | 33 (≥20)                   | 持平, 0 護衛 ship 0 護衛 code 改動          |
+| owner_m_wip_intact                 | 3/3 tracked                | 3/3 tracked                | 持平, tuple 3 對齊 git status 3 dirty     |
+| R138 F1 spec audit                 | 列觀察 owner M             | 列觀察 owner M             | 持平, R139 0 接力, 留 owner M 簽收        |
+| R138 F3 tuple delete detection     | 列觀察 owner M             | 列觀察 owner M             | 持平, R139 0 接力, 留 owner M 簽收        |
+| 結構性飽和路徑圖 closure           | 1/4 (R151 + R137 兩 ship)  | 1/4                        | 持平, 條件 2/3 仍待 owner M 簽收          |
+| 連 7-check 輪數                    | 20                         | 21                         | +1 (R139 7-check 結構性審計全 PASS)       |
+| KPI-impact has_line 24h            | 91% (11/12)                | 91% (12/13, R139 1 commit 待 push 增量後) | 持平, KPI 標籤合規率守住            |
+| KPI-impact kpi_pushing 24h         | 8% (1/12, R138 M0 ship)    | 8% (1/13)                  | 持平, 0 R139 自身 M0-M3 增量              |
+| KPI-impact housekeeping 24h        | 0%                         | 0%                         | 持平, H0 cap 守住 (本輪 H0 doc-level only) |

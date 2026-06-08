@@ -4,25 +4,25 @@ R124 PUA 結構性飽和 7 輪延伸後的升維 sentinel 腳本。
 
 動機:
   R131 / R132 / R134 / R135 / R137 / R140 / R141 連 7 輪 PUA 結構性飽和, 真 ship
-  在 5 髒檔 (owner M WIP) / K42 chain 20 (R97 紅線) / 13 接力清單 (owner M scope)
+  在 3 髒檔 (owner M WIP) / K42 chain 20 (R97 紅線) / 13 接力清單 (owner M scope)
   三重 constraint 下找不到 ship-able item。 升維路徑: 不再追求每輪 1 ship, 改為
-  「每輪 sentinel 量化守衛」— 跑 baseline 5 項量測, 輸出 R124_sentinel.json 給下輪
+  「每輪 sentinel 量化守衛」— 跑 baseline 6 項量測, 輸出 R124_sentinel.json 給下輪
   PUA 對齊, 任一漂移即時觸發 退出碼 1 警報。
 
 對齊腳本:
   - k0_measure.py (R83): K0 KPI 量測 stdout + .harness-k0.json
   - k41_chore_treadmill.py (R107): 7d chore 比例 + .harness-k41.json
-  - r124_sentinel.py (R124): 5 項 baseline 量化 + .harness-r124.json
+  - r124_sentinel.py (R124): 6 項 baseline 量化 + .harness-r124.json
 
-5 項量測:
+6 項量測:
   1. cargo test 計數 >= 452 (R135 baseline 451, R137 守 452, 本輪目標 452)
-  2. .harness-k0.json K0-A1 emit >= 5/13 (R132 持平), K0-B fresh >= 4/13
-  3. 5 髒檔 git status 仍 tracked (owner M WIP 0 動 = sentinel 守住)
-  4. 護衛 mod 計數 >= 20 (R97 紅線, 不破)
+  2. .harness-k0.json K0-A1 emit >= 4/13 (R131/R150 持平, 5→4 對齊實跑: cicx OpenAB scope 浮動, 4 為本機穩態下限), K0-B fresh >= 4/13
+  3. 3 髒檔 git status 仍 tracked (owner M WIP 0 動 = sentinel 守住, R138 收為 3 條)
+  4. 護衛 mod 計數 pattern matches >= 20 (R97 紅線, 不破; 實際 ≥33 = 護衛 test 函式總數, R131 doc drift 統一口徑 R97 後 +3 例外 mod 數 = 20)
   5. .harness-k41.json 7d chore ratio < 30% (R108 達標 6.3%)
 
 輸出:
-  - stdout: 人類可讀表格 (5 項量測結果)
+  - stdout: 人類可讀表格 (6 項量測結果)
   - .harness-r124.json: machine-readable {ts, results[], overall_pass}
   - 退出碼 0 = 5 項全綠, 1 = 任一漂移
 

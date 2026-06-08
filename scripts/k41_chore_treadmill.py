@@ -52,9 +52,31 @@ def git_log_subjects(window_days: int) -> list[str]:
     return [s for s in raw.decode("utf-8", errors="replace").splitlines() if s]
 
 
+def _classify_prefix(subject: str) -> str:
+    """抽 commit subject 的 type prefix (處理 conventional commit scope)
+
+    例:
+      "chore: rotate log"                          → "chore"
+      "chore(gitignore): R127 ..."                  → "chore"
+      "feat(scripts): chain_staleness"              → "feat"
+      "chore(spec)+docs(engineering-log): R115 ..." → "chore"  (雙類型, R115 罕見 case)
+
+    R176 M0 fix: 原 measure() 用 `subject.split(":", 1)[0] in GOVERNANCE_PREFIXES`
+    分類, "chore(scope):" 抽出 prefix = "chore(scope)" 不在 4 前綴 tuple 中,
+    導致 R127/135/137/115 等實際 commit 全部漏算, K41 量化值 undercount。
+    """
+    head = subject.split(":", 1)[0]
+    # 處理 "chore(spec)+docs(...)" 雙類型 case (取第一個 type)
+    head = head.split("+", 1)[0]
+    # 處理 conventional commit "type(scope)" → type
+    if "(" in head:
+        head = head.split("(", 1)[0]
+    return head.strip()
+
+
 def measure(window_days: int = WINDOW_DAYS) -> tuple[int, int, list[str]]:
     subjects = git_log_subjects(window_days)
-    chore = [s for s in subjects if s.split(":", 1)[0] in GOVERNANCE_PREFIXES]
+    chore = [s for s in subjects if _classify_prefix(s) in GOVERNANCE_PREFIXES]
     return len(chore), len(subjects), chore
 
 

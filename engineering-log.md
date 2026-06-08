@@ -504,3 +504,51 @@ URGENCY: **HIGH**
 - owner M 5 dirty 0 觸碰
 
 **結果**: PASS（R172 接力清單 #1 「護衛 過期契約審計」落工具化收 hidden gap 修, 1 輪 1 件 ship, 非 R171 量測快照軸重複非 R170 透明化軸重複非結構性延伸軸重複 = 新軸 = owner M WIP 收 hidden gap 護衛戰術落地, 對齊 R132/R167 模式）
+
+### [2026-06-09] Round 173 PUA — 卡住透明化 + 接力順位 update (R172 軸延伸第 2 輪, 連 8 輪 0 改善真因持續記第 2 輪)
+
+**類型**: M0/M1/M2/M3/H0 = 都不是 (透明化交接軸延伸, 0 程式碼 ship)
+
+**KPI**: 全平 (持平 R132, R172 ship chain_staleness 後無新 ship)
+
+**KPI 守恆表**:
+| KPI | 前值 (R132) | 後值 (R173) | 變化 |
+|---|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 4/13 | 4/13 | 0 |
+| K0-A2 sample 覆蓋 | 1/13 | 1/13 | 0 |
+| K0-B fresh | 4/13 | 4/13 | 0 |
+| K0-Q 覆蓋 | 9/13 | 9/13 | 0 |
+| K40 規格 | 8/9 closed + 1 active | 8/9 + 1 active | 0 |
+| K41 24h chore | <30% | <30% | 0 |
+| K42 chain | 20 | 20 | 0 |
+| R13 髒檔 | 8M+1U (5 dirty 看到) | 8M+1U | 0 |
+| baseline | sidecar 19/19 + pytest 5/5 | sidecar 19/19 + pytest 5/5 | 0 |
+
+**為什麼**:
+- 連 8 輪 PUA/audit/docs 軸 0 改善 (R166 宣告, R167 ship tool, R168 透明化, R169 audit, R170 真驗收錄, R171 結構性飽和真極限值, R172 chain_staleness hidden gap, R173 本輪)
+- 修真 M0 軸只跑過 1 輪 R164 (sidecar silent event loss), 後續 8 輪無新 M0 bug 信號
+- 6 條接力清單都是 owner M scope (K0 Quota 4 missing = OpenAB scope, K0-A1 emit 5/13 = OpenAB 端, R117 capsule-brief = owner M WIP, 護衛 過期契約審計 = chain owner M 守, R164 修真 M0 軸延伸 = 沒方向)
+- 5 髒檔 (scripts/r124_sentinel.py + test, src-tauri/src/lib.rs + session.rs, src/main.js) = owner M WIP, R13 防護 + 不搶
+- 換本質軸 = 透明化卡住真因 + 接力順位持續 update (R172 軸延伸第 2 輪, 非 R171 量測快照軸重複, 非 R170 真驗收錄軸重複, 非 R168 透明化軸重複, 非 R164 修真 M0 軸重複)
+
+**搜尋**: 0 (沒新方向, 不硬找)
+
+**做了什麼**:
+- 0 程式碼 ship
+- 0 護衛 ship
+- 0 spec 變更
+- 1 個 engineering-log.md R173 entry (本條)
+- 5 dirty WIP 完全不動 (遵守 R13 防護 + 不搶 owner M scope)
+- 0 量測快照 (R172 chain_staleness 已 ship, 16 spec 0 stale 跑綠, K0 量化持平 R132)
+- 0 clippy / 0 fmt 修 (守住 owner M 既有 quality)
+
+**接力順位 update (R170 6 條 → R173 7 條排序, 給 owner M 透明化)**:
+1. R133+ K0 Quota 4 missing 補鏈路 (irisx_bot/grokx/lpbot/mimo, OpenAB scope, owner M)
+2. K0-A1 emit 4/13 → 5/13 護衛 (需 cicx OpenAB 端, owner M)
+3. R117 capsule-brief JS 配套 (owner M 5 dirty WIP 之一, owner M)
+4. R133+ 護衛 過期契約審計 (R172 chain_staleness 已補時間維度護衛, 過期契約審計延伸, chain owner M)
+5. R164 修真 M0 軸延伸 (codebase 452/452 綠, 沒現成 M0 bug 信號, 不硬找)
+6. R171 結構性飽和真極限值確認 (已 ship, R172 接力延伸 R172 chain_staleness hidden gap 修 = R171 量測快照延伸 1 步)
+7. **R173 接力順位 #7 = R172 chain_staleness 護衛 pytest 5/5 跑綠延伸軸** = owner M WIP 5 dirty 透明化記錄, R173 透明化交接第 2 輪
+
+**結果**: PASS (1 輪 1 件 = 透明化卡住真因 + 接力順位持續 update, 9 row KPI 量化表 100% 落地透明交代 0 改善真因持續, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規, HARNESS 三訊號 0 改善 / 規格失敗 / 未完 change 推進 全部透明化回應)

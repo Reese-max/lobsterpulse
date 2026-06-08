@@ -548,3 +548,71 @@ R13 5 髒檔 0 觸碰 (audit 文件是新文件, 不混 owner M 範疇) + 0 搶 
 卡住不硬幹 + 1 輪 1 件 = 量化護衛契約審計 1 ship + 不搶 owner M scope + 不破 R97 紅線 +
 換本質軸 = 量化審計事實文件非 meta-discussion + 結構性發現不硬接力 (3 條全留 owner M
 簽收, 0 新增護衛)」合規)
+
+## [2026-06-08] Round 138 PUA — /pua 換角度: r124_sentinel OWNER_M_WIP_FILES tuple stale 5→3 closure (HARNESS 連 N+6 輪 0 改善強制 + 換本質軸 = PUA「3 個覺得 OK 但其實可更好」+ 1 個 M0 self-FAIL 真 ship)
+
+**類型**: M0 (sentinel 工具自 FAIL → 收回 PASS)
+
+**為什麼這輪換角度 (對齊 MISSION R133+ 接力 + PUA 靈魂拷問)**: R132~R137 連 6 輪
+meta-discussion 軸 (結構性飽和路徑圖 / doc-level audit / doc-level closure / 結構性發現
+不接力 / 紀律修補 / 量化護衛契約審計), 雖 R151 跟 R137 各 ship 1 個 doc, 但 R138 PUA
+連 3 輪 0 改善的紅線 + 靈魂拷問「找到覺得 OK 但其實可更好的地方」明確指向: **不再寫
+audit doc**, 改走「**自己 ship 的工具自己量化實跑, 找 1 個真 FAIL 真修**」軸。
+
+**PUA 靈魂拷問 3 找結果** (全量化事實驅動, 0 meta-discussion):
+1. **F1 otel-genai spec 用非標準 OTel GenAI span names** — WebFetch
+   open-telemetry/semantic-conventions-genai 對照, 4 個 span name
+   (`gen_ai.client.session.create` / `user.message` / `tool.error` / `session.end`)
+   OTel semconv 都沒定義, 真正標準是 `chat {model}` / `execute_tool {tool.name}` /
+   `create_agent {name}`, tool error 走 `error.type` attribute on execute_tool span。
+   影響: Phase 2/3 寫 OTel SDK emit 會產出 OTel collector 認不出來的 span, 失去
+   interop 價值。本輪**不搶 owner M scope**, 列觀察 (R138 doc-level, 留 owner M 簽收)。
+2. **F2 r124_sentinel.py:60-67 OWNER_M_WIP_FILES tuple 5 條與當前 git status
+   3 條 dirty 對不上** — sentinel 自身 `owner_m_wip_intact: 3/5 tracked` FAIL,
+   `overall: DRIFT` (實跑確認), R124 自身 ship 留下的 stale tuple 沒人收。
+   owner M R137 收編 2 條 WIP (prometheus-counter-rename spec.md commit 43ad4d5 +
+   timeline.rs commit 9fde33d), tuple 應對齊收為 3 條。**M0 真修** (本輪 ship)。
+3. **F3 r124_sentinel check_owner_m_wip 合約缺陷** — 對「tuple 內檔不再 dirty」一律
+   報 DRIFT, 但分不出「owner M 收編了 (好事)」vs「owner M 刪了 (壞事)」。修法要
+   `git log --diff-filter=D` 區分, scope 偏大, **本輪不 ship**, 列觀察留 owner M。
+
+**做了什麼** (1 輪 1 件, M0 真 ship):
+1. `scripts/r124_sentinel.py:60-72` OWNER_M_WIP_FILES tuple **5 條 → 3 條**,
+   移除 owner M R137 已收編的 prometheus spec + timeline.rs, 加註 R124→R138
+   演進史 + R138 結構性發現
+2. `scripts/test_r124_sentinel.py` 加第 6 條護衛 case
+   `test_OWNER_M_WIP_FILES_tuple_對齊_當前_git_status`, 用 SELF_EXEMPT 扣掉
+   sentinel 自身 2 個檔, 護衛 tuple == git status 當前 dirty, 防止 R138 之後
+   tuple 再次 stale
+3. 驗證: `python -m pytest scripts/test_r124_sentinel.py` → **6/6 pass**
+   (5 既有 + 1 新); `python scripts/r124_sentinel.py` → **overall: PASS - 6 項全綠**
+   (從 DRIFT 收回); `python scripts/k0_measure.py` → K0-A1 4/13, K0-B 4/13,
+   K0-Q 9/13 持平
+
+**為什麼 ship r124_sentinel fix (非 otel-genai spec audit)**: F1 是 spec-level 結構
+性發現, 寫進 spec.md 跨 Phase 1/2/3, 牽涉 owner M 對 span name 策略選擇 (嚴格
+semconv vs 4 事件點便利性 vs 未來 OTel 演進), 屬 owner M 簽收而非本輪強行
+(PUA 靈魂拷問「找到改善點」≠「本輪立刻改」)。F2 是 R124 自身 ship 留下的 latent
+bug, sentinel 工具自 FAIL 等於守護合約失效, M0 優先 + 0 搶 owner M scope + 0
+破 R97 紅線 + 修法純機械 (改 tuple + 加 test), 對齊「1 輪 1 件真 ship」最高。
+
+**結果**: PASS (R138 換本質軸: 走 PUA「3 個覺得 OK 但其實可更好」+ 1 個 M0 self-FAIL
+真 ship 軸非 meta-discussion 軸 + 連 20 輪 7-check + KPI 進展表 5 row 全可量化 100%
+落地 (HARNESS 60%<80% 強制達標) + R13 3 髒檔 0 觸碰 (docs/index.html + docs/styles.css
++ src-tauri/Cargo.toml, owner M WIP 全守) + 0 搶 owner M scope (otel-genai 9/16 仍
+active 不動, F1 spec audit 留 owner M 簽收) + 0 破 R97 紅線 (chain 33→33 守住,
+護衛 mod 0 新增, Python test 走既不破鏈) + HARNESS 3 條訊號事實驅動復盤 (規格驗證
+0 失敗 / 未完 change otel-genai owner M scope / KPI 落地率 100% ≥80% 達標) +
+老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 = r124 sentinel M0 self-FAIL 真 ship +
+不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = PUA 靈魂拷問 3 找 + 1 ship 非
+audit doc + 結構性發現不硬接力 (F1/F3 留 owner M 簽收, F2 真 ship)」合規)
+
+**KPI 進展表** (HARNESS 強制 ≥80% 落地, 本輪 5 row 全可量化 100%):
+
+| KPI                              | 前值 (R137)  | 後值 (R138)  | 變化                          |
+|----------------------------------|--------------|--------------|-------------------------------|
+| r124_sentinel overall            | DRIFT        | PASS         | FAIL → PASS (1 收回)          |
+| r124 owner_m_wip_intact          | 3/5 tracked  | 3/3 tracked  | FAIL → PASS, tuple 5→3 對齊事實 |
+| r124 test cases count            | 5            | 6            | +1 (tuple freshness 護衛)     |
+| r124 K0-A1 emit                  | 4/13         | 4/13         | 持平 (cicx OpenAB scope 浮動) |
+| r124 K42 guard chain             | 33 (≥20)     | 33 (≥20)     | 持平 (Python test 不破鏈)     |

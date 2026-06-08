@@ -60,13 +60,15 @@ K41_CHORE_RATIO_MAX: Final[float] = 0.30
 # 9fde33d, 詳見 R138 engineering-log 結構性發現), tuple 收為 3 條 → R158
 # owner M 新 WIP (R164 lobster-pulse-hook.rs sidecar 4xx/5xx 區分 + 70 行),
 # tuple 收為 4 條 → 52b78ed owner M 收 docs/* 2 條 WIP (landing-page v5.1
-# 對齊: 13 providers split + build SOP warning), tuple 收為 2 條 = 當前實際
-# tracked dirty 數。R138 加 test 護衛: tuple 必須 == `git status --porcelain`
-# dirty 數 (雙向: missing_in_tuple + extra_in_tuple 都觸發 fail), 任何 owner M
-# 收編或新 WIP 必須在同 commit 更新 tuple。
+# 對齊: 13 providers split + build SOP warning), tuple 收為 2 條 → R158
+# 中期 owner M 新 WIP (lib.rs 覆蓋 R158 507ca5c 護衛文件化 + session.rs 新 WIP),
+# tuple 收為 4 條 → acfe26e owner M 收 lobster-pulse-hook.rs (R164 sidecar
+# silent event loss M0 fix 紀錄), tuple 收為 3 條 = 當前實際 tracked dirty 數。
+# R138 加 test 護衛: tuple 必須 == `git status --porcelain` dirty 數 (雙向:
+# missing_in_tuple + extra_in_tuple 都觸發 fail), 任何 owner M 收編或新 WIP
+# 必須在同 commit 更新 tuple。
 OWNER_M_WIP_FILES: Final[tuple[str, ...]] = (
     "src-tauri/Cargo.toml",
-    "src-tauri/src/bin/lobster-pulse-hook.rs",
     "src-tauri/src/lib.rs",
     "src-tauri/src/session.rs",
 )

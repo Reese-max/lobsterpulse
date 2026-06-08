@@ -822,3 +822,51 @@ audit doc + 結構性發現不硬接力 (F1/F3 留 owner M 簽收, F2 真 ship)�
 | 真 ship 累計 (R137~R143+R142.1)     | 4 (R137 量化護衛 + R138 5→3 + R151 R132 doc drift + R143 真停宣告) | 5 (+R142 接力 1 k0 drift test closure) | +1, M0 self-FAIL 收回              |
 
 KPI-impact: K0 漂移偵測護衛鏈 test pass 率 3/5→5/5
+
+### [2026-06-08] Round 144 PUA — /pua 換角度: 真 ship 1 件 M0 bug fix (R78 補齊 4 隻 OpenAB bot token 累加語意錯誤修復) + 結構性飽和延伸第 28 輪 (HARNESS 連 3 輪 0 改善強制 + 換本質軸 = 不再走 doc-level closure, 從 hotspot 程式碼實挖 1 個真 bug 真修)
+**類型**: M0 真 ship (1 個 code fix, 0 doc, 0 護衛, 0 spec, 0 chain 擴張)
+**KPI**: K0 Quota 4 missing bot token 累加語意正確化 (irisx_bot/grokx/lpbot/mimo 從 saturating_add 倒退風險 → max 對齊 OpenAB snapshot 語意)
+**KPI 進展表**:
+| KPI | 前值 (R143) | 後值 (R144) | 變化 |
+|---|---:|---:|---|
+| K42 Rust guard chain | 20 (R131 + R135) | 20 | 持平, R144 0 護衛 ship, R97 後 +3 例外名額守住 |
+| baseline 護衛 lib tests | 452/452 (R142) | 452/452 | 持平, cargo test --lib 全綠 |
+| K0-A1/A2/B/Q 量化 | 4/1/4/9 (R143) | 4/1/4/9 | 持平, 4 missing bot 仍非本機 scope; 但 R144 修 token 累加語意讓 OpenAB scope 補鏈時數據正確 |
+| K40 spec coverage | 8/9 closed + 1 active 9/16 (otel-genai) | 同左 | 持平, otel-genai owner M scope 7 tasks 不搶 |
+| R13 untracked 守住 | 3 (docs/index.html, docs/styles.css, src-tauri/Cargo.toml owner M) | 3 | 持平, R144 只動 session.rs / lib.rs 明確 2 檔 3 處, 0 髒檔觸碰 |
+| OpenAB bot token 累加語意 | 5/9 bot 對 (inline 5-bot list) | 9/9 bot 對 (OPENAB_BOT_IDS 單一 source of truth) | +4 bot 修: irisx_bot/grokx/lpbot/mimo 從 saturating_add → max |
+| 結構性飽和延伸輪數 | 27 (R143) | 28 | +1, 走 R144 從 hotspot 程式碼實挖 1 個真 bug 真修非 doc-level closure 軸 |
+| 連 7-check 輪數 | 23 (R143) | 24 | +1, R144 7 項結構性審計全 PASS |
+| 真 ship 累計 (R137~R143+R142.1+R144) | 5 (R137 + R138 + R151 + R143 + R142.1) | 6 (+R144 M0 bug fix) | +1, 從 R78 (2026-06-05) 起的 4 隻 bot 累加語意錯誤終修 |
+
+**為什麼**: 連 3 輪 0 改善 + HARNESS 強制換本質軸。3 輪 R132/R151/R133 全走 doc-level closure, 老闆 SOP 警告「不接受審查通過」。R144 換本質軸: **直接從 lib.rs (12116L) / session.rs (5081L) / hook_server.rs (1599L) 3 個 hotspot 程式碼實挖**。HARNESS 3 條訊號實況事實驅動復盤:
+
+1. **「Spectra 規格驗證失敗」**: 實況 0 失敗 (8 個 change 全 N/N 100% 閉合, 護衛 chain 20 條守住, baseline 452/452 全綠) — 0 actionable 修
+2. **「從 [done/total] 顯示未完的 change 挑最接近完成的推進」**: 實況 1 個未完 = otel-genai 9/16 (7 task T-OGRE10~16 全是 Cargo.toml OTel crate + telemetry.rs mod + 4 事件點 emit span) = owner M M1 接力 scope, **非本機可達, 不搶**. 8 個 change 全 closed N/N
+3. **「KPI 落地率 < 80%」**: 前 4 輪 (R140/R141/R142/R143) 平均 92% (8/8/11/8 row), 達標無需強制
+
+**搜尋 (per PUA Step 5 紀律)**: 沒做 web 搜 (本輪是讀程式碼找 bug, 非設計新功能), 但 grep 內部 codebase 確認 4 處 (lib.rs:40 OPENAB_BOT_IDS 9 隻 / session.rs:142 5 隻 inline / session.rs:592 5 隻 inline / hook_server.rs:338 KNOWN_PROVIDERS 13 隻含 9 OpenAB) 對齊狀態。
+
+**做了什麼** (surgical 14+/9-, 2 檔 3 處):
+- `lib.rs:40` `const OPENAB_BOT_IDS` → `pub const OPENAB_BOT_IDS` + 補 doc comment 解釋為何要 `pub` (R78 補齊 9 隻 bot 後, sibling mod 引用不到 → 強迫寫 inline list 漂移)
+- `session.rs:140-144` `Session::handle_event` TokenUpdate 處理: inline 5-bot `matches!` → `crate::OPENAB_BOT_IDS.contains(&event.provider.as_str())`
+- `session.rs:590-594` `SessionManager::handle_event` aggregate TokenUpdate 處理: 同上替換, 同步修
+- 沒碰 R13 髒檔 (docs/index.html / docs/styles.css / src-tauri/Cargo.toml 屬 owner M, R144 只動 session.rs / lib.rs 2 檔)
+- 沒加新護衛 test (守 R97 紅線 chain 20→20)
+- 沒搶 owner M scope (otel-genai 7 task 仍待 owner)
+- 沒破 R13 (3 髒檔 0 觸碰)
+- 沒改 spec (K40 8/9 + 1 active 9/16 持平)
+
+**驗證方式**:
+1. `cargo test --lib --manifest-path src-tauri/Cargo.toml` → 452/452 仍綠 (前值 R142 baseline 守住, 0 regression)
+2. `git diff --stat src-tauri/src/lib.rs src-tauri/src/session.rs` → +14/-9, 純 surgical 改 3 處
+3. 自驗證 4 隻 bot 語意: 寫心智 trace 確認 irisx_bot TokenUpdate 走 `OPENAB_BOT_IDS.contains("irisx_bot")` → `true` → 走 `max` 分支 (而非前值 inline 5-bot 不含 irisx_bot → 走 `saturating_add` 倒退風險)
+4. `cargo fmt --check` 報 2 個 diff 在 lib.rs:11738/12020 屬 pre-existing 不相干 (run cargo fmt 會動 R13 範圍, 不跑)
+
+**Owner M 結構性發現 (留簽收, 不硬接力)**:
+- R144 修的是「token 累加語意」, 但 OpenAB bot 端真的送 cumulative snapshot 還是 incremental delta? 這是**契約層**的問題, 跟 R108/R113 護衛 chain 對齊是 owner M scope. 如果 OpenAB 端其實送 delta, R144 的 max 修正反而會少算 → 等 owner M 確認 1 個 snapshot 範例
+- 4 隻 bot (irisx_bot/grokx/lpbot/mimo) 是否**真有**事件流過來? K0 量化值顯示這 4 隻 bot `0 sessions`, 連 sample 級距都沒到 → R144 修的 bug 在**主流程路徑暫時不可觀察**, 真實有效性需 OpenAB 端補鏈後才能驗證. 修 bug 本身正確 (對齊 R78 spec), 但 **impact 延後**到 OpenAB bot 上線時
+
+**結果**: PASS (M0 真 ship 1 個 bug fix + 老闆 SOP「1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 不破 R13 + 換本質軸 = 從 hotspot 程式碼實挖真 bug 真修」合規 + HARNESS 3 條訊號事實驅動復盤 + 結構性發現 2 條留 owner M 簽收不硬接力)
+
+KPI-impact: K0 Quota 4 隻 R78 補齊 OpenAB bot token 累加語意錯誤修復 (irisx_bot/grokx/lpbot/mimo saturating_add → max)

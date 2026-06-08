@@ -137,10 +137,11 @@ impl Session {
             }
             "TokenUpdate" => {
                 // OpenAB bot 送累計 snapshot（取 max 避倒退），本機 CLI 送 delta（用 add）。
-                let is_openab_bot = matches!(
-                    event.provider.as_str(),
-                    "cicx" | "gitx" | "giminix" | "codex_bot" | "openx"
-                );
+                // R144: 改用 `OPENAB_BOT_IDS` 單一 source of truth 對齊 lib.rs 9 隻 OpenAB bot
+                // 補齊。R78 前 inline 5-bot 漏 4 隻 (irisx_bot/grokx/lpbot/mimo) → 走 saturating_add
+                // 倒退風險。對齊 lib.rs:40 設計紀律 (R100 提取 + R67 護衛 chain 16 精神)。
+                let is_openab_bot = crate::OPENAB_BOT_IDS
+                    .contains(&event.provider.as_str());
                 if is_openab_bot {
                     if let Some(i) = event.tokens_input {
                         self.tokens_input = self.tokens_input.max(i);
@@ -587,10 +588,10 @@ impl SessionManager {
             "TokenUpdate" => {
                 // OpenAB bot 送「累計」總量（snapshot），取 max 避倒退；
                 // 本機 CLI 未來若支援 token 事件預期送「delta」增量，用 add 避免漏累。
-                let is_openab_bot = matches!(
-                    event.provider.as_str(),
-                    "cicx" | "gitx" | "giminix" | "codex_bot" | "openx"
-                );
+                // R144: 對齊 Session::handle_event, 改用 `OPENAB_BOT_IDS` 單一 source of truth,
+                // 覆蓋 R78 補齊 9 隻 OpenAB bot (含 irisx_bot/grokx/lpbot/mimo)。
+                let is_openab_bot = crate::OPENAB_BOT_IDS
+                    .contains(&event.provider.as_str());
                 if is_openab_bot {
                     if let Some(i) = event.tokens_input {
                         entry.tokens_input = entry.tokens_input.max(i);

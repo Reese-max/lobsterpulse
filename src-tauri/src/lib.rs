@@ -37,7 +37,11 @@ static LOCAL_USAGE_RUNNERS_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 ///
 /// 對齊 R67 護欄 chain 16 精神（provider 對稱）：將來加 bot 只改這 1 個 const + KNOWN_PROVIDERS
 /// + default_providers 3 點，不再 4+ 處 inline list 散落各處。
-const OPENAB_BOT_IDS: &[&str] = &[
+/// R144 改 `pub`：讓 sibling mod (`session.rs::handle_event` /
+/// `SessionManager::handle_event` aggregate 層) 可引用，避免 R78 補齊 9 隻 bot 後
+/// inline 5-bot list 漏 4 隻 (irisx_bot/grokx/lpbot/mimo) 的 token 累加語意錯誤。
+/// R100 設計本意是「單一 source of truth」，但 `const` private 強迫下游 mod 重複列表 → 漂移。
+pub const OPENAB_BOT_IDS: &[&str] = &[
     "cicx",
     "gitx",
     "giminix",

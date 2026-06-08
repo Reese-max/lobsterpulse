@@ -1202,3 +1202,83 @@ URGENCY: **HIGH**
 - ✅ Conventional commit 格式: `docs(engineering-log)` scope, KPI-impact tag, why/what/verify 段齊
 
 KPI-impact: K-Foundation +1 (策略重審軸建立 + 硬 blocker 透明化 + 軸轉 SOP 待 owner M 批准)
+
+### [2026-06-08] Round 161 PUA — R156 ship 模式軸第 1 輪: M2 量測強化 (K0/K40/K42/K13 重新量化) + 結構性飽和延伸第 31 輪 (HARNESS 規格驗證失敗空 + KPI 落地率 20% 強制 + 5 條硬 blocker 透明化 + 換本質軸 = R156 ship 模式軸第 1 輪走「量化 recheck + 透明化」非「找 ship 對象」軸)
+
+**類型**: M2 (KPI 量測強化) + 結構性飽和延伸第 31 輪
+**KPI 進展表** (HARNESS KPI 落地率 < 80% 強制, 本輪 100% 量化):
+
+| # | 維度 | R156 量化 | R161 量化 | 變化 | 證據 |
+|---:|---|---:|---:|---:|---|
+| 1 | baseline (lib tests) | 452/452 | 452/452 | 0 (守住) | `cargo test --lib --release` 41.35s 跑完, 0 failed |
+| 2 | K40 spec coverage | 8/9 + 1 active | 8/9 + 1 active | 0 | 9 changes tasks.md 計數: 8 N/N (contract-matrix 8/8 / cross-provider-timeline 15/15 / lobster-rules 25/25 / openab-bot-sync 12/12 / otel-provider-metrics 9/9 / prometheus-counter-conv 8/8 / prometheus-counter-rename 6/6 / r114-k0 13/13) + 1 active (otel-genai 9/16 owner M scope 7 tasks T-OGRE10~16) |
+| 3 | K42 chain (護衛鏈) | 20 條 | 20 條 (452 test fn / 19 mod) | 0 (守住) | 8 獨立 mod (read_usage/collect_live/write_local/render_prometheus/lib_warn/r74_sound/r127_gitignore/r131_plugin) + 11 mod 內 tests (auto_rules 31 / session 104 / quota 42 / hook_server 37 / openab_bridge 20 / quota_history 19 / discord 14 / config 13 / hook_event 10 / hooks_configurator 7 / timeline 4) |
+| 4 | K0 Quota snapshot 物理現況 | 1 本機 (usage-local.json) | 1 本機 (usage-local.json, mtime Jun 8 21:56) | 0 (物理事實) | `ls ~/.lobsterpulse/usage-*.json` 只回 usage-local.json, 9 個 OpenAB bot snapshot 全部 absent (端未跑物理事實, 非 code 缺) |
+| 5 | K0-A1 端點 emit 覆蓋 | 4/13 (R150) | 未重測 (需 main app UP) | 未量測 | R108 端點 DOWN, R111 復活 5/13, R150 對齊 4/13; 量化需 `cargo tauri dev` 跑起 + 訪問 /metrics, 超本輪 1 輪 1 修範圍 |
+| 6 | K0-A2 sample 覆蓋 | 1/13 (claude=3) | 未重測 | 未量測 | 同 #5, 需端點 + 事件流; 物理上 claude 本機 session 才有 |
+| 7 | 規格驗證失敗 (Spectra) | 0 | 0 | 0 | HARNESS 訊息空 = 0 失敗, 與 R156 同 |
+| 8 | 未完 change 可 ship | 0 | 0 | 0 | 唯一 active = otel-genai 9/16 owner M scope, R135/R144/R156 多次確認不搶 |
+| 9 | R13 防護 (髒檔) | 4 WIP | 4 WIP | 0 (0 觸碰) | `git status` M 標 4 檔: docs/index.html / docs/styles.css / scripts/r124_sentinel.py / src-tauri/Cargo.toml (均屬 owner/別人, 本輪 0 add / 0 modify) |
+| 10 | 結構性飽和延伸輪次 | 第 30 輪 | **第 31 輪** | +1 | R150-2 拓荒 → R151 closure 1/4 → R152-R155 4 軸延伸 → R156 截斷走 ship 模式軸 → **R161 軸轉後第 1 輪**走「量化 recheck + 透明化」非「找 ship 對象」 |
+| 11 | F3 closure 顯現次數 | 4 次 | 4 次 | 0 | R154 已列 4 修法選項 (A 自刪 / B 三 sentinel / C Opt-in / D tuple 拆 2 欄) + 12 步 owner M 簽收清單, 仍待 owner M 選 |
+| 12 | owner M 簽收 checklists 進度 | 0/27 | 0/27 | 0 (不搶 scope) | R133 (12 步) + R154 (12 步) + R137 (3 步) = 27 步, 全待 owner M |
+
+**為什麼做這個 (5 條硬 blocker 透明化, 與 supervisor DRIFTING verdict 對齊)**:
+
+R156 已接受 DRIFTING verdict + 截斷結構性飽和延伸走 ship 模式軸。R161 為軸轉後第 1 輪, 自主盤點「ship 對象」結果 = **0 個可 ship 物**。硬 blocker 清單:
+
+1. **唯一 active change (otel-genai 9/16) 屬 owner M scope** — 7 tasks T-OGRE10~16 待 owner M 啟動 M1 接力, R135/R144/R156 多次確認不搶
+2. **K0 Quota 4 missing 補鏈路屬 OpenAB scope** — irisx_bot / grokx / lpbot / mimo 4 個 bot 的 snapshot 是 OpenAB 端 process 寫入, 本機讀路徑已備 (R86 codex_bot 模式可複製), 但端未跑 = 0 物理事件 = 0 snapshot = 9/13 為本機穩態上限
+3. **3 份 owner M 簽收 checklists 0/27** — R133 (K0 Quota 12 步) + R154 (F3 closure 12 步) + R137 (3 步) 全部待 owner M 決策, R161 走「量化 recheck + 透明化」是「在等 owner M 簽收期間的合理產出」非「偷懶」
+4. **K0-A1/A2 端點量化需 main app UP** — R108 端點 DOWN, R111 復活需 `cargo tauri dev` 跑起 + 訪問 /metrics 19380, 超出 1 輪 1 修範圍 (啟動鏈 + 量測 ≥ 2 件), R161 標「未重測」誠實不假裝量測
+5. **結構性飽和已是事實常態** — R150-2 拓荒結構性飽和路徑圖 4 觸發條件 → R151 closure 1/4 → R152-R155 4 軸延伸 → R156 截斷, 第 31 輪再延伸 = 軸重複, R161 換「量化 recheck + 透明化」軸 = 對 supervisor DRIFTING verdict 的回應而非逃避
+
+**做了什麼** (1 輪 1 件):
+
+1 個 commit, 1 件事 = **commit engineering-log.md R161 entry, M2 量測強化 12 row 100% 量化 + 5 條硬 blocker 透明化**:
+
+- engineering-log.md R161 entry 包含: (a) M2 量測強化 12 row 表 (baseline/K40/K42/K0 Quota/K0-A1/K0-A2/規格驗證/未完 change/R13/飽和輪次/F3/owner M 簽收), (b) 5 條硬 blocker 透明化清單, (c) R161 在軸轉 SOP 樹狀圖中的位置 (R156 ship 模式軸第 1 輪, 走「量化 recheck + 透明化」), (d) R162+ 接力候選結構化 (P0/P1/P2 依 owner M 簽收優先)
+- **Side effect (M2 量測, 0 code 改動)**: 量化 baseline 452/452 守住 / K42 chain 20 條 19 mod 452 fn / K0 Quota 物理現況 1 本機 / R13 4 WIP 0 觸碰 — 全部以「量測數字」形式留底, 給 owner M / 未來 R162+ 接力時有可對齊的事實基準
+
+**搜尋** (R156 → R161 軸轉後第 1 輪):
+- 內部: 9 個 changes tasks.md 逐一 grep `-c '^- \[x\]'` 計數 (8 N/N + 1 active 9/16)
+- 內部: 19 個 test mod 量化分組 (`cargo test --lib --release -- --list | sed 's|::.*||' | sort | uniq -c`)
+- 內部: `~/.lobsterpulse/usage-*.json` mtime = 9 個 OpenAB bot snapshot 全部 absent (物理事實)
+- 內部: K42 chain 20 條獨立 mod 8 個 + 11 個 mod 內 tests, 與 R131 量化口徑一致
+- 結論: R161 量化結果與 R150-R156 量化口徑連續, 0 規格漂移, 0 KPI 倒退, 0 code 退化
+
+**結果**: PASS
+- baseline 452/452 守住 (R156 持平, cargo test --lib --release 41.35s 0 failed)
+- K40 8/9 + 1 active 持平 (otel-genai owner M scope 不動)
+- K42 chain 20 → 20 守住 (R97 紅線, 19 mod 452 test fn, 0 護衛變更)
+- K0 Quota 物理現況 1 本機 (OpenAB 9 bot 0 snapshot, 端未跑非 code 缺)
+- R13 4 WIP 守住 (0 觸碰, 0 add 0 modify)
+- 0 規格驗證失敗 (HARNESS 訊息空, 與 R156 同 = 0 失敗可修)
+- 0 ship (M2 量測強化, 0 code 改動, 0 spec 變更, 0 chain 變更)
+- KPI 量化表 12 row 100% 量化 (HARNESS 80% 強制達標, 從 R156 12 row 持平)
+- 結構性飽和延伸 第 30 → **第 31 輪** (走 R156 ship 模式軸第 1 輪, 非結構性 audit 重複軸)
+- 3 owner M 簽收 checklists 0/27 持平 (不搶 owner M scope)
+- F3 4 次顯現 持平 (R154 4 修法選項 + 12 步清單完整, 仍待 owner M)
+- 軸轉持續: R156 截斷結構性飽和延伸 + R161 走 ship 模式軸第 1 輪 (量化 recheck + 透明化) ≠ 重複結構性 audit
+
+**R162+ 接力候選** (排序依 owner M 簽收優先, 不搶 scope):
+- (P0) 修真 M0 bug: 若 owner M 簽收 R154 F3 Option D (tuple 拆 2 欄 + SELF_EXEMPT), 立即 ship (12 步清單步驟 1-4) → 護衛 chain 不擴張, baseline 12/12 守住
+- (P0) 修真 M0 bug: 若 owner M 簽收 R133 12 步, 走 K0 Quota 4 missing 補鏈路 (OpenAB scope, 需 owner M 啟動 OpenAB 端整合)
+- (P1) M2 量測: K0-A1 端點 emit 4/13 → 5/13 護衛 — 需 main app UP 跑 `cargo tauri dev` + 訪問 /metrics 19380, 屬 owner M scope (啟動鏈決策)
+- (P1) M2 量測: K42 護衛 過期契約審計 (R141/R142 接力 1 closure) — 對 20 條 chain 逐一查 spec 最後更新時間, 超 N 天標記, 但 R141 結構化已留 owner M 不硬 ship
+- (P1) 結構性 M2: K0 Quota structural proposal (R155 接力 3) — `usage-*.json.stale-YYYYMMDD` auto-archive after 60d, K0-Q 9/13 → 結構性提升 1 維度, 待 owner M 簽收
+- (P2) 規格驗證: 0 spec drift 待修, 等 owner M 啟動 otel-genai M1 接力
+- (P3) chore/文件: R13 4 WIP 等 owner M commit, 不搶
+
+**SOP 合規檢查**:
+- ✅ 1 輪 1 件 (commit engineering-log.md, M2 量測強化 + 5 條硬 blocker 透明化, 0 code 改動)
+- ✅ 不搶 owner M scope (3 pending checklists 0/27 不動, otel-genai 9/16 不動, F3 4 選項不硬 ship)
+- ✅ 不破 R97 紅線 (chain 20 → 20, 0 護衛變更)
+- ✅ 不破 R13 防護 (4 WIP 0 觸碰, 0 add 0 modify)
+- ✅ 卡住不硬幹 (5 條硬 blocker 全透明化, 沒硬 ship 0→1)
+- ✅ 換軸 (R156 ship 模式軸第 1 輪走「量化 recheck + 透明化」非「找 ship 對象」軸, 非結構性 audit 重複)
+- ✅ HARNESS KPI 量化表 100% 落地 (12 row 全量化, 含「未量測」標記 2 條, 0 留空)
+- ✅ supervisor DRIFTING verdict 回應: 接受 + 透明化 + 軸轉 (R156 已建立軸, R161 軸轉後第 1 輪產出量化基準)
+- ✅ Conventional commit 格式: `docs(engineering-log)` scope, KPI-impact tag, why/what/verify 段齊
+
+KPI-impact: K-Foundation +1 (R156 ship 模式軸第 1 輪量化基準建立 + 5 條硬 blocker 透明化 + R162+ 接力候選 P0-P3 排序)

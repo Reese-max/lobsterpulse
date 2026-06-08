@@ -54,16 +54,16 @@ GUARD_MOD_MIN: Final[int] = 20
 # MISSION 90 天 KPI: 7d chore_treadmill < 30%
 K41_CHORE_RATIO_MAX: Final[float] = 0.30
 
-# R124 護衛的 5 髒檔 (owner M WIP, sentinel 應守住 0 動 = tracked dirty)
-# R131 走 R149 closure 路徑選項 C 純版: commit sentinel 進 git 後從 tuple 移除 (commit 後不再是 WIP)
-# R149 結構性發現 5→6 是「commit 前」的對齊事實, commit 後回歸 5 (sentinel 自身已收編)
+# R124 護衛的 owner M WIP tuple — sentinel 應守住 0 動 = tracked dirty
+# 歷史: R124 ship 時 6 髒檔 → R131 commit sentinel 自身 → 5 髒檔 → R137 owner M
+# 收編 2 條 WIP (prometheus-counter-rename-2026-q3 spec 43ad4d5 + timeline.rs
+# 9fde33d, 詳見 R138 engineering-log 結構性發現), tuple 收為 3 條 = 當前實際
+# tracked dirty 數。R138 加 test 護衛: tuple 必須 == `git status --porcelain`
+# dirty 數, 任何 owner M 收編或新 WIP 必須在同 commit 更新 tuple。
 OWNER_M_WIP_FILES: Final[tuple[str, ...]] = (
     "docs/index.html",
     "docs/styles.css",
-    "openspec/changes/prometheus-counter-rename-2026-q3/specs/"
-    "prometheus-counter-rename-2026-q3/spec.md",
     "src-tauri/Cargo.toml",
-    "src-tauri/src/timeline.rs",
 )
 
 

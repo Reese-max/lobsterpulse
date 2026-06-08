@@ -118,3 +118,38 @@ def test_guard_chain_持平_守住_R97_紅線():
     result = r124_sentinel.check_guard_chain()
     assert result.passed is True
     assert "R97" in result.note or "紅線" in result.note or "守住" in result.note
+
+
+def test_OWNER_M_WIP_FILES_tuple_對齊_當前_git_status(monkeypatch):
+    """R138 護衛: tuple 必須 == `git status --porcelain` 當前 dirty tracked 數 (扣 sentinel 自身)。
+    守住 R124 sentinel self-consistency: tuple 跟事實同步, owner M 收編或新 WIP
+    必須在同 commit 更新 tuple, 防止 R138 之後 tuple 再次 stale 導致 sentinel
+    self-FAIL (R138 前 5 條 tuple / 3 條實際 dirty, sentinel 自身 DRIFT 的根因)。
+    SELF_EXEMPT 是 sentinel 模組本身, 允許它們在測試 / commit 過程中 dirty
+    (這護衛合約就是守這些檔), 其他任何 dirty 必須在 tuple 內。
+    """
+    import r124_sentinel
+    import subprocess as _sp
+    SELF_EXEMPT = {
+        "scripts/r124_sentinel.py",
+        "scripts/test_r124_sentinel.py",
+    }
+    proc = _sp.run(
+        ["git", "status", "--porcelain"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=r124_sentinel.REPO_ROOT, check=False,
+    )
+    actual_dirty = {
+        line.split(maxsplit=1)[1].replace("\\", "/")
+        for line in proc.stdout.splitlines() if line.strip()
+    } - SELF_EXEMPT  # sentinel 自身免計
+    declared = set(r124_sentinel.OWNER_M_WIP_FILES)
+    missing_in_tuple = actual_dirty - declared  # owner M 沒宣告
+    extra_in_tuple = declared - actual_dirty    # tuple 內已收編
+    assert not missing_in_tuple, (
+        f"tuple 缺 owner M 當前 WIP {missing_in_tuple}, 需在同 commit 更新 "
+        f"OWNER_M_WIP_FILES (R138 結構性發現: tuple 跟事實必須 sync)"
+    )
+    assert not extra_in_tuple, (
+        f"tuple 內檔已不 dirty {extra_in_tuple}, owner M 已收編, tuple 應同步移除"
+    )

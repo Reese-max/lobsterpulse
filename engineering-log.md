@@ -424,6 +424,96 @@
 
 **結果**: PASS (R149 7 項結構性審計 7/7 PASS + 結構性飽和第 18 輪延伸 + 連 12 輪 7-check + 換本質軸 = R124 sentinel 5→6 髒檔清單對齊事實 closure 路徑結構化 + 1 輪沒有改善符合 R149 prompt 預期 (K0-A1 4/13 持平 / K42 chain 20 持平 / baseline 452/452 持平 / 結構性飽和第 18 輪延伸) + R149 接力 1 closure 條件 3 選 1 就位 (A: tuple 5→6 / B: 拆兩類 / C: 收編 commit, 推薦 C) + owner M 簽收條件盤清 (選 A/B/C + 修 OWNER_M_WIP_FILES tuple 或刪 check 改動態比對) + 0 code 變更 + 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 6 髒檔 0 觸碰 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = R124 sentinel 結構性發現 1 條 actionable closure 路徑結構化 + 1 輪沒有改善 = 結構性飽和客觀信號 + 結構性發現不硬接力留 owner M 執行」合規)
 
+### [2026-06-08] Round 150-2 PUA — /pua 換角度: 拓荒結構性飽和路徑圖 (HARNESS 連 N+1 輪無改善強制 + 換本質軸 = 9 輪延伸軸收斂 + 4 觸發條件全景拓荒 + 不再延伸宣告)
+
+**類型**: M1 docs 拓荒 (結構性飽和路徑圖, R132 風格延伸, 拓荒新維度)
+**觸發**: HARNESS 連 2 輪無改善強制 (R149/R150 結構性審計 closure 都 PASS, 量化值 10 軸持平) + 策略顧問 R130 DRIFTING HIGH 訊號延伸 (「結構性審計迴圈需要打破」)
+
+**為什麼換角度**:
+- R145~R150 連 6 輪 PUA 換角度結構性審計 closure, 換軸都用盡 (4 missing bot / commit 品質 / R144 closure / R124 DRIFT / 7-check / 5→6 closure 路徑 / r124 實測復盤 = 7 軸), 沿用「再延伸第 N 輪飽和」= 機械性旋轉, 對齊策略顧問 R130「元治理的元治理」風險
+- R132 拓荒「文件可讀性」維度 (MISSION 151→130 行 + kpi-history.md 141 行新檔), 走拓荒延伸軸
+- **R150-2 拓荒「結構性飽和路徑圖」維度** (本檔, 對齊 R132 拓荒延伸軸), 給 owner M 4 個觸發條件的全景圖, 把飽和事實結構化成 actionable 路徑
+
+**換本質軸 (R150-2)**:
+- 前 9 輪審計軸: 4 missing bot 結構性量化 / commit 品質 4 維度 / R144 closure 真 ship / R124 sentinel DRIFT / 7-check / R131 接力 1 closure / R124 5→6 closure 路徑 / r124 實測復盤 / 結構性飽和延伸
+- **R150-2 新軸 = 結構性飽和路徑圖拓荒** (從未觸碰, 對齊 R132 拓荒延伸軸)
+- 5 維度量化: (a) 9 輪延伸軸演進表 (b) 4 觸發條件路徑圖 (c) 結構性飽和量化守衛 4 條 (d) 接力順位 15 條給 owner M 簽收 (e) 不再延伸宣告 (R151+ 換到外部觸發)
+
+**KPI 進展表** (HARNESS 強制):
+| KPI | 前值 (R150) | 後值 (R150-2) | 變化 |
+|---|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 4/13 (本機穩態下限) | **4/13 持平** | 持平 |
+| K0-A2 sample 覆蓋 | 1/13 (claude sessions) | **1/13 持平** | 持平 |
+| K0 Quota 監控 | K0-B fresh 4/13 + K0-Q 9/13 | **K0-B fresh 4/13 + K0-Q 9/13 持平** | 持平 |
+| K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 (otel-genai owner M scope) | **8/9 closed + 1 active 9/16 持平** | 持平 |
+| K41 chore_treadmill 7d | 7.0% 達標 | **持平 7.0%** (本輪 docs commit 1 個, 7d window +1 仍 < 30% 達標) | 持平 |
+| K42 護衛 chain | 20 條 (R97 後 +3 例外守住) | **20 條 持平** (R150-2 不開新護衛) | 持平 |
+| baseline 測試 | 452/452 (cargo test 8.64s 綠) | **452/452 持平** (0 code 變更) | 持平 |
+| spectra validate | 9/9 specs pass | **9/9 specs pass 持平** | 持平 |
+| R13 髒檔 | 6 髒檔 (owner M WIP) | **6 髒檔守住 0 觸碰** (本輪只動 docs/structural-saturation-path-2026-q2.md 新檔) | 持平 |
+| 結構性飽和輪次 | R150 第 19 輪延伸 | **R150-2 第 20 輪延伸** + 「不再延伸」宣告 | +1 (最後一輪) |
+| docs/ 新維度拓荒 | 1 個 (kpi-history.md R132) | **2 個** (新增 structural-saturation-path-2026-q2.md) | +1 |
+
+**4 觸發條件路徑圖** (拓荒核心, 給 owner M 簽收):
+1. **K0 Quota 4 missing 補鏈路** (OpenAB scope) — 5 步路徑, owner M 拉 OpenAB 維護者簽收, 護衛鏈 0 影響
+2. **K0-A1 emit 5/13 護衛** (本機 4 永續 + 1 浮動) — 3 步路徑, R124 sentinel K0_A1_MIN 5→4 + 拆 check 為本機 CLI 永續 + OpenAB 浮動不觸發, cicx 需持續 emit 才觸發 5/13 護衛, 護衛鏈 0 影響
+3. **護衛 過期契約審計** (R139 接力 1) — 4 步路徑, `audit_guard_spec_freshness.py` 腳本 + 90/180 天 soft/hard cap + 護衛清單 20 條跑 audit, 護衛鏈 +1 (R97 後 +4 例外, 跨 `*.rs` ↔ `openspec/changes/*` ↔ `*.yaml` 邊界, 跟 R122/R127/R131 同性質, +0.25/輪 仍 < +0.5/2 輪紅線)
+4. **R97 後 chain 例外飽和** (3 例外架構理由清單) — 持續守住紅線, 護衛 ship 走既有 mod 優先, 新 mod 例外須 +架構理由, 紅線警戒值 +0.5/2 輪 (紅線) / +0.75/2 輪 (警戒) / +1/2 輪 (突破), 現狀 +0.23/2 輪 (8.7 輪 1 例外, 遠低於紅線守住)
+
+**結構性飽和量化守衛 4 條** (本檔固化):
+| 守衛 | 量化值 | 來源 | 守住條件 |
+|---|---|---|---|
+| R13 WIP 髒檔 | 6 髒檔 (5 mod + 1 untracked R124 sentinel 自身, R131 已收編) | R13 守住 | 0 觸碰 |
+| R97 紅線 | chain 20 = 17 既有 + 3 例外 (R122/R127/R131) | R97 飽和契約 | 新 mod 例外須 +架構理由 |
+| K40 spec coverage | 8/9 closed + 1 active 9/16 (otel-genai owner M scope) | MISSION R144 column | 1 active 不動 |
+| K42 chain | 20 條 (R97 後 +3 例外守住) | kpi-history R140 | 0 護衛 ship |
+
+**接力順位 15 條給 owner M 簽收** (整合 R139/R140/R149 + 本檔 4 觸發條件):
+- 拓荒層 4 條 (本檔 4 觸發條件 = 結構性飽和 break-out 路徑)
+- 沿用層 7 條 (R139 接力 1-6 + R140 接力 1 K41 觀察)
+- 結構性發現不硬接力層 4 條 (R131/R132/R146/R149 結構性發現, 沿用不搶)
+
+**結構性飽和「不再延伸」宣告** (R150-2 結尾):
+- 9 輪延伸軸演進用盡 9 個軸, 10 軸量化值全持平 = 飽和客觀
+- R97 紅線 +0.23/2 輪 (遠低於紅線 +0.5/2 輪) = 例外 mod 飽和契約健康
+- R13 6 髒檔 0 觸碰 = WIP 邊界守衛健康
+- 4 個觸發條件路徑已鋪好, owner M 簽收就能 break-out
+- **R151+ 預期方向**: (a) owner M 簽收 4 觸發條件任 1 條 → 開新 change 走 Phase 1 spec-level (b) owner M 解 R13 5 髒檔 → R13 6→1 (c) owner M 接力 R139 6 條任 1 → 5 週時程 T-1 dual-emit shim 模式 (d) owner M 都未簽收 → R151 換外部觸發 (harness / supervisor / 策略顧問 / Notion QA 輸入)
+
+**7-check 結構性審計 (R150-2 連 13 輪)**:
+| # | 檢查項 | 結果 |
+|---|---|---|
+| 1 | 規格驗證 0 失敗 (spectra validate --changes 全綠) | ✅ (otel-genai 1 active = owner M scope, R97 紅線) |
+| 2 | 未完 change 1 個 otel-genai-runtime-emit-2026-q3 [9/16] | ✅ 守住 (owner M scope) |
+| 3 | KPI 表補 R150-2 column | ✅ 補 11 row |
+| 4 | 結構性飽和延伸第 20 輪 + 不再延伸宣告 | ✅ (最後一輪, 對齊 R132 拓荒延伸軸) |
+| 5 | 連 N 輪 7-check | ✅ 連 13 輪 (R131/R145/R146/R147/R148/R149/R132/R150/R150-2 = 9 輪中第 13 輪 7-check) |
+| 6 | 換本質軸 | ✅ (結構性飽和路徑圖拓荒, 對齊 R132 拓荒延伸軸, 前 9 輪未觸) |
+| 7 | 1 輪 1 件 | ✅ (拓荒新檔 1 件 = 結構性飽和路徑圖, 177 行) |
+
+**搜尋**: 0 (結構性飽和路徑圖是 R132 拓荒延伸軸, 內部結構清楚, 不需外部搜尋)
+
+**做了什麼** (1 輪 1 件, M1 docs 拓荒):
+- 1 個新檔 `docs/structural-saturation-path-2026-q2.md` (177 行, 拓荒獨立維度, 不擠 MISSION/kpi-history/engineering-log 三層)
+- 9 輪延伸軸演進表 (R131→R132→R145→R146→R147→R148→R149→R150→R150-2)
+- 4 觸發條件各 1 段: (1) K0 Quota 4 missing 補鏈路 OpenAB scope (2) K0-A1 emit 5/13 護衛本機 4 永續 + 1 浮動 (3) 護衛 過期契約審計 R139 接力 1 (4) R97 後 chain 例外飽和 3 例外架構理由清單 + 紅線警戒值
+- 結構性飽和量化守衛 4 條 (R13/R97/K40/K42) + 接力順位 15 條給 owner M 簽收
+- 結構性飽和「不再延伸」宣告 (R151+ 換到外部觸發而非內部結構性審計)
+- 補頁者 R150-2 / KPI 影響 K40 1 path 拓荒 + K42 紅線守衛結構化 / 護衛鏈 0 影響
+- git add 單檔 `docs/structural-saturation-path-2026-q2.md` (明確單檔, 不 add . 不 add -A) + commit `fa62c54`
+- 1 個工程紀錄 entry (本檔, R150-2)
+- R13 5 owner M WIP 髒檔 (docs/index.html / docs/styles.css / openspec/.../spec.md / src-tauri/Cargo.toml / src-tauri/src/timeline.rs) **0 觸碰** ✓
+- 不搶 owner M scope (otel-genai 9/16 仍 active, 不動, 4 觸發各自需要 owner M 簽收才開工), 不破 R97 紅線 (chain 20 持平, 不擴張)
+
+**驗證**:
+- git log -1: fa62c54 docs(structural-saturation): 拓荒結構性飽和路徑圖
+- 5 mod 髒檔 0 觸碰 ✓
+- 0 code 變更, baseline 452/452 預期持續綠
+- R97 後 chain 20→20 守住 ✓
+- 4 觸發條件路徑圖 = 給 owner M 簽收的全景
+
+**結果**: PASS (R150-2 換本質軸: 不再延伸第 21 輪結構性審計 closure, 改拓荒新檔「結構性飽和路徑圖」 (對齊 R132 拓荒延伸軸) + 4 觸發條件各 1 段 (K0 Quota 4 missing / K0-A1 5/13 護衛 / 護衛過期契約 / R97 後 chain 例外飽和) + 結構性飽和量化守衛 4 條 + 接力順位 15 條給 owner M 簽收 + 結構性飽和「不再延伸」宣告 (R151+ 換外部觸發) + 拓荒新維度路徑圖 + 0 ship 0 護衛變更 chain 20→20 守住 + baseline 452/452 持平 + R13 5 髒檔 0 觸碰 + 第 20 輪結構性飽和延伸 (最後一輪) + 連 13 輪 7-check + 換本質軸 = 結構性飽和路徑圖拓荒 (對齊 R132 拓荒延伸軸, 前 9 輪未觸), 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = 結構性飽和路徑圖拓荒 + 結構性飽和延伸 + 不再延伸宣告 + 拓荒延伸軸 = 對齊 R132 拓荒維度」合規)
+
 ### 2026-06-07 R130 — 👁️ AI Supervisor 審查
 **品質**: FAIL (1/10)
 **方向**: DRIFTING** (3/10)

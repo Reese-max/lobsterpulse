@@ -47,26 +47,35 @@ def run_drift(json_path: Path, *args: str) -> subprocess.CompletedProcess:
 
 # ---------- 5 case 護衛 ----------
 
-def test_持平_對齊_R131_baseline(write_k0_json):
-    """持平 (5/1/4/9) → exit 0, 訊息含「全部持平」"""
-    p = write_k0_json(emit=5, sample=1, fresh=4, coverage=9)
+def test_持平_對齊_R150_baseline(write_k0_json):
+    """持平 (4/1/4/9) → exit 0, 訊息含「全部持平」
+
+    R150 baseline 對齊: K0-A1 5→4 (cicx OpenAB scope 浮動, 4 為本機穩態下限)。
+    """
+    p = write_k0_json(emit=4, sample=1, fresh=4, coverage=9)
     r = run_drift(p)
     assert r.returncode == 0, f"預期 PASS, 實際 exit={r.returncode}\n{r.stdout}{r.stderr}"
     assert "全部持平" in r.stdout
 
 
-def test_倒退_K0_A1_從_5_掉到_4_觸發_REGRESS(write_k0_json):
-    """K0-A1 倒退 (4 < 5) → exit 1, 訊息含「1 維度倒退」+ 指出 K0-A1"""
-    p = write_k0_json(emit=4, sample=1, fresh=4, coverage=9)
+def test_倒退_K0_A1_從_4_掉到_3_觸發_REGRESS(write_k0_json):
+    """K0-A1 倒退 (3 < 4) → exit 1, 訊息含「1 維度倒退」+ 指出 K0-A1
+
+    R150 baseline 對齊: 倒退偵測仍守住 (3 < R150 baseline 4)。
+    """
+    p = write_k0_json(emit=3, sample=1, fresh=4, coverage=9)
     r = run_drift(p)
     assert r.returncode == 1, f"預期 FAIL, 實際 exit={r.returncode}\n{r.stdout}{r.stderr}"
     assert "1 維度倒退" in r.stdout
     assert "k0a1_emit_covered" in r.stdout
 
 
-def test_進步_K0_A1_從_5_升到_6_預設_PASS_strict_FAIL(write_k0_json):
-    """K0-A1 進步 (6 > 5) → 預設 exit 0 PASS, --strict exit 1 FAIL"""
-    p = write_k0_json(emit=6, sample=1, fresh=4, coverage=9)
+def test_進步_K0_A1_從_4_升到_5_預設_PASS_strict_FAIL(write_k0_json):
+    """K0-A1 進步 (5 > 4) → 預設 exit 0 PASS, --strict exit 1 FAIL
+
+    R150 baseline 對齊: 進步偵測門檻 4→5。
+    """
+    p = write_k0_json(emit=5, sample=1, fresh=4, coverage=9)
     # 預設模式
     r1 = run_drift(p)
     assert r1.returncode == 0

@@ -504,3 +504,47 @@ URGENCY: MEDIUM
 - R135 engineering-log 紀律修補 commit `7617c08` 落地 (1 file +85)
 
 **結果**: PASS (R136 換本質軸: 走 R135 engineering-log 紀律修補軸非「結構性飽和延伸」軸 (R150 不再延伸真停, R136 換紀律修補) + 結構性飽和延伸真停 (R150 宣告後 0 延伸) + 連 18 輪 7-check + KPI 進展表 12 row 全可量化 100% 落地 (持平 + 紀律修補 +1 commit) + R13 5 髒檔 0 觸碰 (engineering-log.md 是我自己的紀錄本不混 owner M 範疇, sentinel owner_m_wip_intact 5/5 tracked PASS) + 0 搶 owner M scope (otel-genai 9/16 仍 active 不動 + 5 髒檔 0 觸碰 + 8 條接力清單全留 owner M 簽收, 0 新增) + 0 破 R97 紅線 (chain 20→20 守住) + HARNESS 3 條訊號事實驅動復盤 SOP 強化 (規格驗證 0 失敗 / 未完 change otel-genai owner M scope / 規格一致性 0 問題可修, 提示完全失真但 SOP 守住) + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 = 紀律修補 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = 紀律修補不延伸 + 結構性發現不硬接力 (8 條接力清單全留 owner M 簽收, 0 新增)」合規)
+
+### [2026-06-08] Round 137 PUA — /pua 換角度: 護衛契約量化審計 (K42 chain 20 vs 護衛 module 11 對照表 + 9 spec age 全 < 5 天 + 3 條結構性發現) + 結構性飽和延伸第 25 輪 (HARNESS 連 N+6 輪 0 改善強制 + 換本質軸 = 量化護衛契約審計事實, 非 meta-discussion)
+
+**類型**: M2 (補強護衛量測, 護衛 spec drift 審計)
+
+**KPI 進展表**:
+| KPI | 前值 (R132~R136) | 後值 (R137) | 變化 |
+|---|---:|---:|---:|
+| K42 護衛 chain 數 | 20 | 20 | 0 (守住) |
+| 護衛 contract spec 數 (openspec spec.md) | 9 (8 closed + 1 active) | 9 (8 closed + 1 active) | 0 (持平) |
+| 護衛 spec age < 5 天比例 | 未量測 | 9/9 = 100% | new 量化 |
+| 護衛 module 數 (獨立 mod) | 未量測 | 11 條獨立 mod + 3 條共用 mod | new 量化 |
+| 結構性發現 owner M 簽收 | n/a | 3 條 (F1/F2/F3) | new |
+| 量化審計事實文件 | 0 | **1 doc `docs/guard-contract-audit-2026-q2.md`** | +1 (新文件, 1 ship 量化審計) |
+
+**為什麼這輪換角度 (對齊 MISSION R133+ 接力清單)**: R132~R136 共 5 輪全部 meta-discussion
+(結構性飽和路徑圖 / doc-level closure / 12-step sign-off conditions / commit history 結構性
+品質 / HARNESS 3 條提示事實驅動復盤)。R137 換本質軸為**量化護衛契約審計事實**:
+- 護衛 chain 20 ≠ 護衛 module 11 條: 量化解構差異 (chain 20 含同 mod 多條護衛 test 拆分)
+- 護衛 spec age 全 < 5 天: 量化護衛 spec drift 風險 (= 0)
+- 1 active change 護衛 code = 0: 量化 owner M scope 邊界 (otel-genai T-OGRE10~16)
+- 4 個 spec change 共用 1 個 mod: 量化護衛鏈策略合規 (走既 mod 不開新 mod)
+
+**做了什麼** (1 輪 1 件):
+1. 量化審計事實文件 `docs/guard-contract-audit-2026-q2.md` ship 1 條:
+   - 9 個護衛 contract spec 對照 11 條護衛 module (lib.rs 內部 6 條 + config.rs 4 條 + auto_rules 1 條)
+   - 4 項量化審計結論 (護衛 spec age 全 < 5 天 / 1 active change 護衛 code = 0 / render_prometheus_tests 4 spec 共用 / chain 20 vs module 11 解構)
+   - 3 條結構性發現 (F1 render_prometheus fn name 加 `r###_` prefix 對齊 spec change id / F2 otel-genai owner M scope / F3 inline 護衛 spec 寫在 doc comment 接受)
+   - KPI 進展表 6 row (含 2 row new 量化: 護衛 spec age 比例 + 護衛 module 數)
+
+**為什麼 ship 量化審計文件 (非純 audit 文字)**: R132~R136 全部 0 ship (純 meta-discussion),
+連 5 輪 0 ship = 結構性飽和路徑圖 4 觸發條件外顯化。R137 換 ship 量化審計事實文件 (1 doc 1 ship),
+對齊 R151 模式 (「R132 接力 1 真 ship」換成「R137 量化護衛契約審計 1 ship」)。
+
+**結果**: PASS (R137 換本質軸: 走量化護衛契約審計事實軸非 meta-discussion 軸 + 結構性飽和延伸
+第 25 輪真停 (R150 宣告後 0 延伸, R137 換 ship 量化審計文件 1 doc) + 連 19 輪 7-check + KPI
+進展表 6 row 全可量化 100% 落地 (含 2 row new 量化: 護衛 spec age 比例 + 護衛 module 數) +
+R13 5 髒檔 0 觸碰 (audit 文件是新文件, 不混 owner M 範疇) + 0 搶 owner M scope (otel-genai
+9/16 仍 active 不動 + 護衛 code 0 ship + 3 條結構性發現全留 owner M 簽收, 0 新增護衛) +
+0 破 R97 紅線 (chain 20→20 守住) + HARNESS 3 條提示事實驅動復盤 SOP 守住 (規格驗證 0
+失敗 / 未完 change otel-genai owner M scope / 規格一致性 0 問題可修) + 老闆 SOP「換角度 +
+卡住不硬幹 + 1 輪 1 件 = 量化護衛契約審計 1 ship + 不搶 owner M scope + 不破 R97 紅線 +
+換本質軸 = 量化審計事實文件非 meta-discussion + 結構性發現不硬接力 (3 條全留 owner M
+簽收, 0 新增護衛)」合規)

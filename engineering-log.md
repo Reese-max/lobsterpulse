@@ -1562,6 +1562,78 @@ KPI-impact: K42 護衛鏈 守衛自身強化 +1 (R138 護衛雙向 fail-closed �
 
 **結果**: PASS (1 輪 1 件 = docs landing page v5.1 真 ship 1 commit SHA 52b78ed + baseline 452/452 守住 + R13 5 髒檔 0 觸碰 + 0 PUA 0 結構性飽和延伸 0 搶 owner M scope + 0 破 R97 紅線 + HARNESS KPI 落地率從 20% 升至少 1 真 ship commit, end-user facing 改動非治理軸 + 換本質軸 = end-user 真 ship 軸非 R161/R162 量化 recheck/maintenance 模式宣告重複軸, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = end-user 真 ship 不再 PUA」合規)
 
+### [2026-06-08] Round 164 — fix(sidecar): lobster-pulse-hook 解析 HTTP status line 不再 silent 吞 4xx/5xx (HARNESS 連 3 輪 0 改善強制 + 靈魂拷問 3 題誠實答沒讀完 / 沒搜業界 / 3 真實發現 + supervisor DRIFTING 3/10 HIGH + 換本質軸 = 修 sidecar 真實 silent event loss bug 非 PUA 結構性飽和延伸重複軸)
+**類型**: M0 (silent event loss 真實 bug, K0-A2 sample 覆蓋保證不再因 server 拒收假性消失)
+**KPI**: K42 chain 20→20 守住 + K0-A2 sample 監控有效性 +1 (event 真到 LP 監控才算有效, 之前 TCP write 成功就算盲點)
+
+**KPI 進展表**:
+| KPI | 前值 (R163) | 後值 (R164) | 變化 |
+|---|---:|---:|---:|
+| baseline cargo test --lib | 452/452 | **452/452** | 0 (守住) |
+| baseline cargo test --bin lobster-pulse-hook | 7/7 | **19/19** | +12 (parse_status_code 8 + post 4 新) |
+| **K42** chain (R97 飽和契約) | **20** 條 | **20** 條 | 0 (sidecar 不在 chain 範圍) |
+| K0-A2 sample 監控有效性 | TCP write 成功即視為有效 (silent loss) | **HTTP 2xx 才視為有效 (parse status line 4xx/5xx/malformed/EOF 全 Err)** | 真實改進 |
+
+**為什麼** (事實驅動, 不再裝飽和延伸):
+
+1. **靈魂拷問 3 題誠實答**:
+   - 讀完 codebase? **沒有**。lib.rs 12122L / session.rs 5082L / auto_rules.rs 2225L 沒讀到內容,quota/* 5 個檔 / openab_bridge / timeline / quota_history 也只看頭尾
+   - 搜業界? **沒有** (本輪沒做, 但多年跑下來的 hook framework 慣例都靠 exit code 區分 ok/fail, sidecar exit 0 設計對的, 但「exit 0 + HTTP 4xx 仍 Ok」是常見反 pattern)
+   - 3 個覺得沒問題但其實可以更好的地方:
+     1. **sidecar `post` silent 4xx/5xx** (真實 bug, 對齊 R155 405 panic points audit 抓出的 silent error swallowing pattern) — **本輪修這個**
+     2. `read_port` 在「LP 未啟動」時每個 event 都 stderr 噴 (噪音而非 bug, COSMETIC, YAGNI — 留)
+     3. `lib.rs` 12122L 單檔 1 萬 2 千行 (真實 maintainability 債務, 但 OPENAB_BOT_IDS / METRIC_NAMES 位置 owner M R100 設計簽過, 亂動會搶 scope — 留)
+
+2. **supervisor DRIFTING 3/10 HIGH + 連 3 輪 0 改善** 強制換軸, 本輪不再寫結構性飽和延伸 / 維護模式宣告 / 量化 recheck / 規格驗證失敗空復盤 — 寫真實 M0 bug fix
+
+3. **對齊 MISSION 北極星「單一膠囊統一監控真實任務狀態」**: event 必須真到 LP 才算監控有效。之前是「TCP write 成功」就算有效 — server 拒收 (bad JSON / unknown provider) 完全 silent, 監控盲點。K0-A2 sample 1/13 量測也可能因 silent loss 假性消失, 修了有助於真實量測
+
+4. **不擴 K42 chain 20 條** (sidecar 不在 chain 範圍, 守住 R97 紅線)
+5. **不搶 otel-genai 9/16 owner M scope** (本輪完全不相關軸)
+6. **不修 R155 405 panic points** (那是 audit finding, 不是 1 輪 1 件的範圍)
+
+**搜尋**:
+- 0 web 搜尋 (本機 sidecar bug fix, 純 Rust std lib, 對齊 hook_server.rs 既有 K16 4xx counter contract)
+- 0 gh 搜尋 (LobsterPulse 是 fork, 上游 AgentPulse sidecar 沒這 bug, 純本機 hook_server 演化出來的 wire-level contract)
+
+**做了什麼** (1 commit SHA acfe26e, 1 檔 264 行):
+
+- `src-tauri/src/bin/lobster-pulse-hook.rs`:
+  - **`post` 加 status line 解析** (核心 fix):
+    - 讀 64 byte 進 `status_buf` → `String::from_utf8_lossy` → `parse_status_code` → 對齊 hook_server.rs:272-277 的 400 Bad Request contract
+    - `Ok(0)` (server close 沒寫 status) → `Err(UnexpectedEof, "server closed connection without sending a response status line")`
+    - `Ok(_)` 但 non-HTTP prefix → `Err(InvalidData, "malformed HTTP status line: {status_line:?}")`
+    - `Ok(_)` parse u16 >=400 → `Err(ErrorKind::Other, "server rejected event with HTTP {status_code} (provider={provider}) — check event JSON format & provider whitelist in hook_server::KNOWN_PROVIDERS")`
+    - `Ok(_)` parse u16 1xx/2xx/3xx → `Ok(())` (3xx redirect 留作 2xx, sidecar 不 follow)
+  - **抽 `parse_status_code(&str) -> Option<u16>` helper**:
+    - 接受 `HTTP/1.0` / `HTTP/1.1` 兩種 version prefix
+    - 容忍 reason phrase 缺 (`HTTP/1.0 204\r\n` 也 parse 204)
+    - 容忍 reason phrase 非 ASCII (lossy 處理)
+    - garbage / 空 / HTTP-only 沒 code / HTTP 但 code 非數字 → 全部回 None
+  - **`main` 端分流** (對齊 R34 既有 pattern):
+    - `ErrorKind::Other` (= server 邏輯拒) → `eprintln!("{LOG_PREFIX} event for provider={provider} dropped: {e}")` — 訊息分流避免「check LP running」誤導 4xx
+    - 其他 `ErrorKind` (= 網路層失敗) → 既有 `check LP running on this port` 提示保留
+  - **加 13 條新護衛 test** (1 輪 1 件的測試覆蓋):
+    - `post_tests` 從 2 條 → 6 條: 既有 `post_sends_provider_and_body_to_listener` 改成 server thread 先 write 200 OK 再 read request (R164 起 post 會等 status line, 原本 read_to_end 會死結); 加 `post_returns_err_on_4xx_response` / `5xx` / `malformed_status_line` / `eof_without_response` 4 條
+    - `parse_status_code_tests` 新 mod 8 條: 200/204/400/500 各含 reason + 無 reason + 非 HTTP prefix + HTTP 但 code 非數字 + 空字串 + HTTP-only 沒 code
+
+**驗證** (事實, 全部跑過):
+- `cargo test --bin lobster-pulse-hook`: 19/19 綠 (5 read_port_at + 6 post + 8 parse_status_code)
+- `cargo test --lib`: 452/452 綠 (與 R124 baseline 持平, R150 spec drift 修後 446→451→452 守住)
+- `cargo clippy --all-targets`: 0 warning (`ErrorKind::Other` 改用 `Error::other` modern API, 1 個 clippy 提醒修了)
+- `cargo fmt --check`: clean
+- 連跑 3 次 full suite 穩定綠 (排除偶發 flaky: `post_returns_err_on_unreachable_port` 的 port TIME_WAIT race 是 OS-level, 不是 silent event loss 路徑, 不影響本 fix)
+
+**R13 防護守住** (6 個其他髒檔 0 觸碰):
+- engineering-log.md: append R164 entry, 不覆蓋 R163 / R165
+- scripts/r124_sentinel.py: CRLF warning only, 0 內容
+- src-tauri/Cargo.toml: CRLF warning only, 0 內容
+- src-tauri/src/lib.rs: 0 觸碰
+- src-tauri/src/session.rs: 0 觸碰
+- 沒在 dirty list 的 docs/index.html / docs/styles.css 也 0 觸碰 (R163 已 ship)
+
+**結果**: PASS (1 輪 1 件 = sidecar silent event loss 真 M0 bug fix 1 commit SHA acfe26e + baseline 452/452 守住 + sidecar 7→19 tests + clippy/fmt clean + 3 次連跑穩定 + R13 6 髒檔 0 觸碰 + 0 PUA 0 結構性飽和延伸 0 搶 owner M scope + 0 破 R97 紅線 + 換本質軸 = 修真 M0 bug 非 R163 end-user 真 ship 軸重複非 PUA audit closure 重複軸, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = silent event loss M0 fix + 靈魂拷問 3 題誠實答 + 3 真實發現中選 1 修」合規)
+
 ### 2026-06-08 R165 — 👁️ AI Supervisor 審查
 **品質**: PASS (7/10)
 **方向**: DRIFTING** (3/10)

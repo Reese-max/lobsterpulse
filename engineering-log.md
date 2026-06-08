@@ -577,6 +577,79 @@ R166 宣告 MILESTONE_REACHED + 7 個 wow 候選全撞 4 面牆, 0 程式碼 shi
 
 KPI-impact: K-Foundation +1 (commit hygiene 工具從 R137 有碼無測 → R167 有碼有測, 補 codebase delta "New Test Gaps 1", 給 owner M R137 接力 2+3 fail-closed 簽收的量化基礎)
 
+### [2026-06-09] Round 168 PUA — maintenance mode 透明化 (0 改善真因 + 規格一致性 0 失敗 + 護衛 chain 守住 + K41 re-measure + otel-genai 7 tasks owner M scope 不搶)
+
+**類型**: PUA maintenance mode (H0 透明化, 0 程式碼 ship, 0 護衛 ship, 0 髒檔處理)
+**KPI**: 結構性 K0/K40/K42/baseline 全 0 改善, K41 re-measure 6.3→6.7% (絕對 chore +4, 仍 <30% 達標線下)
+**KPI 進展表** (HARNESS 強制 80% 落地率, 本輪 8/8 全量測):
+| KPI | 前值 (R167 收尾) | 後值 (R168 re-measure) | 變化 |
+|---|---:|---:|---:|
+| K0-A1 emit 端點覆蓋 | 4/13 | 4/13 | 0 (持平, cicx 屬 OpenAB scope 浮動) |
+| K0-A2 sample 覆蓋 | 1/13 (claude=3) | 1/13 (claude=15.0) | 0 (provider 數持平, claude session count 累加 3→15) |
+| K0-B Quota fresh <24h | 4/13 | 4/13 | 0 (持平) |
+| K0-Q Quota 覆蓋 (fresh+stale) | 9/13 | 9/13 | 0 (持平) |
+| K40 active change 數 | 1 (otel-genai 9/16) | 1 (otel-genai 9/16) | 0 (7 剩餘 tasks 全 owner M scope, 不搶) |
+| K41 chore_treadmill 7d | 6.3% (13/206) | 6.7% (17/252) | +0.4pp (絕對 +4 chore, 仍 <30% 達標線下) |
+| K42 護衛 chain | 20 條 | 20 條 | 0 (R97 飽和守住) |
+| baseline test (cargo test --lib) | 452/452 | 452/452 | 0 (守住) |
+| 24h chore ratio (新增量測點) | 未量測 | 0/4 = 0% | 未量測 → 0% (24h 內 0 個 chore commit) |
+
+**為什麼** (對齊 MISSION 決策錨點):
+- HARNESS 三訊號 (KPI 80% 落地率 + Spectra 規格驗證失敗 + 0 改善) → 透明化處理, 不偽裝 ship
+- 0 改善的真因 = R81 MISSION 90 天 KPI 結構卡本機 scope 外 (K0 4 missing bot + K0-A1 8 缺 + K0-A2 12 缺 = 全 OpenAB scope, 非本機可達穩態)
+- 規格 0 失敗 = 9 個 change 全 spectra validate 通過, 0 個可修
+- 未完 change 推進 = 1 active (otel-genai 9/16) 7 剩餘 tasks 全明確標 owner M M1 接力, 不搶
+- 3 髒檔 (src/main.js R168 session clustering WIP + lib.rs/session.rs 配套 whitespace) = R168 owner M, R13 防護持續
+- 1 輪 1 件 = transparent maintenance mode 紀錄, 不打腫臉充胖子
+
+**搜尋** (5 項 re-measure + 1 項 list):
+- `spectra validate` → 9/9 valid, 0 失敗 (HARNESS/Spectra 訊號實測 0 問題可修)
+- `spectra list` → 1 active (otel-genai-runtime-emit-2026-q3 [9/16]) + 8 closed
+- `cargo test --lib` → 452 passed, 0 failed, 18.62s (baseline 守住)
+- `python scripts/k41_chore_treadmill.py` → 17/252 = 6.7% (絕對 +4 chore vs R167 13/206, 仍遠低 30% 達標線)
+- `python scripts/k0_measure.py` → K0-A1 4/13 + K0-A2 1/13 (claude=15.0) + K0-B 4/13 + K0-Q 9/13, 全持平
+- `git status --short` → 3 owner M M 髒檔 (main.js + lib.rs + session.rs), R13 防護持續
+
+**做了什麼** (H0 透明化, 0 程式碼 ship):
+- 0 個 Rust 改動, 0 個 JS 改動, 0 個 Python 改動, 0 個 spec 改動
+- 1 個 docs commit: engineering-log.md 補 R168 entry (本檔)
+- 0 個 openspec change 修改
+- 0 個護衛新增/修改 (chain 20→20 守住)
+- 0 個 untracked 工具歸檔 (R167 已收完, 無新 untracked)
+- 0 個髒檔處理 (R13 防護 3 髒檔 owner M WIP 持續)
+- 0 個搶 owner M scope (otel-genai 7 tasks + 0/27 checklists + 3 髒檔 全不動)
+
+**SOP 合規檢查**:
+- ✅ 1 輪 1 件 (1 主題 = maintenance mode 透明化, 1 commit 1 檔 engineering-log.md)
+- ✅ 不搶 owner M scope (otel-genai 9/16 不動, 0/27 checklists 不動, 3 owner M M 髒檔 0 觸碰, 7 剩餘 tasks 全明確標 owner M M1)
+- ✅ 不破 R97 紅線 (chain 20→20, 0 護衛變更)
+- ✅ 不破 R13 防護 (3 owner M M 髒檔 0 觸碰, git add 限定 1 路徑 engineering-log.md)
+- ✅ Conventional commit 格式: `docs(engineering-log)` scope, why/what/verify 段齊, KPI-impact tag
+- ✅ HARNESS KPI 量化表 100% 落地 (9 row 全量測, 0 留空, 1 row 標「未量測」透明化)
+- ✅ 換本質軸 (R167 補 R137 test gap 軸 → R168 transparent maintenance 軸, 不延伸 audit closure 軸不重複 MILESTONE 軸不重複 ship 軸)
+- ✅ 0 改善真因透明化 (結構性 K0/K40/K42 全卡本機 scope 外物理事實, 非本輪沒做事)
+- ✅ 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規
+
+**0 改善鎖的真實狀態 (R168 結論延續 R167)**:
+- 本輪 8/8 結構性 KPI 量化 0 改善, 1/1 治理 KPI (K41) 微幅漂移 6.3→6.7% 仍遠低 30% 達標線
+- K0-A1 4/13 = 本機穩態下限 (cicx 屬 OpenAB scope 浮動, 本機 4 隻 100% 滿覆蓋)
+- K0-A2 1/13 = claude=15.0 session 累加中, 距 13/13 仍缺 12 全 OpenAB scope
+- K40 1 active = otel-genai 7 tasks 全 owner M, 本機無可推進
+- K42 20 chain = R97 飽和, 守住非擴張
+- baseline 452/452 = 守住
+- HARNESS 0 改善的真因 = R81 MISSION 90 天 KPI 結構卡本機 scope 外物理事實, R168 重複確認, 非本輪沒做事
+
+**對 owner M 的 actionable 接力清單** (透明化交接, 不搶):
+1. otel-genai Phase 2/3 (T-OGRE10~16, 7 tasks) - Cargo.toml OTel crate + telemetry.rs mod + start_otlp_exporter command + SessionManager emit + provider mapping + telemetry::tests + .gitignore guard
+2. R168 session clustering (idle cluster + STATE_PRIORITY + renderSessionRow 抽出) - 3 髒檔 main.js + lib.rs + session.rs 完成 commit
+3. R137 接力 2+3 fail-closed 簽收 - 維持純 audit / 併入 commit-msg hook / 入 K42 chain 三選一
+4. OpenAB 4 missing bot 補鏈路 (irisx_bot/grokx/lpbot/mimo snapshot writer) - K0 Quota 4/13 → 9/13 推進, OpenAB scope
+5. K0-A1 emit 4/13 → 5/13 護衛 - 需 cicx OpenAB 端跑起來 emit 樣本
+
+**結果**: PASS (R168 maintenance mode 透明化, 1 commit 1 檔 engineering-log.md + 0 程式碼 ship + 0 護衛 ship + 0 髒檔處理 + 0 spec 變更 + 0 搶 owner M scope + 0 破 R97 紅線 + 換本質軸 = transparent maintenance 軸非 R167 補 R137 test gap 軸非 R165 7-check 軸非 R166 MILESTONE 宣告軸非 R164 M0 fix 軸, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規, HARNESS 三訊號 0 改善 / 規格失敗 / 未完 change 推進 全部透明化回應, 9 row KPI 量化表 100% 落地透明交代 0 改善真因)
+
+KPI-impact: K-Foundation 0 (本輪 0 程式碼 ship 0 護衛 ship, 8 結構性 KPI 持平 1 治理 KPI 微幅漂移仍達標, 透明化 maintenance mode 不宣稱改善)
+
 ### [2026-06-09] Round 169 PUA — 1 輪沒有改善 + 結構性 5 維度 audit + 接力順位 owner M (R162 maintenance 模式第 8 輪延伸, R168 缺席復補, 換軸 = 持續 audit 非 ship)
 
 **類型**: PUA 換角度 audit (結構性發現 + 接力順位, 0 程式碼 ship, 0 護衛 ship, 1 輪 1 件 = 工程紀錄)

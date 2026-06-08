@@ -7,7 +7,7 @@
 
 ## ADDED Requirements
 
-### R-PCR1：T-1 dual-emit 階段 LP_METRICS const 41 → 47
+### Requirement: R-PCR1 — T-1 dual-emit 階段 LP_METRICS const 41 → 47
 
 > 對應 R106 spec 對齊契約 R-1「6 條 counter 必須 `_total` 結尾」。
 
@@ -30,7 +30,7 @@ counter 的**舊名 + 新名**（共 12 row 增量 6 row，總 41 + 6 = 47）：
 - **S-PCR1.3**: T-4 切換日後，6 條舊名從 LP_METRICS const 移除（`LP_METRICS.len()`
   回到 41），R114+ owner follow-up
 
-### R-PCR2：T-1 dual-emit 階段 `render_prometheus_body` 雙名 emit
+### Requirement: R-PCR2 — T-1 dual-emit 階段 `render_prometheus_body` 雙名 emit
 
 > 對應 R106 design.md 廣播計劃時程 T-1 段。
 
@@ -49,7 +49,7 @@ T-1 週，`render_prometheus_body` 必須對 6 條 counter 同時 emit 舊名 + 
 - **S-PCR2.3**: T-4 切換日後舊名 emit block 移除（render_prometheus_body
   只 emit 新名），R114+ owner follow-up
 
-### R-PCR3：R103 護衛 chain 延伸，0 新護衛 chain
+### Requirement: R-PCR3 — R103 護衛 chain 延伸，0 新護衛 chain
 
 > 對齊 K42 chain 17 條飽和契約。
 
@@ -68,7 +68,7 @@ chain 17 條不擴張）。具體：R103 chain 既有 2 條 test 增 assertion�
 - **S-PCR3.3**: R103 護衛 chain `render_prometheus_body_full_state_all_emits_in_lp_metrics_contract`
   加 6 條 dual-emit assertion 1/1 pass
 
-### R-PCR4：1 輪 1 件紀律，T-2 ~ T-5 後續 owner 接力
+### Requirement: R-PCR4 — 1 輪 1 件紀律，T-2 ~ T-5 後續 owner 接力
 
 > 對齊 R106 spec closure 5 週時程分階段 + CLAUDE.md「一輪一件事」紀律。
 

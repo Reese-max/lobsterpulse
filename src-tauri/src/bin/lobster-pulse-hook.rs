@@ -43,12 +43,21 @@ fn main() {
         DEFAULT_PORT
     });
     if let Err(e) = post(port, &provider, &body) {
-        // R34 surface: 原 `let _ = post(...)` silent 吞網路錯誤，operator 看到
-        // 「event 沒到 LP」但完全沒線索區分「LP 沒啟動 / port 不通 / write 失敗」。
-        eprintln!(
-            "{LOG_PREFIX} post to 127.0.0.1:{port} failed: {e} — \
-             event dropped, parent CLI continues (check LP running on this port)"
-        );
+        // R34 + R164 surface: `post` 之前 silent 吞網路錯誤,operator 看到
+        // 「event 沒到 LP」分不清 LP 沒跑 / port 不通 / write 失敗。R164 進一步
+        // 區分「server 拒收 (4xx/5xx)」: ErrorKind::Other = server 端邏輯拒,
+        // 其他 ErrorKind = 網路層失敗。訊息分流避免「check LP running」誤導 4xx。
+        match e.kind() {
+            std::io::ErrorKind::Other => {
+                eprintln!("{LOG_PREFIX} event for provider={provider} dropped: {e}");
+            }
+            _ => {
+                eprintln!(
+                    "{LOG_PREFIX} post to 127.0.0.1:{port} provider={provider} failed: {e} — \
+                     event dropped, parent CLI continues (check LP running on this port)"
+                );
+            }
+        }
     }
 }
 
@@ -121,11 +130,59 @@ fn post(port: u16, provider: &str, body: &str) -> std::io::Result<()> {
     stream.write_all(request.as_bytes())?;
     stream.flush()?;
 
-    // Drain server response best-effort（要 connection: close 收尾乾淨）;
-    // 讀失敗不阻斷 — 我們不 care response body,只關心 server 有 accept 連線。
-    let mut discard = [0u8; 64];
-    let _ = stream.read(&mut discard);
+    // R164：必須 parse response status line,不可 silent 吞 4xx/5xx。
+    //
+    // 對齊 hook_server.rs:272-277 — bad JSON / unknown provider / malformed request
+    // 都回 `HTTP/1.1 400 Bad Request`,server 端 K16 `responses_4xx` counter 已 ++,
+    // server log 也 warn 過 (line 268-271)。但原本 `post` 用 `let _ = stream.read(...)`
+    // 丟棄 response,4xx/5xx 一律 `Ok(())` → caller 端 eprintln 不觸發 → operator 看
+    // 到「event 沒到 LP」分不清是 LP 沒跑還是 server 拒收。Silent event loss。
+    //
+    // 修法: 讀 status line → parse u16 → >=400 回 Err(ErrorKind::Other, status 訊息)。
+    // `Connection: close` 已設,server 寫完 status line 會 flush 後 close,read 一次
+    // 就能拿到 `HTTP/1.X NNN Reason\r\n` (最長 ~32 byte, 64 byte buffer 足夠)。
+    let mut status_buf = [0u8; 64];
+    let n = match stream.read(&mut status_buf) {
+        Ok(n) if n > 0 => n,
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "server closed connection without sending a response status line",
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+    let status_line = String::from_utf8_lossy(&status_buf[..n]);
+    let status_code = parse_status_code(&status_line).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("malformed HTTP status line: {status_line:?}"),
+        )
+    })?;
+    if status_code >= 400 {
+        return Err(std::io::Error::other(format!(
+            "server rejected event with HTTP {status_code} (provider={provider}) \
+                 — check event JSON format & provider whitelist in hook_server::KNOWN_PROVIDERS"
+        )));
+    }
     Ok(())
+}
+
+/// Parse HTTP status code from response status line.
+///
+/// Accepts both `HTTP/1.0` and `HTTP/1.1`, and tolerates the reason phrase
+/// being missing or non-ASCII (some servers truncate to just `HTTP/1.0 200\r\n`).
+/// Returns `None` for any line that doesn't start with `HTTP/` followed by a
+/// valid u16, so caller surfaces a clear "malformed status" error rather
+/// than silently treating it as 200.
+fn parse_status_code(status_line: &str) -> Option<u16> {
+    let mut parts = status_line.split_whitespace();
+    let version = parts.next()?;
+    if !version.starts_with("HTTP/") {
+        return None;
+    }
+    let code = parts.next()?.parse::<u16>().ok()?;
+    Some(code)
 }
 
 #[cfg(test)]
@@ -201,11 +258,13 @@ mod read_port_at_tests {
 
 #[cfg(test)]
 mod post_tests {
-    //! R34 regression:`post` 之前在 `main` 用 `let _ = post(...)` silent 吞網路錯誤,
-    //! 改為 caller 端 `if let Err(e) = ... { eprintln!(...) }` 後,本 module 鎖 post
-    //! 端 2 條契約:
-    //! 1. happy path:連到 ephemeral TCP listener → 寫入的 request 應含 provider/body
+    //! R34 + R164 regression:`post` 之前在 `main` 用 `let _ = post(...)` silent 吞網路
+    //! 錯誤,改為 caller 端 `if let Err(e) = ... { eprintln!(...) }` 後,本 module 鎖 post
+    //! 端契約:
+    //! 1. happy path:連到 ephemeral TCP listener → 寫入的 request 應含 provider/body,
+    //!    server 回 200 → post 回 Ok
     //! 2. connect 失敗:綁到不存在的 port → 回 Err(讓 caller log 警告,不 silent)
+    //! 3. R164: server 回 4xx → post 必須 propagate 為 Err,不能 silent 吞成 Ok
 
     use super::*;
     use std::net::TcpListener;
@@ -217,11 +276,17 @@ mod post_tests {
         let port = listener.local_addr().expect("local_addr").port();
 
         let body = r#"{"hook_event_name":"UserPromptSubmit","session_id":"s1"}"#;
-        // 在另一個 thread accept,避免 post() block(本來 read 60s timeout)
+        // 在另一個 thread accept,R164 起 `post` 會等 server status line → server thread
+        // 必須先 write 200 OK 再 read request(TCP duplex 允許);原本 read_to_end 先 read
+        // 會 block 到 client close,但 client 在 read status 階段不會主動 close,死結。
         let expected_provider = "claude".to_string();
         let expected_body = body.to_string();
         let handle = std::thread::spawn(move || {
             let (mut sock, _) = listener.accept().expect("accept");
+            // 先 write response,讓 client read 立刻拿到 status line
+            let _ = sock
+                .write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            // 再 read request(verification 用)
             let mut buf = Vec::new();
             let _ = sock.read_to_end(&mut buf);
             let s = String::from_utf8_lossy(&buf).to_string();
@@ -256,5 +321,174 @@ mod post_tests {
         // 用一個高機率空着的 port 連線(直接連剛 drop 的 port 或 1)
         let result = post(port, "claude", "{}");
         assert!(result.is_err(), "連到已關閉的 port 應回 Err,不能 silent 吞");
+    }
+
+    #[test]
+    fn post_returns_err_on_4xx_response() {
+        // R164 regression:server 回 400 Bad Request 必須 propagate 為 Err。
+        // 模擬 hook_server::process_body 失敗路徑(JSON parse 失敗 / unknown provider /
+        // 沒 body),原本 `let _ = stream.read(...)` 直接吞 → post 回 Ok → 父 CLI log
+        // 顯示「hook fired」但 LP 沒收到 event,silent event loss。
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            // 先 write 400,讓 client read 立刻拿到
+            let _ = sock.write_all(
+                b"HTTP/1.0 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let mut discard = [0u8; 1024];
+            let _ = sock.read(&mut discard);
+        });
+
+        let result = post(port, "claude", "{}");
+        let _ = handle.join();
+
+        let err = result.expect_err("server 400 應 propagate 為 Err,不能 silent 吞成 Ok");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::Other,
+            "4xx 走 ErrorKind::Other"
+        );
+        assert!(
+            err.to_string().contains("400"),
+            "err msg 應含 status code 400,實際:{}",
+            err
+        );
+        assert!(
+            err.to_string().contains("claude"),
+            "err msg 應含 provider id,實際:{}",
+            err
+        );
+    }
+
+    #[test]
+    fn post_returns_err_on_5xx_response() {
+        // 對齊 4xx 契約:server 5xx (目前永遠 0,保留供未來) 也走同路徑
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let _ = sock.write_all(
+                b"HTTP/1.0 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let mut discard = [0u8; 1024];
+            let _ = sock.read(&mut discard);
+        });
+
+        let result = post(port, "codex", "{}");
+        let _ = handle.join();
+
+        let err = result.expect_err("server 500 應 propagate 為 Err");
+        assert!(
+            err.to_string().contains("500"),
+            "err msg 應含 500,實際:{}",
+            err
+        );
+    }
+
+    #[test]
+    fn post_returns_err_on_malformed_status_line() {
+        // server 回了非 HTTP 開頭的 garbage → parse_status_code 應回 None → post 走 InvalidData
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let _ = sock.write_all(b"NOT-AN-HTTP-RESPONSE\r\n");
+            let mut discard = [0u8; 1024];
+            let _ = sock.read(&mut discard);
+        });
+
+        let result = post(port, "claude", "{}");
+        let _ = handle.join();
+
+        let err = result.expect_err("malformed status 應 propagate 為 Err");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidData,
+            "malformed 走 InvalidData"
+        );
+    }
+
+    #[test]
+    fn post_returns_err_on_eof_without_response() {
+        // server accept 後立刻 drop。OS 表現兩條路徑:
+        //   - Windows: drop 觸發 RST → ConnectionReset (os 10054) — `stream.read` 直接回 Err
+        //   - Linux/macOS: drop 觸發 FIN → UnexpectedEof — `stream.read` 回 Ok(0),我們走
+        //     UnexpectedEof 分支自己 Err
+        // 兩條路徑都是 Err,契約是「server 沒給 status line → propagate Err」,不 hardcode
+        // kind (OS 本地化字串會變)。
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        let handle = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().expect("accept");
+            drop(sock);
+        });
+
+        let result = post(port, "claude", "{}");
+        let _ = handle.join();
+
+        assert!(
+            result.is_err(),
+            "server 沒回 status line 應回 Err,不是 silent Ok"
+        );
+    }
+}
+
+#[cfg(test)]
+mod parse_status_code_tests {
+    //! R164:`parse_status_code` 是 post 內部 helper,獨立抽到 mod level 方便 unit test。
+    //! 鎖 4 條契約:
+    //! 1. 標準 status line → 正確 parse u16
+    //! 2. 沒 reason phrase → 仍 parse u16
+    //! 3. 非 HTTP/ 開頭 → None
+    //! 4. HTTP/ 開頭但第二欄不是 u16 → None
+
+    use super::*;
+
+    #[test]
+    fn parses_standard_200() {
+        assert_eq!(parse_status_code("HTTP/1.1 200 OK"), Some(200));
+    }
+
+    #[test]
+    fn parses_400_with_reason() {
+        assert_eq!(parse_status_code("HTTP/1.0 400 Bad Request"), Some(400));
+    }
+
+    #[test]
+    fn parses_500_with_reason() {
+        assert_eq!(
+            parse_status_code("HTTP/1.1 500 Internal Server Error"),
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn parses_204_no_reason_phrase() {
+        // 某些 server / proxy 只回 `HTTP/1.0 204\r\n`,沒 reason phrase,仍要 parse
+        assert_eq!(parse_status_code("HTTP/1.0 204"), Some(204));
+    }
+
+    #[test]
+    fn rejects_non_http_prefix() {
+        assert_eq!(parse_status_code("NOT-AN-HTTP-RESPONSE"), None);
+    }
+
+    #[test]
+    fn rejects_http_prefix_but_non_numeric_code() {
+        // 防 server bug / 攻擊 payload: status code 不是 u16 → None
+        assert_eq!(parse_status_code("HTTP/1.1 5xx Server Error"), None);
+    }
+
+    #[test]
+    fn rejects_empty_line() {
+        assert_eq!(parse_status_code(""), None);
+    }
+
+    #[test]
+    fn rejects_http_only_no_code() {
+        // 只有 `HTTP/1.1` 沒 code → None
+        assert_eq!(parse_status_code("HTTP/1.1"), None);
     }
 }

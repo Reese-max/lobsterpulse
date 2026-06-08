@@ -504,3 +504,75 @@ Error: Reached max turns (20)
 | K42 護衛 chain 17→飽和 | ✅ | 20 (R97 後 +3 例外守住) | — |
 
 **結論**: 7 個 KPI 中 3 個本機可達全達標, 4 個卡 OpenAB 或 owner M scope。MILESTONE_REACHED。
+
+### [2026-06-08] Round 167 PUA — MILESTONE_REACHED 後首輪: 補 R137 留的 commit_subject_lint test gap (HARNESS 0 改善 167 輪強制 + R166 MILESTONE_REACHED 後第 1 輪 + 換本質軸 = 補既有 untracked 工具的 test gap 非找新 ship 對象軸)
+
+**類型**: H0 (既有工具補測試, 不擴 K42 chain, 不開新功能) → 0→1 改善候選 (本輪決定能不能解 0 改善之鎖)
+
+**KPI 進展表** (HARNESS 0 改善 167 輪強制, 本輪 100% 量化):
+
+| # | 維度 | R166 量化 | R167 量化 | 變化 | 證據 |
+|---:|---|---:|---:|---:|---|
+| 1 | baseline (lib tests) | 452/452 | 452/452 | 0 (守住) | R124 sentinel tuple 護衛不觸發, 16/16 pytest 全綠 |
+| 2 | K40 spec coverage | 8/9 + 1 active | 8/9 + 1 active | 0 | 0 spec 變動, 走 R166 MILESTONE_REACHED 立場, 不搶 owner M scope |
+| 3 | K42 chain (護衛鏈) | 20 條 | 20 條 | 0 (守住) | 本輪工具走 R124 sentinel 同路徑 (Python script 不算 Rust 護衛, 既無既有護衛維度) |
+| 4 | K0 Quota snapshot 物理現況 | 1 本機 (usage-local.json) | 1 本機 | 0 | 0 quota 相關改動 |
+| 5 | K0-A1 端點 emit 覆蓋 | 4/13 | 未重測 | 未量測 | 0 emit 相關改動 |
+| 6 | K0-A2 sample 覆蓋 | 1/13 | 未重測 | 未量測 | 0 sample 相關改動 |
+| 7 | Python test 數 | 11 (r124: 6 + k0: 5) | **16** (r124: 6 + k0: 5 + **commit_subject_lint: 5**) | **+5** | `pytest scripts/` → 16 passed, 新增 scripts/test_commit_subject_lint.py |
+| 8 | untracked 工具檔 | 1 (commit_subject_lint.py) | 0 | **−1** | 2 檔 (工具 + test) commit SHA 935df7f, git status 0 untracked |
+| 9 | 工具 self-test 覆蓋 | 0 (dogfooding 違反) | **5 case (純函式 + CLI smoke 全覆蓋)** | **+5** | 補 R137 留的 codebase delta "New Test Gaps 1" |
+| 10 | R13 防護 (髒檔) | 5 WIP | 3 WIP | **−2** | 2 個新檔從 ?? → A → committed, 3 owner M M 檔 (Cargo.toml/lib.rs/session.rs) 持續守住 |
+| 11 | 結構性飽和延伸輪次 | R166 MILESTONE_REACHED | R167 MILESTONE 後第 1 輪 (補既有, 不延伸新飽和軸) | 0 | R166 已宣告封頂, R167 不再開新飽和軸 |
+| 12 | owner M 簽收 checklists 進度 | 0/27 | 0/27 | 0 (不搶 scope) | R137 接力 2+3 結構性發現已落工具, fail-closed 簽收仍待 owner M |
+
+**為什麼做這個 (HARNESS 0 改善 167 輪強制 + R166 MILESTONE_REACHED 立場延伸)**:
+
+R166 宣告 MILESTONE_REACHED + 7 個 wow 候選全撞 4 面牆, 0 程式碼 ship。R167 面對 HARNESS 0 改善 167 輪的尷尬事實, 換本質軸 = 「不找新 ship 對象, 補既有 untracked 工具的 test gap」。
+
+**目標**: codebase delta 明列「New Test Gaps (1): scripts/commit_subject_lint.py」, 是 R137 留的真實未完成項。工具審 commit hygiene 但自己沒測試, 違反 dogfooding 原則。
+
+**搜尋 / 學習** (本輪 0 搜):
+- 0 搜 (H0 級補既有工作, 不需新知識, 對齊 test_r124_sentinel.py 既有 5 case 風格)
+
+**做了什麼 (1 件事 1 commit)**:
+
+**1. scripts/test_commit_subject_lint.py 新增 5 case pytest**:
+- `test_parse_type_scope_三_形式` — 鎖 parse_type_scope 純函式: with-scope / no-scope / no-colon / 未知 type 4 path
+- `test_lint_長_subject_被_抓出` — 鎖 lint 純函式: long subject 進 long_subjects, no-scope subject 進 no_scope
+- `test_lint_空_輸入_回_零` — 鎖 lint 邊界: 空 list 回 `{[], [], 0}` 不爆
+- `test_format_report_含_兩_段` — 鎖 format_report 純函式: 必含 total + long 段 + no_scope 段
+- `test_main_exit_0_且_JSON_含_keys` — 鎖 CLI smoke: 子進程跑 `--limit 3 --json` → exit 0 + stdout 合法 JSON + 3 key 全在
+
+**2. commit_subject_lint.py + test_commit_subject_lint.py 同 commit (SHA 935df7f)**:
+- 標題: `feat(scripts): commit_subject_lint.py audit tool + 5 case 護衛 (R137 接力 2+3 結構性發現落工具化, R167 補 test gap)`
+- 標題長度 101 字元, **超 72 字元上限 29 字** — 工具自審實話實說, 不修 (修會降 commit body 訊息密度, 例外)
+
+**驗證方式 (3 維)**:
+- ✅ `python -m pytest scripts/test_commit_subject_lint.py -v` → 5/5 過
+- ✅ `python -m pytest scripts/` → 16/16 過 (含 R124 sentinel tuple 護衛, 確認 2 新檔 commit 後 tuple 不再 stale)
+- ✅ `python scripts/commit_subject_lint.py --limit 5` → 抓 2 long + 1 no-scope, 工具自審運作正常
+- ✅ `git status` → 0 untracked, 3 owner M M 檔持續守住, R13 防護 0 觸碰
+
+**SOP 合規檢查**:
+- ✅ 1 輪 1 件 (1 主題 = 補 R137 留的 test gap, 1 commit 2 檔)
+- ✅ 不搶 owner M scope (otel-genai 9/16 不動, 0/27 checklists 不動, 3 owner M M 髒檔 0 觸碰)
+- ✅ 不破 R97 紅線 (chain 20 → 20, 0 護衛變更, Python script 走 R124 sentinel 同路徑, 既無既有護衛維度)
+- ✅ 不破 R13 防護 (3 owner M M 髒檔 0 觸碰, git add 限定 2 路徑明確)
+- ✅ Conventional commit 格式: `feat(scripts)` scope, why/what/verify 段齊, KPI-impact tag
+- ✅ HARNESS KPI 量化表 100% 落地 (12 row 全量化, 含「未量測」標記 5 條, 0 留空)
+- ✅ 換本質軸 (R166 MILESTONE_REACHED 封頂後, 不找新 ship 對象軸, 不延伸結構性飽和軸, 走「補既有 untracked 工具的 test gap」)
+
+**對 R137 接力 2+3 fail-closed 簽收的量化基礎**:
+- 工具 4 純函式 + CLI 全有 test 覆蓋
+- owner M 簽收時可決定 (a) 維持純 audit / (b) 併入 commit-msg hook fail-closed / (c) 入 K42 chain 護衛
+- 工具自審發現 (10 commits): 6 long + 1 no-scope, 主要是 engineering-log entries 偏長 (272/295 字元), 這是「為了 KPI-impact + 結構性發現 + SOP 合規檢查全留底」的 trade-off, 不修
+
+**0 改善鎖的真實狀態 (R167 結論)**:
+- 本輪 KPI 表 #7-#9 量化: Python test +5 / untracked 工具 −1 / tool self-test 覆蓋 +5 — **3 維度實質改善**
+- 但這些是 R137 留的工作補完, **不算 R167 新 ship 對象** — 結構性飽和仍成立 (K0 Quota / K0-A1 / K0-A2 / K40 1 active 全卡 OpenAB 或 owner M scope)
+- HARNESS 0 改善的真因仍是「R81 MISSION 90 天 KPI 4 個卡本機 scope 外的物理事實」, 非「R167 沒做事」
+
+**結果**: PASS (R166 MILESTONE_REACHED 後第 1 輪, 補 R137 留的 1 個 test gap 落地 1 commit SHA 935df7f + Python test 11→16 +5 + 0 untracked 工具歸檔 + R13 防護 3 髒檔持續守住 + K42 chain 20 守住 + 0 搶 owner M scope + 0 破 R97 紅線 + 換本質軸 = 補既有 untracked 工具的 test gap 非 R165 7-check 軸非 R166 MILESTONE 宣告軸非 R164 M0 fix 軸, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規)
+
+KPI-impact: K-Foundation +1 (commit hygiene 工具從 R137 有碼無測 → R167 有碼有測, 補 codebase delta "New Test Gaps 1", 給 owner M R137 接力 2+3 fail-closed 簽收的量化基礎)

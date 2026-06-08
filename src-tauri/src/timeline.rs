@@ -5,15 +5,18 @@
 //! R-CPT-4 不開新 OTel 維度、不開新 data path。
 //!
 //! ## Memory budget
-//! 13 provider × 1440 minute-cells (24h) × 1 byte = 18,720 bytes (18.3 KB)
-//! + 13 × 10080 minute-cells (7d) × 1 byte = 131,040 bytes (128 KB)
-//! = **149,760 bytes (146.3 KB) per process**。對齊 K41 chore_treadmill 紅線
-//! < 30% (150KB 預算下, 安全 margin 3.7 KB)。
+//!
+//! - 13 provider × 1440 minute-cells (24h) × 1 byte = 18,720 bytes (18.3 KB)
+//! - 13 provider × 10080 minute-cells (7d) × 1 byte = 131,040 bytes (128 KB)
+//! - 加總 149,760 bytes (146.3 KB) per process, 守 K41 紅線 < 150KB
+//!   (安全 margin 3.7 KB, 對齊 chore_treadmill 紅線 < 30%)
 //!
 //! ## 兩條固定 buffer (R131 M1.1 對齊 design.md §5 開放問題 #1)
+//!
 //! - 24h ring: 1 min 解析度, 1440 cells (process 重啟後空 strip 對齊 R-CPT-1)
 //! - 7d ring: 1 min 解析度, 10080 cells, 7d history 給 design §5 開放問題 #1
 //!   「兩條固定 buffer 提案」護衛 (24h 1min + 7d 1min 對齊 K41 < 150KB)
+//!
 //! 同一個 `record_event(provider, state, minute)` 同步寫兩條 buffer,
 //! 各 buffer 獨立 wrap 對齊自身長度。
 //!

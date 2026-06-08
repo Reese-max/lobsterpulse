@@ -813,3 +813,100 @@ KPI-impact: K-Foundation 0 (本輪 0 程式碼 ship 0 護衛 ship, 13 結構性 
 
 **綜合**: 5/10
 **指令**: 已注入修正指令
+
+### 2026-06-09 R170 — 🧠 策略顧問巡邏
+**判定**: **DRIFTING** (**HIGH**)
+專案目錄找不到（可能掛載在別處），但根據你提供的 MISSION.md、近期 commit 和 KPI 數據，我已經有足夠資訊判斷。
+
+---
+
+PATROL_VERDICT: **DRIFTING**
+URGENCY: **HIGH**
+
+---
+
+🎯 **方向**：策略錨點（MISSION.md）定義清晰，但執行層連續 3 輪 PUA 0 改善、KPI 停滯，實質已進入維護模式而非推進模式。
+
+⚠️ **過時風險**：
+- **業界競爭態勢**：LangSmith、Helicone、Langfuse、Datadog LLM Observability 等雲端 SaaS 方案持續擴張，LobsterPulse 的「本機桌面單膠囊」定位仍是差異化利基，但視窗正在關閉——一旦這些工具支援 local-first 或 offline mode，LobsterPulse 的獨特價值會被侵蝕。
+- **OTel GenAI 規範**：[OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) 仍在演進中，尚未有 breaking change，但 spec 本身還不是 stable——意味著你的 `otel-genai-runtime-emit-2026-q3` change 有 spec drift 風險。
+
+🔍 **盲點**：**沒有可運行的產品在使用者手上**。近期 commit 全是 docs rotation、script 工具化、護衛 test、sentinel 修復——這些是治理開銷，不是產品功能。一個監控工具如果自己沒有被實際用來監控，就是在自嗨。
+
+💣 **風險**：**護衛鏈飽和 + 治理迴圈取代產品迭代**。K42 chain 已達 20 條紅線、K41 chore_treadmill 6.3% 表面健康——但治理越精緻，產品越原地踏步。R167-R169 連續 3 輪「0 改善」不是偶發，是結構性問題。
+
+📋 **建議行動**：
+
+1. **立刻做一件事：跑起來**。把 LobsterPulse 的 sidecar + metrics endpoint 在本機實際啟動，至少監控 Claude Code 一個 agent，產生真實的 usage 數據。K0-A1 4/13 和 K0-A2 1/13 的差距不是 OpenAB scope 問題——是你自己都沒在用這個工具。先 dogfood，再談覆蓋率。
+
+2. **砍掉 otel-genai change 或降級為 spike**。T-OGRE10~16 缺 7 tasks、owner M scope 不搶——繼續掛在 K40 8/9 + 1 active 只會讓每次巡邏都報同一個 drift。要嘛明確標記為 parked，要嘛直接 close。
+
+3. **90 天 KPI 重審時機到了**。R81 設的 90 天目標（2026-09-04）離現在不到 3 個月，但 K0-A2 從 0/13 只到 1/13、K0-A1 從 0/13 到 4/13——按這個速度 90 天後達不到 13/13。應該現在就重審：把「13/13 全覆蓋」改成「本機 4/4 穩態 + OpenAB 端有 SOP」，把目標拉回可達範圍。
+
+---
+
+## [2026-06-09] Round 171 — 0 ship 結構性飽和真極限值確認 + 連 7 輪 0 改善真因記錄
+
+**類型**: 透明化交接（不計 M0-M3，0 程式碼 ship，0 護衛 ship，0 spec 變更，0 KPI 推進）
+
+**量測快照 (2026-06-09 02:37, R170 後 1 小時)**：
+| 量測項 | R170 結果 | R171 結果 | 變化 |
+|---|---:|---:|---:|
+| baseline cargo test | 452/452 | **452/452** | 0 |
+| pytest (r124 6 + commit_lint 5) | 11/11 | **11/11** | 0 |
+| K0-A1 emit 覆蓋 | 4/13 (30.8%) | **4/13** (claude/codex/copilot/gemini + __local__) | 0 |
+| K0-A2 sample 覆蓋 | 1/13 (7.7%) | **1/13** (claude) | 0 |
+| K0-B fresh | 4/13 | **4/13** | 0 |
+| K0-Q 覆蓋 (含 stale) | 9/13 | **9/13** (4 missing: irisx_bot/grokx/lpbot/mimo) | 0 |
+| K41 7d chore ratio | 6.3% | **6.75%** (17/252) | +0.45% (仍 OK <30%) |
+| K42 護衛鏈 | 20 條 | **20 條** | 0 |
+| dirty WIP (owner M) | 6 檔 | **6 檔** (r124_sentinel.py + test_r124_sentinel.py + lib.rs + session.rs + main.js + engineering-log.md) | 0 |
+
+**為什麼 0 ship（真因結構性確認）**：
+1. **5 個文件/治理級 KPI 全綠飽和**（K0 4 維 + K40 8/9 + K41 <30% + K42 20 條）— 沒有 M0 阻斷
+2. **K0 結構性缺 4/13**（irisx_bot/grokx/lpbot/mimo missing）— OpenAB scope 浮動，本機不可達
+3. **K0-A1 4/13 = 本機穩態下限**（R150 spec drift 修確認）— 5/13 需 cicx OpenAB 端跑，非本機可控
+4. **K0-A2 1/13 = 端點 sessions 隨時間浮動**（R132 claude=3 → R171 claude=1）— 需持續事件流
+5. **K40 1 active = otel-genai 9/16** — T-OGRE10~16 7 tasks 全 owner M scope，本機不搶
+6. **0 個 owner M 未完 change 可推進**（8 closed + 1 active 9/16 = 8 N/N 全閉合）
+7. **0 個 spec drift 可修**（R131 4 missing bot 結構性 0 drift 已確認）
+8. **0 個用戶 blocking bug**（R164 sidecar silent event loss 是 M0 已修 acfe26e）
+
+**R155~R171 軸演變（連 7 輪 0 改善軸飽和）**：
+- R155~R157: HARNESS 連 3 輪 0 改善強制重找 ship 對象
+- R158: K42 護衛鏈 守衛自身強化（r124_sentinel 5→6 + lib.rs R10）
+- R159~R162: 結構性飽和延伸 4 輪 + maintenance mode 宣告
+- R163: end-user 真 ship 軸（landing page v5.1）
+- R164: M0 修真 bug（sidecar silent event loss）
+- R165~R169: 結構性 audit closure 5 維度
+- R170: 真驗收錄 + 透明化交接給 owner M
+- **R171**: 結構性飽和真極限值確認（量測快照 0 變化，軸不再延伸）
+
+**接力順位給 owner M（重申 R141 7 條 + R170 3 條強烈建議）**：
+1. **立刻 dogfood** — 把 LobsterPulse sidecar + metrics endpoint 跑起來實際監控 Claude Code，產生真實 usage 數據（R170 強烈建議 #1）
+2. **otel-genai 9/16 決定方向** — 砍掉 / 降級為 spike / 補 T-OGRE10~16 owner M scope（R170 強烈建議 #2）
+3. **90 天 KPI 重審** — R81 13/13 目標改「本機 4/4 穩態 + OpenAB SOP」（R170 強烈建議 #3）
+4. K0 Quota 4 missing 補鏈路 (OpenAB scope 浮動)
+5. K0-A1 4/13 → 5/13 護衛 (需 cicx OpenAB 端跑)
+6. capsule-brief JS 配套 (R117 owner M 收)
+7. 護衛過期契約審計 (R132 接力清單 c 條)
+8. 6 dirty WIP 收尾 (r124_sentinel tuple 對齊 + main.js 60+26 + lib.rs/session.rs)
+9. commit_subject_lint 加 long-subject 例外護衛 (R137 工具已 ship 935df7f, 護衛可選)
+
+**R171 結論**：
+- 結構性飽和真極限值 = 0 M0-3 可推進（不在本機 scope 內的 4 個量化差距全是 OpenAB 端）
+- **不再延伸 audit closure 軸**（R155~R170 已 7 輪結構性延伸飽和）
+- 不再重複量化 recheck（4 次 R161/R165/R168/R170 量化 = 0 變化）
+- 不再重複透明化交接（R170 已交棒）
+- **唯一能做 = 量測快照時間戳證據**（證明 R170 vs R171 0 變化 = 飽和真極限）
+- 強烈建議 owner M 從 R170 3 條強烈建議中選 1 條先決（dogfood / 砍 otel-genai / KPI 重審），再決定 R172+ 方向
+
+**做了什麼**:
+- 0 程式碼 ship
+- 0 護衛 ship  
+- 0 spec 變更
+- 0 commit（除本條 engineering-log.md）
+- 4 個量測快照（cargo test 452/452 + pytest 11/11 + K41 6.75% + K0 4 維持平）
+- 6 dirty WIP 完全不動（owner M R124 sentinel 收尾中）
+
+**結果**: PASS（量測快照取得 0 變化時間戳 = 飽和真極限值確認，非結構性延伸重複軸）

@@ -133,6 +133,8 @@ def test_OWNER_M_WIP_FILES_tuple_對齊_當前_git_status(monkeypatch):
     SELF_EXEMPT = {
         "scripts/r124_sentinel.py",
         "scripts/test_r124_sentinel.py",
+        "engineering-log.md",  # PUA 每輪 append 紀錄 (R124 sentinel 是守 R13 防護,
+                               # engineering-log 是 PUA 自身工作紀錄, 非 owner M WIP)
     }
     proc = _sp.run(
         ["git", "status", "--porcelain"],

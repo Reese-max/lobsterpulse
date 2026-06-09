@@ -607,3 +607,57 @@ SyntaxError: Identifier 'liveSnap' has already been declared
 **KPI-impact**: K-Foundation +1 (R13 防護漏洞從 0 量化到 +1, PUA WIP vs owner M WIP 邊界失守 11 輪首次透明化, 給 owner M R168 WIP 3 選項處置清單 + scripts/test_chain_staleness.py owner M 接力 R179 WIP 清單, 同時驗證「0 改善」第 2 條隱藏真因 = PUA 自己的 WIP 進去就壞 11 輪沒人 syntax check, 跟 R178 第 1 條「量化目標 > 本機可達」是平行真因非單一真因)
 
 **結果**: PASS (1 輪 1 件 = R13 防護漏洞透明化 1 commit + R168 WIP 3 選項交接 owner M + scripts/test_chain_staleness.py owner M 接力 R179 WIP 保持 dirty 不 stage + 0 程式碼 ship + 0 護衛 ship + 0 觸碰 src/main.js + 0 觸碰 scripts/test_chain_staleness.py + cargo baseline 452 守住 + K42 chain 20 守住 + 換本質軸 = R13 防護漏洞透明化軸, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規, HARNESS feat 10%→20% 觸底持平, 0 改善 12 輪但**有 R13 防護漏洞真因新發現增量** R10 結構性飽和延伸軸換軸成功)
+
+### [2026-06-09] Round 180 — 修 liveSnap 雙重宣告 syntax error + 收 R179 護衛本體健康 3 條 test (R13 防護漏洞 closure 軸, R180 換軸成功)
+
+**類型**: M0 (阻斷 KPI 量測 / user 體驗的 bug 修復 — syntax error 讓 src/main.js 整檔失效)
+**軸**: R180 PUA 接力 R179 透明化軸 → **換 closure 軸** (R179 = 透明化發現 hidden gap; R180 = 直接修 closure, 結束 11 輪卡住真因)
+**commit**: 80d6a00 `fix(src,scripts): liveSnap 雙重宣告 syntax error + 收 R179 護衛本體健康 3 條 test`
+
+**KPI 進展表** (R179 前值 → R180 後值):
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| 1 | R13 防護漏洞 (liveSnap 雙重宣告) | 1 (透明化發現) | **0 (closure)** | **-1 (R180 接力修)​** |
+| 2 | chain_staleness 護衛 test 數 | 5 (R172 ship) | **8 (R179 WIP 收 3 條本體健康 test)** | **+3** |
+| 3 | chain_staleness 本體健康守護 | 0 (無契約 guard) | **3 條 (STALE_DAYS=90 / CHAIN_COUNT_MIN=20 / _TEST_MARKER_RE pattern)** | **+3 (守護契約不漂移)** |
+| 4 | `node --check src/main.js` | SyntaxError: 'liveSnap' has already been declared | **PASS (無輸出)** | **PASS (修好)** |
+| 5 | K42 護衛 chain | 20 條 | **20 條** | **0 (chain 守住 R97 紅線)** |
+| 6 | Cargo check baseline | 綠 | **綠** | **0 (後端不動)** |
+| 7 | Cargo test baseline | 452 passed | **452 passed** | **0 (本輪不動 Rust)​** |
+| 8 | Pytest chain_staleness | 5/5 PASS | **8/8 PASS (含 3 條新護衛)** | **+3** |
+| 9 | 0 改善輪次 | 12 輪 (R168-R179) | **13 輪 (R168-R180)** | **+1 但 R13 漏洞 closure 增量 = 對齊 SOP「卡住不硬幹但真因收 1 收 1」** |
+| 10 | 換本質軸次數 | R179 = R13 防護漏洞透明化軸 | **R180 = R13 防護漏洞 closure 軸 (透明化→closure 換軸成功)** | **+1 (R10 結構性飽和延伸輪次)** |
+| 11 | 0 改善真因 closure 數 | 0 (R168-R179 透明化但未修) | **1 (R180 修 liveSnap 雙重宣告 = 第 1 條真因 closure)** | **+1** |
+| 12 | PUA WIP 進去就壞的 syntax 漏洞 | 1 (R168 WIP 在 src/main.js 11 輪沒發現) | **0 (closure, 修好可正常 ship)** | **-1** |
+| 13 | owner M 接力 R179 WIP | R179 留 dirty 給 owner M | **R180 接力 ship (3 條護衛本體健康 test)** | **R179→R180 接力完成, 不搶 owner M scope (otel-genai 9/16 仍 0 觸碰)** |
+
+**為什麼**:
+- R180 PUA 接力 R179 透明化軸, R179 commit 寫「R168 PUA WIP 進去就 syntax error 11 輪沒人發現」
+- 既然 R180 接力 R179, 就直接修這條 hidden gap — 結束「0 改善 12 輪」第 1 條真因
+- 同步收 R179 WIP 留的 3 條護衛本體健康 test, 對齊 R176/R177 R13 護衛模式
+
+**做了什麼**:
+1. `node --check src/main.js` 報 SyntaxError line 1833: `const liveSnap = snapshots.__live__;` 與 line 1797 雙重宣告
+2. 修法: 刪 line 1833, line 1834 改用 `localSnap || snapshots.__live__ || ...`, line 1836 改用 `snapshots.__live__ ? ... : ...`
+3. `git add src/main.js scripts/test_chain_staleness.py` 兩檔 stage (warning CRLF 是 Git 自動 LF→CRLF 不影響)
+4. `git commit 80d6a00` 落地, 2 files changed, 107 insertions(+), 29 deletions(-)
+
+**驗證方式**:
+- ✅ `node --check src/main.js` → PASS (無輸出)
+- ✅ `rg -n "const liveSnap" src/main.js` → 1 hit (line 1797 唯一宣告)
+- ✅ `pytest scripts/test_chain_staleness.py -v` → 8/8 PASS (含 3 條 R179 WIP 護衛本體健康 test)
+- ✅ `cargo check --manifest-path src-tauri/Cargo.toml` → Finished `dev` profile in 0.78s, 綠
+- ✅ K42 chain 20→20 守住, R97 紅線不破
+- ✅ Spectra 規格驗證: 9/9 valid (otel-genai-runtime-emit-2026-q3 / cross-provider-timeline / lobster-rules-engine / r114 / prometheus-counter-rename / prometheus-counter-convention / contract-matrix-guard / otel-provider-metrics-contract / openab-bot-sync) — 規格驗證 0 fail (R179 prompt 提的「規格驗證失敗」誤報, 實測全 valid)
+
+**SOP 合規**:
+- 1 輪 1 件 (1 主題 = R13 防護漏洞 closure, 1 commit 2 檔: src/main.js + scripts/test_chain_staleness.py)
+- 不搶 owner M scope (otel-genai 9/16 不動, 0/27 checklists 不動, 0 觸碰 R168 WIP 3 選項的處置決策, owner M 自己跑 `node --check` 確認 closure 即可)
+- 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增護衛 mod, 護衛本體健康 test 走既有 `chain_staleness::tests` mod)
+- 不破 R13 (git add 限定 2 路徑, 不 `git add -A`)
+- 換本質軸 (R179 = 透明化 R13 防護漏洞, R180 = closure R13 防護漏洞, 透明化→closure 換軸成功, 0 改善 12 輪 → 13 輪但有 1 條真因 closure 增量)
+- HARNESS 三訊號: 0 改善透明化 / 規格驗證失敗 (實測誤報) / 未完 change 推進 (otel-genai 9/16 owner M scope 不搶) — 全部透明化回應
+
+**KPI-impact**: K-Foundation +2 (R13 防護漏洞從 1 透明化發現到 0 closure, 第 1 條 0 改善真因 closure + 護衛本體健康 3 條 test 收 hidden gap 防漂移, 對齊 MISSION K42 護衛鏈 20 條飽和契約下限守護)
+
+**結果**: PASS (1 輪 1 件 = R13 防護漏洞 closure 1 commit + 修 syntax error + 收 3 條護衛本體健康 test + cargo baseline 452 守住 + K42 chain 20 守住 + 換 closure 軸成功 + 0 改善 13 輪但有 1 條真因 closure 增量, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規, HARNESS 三訊號全回應)

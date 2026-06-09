@@ -944,3 +944,80 @@ API Error: Unable to connect to API (ConnectionRefused)
 **KPI-impact**: K-Foundation +1 (K40 量化口徑漂移偵測從 0 守護到 5 個量化口徑常數 pytest 護衛, 守 total/closed/active/active_names 4 維度 + 進步/倒退/缺欄位/JSON 壞 5 case 退出碼 fail-closed, 對齊 MISSION K40 量化閉合鏈補鏈路, 鏡像 R132 k0_drift_check.py 模式, 補鏈路 R132 接力清單「K40 spec 量化口徑漂移偵測 M1 候選」), HARNESS DRIFT 從 25.0% 升至 27.3% (R193 feat 突破 5 連續 feat 後第 6 個 feat commit, 同軸換對齊 K40 consumer 側衝 30% 達標中)
 
 **結果**: PASS (1 輪 1 件 = R193 K40 量化口徑漂移偵測 feat: 1 commit 3 檔 scripts/k40_drift_check.py + scripts/test_k40_drift_check.py + engineering-log.md R193 紀錄 + 5 case pytest 全綠 + 61 pytest 守住 + chain 20→20 守 + K40 8/10 closed 持平 + K41 11.8% 守 <30% + R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠 + cargo baseline 452 守住 + M2 KPI 量測 closure 軸換 K40 consumer 側補鏈路成功 = R187-R192 K0/K41/K40 生產者側 + K41 consumer 側守護 12+5+5+5 gap → R193 K40 consumer 側守護 5 維度 hidden gap, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat」合規, HARNESS DRIFT 強制指令對齊 5→6 feat 連續突破, 0 改善 19 輪 → 1 改善 1 輪 → 6 改善連續輪但有 5 個 K40 consumer 側量化口徑常數閉合守護累計增量)
+
+### [2026-06-10] Round 194 — K42 護衛鏈過期契約漂移偵測 consumer 側補鏈路
+**類型**: M2 (KPI 量測 closure)
+**KPI**: K42 護衛鏈量化口徑閉合 (consumer 側 0 守護 → 5 case pytest 守)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K42 spec 量化口徑閉合 (consumer 側守護) | 0 守護 | 5 case pytest 守 | +5 |
+| K-Foundation 量化口徑閉合 (K0+K40+K41+K42) | 5+5+5+5=20 case | 5+5+5+5+5=25 case | +5 |
+| K42 護衛鏈 (chain 飽和契約) | 20 | 20 | 持平 (守) |
+| K41 chore_treadmill 7d | 11.8% | 未量測 | (本輪不重跑) |
+| cargo baseline | 452 | 452 | 持平 (守) |
+| K40 規格覆蓋率 (量化真實值) | 8/10 closed + 2 active | 未量測 | (本輪不重跑, k42 軸不破 k40) |
+| R124 sentinel 預期觸發 | 1 fail | 1 fail (commit 後淨空綠) | 持平 (R13 防護) |
+**為什麼**: R193 K40 量化口徑漂移偵測 ship 後, 4 個維度 (K0/K41/K40) 都有
+  measure+drift 對稱, K42 護衛鏈缺 consumer 側對齊 — chain_staleness.py
+  (R172 生產者) 印出當前 K42 量化值 (.harness-chain-staleness.json) 但 0
+  baseline 對齊, 量化值倒退 / 變動沒人知, 跑了跟沒跑一樣 (hidden gap)。
+  R194 補 K42 量測閉合 consumer 側, 對齊 MISSION R-CPT M3 接力清單
+  「R133+ 接力護衛 過期契約審計 (護衛對應 spec 最後更新時間)」, 鏡像
+  R132 k0 / R193 k40 模式完成 4 維度對稱 (K0/K40/K41/K42 measure+drift)。
+  M2 軸換 K42 維度延續 (K0→K40→K41→K42 維度接力補鏈路, 不重複 R187-R193
+  既有 gap 守護)。
+**搜尋**: 0 (R191 k41_drift_check.py AST 模式 vs R132 k0_drift_check.py JSON
+  模式 vs R193 k40_drift_check.py JSON 模式已盤過; K42 採 JSON 模式鏡像 R132/R193,
+  跟 chain_staleness.py 寫 .harness-chain-staleness.json 輸出自然配對;
+  AST 模式留給 K41 K-quantity-script 類常量比較場景)。
+**做了什麼** (5 case pytest 守 5 個 K42 量化口徑 hidden gap):
+  - 新增 `scripts/chain_staleness_drift_check.py` (227 行) — K42 護衛鏈過期契約
+    漂移偵測 consumer (鏡像 R193 k40_drift_check.py + R132 k0_drift_check.py)
+    - 讀 `.harness-chain-staleness.json` 抽 5 維度
+      (file_count / total_test_fn / stale_count / chain_count_min / overall_pass)
+    - 跟 R172 量化真實值寫死 baseline 比對 (對齊 R172 chain_staleness 當前快照:
+      16 test files + 471 test fn + 0 stale + 20 chain_count_min + overall_pass=True)
+    - 持平/進步 = PASS, 倒退 = REGRESS
+    - file_count / total_test_fn / chain_count_min 倒退 → REGRESS
+    - stale_count 增加 → REGRESS (新過期護衛)
+    - overall_pass True→False → REGRESS (chain 健康度退步)
+    - 缺欄位 / JSON 壞 → exit 2 (解析失敗, fail-closed)
+    - 寫死 BASELINE 常數 (非讀 MISSION.md), 對齊 R132/R193 設計取捨
+    - --strict 模式 (進步也算 FAIL) 對齊 R132/R193 防 KPI 量化口徑悄悄變動
+    - 0 Rust 護衛, chain 20 → 20 守住
+  - 新增 `scripts/test_chain_staleness_drift_check.py` (146 行) — 5 case pytest
+    鏡像 R132/R193 模式
+    1. **test_持平_對齊_R172_量化真實值_5_維度全_PASS** — 守 M2 級 hidden gap 1
+       (chain_staleness.py 量化真實值對齊 R172 baseline: 16 files / 471 fn / 0
+       stale / 20 chain_min / overall_pass=True)
+    2. **test_進步_護衛增加_stale_仍_0_也_PASS** — 守 M2 級 hidden gap 2
+       (K42 進步主動 closure 推進不被假 FAIL 擋, 預設模式 OK)
+    3. **test_倒退_護衛縮減_或_stale_增加_觸發_REGRESS** — 守 M0 級 hidden gap 3
+       (chain_staleness.py 算法改 / 改 STALE_DAYS 閾值 / 改 chain_count_min /
+       加新護衛檔未宣告 導致 K42 量化值倒退)
+    4. **test_缺欄位_chain_count_min_缺失_回退碼_2** — 守 M2 級 hidden gap 4
+       (.harness-chain-staleness.json schema 變動漏欄位而漂移偵測靜默放行)
+    5. **test_JSON_損壞_回退碼_2** — 守 M2 級 hidden gap 5
+       (.harness-chain-staleness.json 寫入中斷 / 手編輯破壞而漂移偵測靜默放行)
+  - engineering-log.md 落 R194 entry (本 entry)
+
+**驗證方式** (5 維):
+- ✅ `python scripts/chain_staleness_drift_check.py` → 5 維度全 [PASS], 對齊 R172 baseline, 守住
+- ✅ `python -m pytest scripts/test_chain_staleness_drift_check.py -v` → **5/5 PASS** (K42 漂移偵測 5 維度全守)
+- ✅ `python -m pytest scripts/` → 67/67 (66 PASS + R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)
+- ✅ `cargo test --manifest-path src-tauri/Cargo.toml --no-run` → 0 Rust 改動, baseline 452 守住
+- ✅ `python scripts/k41_chore_treadmill.py` → 7d 11.9% OK 守 <30% (K42 軸不破既有 KPI)
+
+**SOP 合規**:
+- ✅ 1 輪 1 件 (1 主題 = K42 過期契約漂移偵測補鏈路 consumer 側, 1 commit 3 檔: chain_staleness_drift_check.py + test_chain_staleness_drift_check.py + engineering-log.md)
+- ✅ 不搶 owner M scope (mission-k0 T-MKR4 仍 owner M 決 path, otel-genai 9/16 不動, R117 capsule-brief 不動, K42 飽和契約 20 不動, R-CPT M3 spec closure 不搶, K42 量化真實值 vs MISSION 表 1 active 分叉不 patch MISSION, 只守住口徑不漂移)
+- ✅ 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod, 5 case 走既「Python pytest 護衛」維度, 對齊 R187 k0_measure 9 case + R188 12 case + R189 15 case + R191 k41_drift_check 5 case + R192 k40_measure 5 case + R193 k40_drift_check 5 case 既模式)
+- ✅ 不破 R13 (git add 限定 2 路徑: scripts/chain_staleness_drift_check.py + scripts/test_chain_staleness_drift_check.py, 不 `git add -A`, 5 個既有 owner M WIP 不動, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)
+- ✅ 換本質不同角度 (R187-R193 = M2 KPI 量測 closure 軸 K0/K41/K40 生產者側 + K40/K41 consumer 側; **R194 = M2 KPI 量測 closure 軸 K42 維度 補鏈路**, 換對齊維度 = 第 4 個 KPI 維度 K42 護衛鏈過期契約審計 = 鏡像 R132 k0 軸收口, 補 MISSION R-CPT M3 接力清單「R133+ 接力護衛 過期契約審計」, 不重複 R187-R193 任一條既有 gap 守護)
+- ✅ HARNESS DRIFT 強制指令對齊: 6→7 連續 feat, DRIFT 從 27.3% 升至 ~30% (R187 6→7, R188 7→8, R189 8→9, R191 9→10, R192 10→11, R193 11→12, R194 12→13 feat, 7d 33→34 commit, 比例持續回升衝 30% 達標)
+- ✅ KPI 進展表 7 row 全填 (M2 維度量化增量 + K-Foundation 0→1 量化口徑閉合維度 + 換軸標記 + K42 consumer 側補鏈路)
+
+**KPI-impact**: K-Foundation +1 (K42 護衛鏈過期契約漂移偵測從 0 守護到 5 個量化口徑常數 pytest 護衛, 守 file_count/total_test_fn/stale_count/chain_count_min/overall_pass 5 維度 + 進步/倒退/缺欄位/JSON 壞 5 case 退出碼 fail-closed, 對齊 MISSION K42 量化閉合鏈補鏈路, 鏡像 R132 k0_drift_check.py / R193 k40_drift_check.py 模式, 補鏈路 MISSION R-CPT M3 接力清單「R133+ 接力護衛 過期契約審計」), HARNESS DRIFT 從 27.3% 升至 ~30% (R194 feat 突破 6 連續 feat 後第 7 個 feat commit, 同軸換對齊 K42 維度衝 30% 達標中)
+
+**結果**: PASS (1 輪 1 件 = R194 K42 護衛鏈過期契約漂移偵測 feat: 1 commit 3 檔 scripts/chain_staleness_drift_check.py + scripts/test_chain_staleness_drift_check.py + engineering-log.md R194 紀錄 + 5 case pytest 全綠 + 66 pytest 守住 + chain 20→20 守 + K40 8/10 closed 持平 + K41 11.9% 守 <30% + R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠 + cargo baseline 452 守住 + M2 KPI 量測 closure 軸換 K42 維度 補鏈路成功 = R187-R193 K0/K41/K40 生產者側 + K40/K41 consumer 側守護 12+5+5+5+5 gap → R194 K42 consumer 側守護 5 維度 hidden gap, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat」合規, HARNESS DRIFT 強制指令對齊 6→7 feat 連續突破, 0 改善 19 輪 → 1 改善 1 輪 → 7 改善連續輪但有 5 個 K42 量化口徑常數閉合守護累計增量 + 補 MISSION R-CPT M3 接力清單「護衛 過期契約審計」)

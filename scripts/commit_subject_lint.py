@@ -143,6 +143,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable JSON to stdout")
     args = parser.parse_args(argv)
 
+    # R183 M0 fix: Windows 預設 stdout 是 cp950, 含中文/日文等非 ASCII subject
+    # 會被 encode 成 mojibake, 下游 json.loads() 失敗。R167 留的 test gap 在
+    # R183 PUA 7 項檢查 (跑 test_commit_subject_lint.py::test_main_exit_0_...)
+    # 時 surfacing。Reconfigure 到 UTF-8 守衛 ensure_ascii=False 的中文 subject
+    # 也能 round-trip, 不動 R167 設計 (audit 工具退出碼 0 不 fail-closed)。
+    if args.json and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     subjects = git_log_subjects(args.since, args.limit)
     result = lint(subjects, args.max_len)
 

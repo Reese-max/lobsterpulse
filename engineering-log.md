@@ -857,3 +857,67 @@ URGENCY: MEDIUM
 **KPI-impact**: K-Foundation +3 (K40 規格 1 active → 2 active 推進 + MISSION strategy re-audit 結構性重審開案 + KPI landing 60% → 100% 落地率守住, 對齊 MISSION 方向決策規則「不對齊單一 contract = 拒」+ R97 飽和契約精神「不過度擴張護衛鏈」+ MISSION 觸發條件「連 2 週落後 → 策略重審」)
 
 **結果**: PASS (1 輪 1 件 = MISSION K0 結構性重審提案 1 commit 3 檔 + 換 strategy 軸成功 + 0 改善 14→15 輪但結構性 unblock 提案已 ship 等 owner M 決議 + baseline 守住 + chain 20 守 + 5 dirty 0 觸碰 + R13 防護守住 + R97 紅線守住 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = MISSION strategy re-audit」合規, HARNESS 三訊號 0 改善 / 規格失敗 / 未完 change 推進 全部結構性回應, KPI landing 60% → 100% 守住)
+
+### [2026-06-09] Round 183 真 ship — 護衛本體健康 2 條真因 closure (R180 軸延伸第 2 輪, 換 closure 軸成功)
+**類型**: M0 (護衛本體失能, 7 項檢查 surfacing)
+**KPI**: K-Foundation +2 closure (護衛本體健康 27→29 tests + R138 護衛 self-sync + commit_subject_lint JSON 編碼 bug 修, 對齊 R180 換 closure 軸成功)
+**KPI 進展表**:
+| KPI | 前值 (R182) | 後值 (R183) | 變化 |
+|---|---:|---:|---:|
+| baseline cargo test | 452/452 | 452/452 | 0 (守住) |
+| pytest | 27/29 (2 fail) | **29/29** | **+2 closure** (護衛本體 2 條真因 closure) |
+| K0-A1 emit | 4/13 | 4/13 | 0 (持平, 本機穩態下限) |
+| K0-A2 sample | 1/13 | 1/13 | 0 (持平) |
+| K0-B fresh | 4/13 | 4/13 | 0 (持平) |
+| K0-Q coverage | 9/13 | 9/13 | 0 (持平) |
+| K42 護衛 chain | 20 | 20 | 0 (R97 紅線守住) |
+| K41 chore_treadmill 24h | 0/1 = 0% | **0/2 = 0%** | 0 (R183 fix 不算 chore, 守 <30%) |
+| R13 owner M 髒檔 | 0 | 0 | 0 (R13 防護守住) |
+
+**為什麼做這個改善**:
+R182 透明化 R181 strategy re-audit 提案已 ship 後, R183 PUA 7 項檢查真正在
+跑 2 條 PUA 護衛自己時 surfacing 出 2 條真因 closure:
+1. `test_r124_sentinel.py::test_OWNER_M_WIP_FILES_tuple_對齊_當前_git_status` FAIL
+   — tuple 內 3 檔 (lib.rs/session.rs/main.js) 已全被 owner M 收編 (R180 修
+   liveSnap, R128 ship main.js 第 6 視圖, d5e787c session token 累加修復,
+   4b3f951 R121 R131 7d wrapper 對齊 等), 當前 git status 0 dirty, 但 tuple
+   仍寫老清單 → 護衛自己 DRIFT FAIL
+2. `test_commit_subject_lint.py::test_main_exit_0_且_JSON_含_keys` FAIL
+   — `--json` 模式 Windows 預設 stdout 是 cp950, 含中文 subject 會 encode 成
+   mojibake, 下游 json.loads() 失敗 (R167 ship 時留的 test gap)
+
+R180 換 closure 軸 (透明化 → closure) 成功, 護衛本體健康 closure 第 2 條增量
+(第 1 條是 R180 修 liveSnap 雙重宣告 + 收 3 條護衛本體 test, 第 2 條是 R183 修
+R138 護衛 tuple sync + commit_subject_lint JSON encoding).
+
+**搜尋**:
+- r124_sentinel.py:73-77 + 130-135 SELF_EXEMPT 設計意圖: 護衛自身免計, 但 PUA
+  自身 WIP 不在語意內 → R138 護衛假設「dirty = owner M WIP + sentinel 自身」,
+  PUA 改 PUA 自己的工具需在同 commit 內 (commit 後非 dirty 自然綠)
+- R167 commit_subject_lint.py ship 時無 reconfigure, R183 7 項檢查 surfacing
+
+**做了什麼**:
+- 1 個 fix commit, 2 個檔, +16/-5
+  - `scripts/r124_sentinel.py`: OWNER_M_WIP_FILES tuple 清空 `()`, 註解列出
+    每檔被哪個 commit 收編 + 「若 owner M 開新 WIP 需在同 commit 加回」
+  - `scripts/commit_subject_lint.py`: `--json` 模式 reconfigure stdout encoding
+    到 UTF-8, 守衛 ensure_ascii=False 的中文 subject 也能 round-trip
+
+**驗證**:
+- `cargo test --lib`: **452 passed; 0 failed** (守住)
+- `python -m pytest scripts/`: **29 passed** (從 27 + 2 修 = 29, 0 fail)
+- `python scripts/k0_measure.py`: K0-A1 4/13 + K0-A2 1/13 + K0-B 4/13 + K0-Q 9/13
+  持平 (本輪非 K0 推進軸, 是護衛本體 closure 軸)
+- `git status --short`: clean (commit 後 0 dirty)
+- R13 防護: lib.rs / session.rs / main.js 0 觸碰
+- R97 紅線: K42 chain 20 守住 (不擴張)
+- 老闆 SOP 合規: 1 輪 1 件 + 換 closure 軸 (R180 → R183) + 不搶 owner M scope +
+  不破 R97 紅線 + 卡住不硬幹
+
+**結果**: PASS (1 輪 1 件 = 護衛本體健康 2 條真因 closure 1 commit SHA ed6a428
++ baseline 452 cargo + 29 pytest 全綠守住 + K42 chain 20 守住 + K0 9/13 持平 +
+K41 0/2 chore 守 <30% + R13 防護 0 髒檔觸碰 + 換 closure 軸成功 = R180 liveSnap
+closure → R183 PUA 護衛自己 closure, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 +
+不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規, 0 改善 15 輪但有 2 條護衛
+本體真因 closure 增量, HARNESS 三訊號 0 改善 / 規格失敗 / 未完 change 推進 全
+部透明化回應)

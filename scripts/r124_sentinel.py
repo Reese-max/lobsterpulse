@@ -74,11 +74,14 @@ K41_CHORE_RATIO_MAX: Final[float] = 0.30
 # R138 加 test 護衛: tuple 必須 == `git status --porcelain` dirty 數 (雙向:
 # missing_in_tuple + extra_in_tuple 都觸發 fail), 任何 owner M 收編或新 WIP
 # 必須在同 commit 更新 tuple。
-OWNER_M_WIP_FILES: Final[tuple[str, ...]] = (
-    "src-tauri/src/lib.rs",
-    "src-tauri/src/session.rs",
-    "src/main.js",
-)
+# R182 audit (2026-06-09): tuple 內 3 檔 (lib.rs/session.rs/main.js) 已全部
+# 被 owner M 收編進 git 歷史 (80d6a00 R180 修 liveSnap、507ca5c OPENAB_BOT_IDS
+# doc、d5e787c session token 累加修復、4b3f951 R121 R131 7d wrapper 文檔
+# vs 程式碼分叉、a0e02f1 R128 T-CPT10 ship main.js 第 6 視圖 等), 當前
+# git status --porcelain 0 檔 dirty。R138 護衛設計: tuple 必須跟事實 sync,
+# owner M 已收 → tuple 跟著空 (= 0 WIP, R13 防護仍守住但暫無 WIP scope)。
+# 若 owner M 開新 WIP, 需在同 commit 加回 tuple。
+OWNER_M_WIP_FILES: Final[tuple[str, ...]] = ()
 
 
 @dataclass(frozen=True)

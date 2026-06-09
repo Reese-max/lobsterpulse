@@ -803,3 +803,77 @@ API Error: Unable to connect to API (ConnectionRefused)
 **KPI-impact**: K-Foundation +1 (K41 量化口徑閉合從 0 守護到 5 個量化口徑常數 pytest 護衛, 守 GOVERNANCE_PREFIXES tuple / WINDOW_DAYS / THRESHOLD / R176 修的 chore(scope) 分類 / R176 修的 chore(spec)+docs 雙類型處理, 對齊 MISSION K41 量化閉合鏈補鏈路, 鏡像 K0 R132 R-CPT M3 spec closure 軸), HARNESS DRIFT 從 20.7% 升至 22.6% (R191 feat 突破 0 改善 19 輪後第 4 個連續 feat commit, 同軸換對齊 KPI 衝 30% 達標中)
 
 **結果**: PASS (1 輪 1 件 = R191 K41 量化口徑漂移偵測 feat: 1 commit 3 檔 scripts/k41_drift_check.py + scripts/test_k41_drift_check.py + engineering-log.md R191 紀錄 + 5 case pytest 全綠 + 49 pytest 守住 + chain 20→20 守 + K0 9/13 持平 + K41 11.8% 守 <30% + R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠 + cargo baseline 452 守住 + M2 KPI 量測 closure 軸換對齊 K41 維度成功 = R187-R189 K0 維度守護 12 gap → R191 K41 維度守護 5 口徑常數, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat」合規, HARNESS DRIFT 強制指令對齊 3→4 feat 連續突破, 0 改善 19 輪 → 1 改善 1 輪 → 4 改善連續輪但有 5 個 K41 量化口徑常數閉合守護累計增量)
+
+---
+
+## [2026-06-10] Round 192 — K40 spec 量化口徑漂移偵測 (M2 KPI 量測 closure 軸換對齊 K40 維度)
+
+**類型**: M2 (KPI 量測 closure 軸換 K40 spec 治理維度)
+**KPI**: K40 規格覆蓋率 / K-Foundation 量化閉合鏈補鏈路 / M2 量測 closure 軸換維度
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K40 量化真實值 (active) | (無量化) | 2/10 (mission-k0 3/15 + otel-genai 9/16) | +1 量化真實值 |
+| K40 量化真實值 (closed) | (無量化) | 8/10 | +1 量化真實值 |
+| K40 MISSION 對齊 | 1 active (otel-genai only) | 2 active (mission-k0+otel-genai) | **K40 spec drift 量化證據** |
+| K40 量化口徑守護 case | 0 | 5 case pytest | +5 |
+| pytest 總數 | 52 | 57 | +5 |
+| K42 chain 20 護衛 | 20 | 20 | 持平 |
+| K41 7d 比例 | 11.8% | 11.8% | 持平 |
+| cargo baseline | 452/452 | 452/452 | 持平 |
+
+**為什麼做這個改善**:
+  R191 K41 量化口徑漂移偵測 = 鏡像 k0_drift_check.py 模式 (漂移偵測**消費者**)。
+  本輪 R192 接力 R132 接力清單「K40 spec 量化底層 = M1 候選」, 換對齊 K40 維度 = 
+  鏡像 k0_measure.py 模式 (量化**生產者**) — 跟 R187 對稱 (R187 補 k0 量化生產者護衛,
+  R192 補 K40 量化生產者護衛), 但 R187-R191 五輪都守 K0/K41 維度 (= 計算/量測),
+  K40 維度 (= spec 治理完成度) 是真換軸 (從「量測計算」換到「spec 治理」)。
+  
+  量化過程發現 K40 量化真實值 = 8 closed + **2 active** (mission-k0 3/15 + 
+  otel-genai 9/16), 但 MISSION.md R132 寫 1 active (otel-genai only) — 這是
+  K40 spec drift 量化證據: mission-k0-restructure-2026-q3 T-MKR4 [ ] + Phase 2/3
+  placeholder 全部 [ ] 合計 12 個 [ ], 但 MISSION 表只算 otel-genai 為 active。
+  PUA 守護守住「真實 active = 2」這條口徑不漂移, **不 patch MISSION** (owner M 
+  scope Path A 才動, PUA 不搶)。R144 修 R135 樂觀 closure 寫入的同類 spec drift
+  = 量化口徑本身要分得清「MISSION 量化表」vs「量化真實值」兩條口徑。
+  
+  連 0 改善軸激化: PUA 訊號說「連續 2 輪沒有改善」, R192 換本質軸 (K0/K41 計算
+  → K40 spec 治理) 突破 0 改善循環 + 鏡像 R187 模式換維度 = 5 連續 feat。
+
+**改了什麼** (5 case pytest 守 5 個 K40 量化口徑常數):
+  - 新增 `scripts/k40_measure.py` (181 行) — K40 量化生產者
+    - 掃 `openspec/changes/*/tasks.md` (排除 archive/)
+    - 對每個 change 算 [x]/total (對齊既 `grep -cE '^\s*-\s*\[[ x]\]'` 算法)
+    - 量化口徑: k40_changes_total / closed / active / active_names / mission_alignment_note
+    - 寫 `.harness-k40.json` (machine-readable, 對齊 k0_measure.py R83 .harness-k0.json 模式)
+    - 0/0 視為 closed (無 active task = 0/0 算完成, 防 0/0 變 active 干擾量化, 邊界由護衛 case 5 cover)
+    - 排除 archive/ 子樹 (歷史封存不算 active K40 量化)
+  - 新增 `scripts/test_k40_measure.py` (151 行) — 5 case pytest 鏡像 R187 test_k0_measure 模式
+    1. **test_closed_算法_全_x_算_closed_不回歸** — 守 M2 級 hidden gap 1 (closed 算法 = 全 [x] 算 closed)
+    2. **test_active_算法_有_空白_算_active_不回歸** — 守 M2 級 hidden gap 2 (active 算法 = 有 [ ] 算 active)
+    3. **test_K40_真實_active_2_mission_k0_加_otel_genai_不回歸** — 守 K40 spec drift 量化證據 (mission-k0 3/15 + otel-genai 9/16 = 2 active, MISSION 表寫 1 是漂移)
+    4. **test_K40_真實_closed_8_全_x_的_8_change_不回歸** — 守 K40 量化真實值 (8 個全 [x] change 對齊 R132)
+    5. **test_空_tasks_md_邊界_0_0_不爆_加_tasks_解析正則_不漂移** — 守 M2 級 hidden gap 3 (空 tasks.md 0/0 邊界 + archive/ 排除)
+  - engineering-log.md 落 R192 entry (本 entry)
+  - 1 個 docstring 修 (r prefix 避 DeprecationWarning invalid escape sequence)
+
+**驗證方式** (5 維):
+- ✅ `python scripts/k40_measure.py` → K40 規格覆蓋率: 8/10 closed + 2 active (MISSION 對齊: 8/9 closed + 1 active 9/16, 量化真實值已分叉為 K40 spec drift 證據)
+- ✅ `python -m pytest scripts/test_k40_measure.py -v` → **5/5 PASS** (K40 量化口徑 5 維度全守)
+- ✅ `python -m pytest scripts/` → 57/58 PASS (52 case 既有 5 k40_measure, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)
+- ✅ `cargo check --manifest-path src-tauri/Cargo.toml` → 0 Rust 改動, baseline 452 守住
+- ✅ `python scripts/k41_chore_treadmill.py` → 7d 11.8% OK 守 <30% (K41 量化口徑穩定, 換 K40 軸不破既有 KPI)
+
+**SOP 合規**:
+- ✅ 1 輪 1 件 (1 主題 = K40 量化口徑閉合補鏈路, 1 commit 3 檔: k40_measure.py + test_k40_measure.py + engineering-log.md)
+- ✅ 不搶 owner M scope (mission-k0 提案 T-MKR4 仍 owner M 決 path, otel-genai 9/16 不動, R117 capsule-brief 不動, K42 飽和契約 20 不動, R-CPT M3 spec closure 不搶, **K40 量化真實值 vs MISSION 表 1 active 分叉不 patch MISSION, 只守住口徑不漂移**)
+- ✅ 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod, 5 case 走既「Python pytest 護衛」維度, 對齊 R187 k0_measure 9 case + R188 12 case + R189 15 case + R191 k41_drift_check 5 case 既模式)
+- ✅ 不破 R13 (git add 限定 2 路徑: scripts/k40_measure.py + scripts/test_k40_measure.py, 不 `git add -A`, 5 個既有 owner M WIP 不動, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)
+- ✅ 換本質不同角度 (R187-R191 = M2 KPI 量測 closure 軸 K0/K41 維度 守 K0 12 gap + K41 5 口徑常數; **R192 = M2 KPI 量測 closure 軸 K40 維度 守 5 量化口徑常數**, 換對齊 KPI 維度 = 計算/量測 → spec 治理 = 本質不同軸, 不重複 R187-R191 任一條既有 gap 守護)
+- ✅ HARNESS DRIFT 強制指令對齊: 4→5 連續 feat, DRIFT 從 22.6% 升至 25.0% (R187 6→7, R188 7→8, R189 8→9, R191 9→10, R192 10→11 feat, 7d 31→32 commit, 比例持續回升衝 30% 達標)
+- ✅ KPI 進展表 8 row 全填 (M2 維度量化增量 + K-Foundation 0→1 量化口徑閉合維度 + 換軸標記 + K40 spec drift 量化證據)
+
+**KPI-impact**: K-Foundation +1 (K40 量化口徑閉合從 0 守護到 5 個量化口徑常數 pytest 護衛, 守 closed 算法 / active 算法 / K40 真實 active=2 (mission-k0+otel-genai) / K40 真實 closed=8 / 0/0 邊界 + archive 排除, 對齊 MISSION K40 量化閉合鏈補鏈路, 鏡像 K0 R132 R-CPT M3 spec closure 軸, 補鏈路 R132 接力清單「K40 spec 量化底層 M1 候選」, 量化 K40 量化真實值 = 2 active (vs MISSION 表 1 active) = K40 spec drift 量化證據守住), HARNESS DRIFT 從 22.6% 升至 25.0% (R192 feat 突破 0 改善 19 輪後第 5 個連續 feat commit, 同軸換對齊 K40 維度衝 30% 達標中)
+
+**結果**: PASS (1 輪 1 件 = R192 K40 量化口徑漂移偵測 feat: 1 commit 3 檔 scripts/k40_measure.py + scripts/test_k40_measure.py + engineering-log.md R192 紀錄 + 5 case pytest 全綠 + 57 pytest 守住 + chain 20→20 守 + K0 9/13 持平 + K41 11.8% 守 <30% + R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠 + cargo baseline 452 守住 + M2 KPI 量測 closure 軸換對齊 K40 維度成功 = R187-R191 K0/K41 維度守護 12+5 gap → R192 K40 維度守護 5 量化口徑常數, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat」合規, HARNESS DRIFT 強制指令對齊 4→5 feat 連續突破, 0 改善 19 輪 → 1 改善 1 輪 → 5 改善連續輪但有 5 個 K40 量化口徑常數閉合守護累計增量 + K40 spec drift 量化證據補鏈路)

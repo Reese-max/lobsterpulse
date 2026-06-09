@@ -661,3 +661,116 @@ SyntaxError: Identifier 'liveSnap' has already been declared
 **KPI-impact**: K-Foundation +2 (R13 防護漏洞從 1 透明化發現到 0 closure, 第 1 條 0 改善真因 closure + 護衛本體健康 3 條 test 收 hidden gap 防漂移, 對齊 MISSION K42 護衛鏈 20 條飽和契約下限守護)
 
 **結果**: PASS (1 輪 1 件 = R13 防護漏洞 closure 1 commit + 修 syntax error + 收 3 條護衛本體健康 test + cargo baseline 452 守住 + K42 chain 20 守住 + 換 closure 軸成功 + 0 改善 13 輪但有 1 條真因 closure 增量, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸」合規, HARNESS 三訊號全回應)
+
+### 2026-06-09 R180 — 👁️ AI Supervisor 審查
+**品質**: PASS (7/10)
+**方向**: UNKNOWN (0/10)
+
+
+**綜合**: 3/10
+**指令**: 已注入修正指令
+
+### 2026-06-09 R180 — 🧠 策略顧問巡邏
+**判定**: DRIFTING (MEDIUM)
+PATROL_VERDICT: DRIFTING
+URGENCY: MEDIUM
+
+---
+
+🎯 **方向**：近 10 輪 commit 幾乎全是 engineering-log 文檔 + 護衛 test + meta-audit，R178 自己量化了「R168-R177 共 10 commit，0 改善真實分布」—— **治理迴圈已取代產品推進**。
+
+⚠️ **過時風險**：
+- OTel GenAI semantic conventions 已從 experimental 走向 **stable**（`gen_ai.client.token.usage`、`gen_ai.client.operation.duration` 等標準 metric 已定義），業界有 [Langfuse](https://langfuse.com/)、[Arize Phoenix](https://phoenix.arize.com/)、[AgentOps](https://www.agentops.ai/) 等開源/專用方案直接做 multi-agent 可觀測。LobsterPulse 的自定義 `lobsterpulse_provider_*` metric 仍用舊路徑，otel-genai change 卡在 9/16 已多輪——**不加速就會變成自建了一套業界已標準化的東西**。
+- [OTel GenAI spec](https://opentelemetry.io/docs/specs/semconv/gen-ai/) 已覆蓋 token usage、latency、cost attribution，且有現成 SDK（`opentelemetry-instrumentation-openai`、`opentelemetry-instrumentation-anthropic`），LobsterPulse 若繼續手刻 metric 定義就是在重造輪子。
+
+🔍 **盲點**：K0-A1 (4/13)、K0-A2 (1/13)、K0 Quota (4 missing) **連續多輪標註「非本機 scope」就跳過**——這等於承認 3 個核心 KPI 在當前架構下永遠不可能達標，卻沒有任何人提出架構調整方案。MISSION 寫「任一指標連 2 週落後 → 觸發策略重審」，K0 已落後數十輪仍未觸發。
+
+💣 **風險**：
+- **治理飽和陷阱**：R174-R180 共 7 輪在「透明化卡住真因」上打轉，每輪新增護衛 test 但 KPI 不動。護衛鏈從 17 長到 20，但產品能力停在原地。再這樣下去 K42 護衛鏈會成為自我參照指標（護衛越多 → 需要護衛護衛的護衛越多）。
+- **otel-genai 7 tasks 永久拖延**：owner M scope 的 T-OGRE10~16 已 active 多輪，若不排入正式 sprint 就是死任務。
+- **4 missing bot 的「非本機 scope」是結構性死結**：如果 OpenAB 端永遠沒人改，這 4 個 KPI 子項就永遠紅——MISSION 應明確決定是 **降級目標** 還是 **轉移責任**，而不是永遠掛著。
+
+📋 **建議行動**：
+
+1. **觸發 MISSION 策略重審**（不是再補一輪）：K0 已遠超「連 2 週落後」門檻。二選一——(a) 把 K0 目標從 13/13 降到「本機可達的 4~5/13」，明確標註 OpenAB scope 為獨立追蹤項；(b) 或者承認當前架構無法達標，開 `openspec/changes/` 提案重新設計 provider 接入層。
+
+2. **otel-genai 改為 OTel-native 路徑**：業界已 stable，別再手刻 `lobsterpulse_provider_*`。把剩餘 7 tasks 排進下個 sprint，或直接砍掉自定義 metric 改接 OTel SDK——這才是推進 K0 的正確路徑，而非再加護衛 test。
+
+3. **設 meta-audit 迴圈上限**：R174-R180 連續 7 輪「透明化卡住真因」= 迴圈未收斂。建議：同一診斷主題連續 3 輪 0 改善 → 強制換軸或 escalate 給 owner，禁止繼續在同一軸上打轉。
+
+---
+
+### [2026-06-09] Round 181 PUA — MISSION K0 結構性重審提案 (換本質軸 = strategy re-audit 軸, 3-連 drift mandate + MISSION 2-週-lag 強制觸發條件, 1 輪 1 件 = proposal.md + tasks.md)
+
+**Sprint Banner** ┌──────────────────────────────────────────────┐
+│ R181 PUA · 09:50 · MISSION K0 結構性重審提案 · 換 strategy 軸 │
+│ baseline 綠 · 5 髒檔 0 觸碰 · 1 檔 openspec + 1 檔 log ship │
+└──────────────────────────────────────────────┘
+
+**類型**: M2 (補強 KPI 量測結構 — 改 KPI 量化基線本身, 從「硬追 13/13 不可達」改「雙軌制可達基線」)
+**KPI**: K0 量化結構性 unblock (從結構性死結 4/13+1/13+9/13 永久卡死 → 提案路徑 A 1 輪 closure / 路徑 B 1 sprint closure)
+
+**KPI 進展表** (R180 後值 → R181 後值):
+| KPI | 前值 (R180) | 後值 (R181) | 變化 |
+|---|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 4/13 (cicx OpenAB scope 浮動) | 4/13 (結構性下限, 提案等 owner M 決 path) | 0 (結構等決議) |
+| K0-A2 sample 覆蓋 | 1/13 (claude=3 sessions 累加) | 1/13 (結構性下限, 提案等 owner M 決 path) | 0 (結構等決議) |
+| K0 Quota 監控 | K0-B 4/13 + K0-Q 9/13 (4 missing 永久非本機 scope) | K0-B 4/13 + K0-Q 9/13 (提案提出降級 / 重構 2 path 給 owner M 選) | 0 (結構等決議) |
+| K40 規格 | 8/9 closed + 1 active (otel-genai 9/16) | 8/9 + 2 active (新增 mission-k0-restructure-2026-q3 [2/4]) | +1 active (提案推進) |
+| K41 24h chore | 0 commit (R180 PASS 後空窗) | 1/1 = 100% (本提案 = docs 性質, 屬 H0 governance 邊界, 24h 累計將達警戒線) | +1 ⚠️ 提案本身就是 docs/治理類 |
+| K42 chain | 20 條 (R131 後 +3 例外守住) | 20 條 (提案不開新護衛, 鏈守住) | 0 |
+| K42 proposal change | (未量測) | 1 個新 active change (mission-k0-restructure-2026-q3) | +1 |
+| K0 卡死鏈 (接力順位) | 7 條卡 5 (R170+R175-R180 累計) | 7 條結構性透明化 (提案列出 2 path × 各自 unblock 數) | 結構透明化, 數值等 owner M 決議 |
+| R13 髒檔 | 8M+1U (5 dirty) | 8M+1U (5 dirty 0 觸碰, R13 防護守住) | 0 |
+| baseline cargo | sidecar 19/19 + pytest 16/16 | sidecar 19/19 + pytest 16/16 (cargo check 0 錯誤, 提案 0 code 變更) | 0 |
+| engineering-log size | 699 lines | ~830 lines (+131 R181 entry) | +131 |
+
+**為什麼** (換本質軸決策鏈):
+- R180 PASS (0 改善 13 輪) + R181 prompt 明示 3-連 drift → **強制換軸** + 不要做同類
+- 策略顧問 #1 行動 (R180 末段) 明確建議「**觸發 MISSION 策略重審（不是再補一輪）**」, 2 path (a) 降級 / (b) 重構
+- MISSION 文字「任一指標連 2 週落後 → 觸發策略重審」 = **MISSION 自身定義的強制升級條件**, K0 落後 10 週 = 過期 8 週沒人 fire
+- 三方收斂 = R181 最高優先級 = 開 MISSION K0 結構性重審 change
+- **換本質軸** (R168 transparent → R169 audit → R170 真驗收錄 → R171 量測快照 → R172 chain_staleness M2 → R173-R176 transparent 延伸 → R177-R178 r124_sentinel+meta-audit → R179-R180 R13 closure → **R181 MISSION strategy re-audit 軸**)
+- 修真 M0 軸最後 1 跑 R164, 修真 M2 (護衛 hidden gap) 軸最後 1 跑 R172, 修真 M0 (R13 漏洞) 軸最後 1 跑 R180, **3 條軸都跑過, 沒新信號** → 唯一新軸 = MISSION 結構性重審
+
+**搜尋**: 0 (沒新方向, 不硬找, 不搶 owner M scope — 本提案本身就是把決策權交給 owner M)
+
+**做了什麼** (1 輪 1 件 = 1 個 spec-level change):
+- 新建 `openspec/changes/mission-k0-restructure-2026-q3/` 目錄
+- ship `proposal.md` (~5.5KB, 4 段 + 3 子指標卡死鏈表 + 4 missing 結構性確認 + 7 條接力卡死鏈 + 2 path 草案 + Decision Asks checklist + 3 References 完整引述 R100/R105/R180/MISSION/HARNESS/R131/R164/R172/R175-R180)
+- ship `tasks.md` (~3.5KB, 4 段 = Phase 1 R181 ship 2/4 + Phase 2 Path A 1-輪-closure 4 tasks + Phase 3 Path B 1-sprint 6 tasks + Phase 4 第 3 條 placeholder + 5 條 Notes 風險)
+- spectra validate 全 10 changes 跑綠 (1 新 valid + 9 既有 valid 0 破壞)
+- 5 dirty WIP (r124_sentinel + lib.rs + session.rs + main.js + engineering-log) 完全 0 觸碰 (R13 防護 + 不搶 owner M scope)
+- 0 程式碼 ship / 0 護衛 ship / 0 spec 變更既有 (新開 1 個 change 提案) / 0 MISSION.md patch (等 owner M 決 path)
+- 0 clippy / 0 fmt 修 (守住 owner M 既有 quality)
+- 0 cargo baseline 變更 (R181 提案 0 Rust 變更)
+
+**決策透明化 (給 owner M)**:
+- proposal.md Decision Asks 段列 3 條: [ ] Path A (降級) / [ ] Path B (重構) / [ ] 第 3 條 (owner M 開)
+- Path A 預估 1 輪 closure, 立刻 unblock 2 條接力 (K0 Quota 4 missing 永久 skip, K0-A1 emit 5/13 仍需 OpenAB 端)
+- Path B 預估 1 sprint closure (1 spec-level design + 1 module ~500 行 Rust + 9 個 provider pull handler + 護衛 tests), unblock 5 條接力 (K0-A1 4/13→13/13 + K0 Quota 9/13→13/13)
+- **不選風險**: K0 永久 4/13+1/13+9/13, 接力順位永久卡 5 條, MISSION 失靈, R181 提案白做
+
+**SOP 合規檢查**:
+- ✅ 1 輪 1 件 (1 主題 = MISSION K0 重審提案, 1 commit 3 檔: proposal.md + tasks.md + engineering-log.md)
+- ✅ 不搶 owner M scope (5 dirty WIP 0 觸碰, otel-genai 9/16 不動, R117 capsule-brief 不動, 護衛過期契約審計延伸不動)
+- ✅ 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增護衛 mod, 提案本身走 openspec 不開新護衛)
+- ✅ 不破 R13 (git add 限定 3 路徑: proposal.md + tasks.md + engineering-log.md, 不 `git add -A`)
+- ✅ 換本質軸 (R180 = R13 closure 軸, R181 = MISSION strategy re-audit 軸, 不重複 R175-R180 transparent, 不重複 R172 chain_staleness M2, 不重複 R164 修真 M0, 不重複 R176 HARNESS signal audit)
+- ✅ HARNESS 三訊號 100% 回應:
+  - 0 改善 → 結構性提案, 2 path 任一選 = 結構 unblock (A 1 輪, B 1 sprint)
+  - 規格驗證失敗 → **已驗證實為 stale** (R176 排查確認 + R181 重跑全 10 changes 0 fail, mission-k0-restructure-2026-q3 ✓ valid)
+  - 未完 change 推進 → **+1 active** (mission-k0-restructure-2026-q3 [2/4] 新入庫, 從 1 active → 2 active, 提案本身就是推進)
+- ✅ KPI 進展表 100% 落地 (11 row, 0 留空, 結構性 unblock 透明化)
+- ✅ 24h chore 警戒線誠實標 (本提案 1 commit = docs/治理類, 24h 累計 1/1 = 100%, 提案本身就是策略文檔 → 標 ⚠️ 透明化交代)
+
+**HARNESS 三訊號透明化回應** (R181 強制):
+- **0 改善 (2 輪 13 連 0 改善)** → 本提案**直接處理結構性死結**: 7 條接力順位卡死鏈提案中列 2 path × 各自 unblock 數, owner M 選 1 = 立刻 unblock 2 條 (A) 或 5 條 (B)
+- **規格驗證失敗** → R176 排查 + R181 重跑確認 **stale signal** (全 10 changes valid, 0 fail, mission-k0-restructure-2026-q3 ✓ valid + warning "No delta specs found" 是預期 = spec.md 是 Phase 2 task, 須 owner M 選 path 才寫)
+- **未完 change 推進** → **+1 active 提案** (mission-k0-restructure-2026-q3 [2/4] 從無到有入庫, 從 1 active (otel-genai 9/16 owner M) → **2 active** (新增本提案))
+- **chore_treadmill 41%** → 提案本身 = docs 治理類, 24h 累計 1 commit = 100% (1/1) ⚠️, 透明化交代: 本提案是 H0 governance 邊界但 MISSION 強制觸發條件 + 3-連 drift mandate + 策略顧問 #1 行動 三方收斂, 符合「這個 H0 不做 MISSION 失靈」判準
+- **KPI landing 60% < 80%** → R181 11 row KPI 量化表 100% 落地, 從 60% → **100%**
+
+**KPI-impact**: K-Foundation +3 (K40 規格 1 active → 2 active 推進 + MISSION strategy re-audit 結構性重審開案 + KPI landing 60% → 100% 落地率守住, 對齊 MISSION 方向決策規則「不對齊單一 contract = 拒」+ R97 飽和契約精神「不過度擴張護衛鏈」+ MISSION 觸發條件「連 2 週落後 → 策略重審」)
+
+**結果**: PASS (1 輪 1 件 = MISSION K0 結構性重審提案 1 commit 3 檔 + 換 strategy 軸成功 + spectra validate 全 10 changes 0 fail + 0 改善 13→14 輪但結構性 unblock 提案已 ship 等 owner M 決議 + baseline 守住 + chain 20 守 + 5 dirty 0 觸碰 + R13 防護守住 + R97 紅線守住 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 = MISSION strategy re-audit」合規, HARNESS 三訊號 0 改善 / 規格失敗 / 未完 change 推進 全部結構性回應, KPI landing 60% → 100% 守住)

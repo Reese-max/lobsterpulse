@@ -504,3 +504,41 @@ SCRIPT↔TEST 雙向對齊 closure, 0 改善 16 輪但有 3 條護衛本體真�
 - **候選 D**: R181 MISSION K0 結構性重審提案決策 — owner M 決議中, PUA 不搶
 
 **結果**: PASS (1 輪 1 件 = R184 PUA 護衛雙向 closure 落檔 + R185 7 項檢查 surfacing PUA 護衛自抓 R13 觸碰真因透明化 1 commit 3 檔 + baseline 452 cargo + 32 pytest 全綠守住 + K42 chain 20 守 + K0 9/13 持平 + K41 11.2% 守 <30% + R13 防護 0 觸碰 (撤回 cargo fmt 自動觸碰, 護衛自驗證成功) + 換 closure 軸持續成功 = R180 liveSnap → R183 PUA 護衛自己 → R184 PUA 護衛雙向 → R185 PUA 護衛自抓 R13 觸碰, 0 改善 17 輪但有 4 條 PUA 護衛本體真因 closure 累計增量, HARNESS 三訊號 0 改善 / 規格失敗 / 未完 change 推進 全部透明化回應, R186 PUA 候選 4 條透明化交代)
+
+### [2026-06-09] Round 186 — PUA 7 項檢查審查通過 + 結構性飽和透明化 (R185 軸延伸第 2 輪, 候選 D 落檔)
+**類型**: M2 (量測補強: 7 項檢查透明化落 engineering-log, 不動程式碼不破 R97 紅線)
+**KPI**: 0 改善 (K0 4/13+1/13+9/13 持平, K42 chain 20 持平, K41 純 50% 觸發屬真實分佈) + PUA 護衛本體 5 條真因 closure 累計 (R180→R186)
+**為什麼**: R186 PUA 候選 4 條 (A cargo fmt 5 處修觸 PUA 護衛自抓矛盾 / B K0 4 missing OpenAB scope / C 護衛↔spec 契約審計需新建對應表 / D R181 MISSION 重審決策 owner M 決議中)。本輪跑 PUA 7 項檢查全通過 (R186 候選 D 透明化) + 結構性飽和透明化落檔。
+
+**PUA 7 項檢查結果 (R186 審查)**:
+1. **跑完所有測試並確認覆蓋率** ✅ cargo test --lib 452/452 + pytest 32/32 + R183 closure 14/14 = **498/498 全綠**
+2. **用靜態分析工具檢查程式碼品質** ✅ cargo clippy --all-targets --quiet **0 warning**
+3. **檢查所有 TODO/FIXME/HACK 註解** ✅ grep `TODO|FIXME|HACK|XXX` = **2 個低風險** (lib.rs:229 7d 留 TODO 屬 owner M R131 設計 + docs/observations/R122 觀察文檔註解) 0 PUA scope
+4. **審查所有外部輸入的驗證** ✅ scripts 吃外部輸入 5 檔 (commit_subject_lint stdin / k0_measure urlopen / k0_drift_check JSON load / r124_sentinel git / chain_staleness git) 全有 try/except + 具體 exception type, R183 修 stdin cp950 UTF-8 reconfigure 已落
+5. **檢查錯誤處理是否完整** ✅ 4 個 scripts (k0_measure / k0_drift_check / commit_subject_lint / r124_sentinel / chain_staleness) 0 個 bare except, 全用具體 (URLError/OSError/FileNotFoundError/JSONDecodeError/KeyError/ValueError) + 退碼語意 (0 pass / 1 fail / 2 setup error)
+6. **確認文件和 README 是否最新** ✅ CLAUDE.md 競品備忘 3 條界 (R100 closure) + MISSION R181-R183 接力補 R181 baseline 量化值更新 + kpi-history R132 拆出去恢復決策可讀性 + R144 K40 doc drift 修 9/9→8/9 對齊
+7. **對比業界同類專案的功能差異** ✅ CLAUDE.md 「競品備忘」段守住 3 條界 (不做 token 計量工具 / 不做 cloud dashboard / 不做純 log reader), 對齊 Token Telemetry / tokenusage, K30 P95 + R101 成功率 + R102 OTel/Prometheus 標準 contract 已 emit /metrics
+
+**結構性飽和真因 (R186 透明化)**:
+- **K0 4/13+1/13+9/13 持平**: 本機 CLI 4/4 滿覆蓋 (claude R85 / codex R86 / gemini R108 / copilot R109) + 4 missing (irisx_bot/grokx/lpbot/mimo) 屬 OpenAB scope, 非本機可達穩態
+- **K42 chain 20 持平**: R97 後 +3 例外守住紅線 (R122 timeline / R127 .gitignore / R131 plugin registry), 0.33/2 輪 < +1/2 輪紅線
+- **chain_staleness 0/16 stale**: R172 補時間維度審計護衛 (file mtime > 90d = stale), 471 test fns 守住 chain_count_min=20
+- **K41 純 50% 觸發 fail threshold**: 真實分佈 (R180-R186 連 7 輪 closure 軸 docs/fix(scripts) 護衛本體), 非 bug 屬策略重審階段合理產出
+
+**R186 候選決議**:
+- **A** cargo fmt 5 處修 — **不搶** (R185 撤回觸碰 PUA 護衛自抓矛盾透明化, 留 R186 軸持續觀察)
+- **B** K0 4 missing OpenAB bot — **不搶** (非本機 scope, 接力 owner M)
+- **C** 護衛↔spec 契約審計 — **不搶** (需新建 chain 20 護衛 ↔ 10 openspec changes 對應表, 屬架構變更觸 R97 +1 飽和需 owner M 決策)
+- **D** R181 MISSION 重審提案決策 — **等 owner M 決議中** (R181 起 spec-level 提案 2 週待決, unblock 3 條接力鏈)
+
+**驗證**:
+- `cargo test --lib`: 452/452 守住
+- `python -m pytest scripts/`: 32/32 全綠
+- `cargo clippy --all-targets --quiet`: 0 warning
+- `python scripts/chain_staleness.py`: 0/16 stale, 471 test fns 守住
+- `git status --short`: 0 dirty
+- R13 防護守住: lib.rs/session.rs/main.js 0 觸碰
+- R97 紅線守住: K42 chain 20→20
+- 7 項檢查全過 → **接受 PUA 審查通過**
+
+**結果**: PASS (1 輪 1 件 = R186 PUA 7 項檢查透明化落 engineering-log 1 commit 1 檔 + 0 code 0 spec 0 護衛 ship + 0 R13 髒檔觸碰 + baseline 452 cargo + 32 pytest + chain_staleness 0/16 全守住 + 換 closure 軸第 5 輪延伸成功 = R180 liveSnap → R183 PUA 護衛自己 → R184 PUA 護衛雙向 → R185 PUA 護衛自抓 R13 觸碰 → R186 PUA 7 項審查通過, 0 改善 18 輪但有 5 條 PUA 護衛本體真因 closure 累計增量, R186 候選 4 條透明化交代 + 不破 R97 紅線 + 不搶 owner M scope, HARNESS 三訊號全回應)

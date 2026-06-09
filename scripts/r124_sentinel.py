@@ -205,9 +205,13 @@ def check_k0_fresh() -> CheckResult:
 
 
 def check_owner_m_wip() -> CheckResult:
-    """5 髒檔 sentinel 守衛: 仍 tracked dirty (owner M WIP 0 動 = R13 防護守住)。
+    """雙向守衛 owner M WIP tuple 跟 `git status` 同步 (R138 護衛設計, R184 補 SCRIPT 端):
+    1. tuple 內檔都還 tracked dirty (防 owner M commit 走或刪了 tuple 內的 WIP)
+    2. 當前 dirty tracked 都得在 tuple 內 (防 owner M 開新 WIP 漏更新 tuple → false-pass)
 
-    若任何 1 個檔不在 git status 列, 視為漂移 (owner M 刪了或 commit 走了)。
+    R183 改 tuple=() 後, 舊版只查方向 1, 方向 2 缺口 → owner M 開新 WIP 漏宣告時
+    sentinel 仍回 "0 髒檔 owner M WIP 守住 (R13 防護)" 假 PASS。TEST test_r124_sentinel.py
+    早就有雙向護衛, SCRIPT 端補齊對齊 R138 設計意圖 + TEST 端 SSoT。
     """
     status = _run_git(["status", "--porcelain"])
     tracked = {
@@ -215,20 +219,37 @@ def check_owner_m_wip() -> CheckResult:
         for line in status.splitlines()
         if line.strip()
     }
-    missing = [f for f in OWNER_M_WIP_FILES if f not in tracked]
-    passed = not missing
+    # SELF_EXEMPT: 跟 test_r124_sentinel.py:133 對齊, sentinel 自身 / 測試 / PUA log 免計
+    # (R138 護衛設計: tuple == 當前 dirty 扣 sentinel 自身; SCRIPT 雙向 closure 後也採同樣口徑,
+    #  避免 R184 SCRIPT 改完自身 dirty → 雙向 SCRIPT 立刻 surfacing self-DRIFT 假警報)
+    SELF_EXEMPT = {
+        "scripts/r124_sentinel.py",
+        "scripts/test_r124_sentinel.py",
+        "engineering-log.md",
+    }
+    tracked_owner_only = tracked - SELF_EXEMPT
+    # 方向 1: tuple 內檔都還 tracked (防 commit 走/刪了, tuple 不該含 SELF_EXEMPT)
+    missing_in_tracked = [f for f in OWNER_M_WIP_FILES if f not in tracked]
+    # 方向 2: 當前 owner dirty 都得在 tuple 內 (防開新 WIP 漏宣告), 扣 SELF_EXEMPT
+    undeclared = [f for f in tracked_owner_only if f not in OWNER_M_WIP_FILES]
+    passed = not missing_in_tracked and not undeclared
+    if passed:
+        actual = f"{len(tracked_owner_only)}/{len(OWNER_M_WIP_FILES)} owner-dirty/tuple 雙向 sync"
+        note = f"{len(tracked_owner_only)} owner-髒檔 WIP 守住 (R13 防護, R184 雙向 closure)"
+    else:
+        actual = f"tuple={len(OWNER_M_WIP_FILES)} owner-dirty={len(tracked_owner_only)} 不一致"
+        drift = []
+        if missing_in_tracked:
+            drift.append(f"tuple 內 {missing_in_tracked} 已不在 dirty (owner M 已收)")
+        if undeclared:
+            drift.append(f"dirty {undeclared} 未在 tuple 宣告 (owner M 開新 WIP 漏更新)")
+        note = f"DRIFT: {' / '.join(drift)}"
     return CheckResult(
         name="owner_m_wip_intact",
         passed=passed,
-        actual=(
-            f"{len(OWNER_M_WIP_FILES) - len(missing)}/{len(OWNER_M_WIP_FILES)} tracked"
-        ),
-        threshold=f"all {len(OWNER_M_WIP_FILES)}/{len(OWNER_M_WIP_FILES)} tracked",
-        note=(
-            f"{len(OWNER_M_WIP_FILES)} 髒檔 owner M WIP 守住 (R13 防護)"
-            if passed
-            else f"DRIFT: 缺失 {missing}, owner M 應在 WIP 中"
-        ),
+        actual=actual,
+        threshold=f"tuple (size {len(OWNER_M_WIP_FILES)}) == owner-dirty (size {len(tracked_owner_only)})",
+        note=note,
     )
 
 

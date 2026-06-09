@@ -155,3 +155,68 @@ def test_OWNER_M_WIP_FILES_tuple_對齊_當前_git_status(monkeypatch):
     assert not extra_in_tuple, (
         f"tuple 內檔已不 dirty {extra_in_tuple}, owner M 已收編, tuple 應同步移除"
     )
+
+
+# ---------- R184: 雙向 closure 護衛 (SCRIPT 端對齊 R138 設計) ----------
+
+def test_check_owner_m_wip_雙向_開新_WIP_漏宣告會_fail(monkeypatch):
+    """R184 PUA 7 項檢查發現的 SCRIPT 缺口護衛:
+
+    情境: owner M 開新 WIP `src-tauri/src/newfile.rs` (新 dirty), 但漏更新
+    OWNER_M_WIP_FILES tuple (R183 改 tuple=() 是當前穩態)。舊 SCRIPT 單向
+    檢查只會查「tuple 內檔都還 tracked」, tuple 空 → passed=True 假 PASS。
+    新 SCRIPT 雙向 closure 必須 surfacing DRIFT。
+
+    模擬方法: monkeypatch OWNER_M_WIP_FILES=() + 模擬 _run_git 回 dirty 含
+    newfile.rs (扣 SELF_EXEMPT) → 方向 2 undeclared 應非空 → passed=False。
+    """
+    import r124_sentinel
+    monkeypatch.setattr(r124_sentinel, "OWNER_M_WIP_FILES", ())
+    # 模擬 _run_git 回傳新 dirty (newfile.rs, 不在 SELF_EXEMPT 內)
+    def fake_run_git(args):
+        if args[:2] == ["status", "--porcelain"]:
+            return " M src-tauri/src/newfile.rs\n"
+        return ""
+    monkeypatch.setattr(r124_sentinel, "_run_git", fake_run_git)
+    result = r124_sentinel.check_owner_m_wip()
+    assert result.passed is False, (
+        f"雙向 SCRIPT 應 surfacing owner M 漏宣告 WIP, got passed=True: {result}"
+    )
+    assert "newfile.rs" in result.note, f"note 應點名漏宣告檔, got: {result.note}"
+    assert "未在 tuple" in result.note or "漏更新" in result.note, (
+        f"note 應標 owner M 漏更新 tuple, got: {result.note}"
+    )
+
+
+def test_check_owner_m_wip_雙向_tuple_內檔_被_commit_走會_fail(monkeypatch):
+    """R184 SCRIPT 雙向護衛反方向:
+
+    情境: tuple 宣告的 WIP 檔被 owner M commit 走 (不再 dirty), 但 tuple 漏更新。
+    舊 SCRIPT 方向 1 早就會 surfacing, 此 test 鎖住 SCRIPT 雙向 closure 沒回退
+    方向 1 的能力。
+    """
+    import r124_sentinel
+    monkeypatch.setattr(r124_sentinel, "OWNER_M_WIP_FILES", ("src-tauri/src/already_committed.rs",))
+    def fake_run_git(args):
+        # git status 空 (already_committed.rs 已被 commit, 不再 dirty)
+        return ""
+    monkeypatch.setattr(r124_sentinel, "_run_git", fake_run_git)
+    result = r124_sentinel.check_owner_m_wip()
+    assert result.passed is False, "tuple 內檔被 commit 走 → 雙向 SCRIPT 應 fail"
+    assert "已收" in result.note or "已不在 dirty" in result.note, (
+        f"note 應點名已收, got: {result.note}"
+    )
+
+
+def test_check_owner_m_wip_雙向_0_dirty_0_tuple_PASS(monkeypatch):
+    """R183 改 tuple=() 後穩態: 雙向 closure 應仍 PASS (不上 false-DRIFT)。
+    對齊 R183 commit message 「0 髒檔 owner M WIP 守住 (R13 防護)」。
+    """
+    import r124_sentinel
+    monkeypatch.setattr(r124_sentinel, "OWNER_M_WIP_FILES", ())
+    monkeypatch.setattr(r124_sentinel, "_run_git", lambda args: "")
+    result = r124_sentinel.check_owner_m_wip()
+    assert result.passed is True, f"0 dirty + 0 tuple → 雙向 sync 應 PASS, got: {result}"
+    assert "R184" in result.note and "雙向" in result.note, (
+        f"note 應標 R184 雙向 closure, got: {result.note}"
+    )

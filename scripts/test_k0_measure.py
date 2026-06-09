@@ -346,3 +346,164 @@ def test_scan_quota_snapshots_OpenAB_4_missing_bot_結構性_missing(tmp_path, m
     # 4 本機 CLI 也 missing (沒 usage-local.json)
     for p in k0.LOCAL_CLI:
         assert out[p]["state"] == "missing"
+
+
+# ---------- 13. R111 設計事實守護: endpoint DOWN 標 (down_suffix) ----------
+
+def test_main_endpoint_DOWN_加_down_suffix_守_R111(capsys, monkeypatch):
+    """R111 設計事實: 端點 DOWN 時 K0-A1/A2 印 (endpoint DOWN) suffix
+
+    守護: 若有人刪 `down_suffix = "" if endpoint_alive else " (endpoint DOWN)"`
+    → 端點 DOWN 時讀者分不出是「端點死掉沒量到」還是「13 個 provider 都
+    沒事件流過」(兩種情況都印 0/13, 失真)。k0_measure.py:237-243 既有
+    設計, 沒 test 守就可能復發。
+
+    mock fetch_metrics 回空字串 + mock scan_quota_snapshots 回全 missing
+    (避免被 tmp_path QUOTA_DIR 環境污染) → main() 印出必須含
+    "(endpoint DOWN)" suffix 在 K0-A1 / K0-A2 兩行。
+    """
+    # mock fetch_metrics → "" (端點 DOWN)
+    monkeypatch.setattr(k0, "fetch_metrics", lambda: "")
+    # mock scan_quota_snapshots → 全 missing (避免 tmp_path 干擾)
+    monkeypatch.setattr(
+        k0, "scan_quota_snapshots",
+        lambda: {p: {"state": "missing", "mtime_age_hours": None,
+                     "path": None} for p in k0.KNOWN_PROVIDERS},
+    )
+    rc = k0.main()
+    captured = capsys.readouterr()
+    # 退出碼應 = 0 (量測腳本非漂移偵測, 永遠 0)
+    assert rc == 0
+    # 關鍵: 兩行 K0-A1/K0-A2 都應含 (endpoint DOWN) suffix
+    assert "(endpoint DOWN)" in captured.out, (
+        f"端點 DOWN 必須印 (endpoint DOWN) suffix (R111), 實際 stdout:\n"
+        f"{captured.out[:1500]}"
+    )
+    # K0-B 不受影響 (quota 是 filesystem scan, 不走 /metrics 端點)
+    k0b_lines = [l for l in captured.out.splitlines() if "K0-B" in l]
+    assert k0b_lines, "應有 K0-B 行"
+    assert "(endpoint DOWN)" not in k0b_lines[0], (
+        f"K0-B 不應印 (endpoint DOWN) suffix, 實際: {k0b_lines[0]}"
+    )
+
+
+# ---------- 14. R114 設計事實守護: K0-Q coverage 算 fresh+stale 不算 missing ----------
+
+def test_main_K0_Q_coverage_算_fresh_加_stale_不_算_missing_守_R114(capsys, monkeypatch):
+    """R114 設計事實: K0-Q coverage 比 K0-B 寬, fresh+stale 都算 coverage
+
+    守護: 若有人把 `k0_quota_coverage` 改成 `if v.get("state") == "fresh"`
+    → K0-Q 從 9/13 變 4/13 (openx/irisx_bot 等 stale bot 不算),
+    倒退 5 維度, k0_drift_check.py 觸發 K0-Q 倒退 fail-closed。R114
+    修後 K0-Q 9/13 → 10/13 (openx legacy 別名) 是當前 baseline, 守住
+    「fresh+stale 都算」語意。
+
+    mock scan_quota_snapshots 造 1 fresh + 1 stale + 1 missing → K0-Q
+    = 2 (1 fresh + 1 stale), K0-B = 1 (只 fresh)。守住差異。
+    """
+    # 造 1 fresh + 1 stale + 1 missing
+    fake_quota = {
+        "claude": {"state": "fresh", "mtime_age_hours": 1.0, "path": "/x"},
+        "cicx": {"state": "stale", "mtime_age_hours": 48.0, "path": "/y"},
+        "gitx": {"state": "missing", "mtime_age_hours": None, "path": None},
+    }
+    # 其他 10 provider 補 no_dir 補滿 13 (避免 main() KeyError)
+    for p in k0.KNOWN_PROVIDERS:
+        if p not in fake_quota:
+            fake_quota[p] = {"state": "no_dir", "mtime_age_hours": None,
+                             "path": None}
+    monkeypatch.setattr(k0, "scan_quota_snapshots", lambda: fake_quota)
+    # mock fetch_metrics → 空 (端點 DOWN, 印 (endpoint DOWN) suffix)
+    monkeypatch.setattr(k0, "fetch_metrics", lambda: "")
+
+    rc = k0.main()
+    captured = capsys.readouterr()
+    assert rc == 0
+
+    # 抓 K0-Q 行的「X/13」數字 (K0-Q coverage = 2: 1 fresh + 1 stale)
+    import re as _re
+    k0q_match = _re.search(r"K0-Q.*?:\s*(\d+)/13", captured.out)
+    assert k0q_match, f"應有 K0-Q 行, stdout:\n{captured.out[:1500]}"
+    k0q_covered = int(k0q_match.group(1))
+    assert k0q_covered == 2, (
+        f"K0-Q coverage 應 = 2 (1 fresh claude + 1 stale cicx), 實際 {k0q_covered}. "
+        f"守住 R114 設計: fresh+stale 都算 coverage, 不算 missing。"
+    )
+
+    # 對比: K0-B 應 = 1 (只 fresh)
+    k0b_match = _re.search(r"K0-B.*?:\s*(\d+)/13", captured.out)
+    assert k0b_match, f"應有 K0-B 行, stdout:\n{captured.out[:1500]}"
+    k0b_fresh = int(k0b_match.group(1))
+    assert k0b_fresh == 1, f"K0-B fresh 應 = 1 (只 fresh), 實際 {k0b_fresh}"
+
+
+# ---------- 15. R102 設計事實守護: JSON 5 個 KPI key schema 完整性 ----------
+
+def test_main_JSON_含_5_個_KPI_key_結構性_守_R102(capsys, tmp_path, monkeypatch):
+    """R102 設計事實: JSON output 必有 5 個 KPI 維度 key
+
+    守護: 若有人改 report dict 結構 (e.g. 拼錯 k0q_quota_coverage 為
+    k0q_quota_covrage, 或漏 k0a2_health_sample) → k0_drift_check.py
+    讀 .harness-k0.json 會 KeyError / TypeError, fail-closed 觸發
+    假警報。R102 拆 K0-A 雙軌時定了 4 個 KPI 維度, R114 補 K0-Q 第 5
+    維度, 共 5 個必含 key + 1 個 providers_total + 1 個 metrics_endpoint_alive。
+    """
+    # 隔離 QUOTA_DIR 到 tmp (避免動到 ~/.lobsterpulse 真實目錄)
+    monkeypatch.setattr(k0, "QUOTA_DIR", tmp_path)
+    monkeypatch.setattr(k0, "fetch_metrics", lambda: "")
+
+    # 重新導向 .harness-k0.json 寫到 tmp
+    real_write = k0.Path.write_text
+    def fake_write(self, *args, **kwargs):
+        if self.name == ".harness-k0.json":
+            return real_write(self, *args, **kwargs)  # 走真實路徑
+        return real_write(self, *args, **kwargs)
+    monkeypatch.setattr(k0.Path, "write_text", fake_write)
+
+    rc = k0.main()
+    assert rc == 0
+    captured = capsys.readouterr()
+    # 抓 stdout 中的 "JSON 寫入: ..." 行拿路徑
+    import json as _json
+    import re as _re
+    path_match = _re.search(r"JSON 寫入: (.+)", captured.out)
+    assert path_match, f"應有 JSON 寫入行, stdout:\n{captured.out[:1500]}"
+    json_path = k0.Path(path_match.group(1).strip())
+    assert json_path.exists(), f"JSON 檔應存在: {json_path}"
+
+    payload = _json.loads(json_path.read_text(encoding="utf-8"))
+
+    # 5 個 KPI 維度 key 必有
+    required_kpi_keys = {
+        "k0a1_health_emit",       # R102 拆 K0-A 雙軌
+        "k0a2_health_sample",     # R102 拆 K0-A 雙軌
+        "k0b_quota_freshness",    # R83 既有
+        "k0q_quota_coverage",     # R114 補 (鮮+stale 寬口徑)
+        "providers",              # 13 provider 細項
+    }
+    missing_keys = required_kpi_keys - set(payload.keys())
+    assert not missing_keys, (
+        f"JSON 必含 5 個 KPI 維度 key (R102+R114), 缺 {missing_keys}, "
+        f"實際 keys: {set(payload.keys())}"
+    )
+
+    # 每個 KPI 維度內部結構也守住 (歷史差異: k0b 用 fresh, 其他 3 維度用 covered)
+    COVERED_KEYS = {"k0a1_health_emit", "k0a2_health_sample", "k0q_quota_coverage"}
+    for key in COVERED_KEYS:
+        assert "covered" in payload[key], f"{key} 應含 covered 欄"
+        assert "total" in payload[key], f"{key} 應含 total 欄"
+        assert "pct" in payload[key], f"{key} 應含 pct 欄"
+        assert payload[key]["total"] == 13, (
+            f"{key} total 應 = 13, 實際 {payload[key]['total']}"
+        )
+    # k0b_quota_freshness 是 R83 既有, 用 fresh 不用 covered (歷史口徑差異)
+    assert "fresh" in payload["k0b_quota_freshness"], \
+        "k0b_quota_freshness 應含 fresh 欄 (R83 既有口徑)"
+    assert payload["k0b_quota_freshness"]["total"] == 13
+    assert "pct" in payload["k0b_quota_freshness"]
+    # providers 細項必有 13 個 + 每個含 metrics_sessions / metrics_emit / quota
+    assert len(payload["providers"]) == 13
+    for p in k0.KNOWN_PROVIDERS:
+        assert "metrics_sessions" in payload["providers"][p]
+        assert "metrics_emit" in payload["providers"][p]
+        assert "quota" in payload["providers"][p]

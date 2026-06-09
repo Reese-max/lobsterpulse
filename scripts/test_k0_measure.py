@@ -249,3 +249,100 @@ def test_scan_quota_snapshots_STALE_MARKER_分流(tmp_path, monkeypatch):
         f"cicx 應 = fresh (有主檔), 實際 state={out['cicx']['state']}, "
         f"path={out['cicx']['path']}"
     )
+
+
+# ---------- 7. 本機 4 CLI 共用 usage-local.json 邏輯守護 ----------
+
+def test_scan_quota_snapshots_本機_4_CLI_共用_usage_local_json(tmp_path, monkeypatch):
+    """R108 量測事實守護: 4 本機 CLI 共用 1 個 usage-local.json (R85 設計)
+
+    守: 若有人改成本機 4 CLI 各讀 `usage-{cli}.json` 或新增 split 邏輯 →
+    4 個本機 CLI 全部 missing (OpenAB hook 端只寫 usage-local.json) →
+    K0-B fresh 從 4/13 立刻 0/13 (M0 級 KPI 倒退, R108 量化守住 4/13 為
+    本機穩態下限)。R132 接力清源 + R176 補 K41 護衛時同步確認此口徑。
+    """
+    monkeypatch.setattr(k0, "QUOTA_DIR", tmp_path)
+
+    # 模擬 R108 量測事實: 只有 1 個 usage-local.json, 4 本機 CLI 共用
+    local = tmp_path / "usage-local.json"
+    local.write_text("{}", encoding="utf-8")
+    fresh_mtime = time.time() - 3600  # 1 小時前, fresh
+    os.utime(local, (fresh_mtime, fresh_mtime))
+
+    out = k0.scan_quota_snapshots()
+
+    # 4 本機 CLI 全部 fresh, path 都指 usage-local.json
+    for p in k0.LOCAL_CLI:
+        assert out[p]["state"] == "fresh", (
+            f"{p} 應 = fresh (走 usage-local.json 共用), "
+            f"實際 state={out[p]['state']}, path={out[p]['path']}"
+        )
+        assert out[p]["path"] == str(local), (
+            f"{p} path 應 = usage-local.json, 實際 {out[p]['path']}"
+        )
+    # OpenAB 9 個全 missing (空目錄)
+    for p in k0.OPENAB_BOT:
+        assert out[p]["state"] == "missing", (
+            f"{p} 應 = missing (空目錄), 實際 {out[p]['state']}"
+        )
+
+
+# ---------- 8. QUOTA_DIR 不存在時全 13 provider no_dir 守護 ----------
+
+def test_scan_quota_snapshots_QUOTA_DIR_不存在_全_13_no_dir(tmp_path, monkeypatch):
+    """QUOTA_DIR 不存在時 (e.g. 全新裝機 + 還沒建目錄) 13 provider 全 no_dir
+
+    守: 若有人改 QUOTA_DIR 處理邏輯 (e.g. raise FileNotFoundError, 或
+    部分回 missing) → K0 Quota coverage 計算會爆 / 報表 crash /
+    k0_drift_check 觸發假 fail。對齊 k0_measure.py:107-109 既有 `no_dir`
+    設計 (回傳 13 個全 no_dir 字典)。
+    """
+    # 指向不存在的子目錄
+    nonexistent = tmp_path / "does_not_exist"
+    assert not nonexistent.exists()
+    monkeypatch.setattr(k0, "QUOTA_DIR", nonexistent)
+
+    out = k0.scan_quota_snapshots()
+
+    # 全 13 個都應 = no_dir (path=None, mtime_age_hours=None)
+    assert len(out) == 13
+    for p in k0.KNOWN_PROVIDERS:
+        assert out[p]["state"] == "no_dir", (
+            f"{p} 在 QUOTA_DIR 不存在時應 = no_dir, 實際 {out[p]['state']}"
+        )
+        assert out[p]["path"] is None
+        assert out[p]["mtime_age_hours"] is None
+
+
+# ---------- 9. OpenAB 4 missing bot 結構性 missing 守護 ----------
+
+def test_scan_quota_snapshots_OpenAB_4_missing_bot_結構性_missing(tmp_path, monkeypatch):
+    """R131 結構性確認: irisx_bot/grokx/lpbot/mimo 永久非本機 scope
+
+    守: 若有人改 missing 邏輯 (e.g. 給這 4 個加 default snapshot 路徑,
+    或把「missing」改成「auto_fresh」之類的假數據) → K0 Quota coverage
+    9/13 → 13/13 假象反而掩蓋 OpenAB bot 是否真在運作的事實。
+
+    對齊 R131 量化: 4 missing bot 是「永久非本機 scope」, 本機守護量化
+    口徑不漂移 (即使是 missing, 計算法必須一致, 不能為了 KPI 漂亮造假)。
+    """
+    monkeypatch.setattr(k0, "QUOTA_DIR", tmp_path)
+    # 不寫任何檔案 → 全 13 個應 = missing
+    out = k0.scan_quota_snapshots()
+
+    # 9 個 OpenAB bot 全 missing (含 4 個結構性 missing)
+    for p in k0.OPENAB_BOT:
+        assert out[p]["state"] == "missing", (
+            f"{p} 應 = missing (空 QUOTA_DIR), 實際 state={out[p]['state']}"
+        )
+        assert out[p]["path"] is None
+
+    # 特別守護 4 個結構性 missing bot (R131 量化確認)
+    for p in ("irisx_bot", "grokx", "lpbot", "mimo"):
+        assert out[p]["state"] == "missing", (
+            f"{p} 結構性 missing bot (R131), 量化口徑必須守住"
+        )
+
+    # 4 本機 CLI 也 missing (沒 usage-local.json)
+    for p in k0.LOCAL_CLI:
+        assert out[p]["state"] == "missing"

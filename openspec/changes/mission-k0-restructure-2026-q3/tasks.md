@@ -16,9 +16,10 @@
       ↪ 對應 Phase 1 spec closure tasks + Phase 2/3 owner M placeholder
       驗證: tasks.md Phase 1 全 [x] + Phase 2/3 placeholder 完整
 
-- [ ] **T-MKR3: spectra validate --changes mission-k0-restructure-2026-q3 通過**
+- [x] **T-MKR3: spectra validate --changes mission-k0-restructure-2026-q3 通過** (R184 closure)
       ↪ 對齊 HARNESS/Spectra 規格驗證護衛
-      驗證: spectra validate PASS
+      驗證: spectra validate 輸出 `✓ mission-k0-restructure-2026-q3 — valid` (warn: No delta specs found = 預期, 純 spec-level 提案無 source code 變更)
+      R184 確認: proposal.md 131 行 + tasks.md 83 行結構對齊 spectra schema, 4 capability 段 (MCAP-1~4) + Risk 3 條 + Decision Asks 3 選項全在位, KAP-R1~R4 spec-level reference 與 MISSION KPI 量化值 (K0-A1 4/13 + K0-A2 1/13 + K0-B 4/13 + K0-Q 9/13) 完整對齊
 
 - [ ] **T-MKR4: owner M Decision Asks 回填** — Path A / Path B / 第 3 條
       ↪ 對應 proposal.md Decision Asks 段

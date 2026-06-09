@@ -1020,4 +1020,91 @@ API Error: Unable to connect to API (ConnectionRefused)
 
 **KPI-impact**: K-Foundation +1 (K42 護衛鏈過期契約漂移偵測從 0 守護到 5 個量化口徑常數 pytest 護衛, 守 file_count/total_test_fn/stale_count/chain_count_min/overall_pass 5 維度 + 進步/倒退/缺欄位/JSON 壞 5 case 退出碼 fail-closed, 對齊 MISSION K42 量化閉合鏈補鏈路, 鏡像 R132 k0_drift_check.py / R193 k40_drift_check.py 模式, 補鏈路 MISSION R-CPT M3 接力清單「R133+ 接力護衛 過期契約審計」), HARNESS DRIFT 從 27.3% 升至 ~30% (R194 feat 突破 6 連續 feat 後第 7 個 feat commit, 同軸換對齊 K42 維度衝 30% 達標中)
 
+### [2026-06-10] Round 195 — chain_staleness 護衛本體內部函式 hidden gap 守護延伸 3 case (M2 KPI 量測 closure 軸換內部函式軸, 鏡像 R188 6→9 模式)
+**類型**: M2 (KPI 量測 closure — chain_staleness 護衛本體延伸)
+**KPI**: K42 護衛鏈量化口徑閉合 (producer 側護衛本體從 8→11 case, 守 3 個內部函式 hidden gap)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| chain_staleness pytest 護衛總數 | 8 (R172 5 + R180 3) | **11 (R172 5 + R180 3 + R195 3)** | **+3** |
+| chain_staleness 本體健康守護 (量化口徑常數) | 3 條 (STALE_DAYS / CHAIN_COUNT_MIN / _TEST_MARKER_RE pattern) | 3 條持平 | 0 (R180 收完不重複) |
+| chain_staleness 內部函式 hidden gap 守護 | 0 條 | **3 條 (SRC_TAURI 路徑 / _iter_test_files 排除 target/ / 排除無 #[test] marker 的 .rs 檔)** | **+3 (R195 新增)** |
+| K-Foundation 量化口徑閉合 (K0+K40+K41+K42 producer+consumer) | 12+5+5+5+8=35 case | 12+5+5+5+8+3=**38** case | **+3** |
+| K42 護衛鏈 (chain 飽和契約) | 20 | 20 | 持平 (守) |
+| K41 chore_treadmill 7d | 11.9% (R194 守住) | 未重跑 | (本輪不破 K41) |
+| cargo baseline | 452 | 452 | 持平 (守) |
+| R124 sentinel 預期觸發 | 1 fail | 1 fail (commit 後 dirty 淨空綠) | 持平 (R13 防護) |
+**為什麼**:
+  R194 chain_staleness_drift_check.py 補 K42 consumer 側補鏈路後, K42
+  鏈路缺的不是 consumer 端 (已守), 是 producer 端 chain_staleness.py
+  護衛本體的**內部函式 hidden gap** (量化口徑常數已被 R180 收完, 但
+  內部函式行為邊界沒人守) — 若有人改 SRC_TAURI 路徑 (指到 src/ 漏了
+  -tauri/ 子目錄) / 移除 _iter_test_files 內 `target` 排除邏輯 / 改寬
+  _TEST_MARKER_RE 含 #[cfg(test)] → K42 量化值悄悄失真, chain_staleness
+  drift_check 守的「5 維度對齊」就成了 meta-bug 假象 (consumer 守著錯
+  的值還說對齊)。
+  R195 補 K42 producer 側內部函式 hidden gap 守護, 對齊 R188 從 6→9
+  case 模式 (R188 加 3 case 守 k0_measure.py 內部函式 hidden gap):
+  - R172 5 case 量測主路徑 + R180 3 case 量化口徑常數 + R195 3 case 內部
+    函式 hidden gap = chain_staleness 護衛本體 11 case closure 完整軸
+  - 換本質軸: R194 = K42 consumer 側補鏈路, R195 = K42 producer 側
+    內部函式補鏈路 (consumer 跟 producer 兩端對稱閉合)
+**搜尋**: 0 (chain_staleness.py 內部函式列表 _iter_test_files / _count_test_fns
+  / _iso_from_unix / _git_last_commit_unix / measure / overall_pass / SRC_TAURI
+  / OUTPUT_JSON 已在 R172 docstring 跟 main() 內引用盤過; R195 選 3 個最高
+  優先 hidden gap — SRC_TAURI 路徑契約 + _iter_test_files 排除 target/
+  + _iter_test_files 排除無 #[test] marker 邊界, 守護對齊 R180 既有
+  3 case 量化口徑常數的隱藏延伸軸)。
+**做了什麼** (3 case pytest 守 3 個 K42 內部函式 hidden gap):
+  - 修改 `scripts/test_chain_staleness.py` (R195 從 8 case → 11 case)
+    - docstring 改寫: 從「R172 5 case」→「R172 5 + R180 3 + R195 3 = 11 case 守 9 個 hidden gap」
+    1. **test_本體_SRC_TAURI_路徑_對齊_src_tauri_src** — 守 M0 級 hidden gap 1
+       (R172 SRC_TAURI 路徑契約 = `<REPO_ROOT>/src-tauri/src` 不漂移; 改寬/改窄
+       → chain_staleness 量化值跟實際 K42 chain 20 護衛脫鉤, drift_check 變
+       meta-bug 假象; 順帶守 Path 實例 type + 路徑存在 3 重守護)
+    2. **test_iter_test_files_排除_target_子樹** — 守 M0 級 hidden gap 2
+       (_iter_test_files 內 `if "target" in rs.parts: continue` 排除邏輯不漂
+       移; 改壞 → target/ build artifact 被當護衛計入, K42 量化值被 build
+       產物污染失真; 用 tmp_src_with_layers fixture 造 3 層結構 — real.rs
+       含 #[test] / no_marker.rs 只含 #[cfg(test)] / target/build_artifact.rs
+       含 #[test] 但應被排除)
+    3. **test_iter_test_files_排除_無_test_marker_的_rs_檔** — 守 M0 級 hidden gap 3
+       (_TEST_MARKER_RE 守住「只認 #[test] 不認 #[cfg(test)]」, 含 #[cfg(test)]
+       模組宣告但無 #[test] fn 的 .rs 檔應被排除; 改寬正則含 #[cfg(test)] →
+       護衛鏈 chain 計數虛胖失真; 對齊 case 8 _TEST_MARKER_RE 守住純 marker
+       pattern 行為邊界; 順帶守空檔 .rs 也應被排除)
+  - engineering-log.md 落 R195 entry (本 entry)
+
+**驗證方式** (5 維):
+- ✅ `python -m pytest scripts/test_chain_staleness.py -v` → **11/11 PASS**
+  (R172 5 + R180 3 + R195 3 = 11 case 全綠, 3 deprecation warning 從 R172
+  既有的 line 2/45 2 個減少 1 個 [R195 引入的 line 261 改 r""" 修掉])
+- ✅ `python -m pytest scripts/` → 69/70 (R195 chain_staleness 11/11 + R194
+  drift_check 5/5 + 既 56 條, R124 sentinel 預期觸發 1 fail → commit 後
+  dirty 淨空自動綠, 符合 PUA SOP 預期)
+- ✅ `python scripts/chain_staleness.py` → 16 test files / 0 stale / overall_pass=True
+  (R195 沒改 chain_staleness.py 量化口徑, 守住 R172 既有 baseline)
+- ✅ `python scripts/chain_staleness_drift_check.py` → 5 維度全 [PASS],
+  守住 R194 consumer 側補鏈路
+- ✅ `cargo test --manifest-path src-tauri/Cargo.toml --no-run` → 0 Rust 改動,
+  baseline 452 守住, K42 chain 20 守住 R97 紅線
+
+**SOP 合規**:
+- ✅ 1 輪 1 件 (1 主題 = chain_staleness 護衛本體內部函式 hidden gap 守護延伸, 1 commit 2 檔: test_chain_staleness.py + engineering-log.md)
+- ✅ 不搶 owner M scope (mission-k0 T-MKR4 仍 owner M 決 path, otel-genai 9/16 不動, R117 capsule-brief 不動, K42 飽和契約 20 不動, 0/27 checklists 不動, K40 spec 8/9 closed + 1 active 持平, 0 patch MISSION, 0 觸碰 chain_staleness.py 量化本體)
+- ✅ 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod, 3 case 走既「Python pytest 護衛」維度)
+- ✅ 不破 R13 (git add 限定 2 路徑: scripts/test_chain_staleness.py + engineering-log.md, 不 `git add -A`, OWNER_M_WIP_FILES=() 空 tuple, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)
+- ✅ 換本質不同角度 (R194 = K42 consumer 側補鏈路, **R195 = K42 producer 側內部函式 hidden gap 補鏈路**, 換軸向 = consumer → producer 內部函式, 鏡像 R188 從 6→9 case 模式, 不重複 R180 量化口徑常數 3 case, 不重複 R187-R194 任一條既有 gap 守護)
+- ✅ HARNESS Quality Gate 雙訊號對齊 (「8 feat 0 test」= R195 補 3 case pytest 覆蓋; 「8 feat 0 fix」= R195 守 SRC_TAURI / 排除邏輯 / 正則邊界 3 個 M0 級 hidden gap 防量化值悄悄失真)
+
+**KPI-impact**: K-Foundation +3 (chain_staleness pytest 護衛從 8→11 case, 守 SRC_TAURI 路徑契約 + _iter_test_files target/ 排除邏輯 + _TEST_MARKER_RE #[cfg(test)] 邊界 3 個內部函式 hidden gap, 防 chain_staleness.py 量化口徑悄悄漂移導致 drift_check 變 meta-bug 假象, 對齊 R188 從 6→9 case 內部函式 hidden gap 守護模式 + 補鏈路 K42 producer 側完整閉合)
+
 **結果**: PASS (1 輪 1 件 = R194 K42 護衛鏈過期契約漂移偵測 feat: 1 commit 3 檔 scripts/chain_staleness_drift_check.py + scripts/test_chain_staleness_drift_check.py + engineering-log.md R194 紀錄 + 5 case pytest 全綠 + 66 pytest 守住 + chain 20→20 守 + K40 8/10 closed 持平 + K41 11.9% 守 <30% + R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠 + cargo baseline 452 守住 + M2 KPI 量測 closure 軸換 K42 維度 補鏈路成功 = R187-R193 K0/K41/K40 生產者側 + K40/K41 consumer 側守護 12+5+5+5+5 gap → R194 K42 consumer 側守護 5 維度 hidden gap, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat」合規, HARNESS DRIFT 強制指令對齊 6→7 feat 連續突破, 0 改善 19 輪 → 1 改善 1 輪 → 7 改善連續輪但有 5 個 K42 量化口徑常數閉合守護累計增量 + 補 MISSION R-CPT M3 接力清單「護衛 過期契約審計」)
+
+### 2026-06-10 R195 — 👁️ AI Supervisor 審查
+**品質**: PASS (8/10)
+**方向**: ALIGNED** (6/10)
+**風險**: 連續 5 個 commit 全是「量測基礎設施」，K0 核心指標（0/13 → 13/13 provider health）毫無進展——在建尺，不在量東西。**
+
+**綜合**: 7/10
+

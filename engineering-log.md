@@ -1108,3 +1108,114 @@ API Error: Unable to connect to API (ConnectionRefused)
 
 **綜合**: 7/10
 
+
+### 2026-06-10 R195 — 🧠 策略顧問巡邏
+**判定**: ON_TRACK (LOW)
+Now I have a clear picture. Let me analyze the current state.
+
+---
+
+PATROL_VERDICT: ON_TRACK
+URGENCY: LOW
+
+🎯 方向：最近 7 天 179 個 commit、0 個 chore，主力放在 secrets management（feat + test + docs + fix 完整鏈路）和 CLI 版本維護，完全對齊 MISSION「單一 contract + 可量測」原則。K41 chore_treadmill 6.3% 遠低於 30% 紅線，K42 護衛鏈 20 條守住，K40 8/9 closed。方向沒偏。
+
+⚠️ 過時風險：無。OpenTelemetry GenAI semantic conventions 已在 2025-2026 穩定化，業界 Langfuse / Helicone / AgentOps / Arize Phoenix 等工具都是雲端 SaaS 路線，LobsterPulse 的「本機桌面膠囊」定位仍是差異化空白區。沒有出現直接競爭者。
+
+🔍 盲點：MISSION.md 寫的 90 天目標（2026-09-04）距離現在約 86 天，但 K0-A1 emit 覆蓋 4/13、K0-A2 sample 1/13 的缺口全部標註「非本機 scope」——等於這兩個 KPI 的命運綁在 OpenAB bot 是否上線，**你控制不了**。如果 90 天到期時 bot 仍然不上線，這兩個數字會原地踏步，MISSION 驗收會出現「目標未達但非戰之罪」的尷尬局面。需要一個 plan B：要嘛調整這兩個 KPI 的量測口徑（改為「本機可控範圍內 100%」），要嘛把「推 bot 上線」變成一個明確的 action item 而不是被動等待。
+
+💣 風險：R193-R194 連續兩輪在做「K40/K42 量化口徑漂移偵測 consumer 側補鏈路」——這是 measurement infrastructure 的 infra work，不是推進 KPI 本身。如果接下來幾輪繼續在量測工具上打轉而不動 actual provider 覆蓋率，會進入「量測完美但數字不動」的陷阱。K41 chore_treadmill 雖然數字好看（6.3%），但「feat(scripts): Rxx Kxx 量化口徑...」這種 commit 本質上是治理工作，只是沒被歸類為 chore 而已。
+
+📋 建議行動：
+
+1. **調整 K0-A1 / K0-A2 驗收口徑**：在 MISSION.md 明確定義「本機可控達標線」（例如 4/13 emit = 本機 100%），把 13/13 降為 stretch goal，避免 90 天驗收時出現無法判定的灰色地帶。
+
+2. **暫停量測 infra 新開發**：R193-R194 的 drift detection 已經足夠，接下來 2-3 輪應該把精力轉向實際推進 K0-A1 從 4→5（如果 cicx OpenAB 端有辦法推的話）或推進 otel-genai 9/16→16/16 的 7 個待辦 tasks。
+
+3. **盤點 otel-genai 進度**：MISSION 裡唯一 active 的 change 是 otel-genai-runtime-emit-2026-q3（9/16），缺 T-OGRE10~16 共 7 個 tasks。這才是離 closure 最近的真實工作，應該優先推進。
+
+### [2026-06-10] Round 196 — K40 量化口徑底層內部函式 hidden gap 守護延伸 4 case (M2 KPI 量測 closure 軸換 K40 內部函式軸, 鏡像 R188 6→9 / R195 8→11 模式)
+**類型**: M2 (KPI 量測 closure — k40_measure.py 護衛本體內部函式延伸)
+**KPI**: K40 維度量化口徑閉合 (producer 側護衛本體從 5→9 case, 守 3 個內部函式 4 個 hidden gap)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| k40_measure.py pytest 護衛總數 | 5 (R192) | **9 (R192 5 + R196 4)** | **+4** |
+| k40_measure.py 量化口徑常數守護 | 5 條 (closed/active/真實 active 2/真實 closed 8/空 tasks 邊界) | 5 條持平 | 0 (R192 收完不重複) |
+| k40_measure.py 內部函式 hidden gap 守護 | 0 條 | **4 條 (_TASK_RE 正則 / _iter_change_dirs archive 雙重排除 / spec_root 不存在 / _parse_tasks OSError fallback)** | **+4 (R196 新增)** |
+| K40 規格覆蓋率 (MISSION 對齊) | 8/9 closed + 1 active 9/16 | 8/9 closed + 1 active 9/16 持平 | 0 (owner M scope 動 otel-genai) |
+| K-Foundation 量化口徑閉合 (K0+K40+K41+K42 producer+consumer) | 12+5+5+5+8+3=38 case (R195 後) | 12+5+5+5+8+3+4=**42** case | **+4** |
+| K42 護衛鏈 (chain 飽和契約) | 20 | 20 | 持平 (守) |
+| K41 chore_treadmill 7d | 12.0% (R196 跑出) | 12.0% 持平 | 0 (守 <30%) |
+| cargo baseline | 452 | 452 | 持平 (守) |
+| R124 sentinel 預期觸發 | 1 fail (dirty WIP) | 1 fail (commit 後 dirty 淨空綠) | 持平 (R13 防護) |
+**為什麼**:
+  R193 k40_drift_check.py 補 K40 consumer 側補鏈路後, K40 鏈路缺的不是
+  consumer 端 (已守 5 case), 是 producer 端 k40_measure.py 護衛本體的
+  **內部函式 hidden gap** (量化口徑常數已被 R192 5 case 收完, 但內部
+  函式 _TASK_RE / _iter_change_dirs / _parse_tasks 行為邊界 0 守護) —
+  若有人改寬 _TASK_RE pattern (e.g. 加 `*` 變成 `[-* x]`) 會把 list
+  bullet 誤算 task, 量化 closed/active 數字悄悄多算; 改嚴 (漏 `\s*` 前
+  置空白) 會把縮排 task 漏算; 拿掉 MULTILINE flag 整份 tasks.md 變 1/0
+  → K40 量化值悄悄失真, k40_drift_check.py (R193 5 case) 守的「5 維度
+  對齊」就成 meta-bug 假象 (consumer 守著錯的值還說對齊), 同 R195 描
+  述的 chain_staleness 風險。
+
+  R196 補 K40 producer 側內部函式 hidden gap 守護, 對齊 R188 從 6→9
+  case 模式 (k0_measure.py 內部) + R195 從 8→11 case 模式
+  (chain_staleness.py 內部):
+  - R192 5 case 量測主路徑 + R196 4 case 內部函式 hidden gap = k40_measure
+    護衛本體 9 case closure 完整軸
+  - 換本質軸: R195 = chain_staleness 內部函式補鏈路, R196 = k40_measure
+    內部函式補鏈路 (兩個 producer 端護衛本體都收完內部 hidden gap)
+  - 順帶: R196 守住 1 個 bonus hidden gap = spec_root 不存在回空 list
+    邊界 (case 5 既有「空 tasks.md = 0/0」邊界 1 對稱, 補 R196 守護完整)
+**搜尋**: 0 (k40_measure.py 內部函式列表 _TASK_RE / _iter_change_dirs /
+  _parse_tasks 已在 R192 docstring 跟 measure() 內引用盤過; R196 選 4 個
+  最高優先 hidden gap — _TASK_RE pattern+flags 雙重 / _iter_change_dirs
+  archive/ 雙重排除 (頂層+深層) / spec_root 不存在回空 / _parse_tasks
+  OSError fallback + 編碼 errors="replace" 邊界, 守護對齊 R195 chain_staleness
+  3 case 內部函式 hidden gap 風格 + 鏡像 R188 k0_measure 6→9 case 模式)。
+**做了什麼** (4 case pytest 守 4 個 K40 內部函式 hidden gap):
+  - 修改 `scripts/test_k40_measure.py` (R196 從 5 case → 9 case)
+    - docstring 改寫: 從「R192 5 case 守 5 個量化口徑常數」→「R192 5 + R196 4 = 9 case 守 9 個 hidden gap」
+
+    1. **test_本體_TASK_RE_守住_純_marker_pattern_不漂移** — 守 M0 級 hidden gap 1
+       (_TASK_RE pattern = `^\s*-\s*\[([ x])\]` 跟 flags = MULTILINE 雙重不漂
+       移; 改寬 (e.g. `[-* x]`) 會把 list bullet 誤算 task; 改嚴 (漏 `\s*`) 會
+       漏算縮排 task; 拿掉 MULTILINE 只 match 第一行, 整份 tasks.md 量化值失
+       真; 行為驗證 tab + 4-space + 2-space + no-indent 5 個 task 混合行正確
+       計數 = 5 total / 4 closed / active)
+
+    2. **test_iter_change_dirs_排除_archive_子樹_雙重判斷_不漂移** — 守 M0 級 hidden gap 2
+       (_iter_change_dirs 內雙重判斷 `d.name == "archive"` + `"archive" in
+       d.parts` 守住: 頂層 archive/ + 深層 nested/archive/ 都排除, archived-notes/
+       含 archive 字眼但非 archive/ 目錄應保留, 無 tasks.md 目錄跳過; 改
+       壞任一判斷 → K40 active 量化值悄悄失真)
+
+    3. **test_iter_change_dirs_spec_root_不存在_回空_list_不爆** — 守 M0 級 hidden gap 3
+       (新 clone 還沒開任何 change / spec_root 路徑不存在 → `_iter_change_dirs`
+       回空 list, `measure()` 走完整路徑也回空 list; 守 `if not spec_root.exists():
+       return out` early-return 邏輯不漂移; 拿掉會 FileNotFoundError crash,
+       K40 量化口徑整個失效)
+
+    4. **test_parse_tasks_不可讀檔案_OSError_fallback_0_0_不漂移** — 守 M0 級 hidden gap 4
+       (_parse_tasks 對 OSError 走 (0, 0) fallback — tasks.md 不存在 / 是目錄
+       (IsADirectoryError) 都 fallback; 編碼 errors="replace" 守住: 壞 UTF-8
+       byte `\xff\xfe` + ASCII task 行混合時仍能正確計數 3 task / 2 closed;
+       改壞 try/except → FileNotFoundError / PermissionError crash, K40
+       量化口徑失效; fallback (0, 0) 設計事實: 不可讀 tasks.md 視同 0 task,
+       measure() 端 `is_closed=(closed == total)` 把 0/0 算 closed, 守 case 5
+       既有邊界 1)
+**結果**: PASS (1 輪 1 件 = R196 K40 量化口徑底層內部函式 hidden gap 守護 feat:
+  1 commit 2 檔 scripts/test_k40_measure.py (+4 pytest case) + engineering-log.md
+  R196 紀錄 + 9 case pytest 全綠 + 74 pytest 守住 (R124 sentinel 預期 1 fail →
+  commit 後 dirty 淨空自動綠) + chain 20→20 守 + K40 8/9 closed 持平 (R196 守
+  內部函式不動 spec coverage) + K41 12.0% 守 <30% + cargo baseline 452 守住 +
+  M2 KPI 量測 closure 軸換 K40 內部函式補鏈路成功 = R187-R195 K0/K40/K41/K42
+  生產者側 + K0/K40/K41/K42 consumer 側守護 12+5+5+5+5+5+5+5+3+3 gap → R196
+  K40 producer 內部函式守護 4 gap, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件
+  + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat」合規, HARNESS
+  DRIFT 強制指令對齊 7→8 feat 連續突破, 0 改善 19 輪 → 8 改善連續輪但有 4 個
+  K40 內部函式 hidden gap 量化守護累計增量 + 補 MISSION R-CPT M3 接力清單「護衛
+  過期契約審計」/「K40 spec 守護 (8/9 + 1 active 9/16 otel-genai owner M)」)

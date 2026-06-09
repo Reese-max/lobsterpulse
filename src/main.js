@@ -59,6 +59,33 @@ let collapsedAt = 0;
 let sessionFilter = null; // bot card 點選後過濾 session list 的 provider id
 let notifiedLongSessions = new Set(); // 避免同一 long session 重複發 Telegram
 let sessionExpanded = new Set(); // 被展開的 session id（預設 compact）
+let idleClusterExpanded = false; // R168 session clustering: idle 群組折疊開關 (≥2 idle 時自動啟用)
+const STATE_PRIORITY = { working: 0, waiting_for_user: 1, stale: 2, idle: 3 }; // R168 排序:active 在前, idle 在後
+function renderSessionRow(s, aid) {
+  const sel = s.id === aid ? " selected" : "";
+  const sc = ({ working: "working", waiting_for_user: "waiting_for_user", stale: "stale" })[s.state] || "idle";
+  const sl = ({ working: "執行中", waiting_for_user: "等待中", stale: "閒置過久" })[s.state] || "";
+  const cwdShort = shortenCwd(s.cwd);
+  const meta = buildSessionMetaHtml(s);
+  const expanded = sessionExpanded.has(s.id) ? " expanded" : "";
+  const hasDetails = !!(cwdShort || s.last_prompt || meta);
+  return `<div class="session-row${sel}${expanded}" data-id="${s.id}">
+      <div class="session-row-head">
+        <div class="session-provider-icon">${providerIconHtml(s.provider, 14)}</div>
+        <span class="session-name">${esc(s.project_name)}</span>
+        <span class="status-dot ${sc}"></span>${sl ? `<span class="session-state-label ${sc}">${sl}</span>` : ""}
+        <span class="session-row-spacer"></span>
+        ${s.is_active ? `<span class="session-time">${s.formatted_time}</span>` : ""}
+        ${hasDetails ? `<span class="session-toggle">${expanded ? "▾" : "▸"}</span>` : ""}
+        <button class="session-remove" data-rid="${s.id}" title="移除">&times;</button>
+      </div>
+      ${hasDetails ? `<div class="session-details">
+        ${cwdShort ? `<div class="session-cwd">${esc(cwdShort)}</div>` : ""}
+        ${s.last_prompt ? `<div class="session-prompt">${esc(s.last_prompt)}</div>` : ""}
+        ${meta ? `<div class="session-meta">${meta}</div>` : ""}
+      </div>` : ""}
+    </div>`;
+}
 let dashboardCollapsed = { "bot-grid": false, "local-grid": false }; // 兩區塊都預設展開，讓用戶一眼看到 OpenAB 和本機兩條路徑
 let quotaCollapsed = false;
 let refreshStateInFlight = false;
@@ -1802,11 +1829,12 @@ async function refreshQuotas() {
 
     // 全域額度區——**LobsterPulse 自跑的 local runner 優先**，若無才用 live API 補，
     // 兩者皆缺才 fallback 到 OpenAB snapshot。
+    // 註: 上面 quota fetch 區已宣告 `liveSnap` (line 1797), 這裡直接讀 `snapshots.__live__`
+    // 避免重複宣告 syntax error。R180 修 R179 透明化的 R13 防護漏洞。
     const localSnap = snapshots.__local__;
-    const liveSnap = snapshots.__live__;
-    const representativeSnap = localSnap || liveSnap || snapshots.cicx || snapshots.gitx || snapshots.giminix || snapshots.codex_bot;
+    const representativeSnap = localSnap || snapshots.__live__ || snapshots.cicx || snapshots.gitx || snapshots.giminix || snapshots.codex_bot;
     const sectionTitle = localSnap ? "💻 本機額度"
-      : (liveSnap ? "💻 本機額度 (live)" : "☁️ OpenAB 額度");
+      : (snapshots.__live__ ? "💻 本機額度 (live)" : "☁️ OpenAB 額度");
 
     // freshness badge: 計算 snapshot 年齡
     let freshnessBadge = "";
@@ -2371,32 +2399,32 @@ function renderSessions(st) {
     ? st.sessions.filter(s => s.provider === sessionFilter)
     : st.sessions;
 
-  $("session-list").innerHTML = visible.map(s => {
-    const sel = s.id === aid ? " selected" : "";
-    const sc = ({ working: "working", waiting_for_user: "waiting_for_user", stale: "stale" })[s.state] || "idle";
-    const sl = ({ working: "執行中", waiting_for_user: "等待中", stale: "閒置過久" })[s.state] || "";
-    const cwdShort = shortenCwd(s.cwd);
-    const meta = buildSessionMetaHtml(s);
-    // 預設 compact（只顯示 header）；expanded set 記住哪些 session 被展開過
-    const expanded = sessionExpanded.has(s.id) ? " expanded" : "";
-    const hasDetails = !!(cwdShort || s.last_prompt || meta);
-    return `<div class="session-row${sel}${expanded}" data-id="${s.id}">
-      <div class="session-row-head">
-        <div class="session-provider-icon">${providerIconHtml(s.provider, 14)}</div>
-        <span class="session-name">${esc(s.project_name)}</span>
-        <span class="status-dot ${sc}"></span>${sl ? `<span class="session-state-label ${sc}">${sl}</span>` : ""}
-        <span class="session-row-spacer"></span>
-        ${s.is_active ? `<span class="session-time">${s.formatted_time}</span>` : ""}
-        ${hasDetails ? `<span class="session-toggle">${expanded ? "▾" : "▸"}</span>` : ""}
-        <button class="session-remove" data-rid="${s.id}" title="移除">&times;</button>
-      </div>
-      ${hasDetails ? `<div class="session-details">
-        ${cwdShort ? `<div class="session-cwd">${esc(cwdShort)}</div>` : ""}
-        ${s.last_prompt ? `<div class="session-prompt">${esc(s.last_prompt)}</div>` : ""}
-        ${meta ? `<div class="session-meta">${meta}</div>` : ""}
-      </div>` : ""}
-    </div>`;
-  }).join("");
+  $("session-list").innerHTML = (() => {
+    // R168 session clustering: active 狀態 (working/waiting_for_user/stale) 排序在前,
+    // idle ≥2 時自動收成可折疊 cluster。解決「5 session 折疊看不到 active」痛點。
+    const sorted = visible.slice().sort((a, b) =>
+      (STATE_PRIORITY[a.state] ?? 3) - (STATE_PRIORITY[b.state] ?? 3)
+    );
+    const active = sorted.filter(s => s.state !== "idle");
+    const idle = sorted.filter(s => s.state === "idle");
+    const html = [active.map(s => renderSessionRow(s, aid)).join("")];
+    if (idle.length >= 2) {
+      html.push(
+        `<div class="session-cluster" data-cluster="idle" style="display:flex;align-items:center;gap:6px;padding:6px 10px;margin:4px 6px;border-radius:6px;background:rgba(128,128,128,0.08);cursor:pointer;font-size:12px;opacity:0.75;">
+          <span class="session-cluster-toggle">${idleClusterExpanded ? "▾" : "▸"}</span>
+          <span class="session-cluster-label">閒置 · ${idle.length} session${idle.length === 1 ? "" : "s"}</span>
+          <span class="session-row-spacer"></span>
+          <span class="session-cluster-hint" style="font-size:10px;opacity:0.6;">點擊展開</span>
+        </div>`
+      );
+      if (idleClusterExpanded) {
+        html.push(idle.map(s => renderSessionRow(s, aid)).join(""));
+      }
+    } else {
+      html.push(idle.map(s => renderSessionRow(s, aid)).join(""));
+    }
+    return html.join("");
+  })();
 
   $("session-list").querySelectorAll(".session-row").forEach(r => {
     r.addEventListener("mouseenter", () => r.classList.add("hovered"));
@@ -2408,6 +2436,13 @@ function renderSessions(st) {
       if (sessionExpanded.has(id)) sessionExpanded.delete(id);
       else sessionExpanded.add(id);
       invoke("select_session", { id });
+      refreshState();
+    });
+  });
+
+  $("session-list").querySelectorAll(".session-cluster").forEach(c => {
+    c.addEventListener("click", () => {
+      idleClusterExpanded = !idleClusterExpanded;
       refreshState();
     });
   });

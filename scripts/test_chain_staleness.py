@@ -107,3 +107,46 @@ def test_整體_fail_closed_stale_觸發():
         is_stale=False,
     )
     assert cs.overall_pass([tiny]) is False
+
+
+# ---------- 6-8. R179 護衛本體健康測試: 守住 3 個硬編碼契約 ----------
+# 對齊 R176/R177 R13 軸模式: 護衛腳本本身不被亂改, baseline 對齊。
+# chain_staleness.py 有 3 個關鍵硬編碼 (STALE_DAYS / CHAIN_COUNT_MIN / _TEST_MARKER_RE),
+# 若被偷改, 量測結果會 silent pass 過期契約, 但 R97 紅線守不住。
+# 加 3 個本體健康測試守住這 3 個契約, 對齊 R176 r124_sentinel tuple + R177 cargo test 計數 模式。
+
+def test_本體_STALE_DAYS_守住_90天():
+    """R172 設定 STALE_DAYS=90, 不讓人偷改成過大 (放水) 或過小 (誤殺) 閾值。
+    對齊 MISSION R133+ 接力護衛 過期契約審計 90 天契約。
+    """
+    assert cs.STALE_DAYS == 90, (
+        f"STALE_DAYS 應守住 90 (R172 契約), 實際 {cs.STALE_DAYS}. "
+        f"若要改閾值, 需先在 MISSION 補頁或新開 spec change 提案。"
+    )
+
+
+def test_本體_CHAIN_COUNT_MIN_守住_20():
+    """CHAIN_COUNT_MIN 對齊 R97 紅線 K42 chain 20 條飽和契約下限。
+    若被偷降, overall_pass 會 silent pass chain 計數 < 20, 違反 R97。
+    """
+    assert cs.CHAIN_COUNT_MIN == 20, (
+        f"CHAIN_COUNT_MIN 應守住 20 (R97 紅線 K42 chain 下限), 實際 {cs.CHAIN_COUNT_MIN}. "
+        f"chain 計數下限歸 r124_sentinel 守, 這裡只防 silent pass 放水。"
+    )
+
+
+def test_本體_TEST_MARKER_RE_守住_純_marker_pattern():
+    """_TEST_MARKER_RE 是 chain_staleness 識別 #[test] marker 的唯一契約。
+    若 regex 被改寬 (含 #[bench] / #[ignore] 等), 會把非 test fn 算進 chain 計數。
+    若被改嚴, 會漏算真實 test fn, 護衛 silently pass 失真。
+    pattern 對齊 R170/R172: 純粹 `#[test]` marker (含前置空白), 不含 `#[cfg(test)]`。
+    """
+    import re as _re
+    expected = _re.compile(r"^\s*#\[test\]\s*$", _re.MULTILINE)
+    assert cs._TEST_MARKER_RE.pattern == expected.pattern, (
+        f"_TEST_MARKER_RE pattern 漂移: 預期 {expected.pattern!r}, "
+        f"實際 {cs._TEST_MARKER_RE.pattern!r}."
+    )
+    assert cs._TEST_MARKER_RE.flags == expected.flags, (
+        f"_TEST_MARKER_RE flags 漂移: 預期 {expected.flags}, 實際 {cs._TEST_MARKER_RE.flags}."
+    )

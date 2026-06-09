@@ -15,7 +15,9 @@ R124 PUA 結構性飽和 7 輪延伸後的升維 sentinel 腳本。
   - r124_sentinel.py (R124): 6 項 baseline 量化 + .harness-r124.json
 
 6 項量測:
-  1. cargo test 計數 >= 452 (R135 baseline 451, R137 守 452, 本輪目標 452)
+  1. cargo test 計數 >= 471 (R137 守 452 lib unittests, R164 sidecar M0 fix ship +19,
+     總計 471; 過往 sentinel 只 parse 第一行 = 452 漏算 sidecar + doc, 掩蓋 19 test 守衛,
+     R177 修為 sum 全部 binary)
   2. .harness-k0.json K0-A1 emit >= 4/13 (R131/R150 持平, 5→4 對齊實跑: cicx OpenAB scope 浮動, 4 為本機穩態下限), K0-B fresh >= 4/13
   3. 3 髒檔 git status 仍 tracked (owner M WIP 0 動 = sentinel 守住, R138 收為 3 條)
   4. 護衛 mod 計數 pattern matches >= 20 (R97 紅線, 不破; 實際 ≥33 = 護衛 test 函式總數, R131 doc drift 統一口徑 R97 後 +3 例外 mod 數 = 20)
@@ -44,8 +46,10 @@ OUTPUT_JSON: Final[Path] = REPO_ROOT / ".harness-r124.json"
 K0_JSON: Final[Path] = REPO_ROOT / ".harness-k0.json"
 K41_JSON: Final[Path] = REPO_ROOT / ".harness-k41.json"
 
-# R135 baseline 451 → R137 ship 護衛 +1 → 452 → 本輪目標持平
-CARGO_TEST_MIN: Final[int] = 452
+# R135 baseline 451 → R137 ship 護衛 +1 → 452 (lib unittests) → R164 sidecar M0
+# fix ship +19 (lobster-pulse-hook 護衛) → 471 全 binary 總計 → R177 修 sentinel
+# 從「只 parse 第一行」改為「sum 全部 `test result: ok. N passed` 行」守住總計
+CARGO_TEST_MIN: Final[int] = 471
 # R150 (f56180d) 對齊實跑: K0-A1 4/13 emit baseline (本機 CLI 永續 4 + cicx OpenAB scope 浮動)
 K0_A1_MIN: Final[int] = 4
 K0_B_MIN: Final[int] = 4
@@ -104,10 +108,14 @@ def _run_git(args: list[str]) -> str:
 
 
 def _run_cargo_test_count() -> int:
-    """跑 cargo test 取 test count, 從 'test result: ok. N passed' 解析。
+    """跑 cargo test 取 test count, sum 全部 `test result: ok. N passed` 行。
 
-    不跑 build (太慢), 走 --no-run 編譯, 然後跑實際 test。
-    對齊 R135/R137 守衛路徑: parse `test result: ok. N passed` 第一行 (lib unittests)。
+    過往 sentinel 拿第一行 (lib unittests 452) 漏算 sidecar / doc binary,
+    實際 cargo test 跑出 4 行 (lib 452 / main 0 / sidecar 19 / doc 0) 總計 471。
+    只取第一行 = 452 會在 sidecar / doc 守衛掛掉時仍誤報 baseline 守住,
+    掩蓋 19 個 sidecar test 的守衛 (R164 M0 fix 護衛的合約失效)。
+
+    R177 修為 sum 全部 N passed; 任一 binary 倒回就會觸發 baseline 漂移警報。
     """
     proc = subprocess.run(
         ["cargo", "test", "--manifest-path", "src-tauri/Cargo.toml"],
@@ -117,8 +125,8 @@ def _run_cargo_test_count() -> int:
     if proc.returncode != 0:
         return -1
     text = proc.stdout.decode("utf-8", errors="replace")
-    m = re.search(r"test result: ok\. (\d+) passed", text)
-    return int(m.group(1)) if m else -1
+    matches = re.findall(r"test result: ok\. (\d+) passed", text)
+    return sum(int(n) for n in matches) if matches else -1
 
 
 def check_cargo_test() -> CheckResult:
@@ -127,13 +135,13 @@ def check_cargo_test() -> CheckResult:
     return CheckResult(
         name="cargo_test_count",
         passed=passed,
-        actual=f"{actual}/>=452",
+        actual=f"{actual}/>=471",
         threshold=f">= {CARGO_TEST_MIN}",
         note=(
-            f"R135 baseline 452, R124 持平 期望 "
-            f"{actual} >= {CARGO_TEST_MIN} 守住"
+            f"R164 sidecar 護衛補齊後 baseline 471, 期望 "
+            f"{actual} >= {CARGO_TEST_MIN} 守住 (R177 改 sum 全 binary)"
             if passed
-            else f"DRIFT: R135 baseline 452, 當前 {actual} < {CARGO_TEST_MIN}"
+            else f"DRIFT: R164+ sidecar 總計 471, 當前 {actual} < {CARGO_TEST_MIN}"
         ),
     )
 

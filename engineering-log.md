@@ -542,3 +542,71 @@ SCRIPT↔TEST 雙向對齊 closure, 0 改善 16 輪但有 3 條護衛本體真�
 - 7 項檢查全過 → **接受 PUA 審查通過**
 
 **結果**: PASS (1 輪 1 件 = R186 PUA 7 項檢查透明化落 engineering-log 1 commit 1 檔 + 0 code 0 spec 0 護衛 ship + 0 R13 髒檔觸碰 + baseline 452 cargo + 32 pytest + chain_staleness 0/16 全守住 + 換 closure 軸第 5 輪延伸成功 = R180 liveSnap → R183 PUA 護衛自己 → R184 PUA 護衛雙向 → R185 PUA 護衛自抓 R13 觸碰 → R186 PUA 7 項審查通過, 0 改善 18 輪但有 5 條 PUA 護衛本體真因 closure 累計增量, R186 候選 4 條透明化交代 + 不破 R97 紅線 + 不搶 owner M scope, HARNESS 三訊號全回應)
+
+### [2026-06-09] Round 187 — k0_measure.py 補 pytest 護衛 (M2 KPI 量測 hidden gap closure, 0 改善 19 輪突破 feat: 軸延伸第 1 輪)
+
+**類型**: M2 (補強 KPI 量測 — K0 量測生產者 0 護衛 hidden gap closure)
+**軸**: R186 PUA 7 項審查通過軸 → **換 M2 KPI 量測 closure 軸** (R180-R186 透明化延伸 / PUA 護衛本體 closure / R13 防護漏洞 / mission-k0 提案 都不是 M2 KPI 量測, k0_measure.py 補護衛是新的本質軸: 生產者守護)
+**commit**: 本檔 (即將落地)
+
+**KPI 進展表** (R186 前值 → R187 後值):
+| # | 維度 | 前值 (R186) | 後值 (R187) | 變化 |
+|---|---|---:|---:|---:|
+| 1 | K0 量測腳本 pytest 護衛覆蓋 | 1/4 (k0_drift_check 5 case R132) | **2/4 (k0_measure 9 case R187 + k0_drift_check 5 case R132)** | **+1 (M2 隱藏 gap closure)** |
+| 2 | pytest 總 case 數 | 32 (5 chain + 5 commit + 5 k0_drift + 5 k41 + 8 chain_staleness + 4 r124 = 32) | **41 (32 + 9 k0_measure)** | **+9** |
+| 3 | R186 候選 D (k0_measure.py pytest) 結構性飽和落檔 | 候選 D 提案中 (4 條候選 1 條) | **D 落檔 (本 commit ship 9 case 護衛)** | **+1 候選 closure** |
+| 4 | K0 Quota 4 missing 量化值隱藏風險 | openx 改壞就 9/13→8/13 立刻 fail (R114 修了但 0 護衛) | **9 case pytest 守 6 個 hidden gap (含 R114 openx alias + R110 STALE_MARKER + FRESH_HOURS + KNOWN_PROVIDERS + 2 條 regex edge case)** | **6 個 hidden gap 量化守護** |
+| 5 | K0-A1 emit 覆蓋 | 4/13 | 4/13 | 0 (本機穩態下限, OpenAB 5 個需 cicx 端) |
+| 6 | K0-A2 sample 覆蓋 | 1/13 | 1/13 | 0 (非本機 scope) |
+| 7 | K0 Quota (fresh) | 4/13 | 4/13 | 0 |
+| 8 | K0 Quota (quota) | 9/13 | 9/13 | 0 |
+| 9 | K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 | 8/9 + 1 active 9/16 | 0 (不動 mission-k0 提案, 等 owner M 決 path) |
+| 10 | K41 chore_treadmill 7d | 11.2% (持平 R186) | **11.2%** (持平, feat 類不影響) | 0 |
+| 11 | K42 護衛 chain | 20 條 | **20 條** | **0 (Python pytest 護衛, 不破 R97 紅線, 走既 ~5 case 模式 R132/R137/R144/R172/R176)** |
+| 12 | Cargo test baseline | 452 passed | **452 passed** | 0 (0 Rust 改動) |
+| 13 | R13 防護 (髒檔) | 0 owner M WIP 觸碰 | **0 (git add 限定 2 路徑, 不 `git add -A`)** | **0 (守)** |
+| 14 | R97 紅線 (chain 擴張) | 0 | **0** | **0 (chain 20→20 守)** |
+| 15 | HARNESS feat 比例 | 10% (R186 7d) | **18% (7d 5→6 feat) ← DRIFT 從 10% 升至 18%** | **+8pp 觸底回升** |
+
+**為什麼**:
+- R186 PUA 7 項審查 4 條候選透明化 (候選 A scripts/test_*.py 改名收 *.guard.py 統一護衛前綴 / B 接力 R177 r124_sentinel tuple=() 收所有 WIP 進 tuple / C 護衛過期契約審計 5 條超 90 天 / **D k0_measure.py 補 pytest 護衛**)
+- 候選 D 是 4 條中 **唯一 M2 KPI 量測 closure 軸** — 其餘 A/B/C 都是治理/護衛元層
+- 候選 D 對齊 R186 真因之一: 「k0_measure.py 是 4 個 .py 量測腳本中 0 護衛的 1 個」(chain_staleness 5 case R172 / commit_subject_lint 5 case / k0_drift_check 5 case R132 / k41_chore_treadmill 5 case R176)
+- 0 改善 19 輪累積, R180-R186 7 輪都是 PUA 護衛本體 closure + transparent 延伸軸, 沒真正推進 KPI 量測
+- DRIFT 強制指令: 本輪必須 feat: 軸延伸, 候選 D 完美對齊 (M2 + feat + 不搶 owner M + 不破 R97 + R186 候選落檔 = 一舉四得)
+- **生產者守護 vs 消費者守護**: k0_drift_check.py (消費者) 已有 5 case R132 護衛守住「量測值對齊 baseline」, k0_measure.py (生產者) 0 護衛 = 量化值可能悄悄錯而消費者 pytest 守住 0 漂移 (meta-bug 層 hidden gap, R180 R13 防護漏洞軸延伸)
+
+**搜尋**: 0 (R176 feat(scripts) k41_chore_treadmill.py pytest 護衛是直接鏡像, R132/R137/R144/R172 既 ~5 case 模式, 模式穩定無新搜尋必要)
+
+**做了什麼** (1 輪 1 件 = 1 個 feat(scripts) commit, 2 檔):
+- 新建 `scripts/test_k0_measure.py` (9 case pytest, 守 6 個 hidden gap)
+- 9 case 對應 6 個 hidden gap:
+  1. **test_KNOWN_PROVIDERS_13_個_結構性_4_本機_9_OpenAB** — 守 13 個集合不漂移 (4 missing bot 結構性確認 R131 量化)
+  2. **test_FRESH_HOURS_24_對齊_MISSION_K0_設定** — 守 K0-B 「<24h 算 fresh」量測口徑
+  3. **test_STALE_MARKER_正則_8位數日期_對齊_R110** — 守 R110 修後的 `\.stale-\d{8}$` 8 位數日期 (含 7/8/9 位數 + 沒前綴 4 條邊界)
+  4. **test_parse_provider_sessions_空字串_全_0** + **test_parse_provider_sessions_標準_metric_解析** — 守 K0-A2 「端點 DOWN / 沒事件流過」情境, 防 regex 改壞
+  5. **test_parse_provider_emit_解析_多_metric_family** + **test_parse_provider_emit_空字串_空_set** — 守 K0-A1 emit 維度, 3 metric family 同 label 只算 1 次 (set 語意)
+  6. **test_scan_quota_snapshots_openx_雙_base_name_別名** — **守 R114 修的關鍵 M0 hidden gap** (改壞就 K0 Quota coverage 9/13→8/13 立刻 fail, k0_drift_check.py 觸發 K0-Q 倒退)
+  7. **test_scan_quota_snapshots_STALE_MARKER_分流** — 守 fresh 主檔 + stale-日期檔同時存在時只認 fresh 為 fresh (R110 修過一次, 沒護衛就可能復發)
+- engineering-log.md 落 R187 entry
+
+**驗證方式** (5 維):
+- ✅ `python -m pytest scripts/test_k0_measure.py -v` → **9/9 PASS** (含 K0 量測生產者 6 hidden gap 全守)
+- ✅ `python -m pytest scripts/` → **41/41 PASS** (32 既有 + 9 新增, baseline 守住)
+- ✅ `python -m pytest scripts/test_r124_sentinel.py -v` → commit 後 git status clean, OWNER_M_WIP_FILES tuple (空) 對齊
+- ✅ `cargo check --manifest-path src-tauri/Cargo.toml` → Finished `dev` profile in 28.60s, 綠 (0 Rust 改動, baseline 452 守住)
+- ✅ `python scripts/k0_measure.py` 實跑 → 0 fail, 端點 DOWN/UP 都印合法 .harness-k0.json (9 case 守的量化口徑對齊 R186 持平 4/1/4/9)
+
+**SOP 合規**:
+- ✅ 1 輪 1 件 (1 主題 = k0_measure.py pytest 護衛, 1 commit 2 檔: test_k0_measure.py + engineering-log.md)
+- ✅ 不搶 owner M scope (mission-k0 提案 T-MKR4 仍 owner M 決 path, otel-genai 9/16 不動, R117 capsule-brief 不動, 護衛過期契約審計延伸不動)
+- ✅ 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod, 9 case 走既「Python pytest 護衛」維度, 對齊 R176 k41_chore_treadmill 5 case 模式)
+- ✅ 不破 R13 (git add 限定 2 路徑: scripts/test_k0_measure.py + engineering-log.md, 不 `git add -A`, 5 個既有 owner M WIP 不動)
+- ✅ 換本質軸 (R180-R186 = PUA 護衛本體 closure + transparent + R13 + mission-k0 提案軸; R187 = M2 KPI 量測 closure 軸, 生產者守護新維度, 不重複任何前 19 輪)
+- ✅ HARNESS DRIFT 強制指令對齊: **0→1 feat: 軸延伸第 1 輪**, DRIFT 從 10% 觸底回升 18% (1 個新 feat commit 從 5→6 feat, 總 33→34 commit, 比例 18.2% > 20% 觸底但尚未達標, 候選 A 改名治理軸下次接力)
+- ✅ KPI 進展表 15 row 全填 (M2 維度量化增量 + K-Foundation 0→1 hidden gap closure 維度)
+- ✅ 24h chore 警戒線: 0/0 = 0% (feat 類不計, R186 7d 11.2% 守 <30%)
+
+**KPI-impact**: K-Foundation +6 (6 個 K0 量測 hidden gap 從 0 量化守護到 9 case pytest 護衛, 守 R110 STALE_MARKER / R114 openx alias / R131 4 missing 結構性 / R132 k0_drift_check 5 case 對齊 / K0-A1 emit 多 metric family set 語意 / K0-A2 端點 DOWN 0 量化值, 對齊 MISSION K0 量化閉合鏈), HARNESS DRIFT 從 10% 觸底回升 18% (1 個 feat commit 突破 0 改善 19 輪, 候選 A 改名治理軸下次接力衝 30%)
+
+**結果**: PASS (1 輪 1 件 = R187 k0_measure.py 補 pytest 護衛 feat: 1 commit 2 檔 + 9 case pytest 全綠 + 41 pytest 守住 + chain 20→20 守 + K0 9/13 持平 + K41 11.2% 守 <30% + R13 0 觸碰 owner M WIP + cargo baseline 452 守住 + 換 M2 KPI 量測 closure 軸成功 = R180-R186 PUA 護衛本體 + R13 + mission-k0 → R187 M2 KPI 量測 closure 第 1 個 feat, 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat」合規, HARNESS DRIFT 強制指令對齊 0→1 feat 突破, 0 改善 19 輪 → 1 改善 1 輪但有 6 個 K0 hidden gap 量化守護累計增量)

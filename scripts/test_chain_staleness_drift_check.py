@@ -14,6 +14,19 @@ R194 落地。鏡像 R132 test_k0_drift_check.py + R193 test_k40_drift_check.py 
      overall_pass True→False) → exit 1 FAIL
   4. 缺欄位 → exit 2 (解析失敗)
   5. JSON 損壞 → exit 2 (解析失敗)
+
+R206 內部函式 hidden gap 守護延伸 4 case, 鏡像 R204 k0_drift_check 內部函式
+hidden gap 模式, 換 closure 軸標的 (kpi 量測軸 → sensor 補鏈路軸) = 換本質軸
+= R204 transferability validation 第 2 對象. 4 case 守 4 個 chain_staleness
+_drift_check.py 內部函式 hidden gap:
+  6. load_current 處理 list-typed JSON 結構 → 拋 TypeError (line 90-91
+     假設 data 是 dict, 未驗 type 隱含 hidden gap)
+  7. load_current 處理字串型別值 → int() / bool() 自動 type coercion
+     (line 92-96 隱含 type coercion 路徑)
+  8. compute_drift current 缺 key → 拋 KeyError (line 126-129 顯式 raise,
+     跟 R204 k0_drift_check 預設 0 不同, 守 fail-closed 行為不退化)
+  9. render_report 空 results list → 印 header + separator 不 crash
+     (line 151 for r in results 空 list 路徑, 守 report 結構穩定)
 """
 import json
 import subprocess
@@ -21,6 +34,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+import chain_staleness_drift_check as _cs_dc
 
 SCRIPT = Path(__file__).resolve().parent / "chain_staleness_drift_check.py"
 CHAIN_STALE_JSON = (
@@ -162,3 +177,106 @@ def test_JSON_損壞_回退碼_2(tmp_chain_json):
         f"預期 exit=2, 實際 exit={r.returncode}\n{r.stdout}{r.stderr}"
     )
     assert "解析失敗" in r.stderr or "Expecting" in r.stderr or "delimiter" in r.stderr
+
+
+# ---------- R206 內部函式 hidden gap 守護延伸 4 case ----------
+# 鏡像 R204 test_k0_drift_check 內部函式 hidden gap 模式, 換 closure 軸標的
+# (kpi 量測軸 → sensor 補鏈路軸) = 換本質軸, R204 transferability validation
+# 第 2 對象. 4 個 chain_staleness_drift_check.py 內部函式 hidden gap:
+#   - load_current: JSON list 結構 / 字串型別 type coercion
+#   - compute_drift: current 缺 key 拋 KeyError (跟 R204 k0 預設 0 不同)
+#   - render_report: 空 list 路徑
+
+
+def test_load_current_JSON_結構是_list_不是_dict_拋_TypeError(tmp_path):
+    """load_current() 處理 list-typed JSON 結構 → TypeError (fail-fast)
+
+    M0 級 hidden gap 守護: 防 chain_staleness.py 改 .harness-chain-staleness.json
+    schema 從 dict 變 list (e.g. 改成 provider list 而非 dict map) 而
+    chain_staleness_drift_check.py load_current 假設 data 是 dict 觸發
+    TypeError 而不是靜默回 0 / 空 dict 假 PASS。
+    """
+    bad = tmp_path / ".harness-chain-staleness.json"
+    bad.write_text(json.dumps([1, 2, 3]), encoding="utf-8")  # list 不是 dict
+    with pytest.raises(TypeError) as exc_info:
+        _cs_dc.load_current(bad)
+    # Python list 用 str index 必拋 TypeError: list indices must be integers
+    assert "list" in str(exc_info.value) or "indices" in str(exc_info.value), (
+        f"預期 TypeError 提到 list indices, 實際: {exc_info.value!r}"
+    )
+
+
+def test_load_current_值是字串_自動轉_int_與_bool_5_維度():
+    """load_current() 值是字串 → int() / bool() 自動 type coercion (守護 5 維度)
+
+    守住 load_current() 內 int(data[...]) / bool(data[...]) 的 type coercion
+    邏輯。防有人改 chain_staleness.py 量化輸出從 int/bool 改 str (e.g. JSON
+    序列化用 ensure_ascii=False 漏 type 標記 / 寫入中斷掉型別) 而
+    load_current 因 type error crash 或悄悄回錯值。
+    """
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        payload = {
+            "file_count": "16",       # 字串 "16" → int 16
+            "total_test_fn": "471",   # 字串 "471" → int 471
+            "stale_count": "0",       # 字串 "0" → int 0
+            "chain_count_min": "20",  # 字串 "20" → int 20
+            "overall_pass": "true",   # 字串 "true" → bool True
+        }
+        f.write(json.dumps(payload))
+        f.flush()
+        cur = _cs_dc.load_current(Path(f.name))
+    assert cur == {
+        "file_count": 16,
+        "total_test_fn": 471,
+        "stale_count": 0,
+        "chain_count_min": 20,
+        "overall_pass": True,
+    }, f"type coercion 後 5 維度應對齊 R172 baseline, 實際: {cur}"
+
+
+def test_compute_drift_current_缺_chain_count_min_key_拋_KeyError():
+    """compute_drift() current 缺 chain_count_min → 拋 KeyError (fail-closed)
+
+    守住 M0 級 hidden gap: 防止 chain_staleness.py schema 改時 (漏寫
+    chain_count_min 維度) compute_drift 假 PASS (R204 k0_drift_check 用
+    .get(key, 0) 預設 0 行為, 但 chain_staleness_drift_check 用 .get(key) +
+    raise KeyError, 守 fail-closed 行為不退化, 不 silent 放行)。
+
+    對齊 R188 k0_measure / R195 chain_staleness / R196 K40 / R198 K0 endpoint
+    live / R201 K30 P95 / R202 K41 drift / R203 k0_target_baseline_check /
+    R204 k0_drift_check 內部函式 hidden gap 守護模式: 當前值缺漏 → fail-closed
+    而非 silent 放行。
+    """
+    current = {
+        "file_count": 16,
+        "total_test_fn": 471,
+        "stale_count": 0,
+        # chain_count_min 缺 (模擬 schema 漂移 / chain_staleness.py 量化少算 1 維)
+        "overall_pass": True,
+    }
+    with pytest.raises(KeyError) as exc_info:
+        _cs_dc.compute_drift(current)
+    assert "chain_count_min" in str(exc_info.value), (
+        f"預期 KeyError 提到 chain_count_min, 實際: {exc_info.value!r}"
+    )
+
+
+def test_render_report_空_results_list_僅印_header_不_crash():
+    """render_report([]) → 印 header + separator 沒 row (report 結構穩定)
+
+    守住 M0 級 hidden gap: 空 results list 仍輸出可讀 header (KPI / baseline /
+    current / delta / status 標頭 + 72-char separator), 不 crash 不印 None。
+
+    對齊 R188 6→9 / R195 8→11 / R204 k0_drift_check 內部函式 hidden gap
+    邊界守護模式。
+    """
+    report = _cs_dc.render_report([])
+    lines = report.splitlines()
+    # 應有 2 行 (header + separator), 沒 data row
+    assert len(lines) == 2, f"空 list 應僅 2 行 (header + separator), 實際 {len(lines)} 行:\n{report}"
+    assert "KPI" in lines[0], f"header 應含 'KPI' 欄名, 實際: {lines[0]!r}"
+    assert "status" in lines[0], f"header 應含 'status' 欄名, 實際: {lines[0]!r}"
+    assert lines[1].startswith("-" * 10), f"第 2 行應為 separator, 實際: {lines[1]!r}"

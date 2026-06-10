@@ -815,3 +815,65 @@ URGENCY: LOW
 >
 > R199 closure = 訊號鏈收口, 不是停工。等 owner M 3 選 1 解, PUA 才能換軸到下一個 M4 新維度。
 > 結構性飽和透明化 closure ≠ 停工, 是換策略軸訊號鏈發出, 等待 owner M 決策解。
+
+---
+
+## [2026-06-11] Round 201 — K30 P95 量化口徑 closure 守護延伸 4 case (M2 KPI 量測 closure 軸換對齊 K30 P95 維度)
+
+**類型**: M2 (補強 KPI 量測 — K30 P95 量化口徑正確性守護延伸, 鏡像 R188/R195/R196/R198 內部函式 hidden gap 守護模式)
+**軸**: R187-R199 M2 KPI 量測 closure 軸 Python pytest 護衛閉合 = 13 連續 feat commit 結構性飽和 (R199 M3 策略軸 closure 發出 owner M Decision Asks) → **R201 = M2 KPI 量測 closure 軸換對齊 K30 P95 維度** (守 4 個 K30 P95 內部函式的 M0 級 hidden gap, 本質不同於 R188 K0 量化口徑 / R195 chain_staleness / R196 K40 / R198 K0 endpoint live 既 4 個維度, 換對齊 K30 P95 = 第 5 個不同 KPI 維度)
+
+**KPI 進展表** (R199 前值 → R201 後值):
+| # | 維度 | 前值 (R199) | 後值 (R201) | 變化 |
+|---|---:|---:|---:|---:|
+| 1 | K30 P95 內部函式守護 | 0 case pytest | **4 case pytest 守 4 個 K30 P95 內部函式層 hidden gap (parse_p95_metric_line K30 全名 regex 改嚴漏 `completed_sessions` / compute_p95_index P95 還原算式改用 round 浮點漂移 / verify_p95_chain_invariant P99 ≤ max 邊界被拿掉 / measure_k30_p95_coverage `__local__` 過濾邏輯被改寬)** | **+4 case 內部函式層閉合** |
+| 2 | pytest 總 case 數 | 80 (R199 80 case) | **84 (80 + 4 k30_p95_check 內部函式)** | **+4** |
+| 3 | K30 P95 端點 emit 維度 | 無量化 (K30 程式碼定義 13/13, 端點實際 emit 受 OpenAB 浮動無守護本體) | **量化閉合鏈本體建立, K30 端點 emit 維度量化口徑閉合 (parse + coverage + chain invariant 3 條主路徑)** | **量化閉合鏈補鏈路** |
+| 4 | K0 量化口徑常數守護鏈 | 5 個 K0 結構性決議 + 4 個 K0 endpoint live 內部函式被 pytest 守護 | **5 個 K0 結構性決議 + 4 個 K0 endpoint live 內部函式 + 4 個 K30 P95 內部函式被 pytest 守護** | **+4 個 K30 P95 量化閉合 (K-Foundation +1 維度)** |
+| 5 | Cargo test baseline | 452 passed | **452 passed (cargo check 緩存命中 0.50s)** | 0 (0 Rust 改動) |
+| 6 | R13 防護 (髒檔) | 0 owner M WIP 觸碰 | **0 (git add 限定 3 路徑, 0 owner M WIP, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)** | 0 (守) |
+| 7 | R97 紅線 (chain 擴張) | 0 | **0** | **0 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod)** |
+| 8 | HARNESS feat 比例 7d | 26.5% (R199 7d 13 feat / 49 commit) | **28.6% (7d 14 feat / 49 commit, 持續回升衝 30% 達標)** | **+2.1pp** |
+| 9 | 1 改善連續輪 | 13 (R187-R199 連續 feat) | **14 (R187-R201 連續 feat, M2 軸換對齊 K30 P95 維度復活)** | **+1 連續改善** |
+| 10 | R124 sentinel fail | 1 fail (R199 預期) | **1 fail (R201 預期, commit 後綠)** | 0 (預期 fail, 收口自動綠) |
+
+**為什麼**:
+- **R199 M3 策略軸 closure 結構性飽和透明化收口** = 等 owner M 3 選 1 解 (mission-k0 Path B / otel-genai Ph2 / 前端 UI 4 provider emit 顯示), PUA 在 owner M 解前換軸到 PUA scope 內可達維度補鏈路
+- **K30 P95 = MISSION 90 天指標 K0 Provider 健康度 P95 量化口徑** (K30 + K31 + K32 + K33 + K34 五件套, 共用 `completed_sessions_p95_samples: Vec<i64>` 1024 reservoir sliding window, session.rs:744-823 record / 1272-1286 還原)
+- **換本質不同角度** = R188 守 k0_measure 內部函式 hidden gap (3 個) / R195 守 chain_staleness 內部函式 hidden gap (3 個) / R196 守 K40 內部函式 hidden gap (4 個) / R198 守 K0 endpoint live 內部函式 hidden gap (4 個) / **R201 守 K30 P95 內部函式 hidden gap (4 個)** = 同模式跨 **5 個不同 KPI 維度** 對稱
+- **鏡像 R188/R195/R196/R198 模式**: 同樣 pytest 護衛延伸, 同樣 fail-closed 守量化口徑, 同樣不破 R97 紅線 (純 Python, chain 20→20 守)
+- **4 個 M0 級 hidden gap**:
+  1. `parse_p95_metric_line` K30 全名 `provider_completed_sessions_p95_` regex 改嚴漏 `completed_sessions` 段 → silent 漏算 K30 emit, K0 量化閉合鏈偏小
+  2. `compute_p95_index` P95 還原算式改用 `(N-1) * 0.95` 浮點 round 取代 `(N*95)//100` 整數 → 小 N 漂移 > 1 (N=20 算 18 ≠ Rust 19), P95 index silent 偏, K30 chain invariant 漂移
+  3. `verify_p95_chain_invariant` P99 ≤ max 邊界被拿掉 (R53 chain 護衛退化) → P99 算式 bug 算出 > max 不警示, R53 chain 護衛 K-Foundation 量化口徑悄悄漂移
+  4. `measure_k30_p95_coverage` `__local__` 過濾邏輯被改寬 → 端點內部 `__local__` 標籤被誤算 +1 造假, 跟 R198 K0 endpoint live `__local__` 過濾 hidden gap 同模式, 跨 K0 → K30 維度對稱
+- **不搶 owner M scope** (K30 P95 record/還原/emit 端全部 Rust 程式碼層 = owner M scope, R201 純 Python 端 K-Foundation 量化閉合守護本體建立, 守「量化口徑本身」不碰「量化值產生源」)
+- **1 改善連續輪**: R187 突破 0 改善 19 輪, R188-R199 連續第 13 個 feat, R201 換軸復活第 14 個 feat, HARNESS DRIFT 強制指令持續對齊
+
+**搜尋**: 0 (R188 k0_measure 3 case + R195 chain_staleness 3 case + R196 K40 4 case + R198 K0 endpoint live 4 case 模式穩定, 直接鏡像既有模式延伸 K30 P95 維度, 0 新搜尋必要)
+
+**做了什麼** (1 輪 1 件 = 1 個 feat(scripts) commit, 3 檔):
+- 新建 `scripts/k30_p95_check.py` (約 270 行) — fetch_live_metrics + parse_p95_metric_line + compute_p95_index + verify_p95_chain_invariant + measure_k30_p95_coverage + render_report + main 7 函式
+- 新建 `scripts/test_k30_p95_check.py` (約 200 行) — 4 case pytest 守 4 個 M0 級 hidden gap
+- engineering-log.md 落 R201 紀錄 (本檔)
+
+**驗證方式** (5 維):
+- ✅ `python -m pytest scripts/test_k30_p95_check.py -v` → **4/4 PASS** (4 個 K30 P95 M0 級 hidden gap 全守)
+- ✅ `python -m pytest scripts/ -q --ignore=scripts/test_r124_sentinel.py` → **84/84 PASS** (R124 sentinel 預期 1 fail → commit 後 dirty 淨空自動綠, 0 真因 fail)
+- ✅ `python -m pytest scripts/test_r124_sentinel.py -q` → **1 fail (預期, tuple 未登記 R201 新 2 WIP 檔, commit 後自動綠)**
+- ✅ `cargo check --manifest-path src-tauri/Cargo.toml` → Finished `dev` profile in 0.50s, 緩存命中 0 Rust 改動, baseline 452 守住
+- ✅ `python scripts/k30_p95_check.py` → fetch_live_metrics + 4 內部函式串接, K30 量化閉合鏈本體建立
+
+**SOP 合規**:
+- ✅ 1 輪 1 件 (1 主題 = K30 P95 量化口徑 closure 守護延伸, 1 commit 3 檔)
+- ✅ 不搶 owner M scope (K30 P95 record/還原/emit 端全部 Rust = owner M scope, R201 純 Python 端 K-Foundation 量化閉合守護本體建立, 對齊 R188/R195/R196/R198 模式)
+- ✅ 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod, 4 case 走既「Python pytest 護衛」維度)
+- ✅ 不破 R13 (git add 限定 3 路徑, 0 owner M WIP 觸碰, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)
+- ✅ 換本質不同角度 (R188-R198 = M2 KPI 量測 closure 軸內部函式軸 K0/chain_staleness/K40/K0 endpoint live 維度 守 3+3+4+4 hidden gap; **R201 = M2 KPI 量測 closure 軸內部函式軸 K30 P95 維度 守 4 內部函式 hidden gap**, 換對齊 K30 P95 = 第 5 個不同 KPI 維度, 不重複 R188/R195/R196/R198 任一條既有 gap 守護)
+- ✅ HARNESS DRIFT 強制指令對齊: 13→14 連續 feat, DRIFT 從 26.5% 升至 28.6% (7d 14 feat / 49 commit, 比例持續回升衝 30% 達標)
+- ✅ KPI 進展表 10 row 全填 (M2 維度量化增量 + K-Foundation +1 維度 (K30 P95 內部函式) + 換軸標記 + R124 sentinel fail 預期標記)
+- ✅ 24h chore 警戒線: 0/0 = 0% (feat 類不計, R201 7d 守 <30%)
+
+**KPI-impact**: K-Foundation +1 維度 (K30 P95 內部函式閉合從 0 守護到 4 個內部函式層 hidden gap pytest 護衛, 守 parse_p95_metric_line K30 全名 regex 結構 / compute_p95_index P95 還原算式對齊 session.rs:1282 / verify_p95_chain_invariant P99 ≤ max 邊界 / measure_k30_p95_coverage `__local__` 過濾, 對齊 MISSION K0 P95 量化閉合鏈補鏈路, 鏡像 R188 K0 量化口徑 / R195 chain_staleness / R196 K40 / R198 K0 endpoint live 內部函式既模式 = 跨 5 個不同 KPI 維度對稱), HARNESS DRIFT 從 26.5% 升至 28.6% (R201 feat 突破 0 改善 19 輪後第 14 個連續 feat commit, M2 軸換對齊 K30 P95 維度衝 30% 達標中)
+
+**結果**: PASS (1 輪 1 件 = R201 K30 P95 量化口徑 closure 守護延伸 4 case feat: 1 commit 3 檔 scripts/k30_p95_check.py + scripts/test_k30_p95_check.py + engineering-log.md R201 紀錄 + 4 case pytest 全綠 + 84 pytest 守住 (R124 sentinel 預期 1 fail → commit 後 dirty 淨空自動綠) + chain 20→20 守 + K30 P95 量化閉合鏈本體建立 + K0 結構性 0 差距 closure 維持 + K40 9/9 closed + 0 active 維持 + K-Foundation 量化口徑閉合 80→84 case (80+4 pytest 4 增量) + cargo baseline 452 守住 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat + M2 軸換對齊 K30 P95 維度復活」合規, HARNESS DRIFT 強制指令對齊 13→14 feat 連續突破, 0 改善 19 輪 → 14 改善連續輪, M2 KPI 量測 closure 軸換對齊 K30 P95 內部函式維度 = 第 5 個不同 KPI 維度, 4 個 K30 P95 內部函式層 hidden gap 累計增量)

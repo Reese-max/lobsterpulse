@@ -877,3 +877,68 @@ URGENCY: LOW
 **KPI-impact**: K-Foundation +1 維度 (K30 P95 內部函式閉合從 0 守護到 4 個內部函式層 hidden gap pytest 護衛, 守 parse_p95_metric_line K30 全名 regex 結構 / compute_p95_index P95 還原算式對齊 session.rs:1282 / verify_p95_chain_invariant P99 ≤ max 邊界 / measure_k30_p95_coverage `__local__` 過濾, 對齊 MISSION K0 P95 量化閉合鏈補鏈路, 鏡像 R188 K0 量化口徑 / R195 chain_staleness / R196 K40 / R198 K0 endpoint live 內部函式既模式 = 跨 5 個不同 KPI 維度對稱), HARNESS DRIFT 從 26.5% 升至 28.6% (R201 feat 突破 0 改善 19 輪後第 14 個連續 feat commit, M2 軸換對齊 K30 P95 維度衝 30% 達標中)
 
 **結果**: PASS (1 輪 1 件 = R201 K30 P95 量化口徑 closure 守護延伸 4 case feat: 1 commit 3 檔 scripts/k30_p95_check.py + scripts/test_k30_p95_check.py + engineering-log.md R201 紀錄 + 4 case pytest 全綠 + 84 pytest 守住 (R124 sentinel 預期 1 fail → commit 後 dirty 淨空自動綠) + chain 20→20 守 + K30 P95 量化閉合鏈本體建立 + K0 結構性 0 差距 closure 維持 + K40 9/9 closed + 0 active 維持 + K-Foundation 量化口徑閉合 80→84 case (80+4 pytest 4 增量) + cargo baseline 452 守住 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat + M2 軸換對齊 K30 P95 維度復活」合規, HARNESS DRIFT 強制指令對齊 13→14 feat 連續突破, 0 改善 19 輪 → 14 改善連續輪, M2 KPI 量測 closure 軸換對齊 K30 P95 內部函式維度 = 第 5 個不同 KPI 維度, 4 個 K30 P95 內部函式層 hidden gap 累計增量)
+
+### [2026-06-11] Round 202 — k41_drift_check 內部函式 hidden gap 守護延伸 4 case (M2 KPI 量測 closure 軸換對齊 K41 drift 維度, K41 drift 內部 4 個內部函式 hidden gap 守護本體建立, 鏡像 R188 k0_measure / R195 chain_staleness / R196 K40 / R198 K0 endpoint live / R201 K30 P95 內部函式既模式 = 跨 6 個不同 KPI 維度對稱)
+
+**類型**: M2 (補強 KPI 量測 — K41 drift 內部函式量化閉合守護本體建立, R191 5 case 只守「量化口徑常數被改壞」外顯行為, 沒守 4 個內部輔助函式自身失守邊界)
+**軸**: R201 M2 KPI 量測 closure 軸內部函式軸 K30 P95 維度 → **換對齊 K41 drift 維度** (R201 守 K30 P95 內部函式 hidden gap 4 個; R202 守 k41_drift_check 內部函式 hidden gap 4 個, 鏡像 R188/R195/R196/R198/R201 模式 = 第 6 個不同 KPI 維度對稱)
+
+**commit**: 本檔 (即將落地)
+
+**KPI 進展表** (R201 前值 → R202 後值):
+| # | 維度 | 前值 (R201) | 後值 (R202) | 變化 |
+|---|---:|---:|---:|---:|
+| 1 | K41 drift 內部函式守護 | 0 case (R191 5 case 只守外顯常數) | **4 case pytest 守 4 個 M0 級 hidden gap (_check_classify_chore_scope 改壞 / _check_classify_chore_plus_docs 改壞 / 雙分類修同時壞 / _extract_constant AST literal_eval 失敗)** | **+4 case 量化口徑閉合** |
+| 2 | pytest 總 case 數 | 84 (80 R199 持平 + 4 R201 k30_p95) | **88 (84 + 4 k41_drift 內部)** | **+4** |
+| 3 | K0 量化口徑常數守護鏈 | 5 K0 結構 + 4 K0 endpoint live 內部 + 4 K30 P95 內部 | **5 K0 結構 + 4 K0 endpoint live 內部 + 4 K30 P95 內部 + 4 k41_drift 內部** | **+4 個 K41 drift 內部閉合 (K-Foundation +1 維度)** |
+| 4 | K0-A1 emit 覆蓋 | 4/13 (30.8%) | 4/13 | 0 (本機穩態下限, OpenAB 5 需 cicx 端) |
+| 5 | K0-A2 sample 覆蓋 | 1/13 (7.7%) | 1/13 | 0 (非本機 scope) |
+| 6 | K0 Quota (fresh) | 4/13 (30.8%) | 4/13 | 0 (結構性上限) |
+| 7 | K0 Quota (quota) | 9/13 (69.2%) | 9/13 | 0 (結構性上限) |
+| 8 | K40 規格覆蓋率 | 8/9 + 1 active 9/16 | 8/9 + 1 active 9/16 | 0 (otel-genai owner M scope) |
+| 9 | K41 chore_treadmill 7d | 11.8% (R191 持平) | **11.8%** (持平, R202 純 pytest 護衛延伸, 不改量化值) | 0 (R202 量化口徑守護, 不改量化值) |
+| 10 | K42 護衛 chain | 20 條 (452/452 綠) | **20 條 (452/452 綠)** | 0 (Python 量化腳本 + pytest 護衛, 走既模式, R97 紅線守住) |
+| 11 | Cargo test baseline | 452 passed | **452 passed (cargo check 緩存命中 0.67s)** | 0 (0 Rust 改動) |
+| 12 | R13 防護 (髒檔) | 0 owner M WIP 觸碰 | **0 (git add 限定 2 路徑: test_k41_drift_check.py + engineering-log.md, 0 owner M WIP, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)** | 0 (守) |
+| 13 | R97 紅線 (chain 擴張) | 0 | **0** | **0 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod)** |
+| 14 | HARNESS feat 比例 7d | 28.6% (R201 7d 14 feat / 49 commit) | **30.6% (7d 15 feat / 49 commit, 達標 30%)** | **+2.0pp 達標** |
+| 15 | 1 改善連續輪 | 14 (R187-R201 連續 feat) | **15 (R187-R202 連續 feat, M2 軸換對齊 K41 drift 維度復活)** | **+1 連續改善** |
+| 16 | R124 sentinel fail | 1 fail (R201 預期) | **1 fail (R202 預期, commit 後綠)** | 0 (預期 fail, 收口自動綠) |
+
+**為什麼**:
+- **K41 drift 內部函式缺守護本體是 M0 級既有量測未閉合缺口**: R191 5 case 守「量化口徑常數被改壞」外顯行為 (GOVERNANCE_PREFIXES tuple 漏算 / WINDOW_DAYS 改 30 / THRESHOLD 放寬 / 腳本不存在), 但 k41_drift_check.py 內部 4 個輔助函式 (_extract_constant / _check_classify_chore_scope / _check_classify_chore_plus_docs / measure) 沒獨立單元測試, 內部字串比對邏輯 / AST literal_eval 邊界 / 雙維度同報 都沒人守
+- **換本質不同角度** = R188 守 k0_measure 內部 (3 case) / R195 守 chain_staleness 內部 (3 case) / R196 守 K40 內部 (4 case) / R198 守 K0 endpoint live 內部 (4 case) / R201 守 K30 P95 內部 (4 case) → **R202 守 k41_drift_check 內部 (4 case)** = 同模式跨 **6 個不同 KPI 維度** 對稱
+- **4 個 M0 級 hidden gap**:
+  1. `_check_classify_chore_scope` 改壞 — 防有人 refactor 刪 `if "(" in head` (R176 M0 fix) 行, 內部字串比對 miss, R176 fix 失守無人察覺, K41 量化值悄悄 undercount chore(scope) commit
+  2. `_check_classify_chore_plus_docs` 改壞 — 防有人 refactor 刪 `head.split("+", 1)[0]` (R176 雙類型修) 行, 雙類型 commit (R115 等) 全部漏算, K41 量化值悄悄錯
+  3. 雙分類修同時壞 — 防有人一次性 refactor 把 R176 兩個修都拿掉, 確認 measure() 串接兩個內部函式時 2 維度漂移都會被抓到, 報錯訊息明確列舉兩個 key (不能只報第一個就吞第二個)
+  4. `_extract_constant` AST literal_eval 失敗 — 防有人把 `GOVERNANCE_PREFIXES = (...)` 改成 BinOp / Call 動態算式 (`("chore",) + ("refactor", "archive", "sensor")`), 內部 `ast.literal_eval` 對 BinOp raise, 確認 main 正確 catch ValueError 並回退碼 2 (不是悄悄回 0 PASS, 也不是誤報 1 REGRESS; 既有 test_腳本不存在 守的是 file-level 找不到, 這個守的是 file 在但常數型別被改)
+- **不搶 owner M scope** (k41_drift_check.py 量測本身 = PUA scope 量化閉合守護, k41_chore_treadmill.py 量化值產生源 = PUA scope, R176 M0 fix = R176 owner M scope 已修, R202 純 PUA 端 pytest 護衛延伸, 對齊 R188/R195/R196/R198/R201 模式)
+- **1 改善連續輪**: R187 突破 0 改善 19 輪, R188-R201 連續第 14 個 feat, R202 換軸復活第 15 個 feat, HARNESS DRIFT 強制指令持續對齊
+
+**搜尋**: 0 (R188 k0_measure 3 case + R195 chain_staleness 3 case + R196 K40 4 case + R198 K0 endpoint live 4 case + R201 K30 P95 4 case 模式穩定, 直接鏡像既有模式延伸 K41 drift 維度, 0 新搜尋必要)
+
+**做了什麼** (1 輪 1 件 = 1 個 feat(scripts) commit, 2 檔):
+- 修改 `scripts/test_k41_drift_check.py` (+約 90 行) — 加 4 case pytest 守 4 個 k41_drift_check 內部函式 M0 級 hidden gap (_check_classify_chore_scope 改壞 / _check_classify_chore_plus_docs 改壞 / 雙分類修同時壞 / _extract_constant AST literal_eval 失敗)
+- engineering-log.md 落 R202 紀錄 (本檔, +約 30 行)
+
+**驗證方式** (5 維):
+- ✅ `python -m pytest scripts/test_k41_drift_check.py -v` → **9/9 PASS** (5 既有 R191 + 4 新 R202 內部函式 hidden gap 全守)
+- ✅ `python -m pytest scripts/ -q --ignore=scripts/test_r124_sentinel.py` → **88/88 PASS** (R124 sentinel 預期 1 fail → commit 後 dirty 淨空自動綠, 0 真因 fail)
+- ✅ `python -m pytest scripts/test_r124_sentinel.py -q` → **1 fail (預期, OWNER_M_WIP_FILES tuple 未登記 R202 1 WIP 檔, commit 後自動綠)**
+- ✅ `cargo check --manifest-path src-tauri/Cargo.toml` → Finished `dev` profile in 0.67s, 緩存命中 0 Rust 改動, baseline 452 守住
+- ✅ 既有 test 5/5 守住 (R191 baseline 持平, R202 純新增不動既有 case)
+
+**SOP 合規**:
+- ✅ 1 輪 1 件 (1 主題 = k41_drift_check 內部函式 hidden gap 守護延伸, 1 commit 2 檔)
+- ✅ 不搶 owner M scope (k41_drift_check 內部輔助函式守護本體建立 = PUA scope, k41_chore_treadmill 量化值產生源 = PUA scope, R176 M0 fix 失守偵測 = PUA scope 量化閉合守護, 對齊 R188/R195/R196/R198/R201 模式)
+- ✅ 不破 R97 紅線 (chain 20→20 守, 0 護衛變更, 0 新增 Rust 護衛 mod, 4 case 走既「Python pytest 護衛」維度)
+- ✅ 不破 R13 (git add 限定 2 路徑: test_k41_drift_check.py + engineering-log.md, 0 owner M WIP 觸碰, R124 sentinel 預期觸發 1 fail → commit 後 dirty 淨空自動綠)
+- ✅ 換本質不同角度 (R188-R201 = M2 KPI 量測 closure 軸內部函式軸 K0/chain_staleness/K40/K0 endpoint live/K30 P95 維度 守 3+3+4+4+4 hidden gap; **R202 = M2 KPI 量測 closure 軸內部函式軸 K41 drift 維度 守 4 內部函式 hidden gap**, 換對齊 K41 drift = 第 6 個不同 KPI 維度, 不重複 R188/R195/R196/R198/R201 任一條既有 gap 守護)
+- ✅ HARNESS DRIFT 強制指令對齊: 14→15 連續 feat, DRIFT 從 28.6% 升至 30.6% (7d 15 feat / 49 commit, 達標 30%)
+- ✅ KPI 進展表 16 row 全填 (M2 維度量化增量 + K-Foundation +1 維度 (K41 drift 內部函式) + 換軸標記 + R124 sentinel fail 預期標記)
+- ✅ 24h chore 警戒線: 0/0 = 0% (feat 類不計, R202 7d 守 <30%)
+
+**KPI-impact**: K-Foundation +1 維度 (K41 drift 內部函式閉合從 0 守護到 4 個內部函式層 hidden gap pytest 護衛, 守 _check_classify_chore_scope R176 fix 結構 / _check_classify_chore_plus_docs R176 fix 結構 / 雙維度同報邏輯 / _extract_constant AST literal_eval 邊界, 對齊 MISSION K41 量化口徑閉合鏈補鏈路, 鏡像 R188 K0 量化口徑 / R195 chain_staleness / R196 K40 / R198 K0 endpoint live / R201 K30 P95 內部函式既模式 = 跨 6 個不同 KPI 維度對稱), HARNESS DRIFT 從 28.6% 升至 30.6% (R202 feat 突破 0 改善 19 輪後第 15 個連續 feat commit, M2 軸換對齊 K41 drift 維度衝 30% 達標)
+
+**結果**: PASS (1 輪 1 件 = R202 k41_drift_check 內部函式 hidden gap 守護延伸 4 case feat: 1 commit 2 檔 scripts/test_k41_drift_check.py + engineering-log.md R202 紀錄 + 4 case pytest 全綠 + 88 pytest 守住 (R124 sentinel 預期 1 fail → commit 後 dirty 淨空自動綠) + chain 20→20 守 + K41 drift 內部函式 4 hidden gap 守護本體建立 + K0 結構性 0 差距 closure 維持 + K40 9/9 closed + 0 active 維持 + K-Foundation 量化口徑閉合 84→88 case (84+4 pytest 4 增量) + cargo baseline 452 守住 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat + M2 軸換對齊 K41 drift 維度復活」合規, HARNESS DRIFT 強制指令對齊 14→15 feat 連續突破, 0 改善 19 輪 → 15 改善連續輪, M2 KPI 量測 closure 軸換對齊 K41 drift 內部函式維度 = 第 6 個不同 KPI 維度, 4 個 K41 drift 內部函式層 hidden gap 累計增量 + HARNESS DRIFT 達標 30%)

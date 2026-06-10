@@ -75,24 +75,16 @@ R139 audit (2026-06-06) 結構性審計 + scope 估算:
 
 ## Capabilities
 
-本 change 新增 1 個 capability, 對應 1 個 spec 檔:
-
-### `otel-genai-runtime-emit-2026-q3`
-
-- **OGRE-R1: OpenTelemetry SDK initialization contract** — OTel SDK 必須
-  在 Tauri app 啟動時初始化, 讀 `OTEL_EXPORTER_OTLP_ENDPOINT` env var
-  (預設 `http://localhost:4317` gRPC), 0 panic 0 fallback (fail-closed
-  跟 R127 `.gitignore` 護衛 +1 同性質)
-- **OGRE-R2: SessionManager 4 事件點 emit span contract** — 4 個關鍵
-  事件點 (`SessionStart` / `UserPromptSubmit` / `PostToolUseFailure` /
-  `SessionEnd`) 必須 emit OTel span, span name 對齊 OTel GenAI semconv
-  `gen_ai.*` 命名空間, span attributes 對齊 R103 design.md 對照表
-- **OGRE-R3: provider → OTel `gen_ai.provider.name` mapping contract** —
-  13 個 provider id (4 本機 CLI + 9 OpenAB bot) 必須映射到 OTel
-  `gen_ai.provider.name` 標準命名空間 (anthropic / openai / google /
-  github / custom), 護衛 test 守住 mapping 表大小 = 13
-
-3 個 Requirement + ≥5 個 Scenario (Scenario 數量在 spec.md 階段決定)。
+- `otel-genai-runtime-emit-2026-q3` — OpenTelemetry SDK initialization contract
+  (讀 OTEL_EXPORTER_OTLP_ENDPOINT env var, 預設 http://localhost:4317 gRPC,
+  fail-closed 0 silent fallback 跟 R127 .gitignore 護衛 +1 同性質) +
+  SessionManager 4 事件點（SessionStart / UserPromptSubmit /
+  PostToolUseFailure / SessionEnd）emit OTel span contract (span name
+  對齊 OTel GenAI semconv gen_ai.* 命名空間) + provider → OTel
+  gen_ai.provider.name mapping contract (13 條 4 本機 CLI + 9 OpenAB bot
+  對應到 anthropic / openai / google / github / custom.<bot_id> 命名空間,
+  護衛 test 守住 mapping 表大小 = 13), 涵蓋 OGRE-R1/R2/R3 3 個 Requirement +
+  9 個 Scenario, spec 檔 specs/otel-genai-runtime-emit-2026-q3/spec.md。
 
 ## Phase 規劃
 

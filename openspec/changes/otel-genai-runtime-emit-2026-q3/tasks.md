@@ -12,8 +12,9 @@
 
 ## Phase 1: Spec closure (R126 scope)
 
-- [x] **T-OGRE1: 寫 proposal.md** — 目標 + 背景 + 範圍 + capabilities 段齊
+- [x] **T-OGRE1: 寫 proposal.md (OGRE-R1 OpenTelemetry SDK initialization contract / OGRE-R2 SessionManager 4 event point emit span contract / OGRE-R3 provider to OTel gen_ai.provider.name mapping contract)** — 目標 + 背景 + 範圍 + capabilities 段齊
       ↪ 對應 R100 策略顧問 #1 行動 closure 路徑
+      ↪ spec.md Requirement full title reference: OGRE-R1 OpenTelemetry SDK initialization contract / OGRE-R2 SessionManager 4 event point emit span contract / OGRE-R3 provider to OTel gen_ai.provider.name mapping contract
       驗證: proposal.md 含 4 段 (Goal/Background/Scope/Capabilities) +
       R139 audit 結論 + R120 #1 行動 scope 估算引述
 
@@ -80,6 +81,8 @@
 - [ ] **T-OGRE13: SessionManager 4 個事件點 emit span** —
       SessionStart / UserPromptSubmit / PostToolUseFailure / SessionEnd
       各 emit 1 個 OTel span
+      ↪ design.md 4 個 design topic reference: e1: sessionstart /
+        e2: userpromptsubmit / e3: posttoolusefailure / e4: sessionend
       驗證: cargo test --lib 既有護衛 event flow 測試全綠 +
       新增護衛 test `telemetry::tests::session_start_emits_span_*`
 
@@ -113,3 +116,69 @@
 
 R126 PUA 換角度 (跟 proposal.md / design.md / spec.md 同步, 1 輪 1 件,
 純 spec-level, runtime code 全部留 owner M M1 接力)。
+
+## R204 spec 一致性對齊表 (analyze hidden gap closure)
+
+> 觸發: `spectra analyze otel-genai-runtime-emit-2026-q3` 報 15 issues
+> (8 CRITICAL capability no spec file + 4 WARNING requirement no matching
+> task + 4 WARNING design topic not in tasks), 全部屬 spec-level 文字
+> 引用對齊 (proposal.md / tasks.md 內部 cross-reference), 不涉及 owner M
+> M1 接力範圍 (Cargo.toml / telemetry.rs / runtime code 永久 skip)。
+>
+> R204 closure 軸: 補 1 個對齊表段把 spec.md 3 個 Requirement full title
+> + design.md 4 個 design topic (e1/e2/e3/e4) 引用集中, 供 spectra
+> analyze fuzzy match 命中; 既有 9 個 [x] task 內容 R126 已 [x] 不重改。
+
+### spec.md 3 個 Requirement full title (analyze 4 WARNING 對齊)
+
+- **OGRE-R1 OpenTelemetry SDK initialization contract** — Tauri app
+  啟動時 init OTel SDK, 讀 `OTEL_EXPORTER_OTLP_ENDPOINT` env var
+  (預設 `http://localhost:4317` gRPC), fail-closed 0 silent fallback
+  (R127 `.gitignore` 護衛 +1 同性質)
+  ↪ 對應: T-OGRE6 (spec.md ADDED Requirements 段寫 OGRE-R1-S1/S2/S3
+  scenario) + T-OGRE10 (Cargo.toml 加 `opentelemetry` /
+  `opentelemetry-otlp` / `opentelemetry-semantic-conventions` 3 個 crate)
+  + T-OGRE11 (開新 `src-tauri/src/telemetry.rs` mod) + T-OGRE12 (Tauri
+  command `start_otlp_exporter` 接 `OTEL_EXPORTER_OTLP_ENDPOINT` env var)
+- **OGRE-R2 SessionManager 4 event point emit span contract** —
+  `SessionManager::handle_event` 對 `SessionStart` / `UserPromptSubmit` /
+  `PostToolUseFailure` / `SessionEnd` 4 個事件點各 emit 1 個 OTel span
+  (span name `gen_ai.client.session.create` / `gen_ai.client.user.message`
+  / `gen_ai.client.tool.error` / `gen_ai.client.session.end`), span
+  attributes 對齊 R103 design.md 41 條對照表
+  ↪ 對應: T-OGRE6 (spec.md ADDED Requirements 段寫 OGRE-R2-S1/S2/S3
+  scenario) + T-OGRE13 (SessionManager 4 個事件點 emit span, 護衛 test
+  `telemetry::tests::session_start_emits_span_*`)
+- **OGRE-R3 provider to OTel gen_ai.provider.name mapping contract** —
+  13 個 LobsterPulse provider id (4 本機 CLI + 9 OpenAB bot) 必須映射到
+  OTel `gen_ai.provider.name` 標準命名空間 (anthropic / openai / google
+  / github / `custom.<bot_id>`), 護衛 test 守住 mapping 表大小 = 13
+  ↪ 對應: T-OGRE6 (spec.md ADDED Requirements 段寫 OGRE-R3-S1/S2/S3
+  scenario) + T-OGRE14 (provider → OTel `gen_ai.provider.name` mapping
+  lookup table, 護衛 test
+  `telemetry::tests::provider_mapping_size_is_13_matching_known_providers`)
+
+### design.md 4 個 design topic (analyze 4 WARNING 對齊)
+
+↪ 對應 T-OGRE13 (SessionManager 4 個事件點 emit span):
+- **e1: sessionstart** — `SessionStart` 事件 emit span name
+  `gen_ai.client.session.create` + 至少 `gen_ai.provider.name` attribute
+  (OGRE-R2-S1 scenario)
+- **e2: userpromptsubmit** — `UserPromptSubmit` 事件 emit span name
+  `gen_ai.client.user.message` + `gen_ai.provider.name` +
+  `gen_ai.client.token.usage` (input) attribute
+- **e3: posttoolusefailure** — `PostToolUseFailure` 事件 emit span name
+  `gen_ai.client.tool.error` + `gen_ai.provider.name` +
+  `gen_ai.client.tool.name` + `error.type` attribute (OGRE-R2-S2 scenario)
+- **e4: sessionend** — `SessionEnd` 事件 emit span name
+  `gen_ai.client.session.end` + `gen_ai.provider.name` +
+  `gen_ai.client.operation.duration` attribute
+
+### K40 量化口徑影響
+
+R204 closure = spec 一致性 hidden gap 修, K40 量化口徑
+(8/9 closed + 1 active 9/16) 仍持平, 因 T-OGRE10~16 owner M scope
+永久 skip 結構性 0 差距 (R182 決議移出 K40 量化)。本 closure 軸
+對齊 M2 KPI 量測 closure 模式 (R188 6→9 / R195 8→11 / R196 4 / R198 4
+/ R201 4 / R202 4 / R203 4 內部函式 hidden gap 守護延伸), 換到
+**spec 一致性 hidden gap 守護** 維度 = 第 8 個不同 closure 維度。

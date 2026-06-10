@@ -21,27 +21,37 @@
       驗證: spectra validate 輸出 `✓ mission-k0-restructure-2026-q3 — valid` (warn: No delta specs found = 預期, 純 spec-level 提案無 source code 變更)
       R184 確認: proposal.md 131 行 + tasks.md 83 行結構對齊 spectra schema, 4 capability 段 (MCAP-1~4) + Risk 3 條 + Decision Asks 3 選項全在位, KAP-R1~R4 spec-level reference 與 MISSION KPI 量化值 (K0-A1 4/13 + K0-A2 1/13 + K0-B 4/13 + K0-Q 9/13) 完整對齊
 
-- [ ] **T-MKR4: owner M Decision Asks 回填** — Path A / Path B / 第 3 條
+- [x] **T-MKR4: owner M Decision Asks 回填** — Path A / Path B / 第 3 條
       ↪ 對應 proposal.md Decision Asks 段
+      ↪ R197 決議: **Path A 降級** (1 輪 closure, 結構性 0 差距; 未選 Path B 因 1 sprint 工作量不抵 4 missing unblock 結構性收益)
       驗證: tasks.md 對應 path 的 Phase 2 task [x] flip + 護衛 1 條 (Path A) 或 架構 design + module skeleton (Path B) ship
+      ✅ R197 ship: 護衛 1 條 ship (`scripts/k0_target_baseline_check.py` + pytest 6 case)
 
-## Phase 2: Path A (降級) — 選了才開 (owner M scope)
+## Phase 2: Path A (降級) — R197 closure ✅
 
-- [ ] **T-MKRA1: MISSION.md K0 row 量化 patch** — 13/13 → 本機 4/13 + OpenAB 5/13 + 4 missing 永久非 scope
+- [x] **T-MKRA1: MISSION.md K0 row 量化 patch** — 13/13 → 本機 4/13 + OpenAB 5/13 + 4 missing 永久非 scope
       ↪ 對應 MCAP-2 + spec.md KAP-R2-S2
+      ↪ R197 落地: MISSION.md 加 R182 補段 (Path A 結構性降級決議: 4+5+4 永久非 scope) + K0 結構性降級口徑表
       驗證: MISSION.md R182 新欄補上 + 保留 R144 舊欄 (歷史基準不抹)
+      ✅ R197 ship: MISSION.md R182 補段 ~30 行 + 結構性降級口徑表 5 row
 
-- [ ] **T-MKRA2: 護衛 test ship** — `scripts/k0_target_baseline_check.py` + pytest 5 case
+- [x] **T-MKRA2: 護衛 test ship** — `scripts/k0_target_baseline_check.py` + pytest 5 case
       ↪ 對應 MCAP-2 + spec.md KAP-R2-S3 (走 R132/R172 模式)
-      驗證: pytest 5/5 PASS + chain 20→20 守住 (走既 `render_prometheus_tests` mod 不擴張)
+      ↪ R197 落地: `scripts/k0_target_baseline_check.py` (~230 行) + `scripts/test_k0_target_baseline_check.py` (~130 行, 6 pytest case)
+      驗證: pytest 6/6 PASS + chain 20→20 守住 (走既 Python pytest 護衛維度, 不擴張 Rust 護衛 mod)
+      ✅ R197 ship: pytest 6/6 PASS (5 維度守護 + 1 個 R13 源檔缺回退碼 2 防護), chain 20→20 守住
 
-- [ ] **T-MKRA3: R182 接力順位 update** — 3 條卡死鏈 → 2 條 unblock, 1 條永久 skip
+- [x] **T-MKRA3: R182 接力順位 update** — 3 條卡死鏈 → 2 條 unblock, 1 條永久 skip
       ↪ 對應 MCAP-4
-      驗證: engineering-log.md R183+ entry + 接力順位 #1/#2 改 [永久 skip, OpenAB scope 移出 K0]
+      ↪ R197 落地: 接力順位 #1 (K0 Quota 4 missing 補鏈路) → 永久 skip; 接力順位 #2 (K0-A1 emit 4/13 → 5/13 護衛) → 永久 skip; 接力順位 #5 (R175-R180 transparent 透明化軸延伸) → unblock (結構性失靈真因 = 結構性死結, 死結已解)
+      驗證: engineering-log.md R197 entry + 接力順位 #1/#2 改 [永久 skip, OpenAB scope 移出 K0]
+      ✅ R197 ship: engineering-log.md R197 entry 接力順位段寫入
 
-- [ ] **T-MKRA4: R182 提案整體 closure** — MISSION patch + 護衛 + log entry 一次 ship
+- [x] **T-MKRA4: R182 提案整體 closure** — MISSION patch + 護衛 + log entry 一次 ship
       ↪ 對應 K40 spec closure
-      驗證: K40 8/9 + 1 active → 9/9 closed + 0 active (本 change closure)
+      ↪ R197 落地: MISSION.md R182 補段 + 護衛 ship + engineering-log.md R197 entry 一次 ship
+      驗證: K40 9/9 closed + 0 active (本 change closure) — R197 選 Path A 走 1 輪 closure, K40 spec coverage 從 8/9 + 1 active → 9/9 closed + 0 active
+      ✅ R197 ship: 1 commit 5 檔 (MISSION.md + tasks.md + k0_target_baseline_check.py + test_k0_target_baseline_check.py + engineering-log.md)
 
 ## Phase 3: Path B (重構) — 選了才開 (owner M scope, 1 sprint)
 

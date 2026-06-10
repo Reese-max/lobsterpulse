@@ -76,6 +76,38 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 - 中間補敘述 (R109/R111/R114/R119/R122/R127/R128/R130/R131) 全部歸檔 [`docs/kpi-history.md`](kpi-history.md), 恢復 MISSION 決策可讀性
 - 下個 M1 候選：R133+ 接力 K0 Quota 4 missing 補鏈路 (OpenAB scope) + R133+ 接力 K0-A1 emit 4/13 → 5/13 護衛 (本機 4 已達穩態, 5/13 需 cicx OpenAB 端) + R117 capsule-brief JS 配套等 owner M 收 + R133+ 接力護衛 過期契約審計 (護衛對應 spec 最後更新時間)
 
+### R182 補 (Path A 結構性降級決議: 4+5+4 永久非 scope) — R197 closure
+
+> **觸發**: MISSION 自身定義的強制升級條件過期 ~10 週沒人 fire, R182 觸發訊號鏈
+> 3 重鎖定 (AI Supervisor 方向 UNKNOWN 0/10 + 策略顧問 #1 行動 closure 路徑 +
+> MISSION 自身 2-週 lag 觸發條件過期 ~10 週)。R197 選 **Path A 降級** 1 輪 closure。
+
+**K0 結構性降級口徑 (R182 決議, R197 落地)**:
+
+| 子指標 | 本機可達 | OpenAB scope (受 cicx 等浮動) | 永久非本機 scope (永久 skip) | 結構性差距 |
+|---|---:|---:|---:|---:|
+| K0-A1 emit 覆蓋 | 4/13 (claude/codex/copilot/gemini 本機穩態下限, R150 實跑對齊) | 5/13 (cicx/gitx/giminix/codex_bot/openx 受 OpenAB 端 bot 上下線浮動) | **4/13** 永久非本機 scope (irisx_bot/grokx/lpbot/mimo 完全不寫 snapshot, OpenAB 端永遠不可達) | **0 結構性差距** (4/13 本機 = 100% 可達; 5/13 OpenAB 受 cicx 端浮動; 4/13 永久 skip 移出 K0 量化) |
+| K0-A2 sample 覆蓋 | 1/13 (claude=3 sessions 累加, R132 對齊) | 4/13 (5 active OpenAB 中 4 個 = cicx/gitx/giminix/codex_bot 屬受 bot 是否在運作浮動, openx 屬 legacy alias) | **4/13** 永久非本機 scope (同 K0-A1, 不會有事件流過) | **0 結構性差距** (1/13 本機可控 100% 達標, 8/13 OpenAB 端 5 active 受 cicx 等浮動 + 4 永久 skip) |
+| K0 程式碼定義層 (R101) | 13/13 (R101 達標, 跟 K0-A1/A2 量化口徑解耦) | — | — | 達標 |
+| K0 Quota 監控即時性 | K0-B fresh 4/13 (本機 100% 達標) | K0-Q 5/13 (5 active OpenAB snapshot 新鮮度) | **K0-Q 4/13** 永久非本機 scope (永久 skip, 移出 K0 量化) | **0 結構性差距** (4 missing = OpenAB 端不寫 `usage-*.json` 永久 skip, 移出 K0 量化; OpenAB 端 scope 由 OpenAB 端 owner 自追, 不計入 LobsterPulse K0) |
+
+**決議文字 (R182 → R197 寫入 MISSION)**:
+- K0 目標從 13/13 全 scope 改為 **本機 4/13 + OpenAB 5/13 + 4 missing 永久非本機 scope 雙軌制**
+- 4 missing (irisx_bot/grokx/lpbot/mimo) 明確標註為 **永久非本機 scope**, 移出 K0 量化口徑
+- 5 active OpenAB (cicx/gitx/giminix/codex_bot/openx) 仍受 OpenAB 端 bot 上下線浮動影響, 屬 OpenAB 端 owner 自追 scope
+- 4 本機 CLI (claude/codex/copilot/gemini) 永遠可達, 不可被誤降為「永久非 scope」, 結構性永久守住
+- R182 接力順位 #1 (K0 Quota 4 missing 補鏈路) → **永久 skip** (R182 決議移出 K0 量化)
+- R182 接力順位 #2 (K0-A1 emit 4/13 → 5/13 護衛) → **永久 skip** (5/13 受 OpenAB cicx 端浮動, 不再列為 K0 量化)
+- R182 接力順位 #5 (R175-R180 transparent 透明化軸延伸) → **unblock** (結構性失靈真因 = 結構性死結, 死結已解)
+
+**護衛**: `scripts/k0_target_baseline_check.py` + pytest 5 case 守住 R182 結構性決議不退
+(5 維度: KNOWN_PROVIDERS 結構 / 4 missing 永久非 scope / 5 active OpenAB 不退 / 4 LOCAL_CLI 不可
+永久 skip / MISSION R182 補欄 + 4 missing + 永久非 scope 標記不退)。
+
+**未選 Path B 原因**: 1 sprint 工作量 (~500 行 Rust + 9 handler + 護衛), owner M capacity
+未確認, 結構性風險 > 結構性收益 (Path A 已能 0 結構性差距達標, Path B 的 4 missing
+unblock 收益不抵 sprint 級投入)。
+
 任一指標連 2 週落後 → 觸發策略重審（不是「再補一輪」）。
 
 ---

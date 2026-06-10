@@ -152,7 +152,7 @@ def compute_drift(current: Dict[str, Any]) -> list[DriftResult]:
 def render_report(results: list[DriftResult]) -> str:
     """人類可讀: KPI | baseline | current | delta | status (ASCII, 避 cp950)"""
     rows = []
-    rows.append(f"{'KPI':<22} {'baseline':<40} {'current':<40}  status")
+    rows.append(f"{'KPI':<22} {'baseline':<40} {'current':<40} {'delta':>6}  status")
     rows.append("-" * 110)
     for r in results:
         base_s = repr(r.baseline)[:40]
@@ -164,7 +164,7 @@ def render_report(results: list[DriftResult]) -> str:
         else:
             delta_s = f"{r.delta:+d}"
         rows.append(
-            f"{r.key:<22} {base_s:<40} {cur_s:<40}  [{r.status}]"
+            f"{r.key:<22} {base_s:<40} {cur_s:<40} {delta_s:>6}  [{r.status}]"
         )
     return "\n".join(rows)
 

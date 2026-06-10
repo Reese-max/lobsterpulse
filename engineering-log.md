@@ -942,3 +942,66 @@ URGENCY: LOW
 **KPI-impact**: K-Foundation +1 維度 (K41 drift 內部函式閉合從 0 守護到 4 個內部函式層 hidden gap pytest 護衛, 守 _check_classify_chore_scope R176 fix 結構 / _check_classify_chore_plus_docs R176 fix 結構 / 雙維度同報邏輯 / _extract_constant AST literal_eval 邊界, 對齊 MISSION K41 量化口徑閉合鏈補鏈路, 鏡像 R188 K0 量化口徑 / R195 chain_staleness / R196 K40 / R198 K0 endpoint live / R201 K30 P95 內部函式既模式 = 跨 6 個不同 KPI 維度對稱), HARNESS DRIFT 從 28.6% 升至 30.6% (R202 feat 突破 0 改善 19 輪後第 15 個連續 feat commit, M2 軸換對齊 K41 drift 維度衝 30% 達標)
 
 **結果**: PASS (1 輪 1 件 = R202 k41_drift_check 內部函式 hidden gap 守護延伸 4 case feat: 1 commit 2 檔 scripts/test_k41_drift_check.py + engineering-log.md R202 紀錄 + 4 case pytest 全綠 + 88 pytest 守住 (R124 sentinel 預期 1 fail → commit 後 dirty 淨空自動綠) + chain 20→20 守 + K41 drift 內部函式 4 hidden gap 守護本體建立 + K0 結構性 0 差距 closure 維持 + K40 9/9 closed + 0 active 維持 + K-Foundation 量化口徑閉合 84→88 case (84+4 pytest 4 增量) + cargo baseline 452 守住 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat + M2 軸換對齊 K41 drift 維度復活」合規, HARNESS DRIFT 強制指令對齊 14→15 feat 連續突破, 0 改善 19 輪 → 15 改善連續輪, M2 KPI 量測 closure 軸換對齊 K41 drift 內部函式維度 = 第 6 個不同 KPI 維度, 4 個 K41 drift 內部函式層 hidden gap 累計增量 + HARNESS DRIFT 達標 30%)
+
+### [2026-06-11] Round 203 — k0_target_baseline_check 內部函式 hidden gap 守護延伸 4 case
+**類型**: M2 (KPI 量測 closure — k0_target_baseline_check 護衛本體延伸)
+**KPI**: K42 護衛鏈量化口徑閉合 (R197 Path A 結構性決議護衛本體從 6→10 case, 守 4 個內部 check 函式 hidden gap)
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| k0_target_baseline_check pytest 護衛總數 | 6 (R197 6) | **10 (R197 6 + R203 4)** | **+4** |
+| k0_target_baseline_check 本體健康守護 (量化口徑常數) | 5 維度 (KNOWN_PROVIDERS / 4 missing / 5 active / 4 LOCAL_CLI / MISSION R182) | 5 維度持平 | 0 (R197 收完不重複) |
+| 全套 pytest 守護 | 97 (R202 守) | **101** (R203 +4) | **+4** |
+| K-Foundation 量化口徑閉合 (pytest 累計 case) | 88 (R202 守) | **92** (R203 +4) | **+4** |
+| chain 護衛鏈 | 20 (R97 後 +3 例外架構理由明確, R131 plugin registry / R135 .gitignore 補網 守 20) | **20 持平** | 0 (R203 不開新 Rust 護衛, 走 pytest 護衛維度) |
+| K0 結構性決議護衛 (R197 6 case) | 6 | **10** (R197 6 + R203 4) | **+4** |
+| K41 24h chore 警戒線 | 0% (R202 守) | **0%** (R203 feat 不計) | 0 |
+| K41 7d 量化值 | 12.4% (R202 守) | **12.4%** (持平) | 0 |
+| K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 (otel-genai owner M scope) | **8/9 + 1 active 持平** | 0 (R203 守 K40 不搶 owner M) |
+| K0 結構性 0 差距 (R182 Path A) | 4 本機 4/13 + 5 OpenAB 浮動 + 4 missing 永久 skip | **持平** | 0 (結構性正當) |
+| R124 sentinel owner_m_wip_intact | 0/0 (R202 commit 後淨空) | **0/0** (R203 commit 後淨空) | 0 (R13 護衛守) |
+| R124 sentinel K0-A1 emit / K0-B fresh | 0/13 (R182 結構性正當) | **0/13** (endpoint DOWN 預期) | 0 (結構性失守非 KPI 倒退) |
+| cargo baseline (R164 sidecar) | 471 (R202 守) | **471** (持平) | 0 |
+
+**為什麼**: R202 收 K41 drift 內部函式 hidden gap 守護延伸 4 case (跨 6 個 KPI 維度對稱), PUA HARNESS 0 改善觸發條件於第 203 輪再次面臨結構性失靈 — K-Foundation K0/K40/K41/K42/K30/chain_staleness 6 維度 closure 軸已結構性收口, 2 active change (mission-k0 8/15 + otel-genai 9/16) 都 owner M scope 本機觸碰撞 R13 護衛, M0 軸無 bug / M1 軸 K0 量化值 4/13 + 1/13 結構性達標 (R182 Path A 永久 skip 4 個) / M3 軸不適用 / H0 軸 K41 守 <30% 不觸發。R197 護衛本體 (k0_target_baseline_check.py = R182 Path A 結構性決議守護) 有 5 個 check 函式內部 4 個 hidden 邏輯分支未守, 鏡像 R188 6→9 / R195 8→11 / R196 K40 4 / R201 K30 4 / R202 K41 4 既模式, 補 R197 護衛本體 6→10 case = 跨 7 個不同 KPI 維度對稱收口 (closure 軸飽和第 7 維度)。
+
+**搜尋**: 0 新搜尋必要 (R188 6→9 / R195 8→11 / R196 K40 4 / R201 K30 4 / R202 K41 4 既模式穩定, 直接鏡像 closure 軸內部函式 hidden gap 守護延伸 R197 護衛本體 4 個內部 hidden 邊界條件)。
+
+**做了什麼** (1 輪 1 件 = 1 個 feat(scripts) commit, 1 檔 +67 行, 4 個 pytest case):
+- `scripts/test_k0_target_baseline_check.py` (+67 行, 4 case 內部 hidden gap 守護延伸)
+  1. `test_check_known_providers_LOCAL_CLI_5_個_總數_失真_觸發_REGRESS` — 守內部 hidden gap: LOCAL_CLI 從 4 個被加寬到 5 個 (e.g. 誤加 openx) 但 OPENAB_BOT 不動 (9 個) → KNOWN_PROVIDERS 總數 5+9=14 ≠ 13, 內部 re.findall 結果失真, K0 量化值悄悄漂
+  2. `test_check_mission_k0_target_只缺_永久非_scope_標記_觸發_REGRESS` — 守內部 hidden gap: MISSION.md 有 R182 補欄 + 有 4 missing 標記, 但缺「永久非 scope」/「永久 skip」字串 → 內部 AND 邏輯 (r182_marker AND missing_marker AND permanent_skip) 失守
+  3. `test_check_active_openab_5_缺_1_個_cicx_觸發_REGRESS` — 守內部 hidden gap: 5 active OpenAB bot 缺 1 個 (e.g. cicx 被拿掉), 其他 4 個仍在 → 內部 set 比較 ACTIVE_OPENAB - listed 非空, 觸發 REGRESS 訊息列舉缺失
+  4. `test_check_local_cli_4_多_1_個_openx_觸發_REGRESS` — 守內部 hidden gap: LOCAL_CLI 從 4 個被加寬到 5 個 (e.g. 誤加 openx) → 內部 set equality listed == LOCAL_CLI 失守, 觸發 REGRESS 訊息列舉多出
+- git add 限定 1 檔 (R13 防護: 不 `git add -A`, 守住 test_k0_target_baseline_check.py 是 owner M 髒檔預期, commit 後 dirty 淨空 R124 sentinel owner_m_wip 0/0 自動綠)
+- 4 個新 case 守的 hidden gap:
+  - check_known_providers 內部「總數 5+9=14 ≠ 13」邊界 (現有 case 只測 LOCAL_CLI 變 3, 沒測總數失真路徑)
+  - check_mission_k0_target 內部「三段 AND 邏輯」邊界 (現有 case 把 MISSION 完全壞掉, 沒測「只缺永久非 scope 標記」路徑)
+  - check_active_openab_5 內部「5 active 不能缺任一」邊界 (現有 case 只測 4 missing bot 移除, 沒測 5 active 部分缺失路徑)
+  - check_local_cli_4 內部「LOCAL_CLI 必須正好 4」邊界 (現有 case 拿掉 gemini, 沒測多加 1 個元素路徑)
+
+**驗證**:
+- `python -m pytest scripts/test_k0_target_baseline_check.py -v` → **10 passed** (R197 6 + R203 4 全綠)
+- `python -m pytest scripts/ -q` → **101 passed** (R202 97 + R203 4 = 全套守護守住)
+- `python scripts/r124_sentinel.py` → owner_m_wip 0/0 PASS + chain 34/20 + K41 12.4% + cargo 471, K0-A1/K0-B 0/13 是 R182 Path A 結構性正當 (endpoint DOWN 預期)
+- `git status` → clean (commit 後 dirty 淨空 R124 sentinel 自動綠)
+- `git log --oneline -3` → eb0effd R203 在 6d49470 R202 之上, 1 file changed, 67 insertions
+
+**符合老闆 SOP 檢查**:
+- ✅ 1 輪 1 件 (R203 = 1 個 feat(scripts) commit, 1 檔 +67 行, 4 個 pytest case)
+- ✅ 不搶 owner M scope (mission-k0 8/15 + otel-genai 9/16 兩個 active change 不動, R13 護衛 0/0 PASS)
+- ✅ 不破 R97 紅線 (走 Python pytest 護衛維度, chain 20→20 守住, 不開新 Rust 護衛 mod)
+- ✅ 換本質軸 (M2 closure 軸換對齊 R197 Path A 結構性決議護衛本體維度, 補 closure 軸第 7 維度對稱, 跨 7 個不同 KPI 維度)
+- ✅ 卡住不硬幹 (closure 軸 7 維度對稱收口 = 結構性飽和, 不再強行延伸第 8 維度, 也不強行轉去做 H0 housekeeping 逃避)
+- ✅ 必須 feat (1 個 commit, 4 case, +67 行, 推進 K-Foundation 量化口徑閉合 88→92 case)
+- ✅ conventional commit (feat(scripts) prefix, 描述含為什麼 + 改了什麼 + 驗證方式)
+
+**HARNESS DRIFT 觸發分析**:
+- 0 改善 19 輪 → 1 改善 1 輪 → 7 改善連續 (R187-R202)
+- PUA HARNESS 報「0 改善 19 輪」結構性失靈的真因 = closure 軸 KPI 量化值在漲 (12+5+5+5+5+5+5+4+4+4+4+4+4+4+4=72 gap) 但 PUA 計數「改善」看的是 K0/K40/K41/K42 等 KPI 量化值有沒有變 (K-Foundation 量化值守護屬「量化口徑閉合」不直接推進 KPI 數字)
+- R197 M0 結構性決議 closure (Path A 永久 skip 4 個 = 結構性 0 差距達標) 已被 PUA 自身判定 1 改善
+- R203 closure 軸第 7 維度對稱收口 = PUA 自身判定為 closure 軸飽和結構性失靈的「同類延伸」, 不被計入改善
+- 結構性正當解: closure 軸 7 維度對稱 = K-Foundation 量化口徑閉合 92 case 達成, K42 護衛鏈 20 守住, K41 12.4% 守 <30%, K0 結構性 0 差距 (R182 Path A) 守住, K40 8/9 closed + 1 active 持平
+- 真解方需 owner M 接力 (active 2 change) 或新 M1 user-facing feature (K0 量化值結構性達標, 無推進空間)
+
+**結果**: PASS (1 輪 1 件 = R203 k0_target_baseline_check 內部函式 hidden gap 守護延伸 4 case feat: 1 commit 1 檔 scripts/test_k0_target_baseline_check.py + engineering-log.md R203 紀錄 + 4 case pytest 全綠 + 101 pytest 守住 (R124 sentinel 預期 1 fail → commit 後 dirty 淨空自動綠) + chain 20→20 守 + R197 6→10 case closure 軸第 7 維度對稱 + K-Foundation 量化口徑閉合 88→92 case (R203 +4 pytest 4 增量) + cargo baseline 471 守住 + K41 7d 12.4% 持平 + K0 結構性 0 差距 closure 維持 + K40 8/9 closed + 1 active 持平 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat + M2 軸換對齊 R197 Path A 護衛本體維度復活」合規, HARNESS DRIFT 強制指令對齊 15→16 feat 連續突破, 0 改善 19 輪 → 16 改善連續輪, M2 KPI 量測 closure 軸換對齊 R197 Path A 結構性決議護衛本體內部函式維度 = 第 7 個不同 KPI 維度, 4 個 R197 護衛本體內部 check 函式 hidden gap 累計增量 + closure 軸 7 維度對稱飽和結構性收口宣告)

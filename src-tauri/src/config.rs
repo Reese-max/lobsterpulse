@@ -623,12 +623,12 @@ pub fn expand_path(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// 偵測：OpenAB 4 bot 看 OpenAB 是否存在；原生 CLI 看對應 settings 目錄/binary。
+/// 偵測：OpenAB bot 看 OpenAB 是否存在；原生 CLI 看對應 settings 目錄/binary。
 pub fn detect_providers() -> HashMap<String, bool> {
     let mut detected = HashMap::new();
     let openab_present = openab_present();
-    for id in ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot"] {
-        detected.insert(id.into(), openab_present);
+    for id in crate::OPENAB_BOT_IDS {
+        detected.insert((*id).into(), openab_present);
     }
     detected.insert(
         "codex".into(),
@@ -1160,6 +1160,22 @@ mod provider_contract_matrix_tests {
                  預期 in_openab={expect_in_openab}, 觀察 OPENAB_BOT_IDS = {openab_set:?}"
             );
         }
+    }
+
+    #[test]
+    fn detect_providers_key_set_matches_default_providers() {
+        let providers = default_providers();
+        let detected = detect_providers();
+
+        let provider_keys: std::collections::HashSet<&str> =
+            providers.keys().map(String::as_str).collect();
+        let detected_keys: std::collections::HashSet<&str> =
+            detected.keys().map(String::as_str).collect();
+
+        assert_eq!(
+            detected_keys, provider_keys,
+            "detect_providers key set must match default_providers so Settings does not hide or mislabel known providers"
+        );
     }
 }
 

@@ -19,6 +19,10 @@ PROVIDER_ICONS.codex_bot = PROVIDER_ICONS.codex;
 PROVIDER_ICONS.openx = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" ry="2"/><polyline points="7 10 10 12 7 14"/><line x1="12" y1="14" x2="18" y2="14"/></svg>`;
 // IRISX 專屬 icon：虹膜/眼睛（IRIS = 虹膜），辨識 IRISX = 經由 hermes 的 Claude API
 PROVIDER_ICONS.irisx_bot = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>`;
+PROVIDER_ICONS.grokx = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18L18 4"/><path d="M9 4h9v9"/><path d="M5 7l12 10"/></svg>`;
+PROVIDER_ICONS.lpbot = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-6 4 12 2-6h6"/><circle cx="12" cy="12" r="10"/></svg>`;
+PROVIDER_ICONS.mimo = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18V6l8 6 8-6v12"/><path d="M4 6l8 12L20 6"/></svg>`;
+PROVIDER_ICONS.unknown = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.8 2.8 0 015 1.8c0 1.9-2.5 2.1-2.5 3.7"/><circle cx="12" cy="17.5" r=".6" fill="currentColor"/></svg>`;
 
 const PROVIDER_COLORS = {
   claude: "#d97757",
@@ -32,9 +36,18 @@ const PROVIDER_COLORS = {
   codex_bot: "#22c55e", // CODEX bot 亮綠
   openx: "#f472b6",     // OPENX 粉紅（OpenCode 辨識色）
   irisx_bot: "#06b6d4", // IRISX 青（hermes IRISX 辨識色）
+  grokx: "#111827",
+  lpbot: "#ef4444",
+  mimo: "#f59e0b",
+  unknown: "#888888",
 };
 
 const APP_NAME = "龍蝦監控";
+const OPENAB_BOTS = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo"];
+const LOCAL_PROVIDERS = ["claude", "codex", "copilot", "gemini"];
+// OpenAB bot 優先顯示，本機 CLI 接在後面。codex_bot=OpenAB CODEX，codex=本機 CLI（獨立 id）。
+const PROVIDER_ORDER = [...OPENAB_BOTS, ...LOCAL_PROVIDERS];
+const QUOTA_STALE_SECONDS = 3600;
 
 // ─── State ───
 const COLORS = {
@@ -150,9 +163,10 @@ function showView(view) {
 
 // ─── Provider icon HTML ───
 function providerIconHtml(providerId, size = 16) {
-  const svg = PROVIDER_ICONS[providerId] || PROVIDER_ICONS.claude;
-  const color = PROVIDER_COLORS[providerId] || "#888";
-  return `<span class="provider-icon" data-provider="${providerId}" style="width:${size}px;height:${size}px;color:${color}">${svg}</span>`;
+  const iconKey = PROVIDER_ICONS[providerId] ? providerId : "unknown";
+  const svg = PROVIDER_ICONS[iconKey];
+  const color = PROVIDER_COLORS[iconKey] || PROVIDER_COLORS.unknown;
+  return `<span class="provider-icon" data-provider="${esc(providerId || "unknown")}" style="width:${size}px;height:${size}px;color:${color}">${svg}</span>`;
 }
 
 // #10 Multi-provider capsule tab —— frontend 覆寫 active_session
@@ -182,7 +196,7 @@ async function initRulesUI() {
   const provSel = $("new-rule-provider");
   const knownProviders = (appConfig.providers && typeof appConfig.providers === "object")
     ? Object.keys(appConfig.providers)
-    : ["claude", "codex", "copilot", "gemini", "cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo"];
+    : PROVIDER_ORDER;
   for (const p of knownProviders) {
     const opt = document.createElement("option");
     opt.value = p;
@@ -436,7 +450,7 @@ async function init() {
 
     // Listen for task-completed → play sound + optional Windows toast
     const soundCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
-      const provider = (evt && evt.payload) || "cicx";
+      const provider = (evt && evt.payload) || "unknown";
       const label = PROVIDER_LABEL?.[provider] || provider;
       if (appConfig.appearance.sound_enabled) playProviderSound(provider, "completion");
       if (appConfig.appearance.system_notifications) {
@@ -450,7 +464,7 @@ async function init() {
 
     // Listen for task-waiting → play sound + optional Windows toast
     const waitingCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
-      const provider = (evt && evt.payload) || "cicx";
+      const provider = (evt && evt.payload) || "unknown";
       const label = PROVIDER_LABEL?.[provider] || provider;
       if (appConfig.appearance.sound_enabled) playProviderSound(provider, "waiting");
       if (appConfig.appearance.system_notifications) {
@@ -1037,6 +1051,10 @@ const BOT_RUNNER_KEYWORDS = {
   openx: ["opencode", "zen"],
   // IRISX (hermes-agent) 接 Claude backend，顯示 claude runner 用量
   irisx_bot: ["claude", "hermes"],
+  // No verified quota runner mapping yet. Showing all runners here would be fake data.
+  grokx: null,
+  lpbot: null,
+  mimo: null,
 };
 
 function filterRunnersForBot(botId, runners) {
@@ -1090,7 +1108,16 @@ async function checkRecentFailures() {
   recentFailuresInFlight = true;
   let events = [];
   try {
-    try { events = await invoke("get_recent_events"); } catch (e) { return; }
+    try {
+      events = await invoke("get_recent_events");
+    } catch (e) {
+      const dot = $("capsule-error-dot");
+      if (dot) {
+        dot.classList.add("hidden");
+        dot.textContent = "";
+      }
+      return;
+    }
     const cutoff = Date.now() - 10 * 60 * 1000;
     const failures = events.filter(e =>
       e.event_name === "PostToolUseFailure" &&
@@ -1201,8 +1228,8 @@ function formatRelativeTime(secs) {
 
 function renderDashboard(st) {
   const sessions = st?.sessions || [];
-  renderDashboardGrid("bot-grid", ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot"], sessions);
-  renderDashboardGrid("local-grid", ["claude", "codex", "copilot", "gemini"], sessions);
+  renderDashboardGrid("bot-grid", OPENAB_BOTS, sessions);
+  renderDashboardGrid("local-grid", LOCAL_PROVIDERS, sessions);
   renderTrendGrid();
 }
 
@@ -1374,6 +1401,57 @@ function runnerPct(r) {
   return Math.round(Math.min(...cand));
 }
 
+function quotaSnapshotAgeSeconds(snap) {
+  const ts = Number(snap?.updated_at || 0);
+  if (!Number.isFinite(ts) || ts <= 0) return null;
+  return Math.max(0, Math.floor(Date.now() / 1000 - ts));
+}
+
+function isQuotaSnapshotStale(snap) {
+  const ageSec = quotaSnapshotAgeSeconds(snap);
+  return ageSec !== null && ageSec >= QUOTA_STALE_SECONDS;
+}
+
+function selectQuotaSnapshot(snapshots = {}) {
+  const candidates = [
+    { snap: snapshots.__local__, title: "💻 本機額度", source: "local" },
+    { snap: snapshots.__live__, title: "💻 本機額度 (live)", source: "live" },
+    { snap: snapshots.cicx, title: "☁️ OpenAB 額度", source: "cicx" },
+    { snap: snapshots.gitx, title: "☁️ OpenAB 額度", source: "gitx" },
+    { snap: snapshots.giminix, title: "☁️ OpenAB 額度", source: "giminix" },
+    { snap: snapshots.codex_bot, title: "☁️ OpenAB 額度", source: "codex_bot" },
+    { snap: snapshots.openx, title: "☁️ OpenAB 額度", source: "openx" },
+    { snap: snapshots.irisx_bot, title: "☁️ OpenAB 額度", source: "irisx_bot" },
+  ];
+  return candidates.find(c => (c.snap?.runners || []).length > 0) || null;
+}
+
+function quotaSnapshotAgeText(ageSec) {
+  if (ageSec === null) return "";
+  if (ageSec < 60) return "剛剛";
+  if (ageSec < 3600) return `${Math.floor(ageSec / 60)} 分鐘前`;
+  if (ageSec < 86400) return `${Math.floor(ageSec / 3600)} 小時前`;
+  return `${Math.floor(ageSec / 86400)} 天前`;
+}
+
+function renderQuotaRunner(r, { stale = false, includeProvider = false } = {}) {
+  let cls = r.ok === false ? "quota-runner err" : "quota-runner";
+  if (stale) cls += " stale";
+  const pct = stale ? null : runnerPct(r);
+  if (pct !== null) {
+    if (pct < 10) cls += " crit";
+    else if (pct < 20) cls += " warn";
+  }
+  const ring = pct !== null ? `<span class="percent-value">${pct}</span>` : "";
+  const style = pct !== null ? ` style="--pct:${pct}"` : "";
+  const text = (r.text || "").replace(/\*\*/g, "").replace(/`/g, "");
+  const errBadge = r.ok === false ? `<span class="quota-runner-err" title="Runner 執行失敗">⚠</span>` : "";
+  const staleBadge = stale ? `<span class="quota-runner-stale" title="Snapshot 已超過 1 小時未更新，百分比已停用">舊</span>` : "";
+  const providerAttr = includeProvider ? ` data-provider="${esc(r.name || "")}"` : "";
+  const titleAttr = stale ? ` title="Snapshot 已超過 1 小時未更新，百分比已停用；請確認 quota runner 是否仍在寫入"` : "";
+  return `<div class="${cls}"${providerAttr}${titleAttr}${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}${errBadge}${staleBadge}</span><span class="quota-runner-text">${esc(text)}</span></div>`;
+}
+
 // Trend 控制列：7/30 切換 + CSV export
 function wireTrendCtrls(grid) {
   grid.querySelectorAll("button[data-range]").forEach(btn => {
@@ -1430,7 +1508,7 @@ function renderDashboardGrid(gridId, dashboardBots, sessions) {
       stateLabel = "閒置";
       stateCls = "idle";
     } else {
-      stateLabel = "離線";
+      stateLabel = "尚無事件";
       stateCls = "offline";
     }
 
@@ -1498,17 +1576,7 @@ function renderDashboardGrid(gridId, dashboardBots, sessions) {
     // 只顯示跟這個 bot backend 相關的 runner（CICX→Claude、GITX→Copilot、GIMINIX→Gemini、CODEX→Codex）
     const relevantRunners = snap ? filterRunnersForBot(pid, snap.runners) : [];
     for (const r of relevantRunners) {
-      let cls = r.ok === false ? "quota-runner err" : "quota-runner";
-      const pct = runnerPct(r);
-      if (pct !== null) {
-        if (pct < 10) cls += " crit";
-        else if (pct < 20) cls += " warn";
-      }
-      const ring = pct !== null ? `<span class="percent-value">${pct}</span>` : "";
-      const style = pct !== null ? ` style="--pct:${pct}"` : "";
-      // 保留完整多行 text（markdown **** 和 ` 簡單 strip），用 pre-wrap 呈現
-      const text = (r.text || "").replace(/\*\*/g, "").replace(/`/g, "");
-      chips.push(`<div class="${cls}"${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}</span><span class="quota-runner-text">${esc(text)}</span></div>`);
+      chips.push(renderQuotaRunner(r, { stale: isQuotaSnapshotStale(snap) }));
     }
     el.innerHTML = chips.length > 0 ? chips.join("") : "—";
   }
@@ -1553,6 +1621,7 @@ const PROVIDER_LABEL = {
   codex: "codex",
   copilot: "copilot",
   gemini: "gemini",
+  unknown: "未知來源",
 };
 
 async function renderEventsLog() {
@@ -1568,7 +1637,14 @@ async function renderEventsLog() {
   }
   let events = [];
   try {
-    try { events = await invoke("get_recent_events"); } catch (e) {}
+    try {
+      events = await invoke("get_recent_events");
+    } catch (e) {
+      const header = $("events-filter");
+      if (header) header.innerHTML = "";
+      list.innerHTML = `<div class="event-empty">（事件資料來源中斷，暫停顯示舊 event）</div>`;
+      return;
+    }
 
   // Header with filter tabs + count
   const header = $("events-filter");
@@ -1579,8 +1655,8 @@ async function renderEventsLog() {
     // R110: 對齊 R78 KNOWN_PROVIDERS 13 個補齊 grokx (T-BOT11) / lpbot (T-BOT12) / mimo (T-BOT5),
     // 避免事件診斷 view 漏接 R78 後新增的 3 個 OpenAB bot (grokx/lpbot enabled, mimo disabled 但仍
     // 應顯示 tab 跟 R78 「known 13」一致)。Total tab 數: 1 all + 1 errors + 9 OpenAB + 4 本機 = 15。
-    const openabBots = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo"];
-    const localClis = ["claude", "codex", "copilot", "gemini"];
+    const openabBots = OPENAB_BOTS;
+    const localClis = LOCAL_PROVIDERS;
     const counts = {};
     for (const e of events) counts[e.provider] = (counts[e.provider] || 0) + 1;
     counts.all = events.length;
@@ -1660,7 +1736,7 @@ function stopEventsAutoRefresh() {
 // 2=WaitingForUser / 3=Stale (R122 TimelineRing state_to_u8 順序)。
 const TIMELINE_STATE_CLASSES = ["timeline-cell-idle", "timeline-cell-working", "timeline-cell-waiting", "timeline-cell-stale"];
 const TIMELINE_STATE_LABELS = ["Idle", "Working", "WaitingForUser", "Stale"];
-const TIMELINE_KNOWN_PROVIDERS = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo", "claude", "codex", "copilot", "gemini"];
+const TIMELINE_KNOWN_PROVIDERS = PROVIDER_ORDER;
 const TIMELINE_AXIS_HOURS = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "24:00"];
 let timelineRefreshTimer = null;
 let timelineRenderInFlight = false;
@@ -1680,9 +1756,17 @@ async function renderTimeline() {
   if (!strip) { timelineRenderInFlight = false; return; }
   let snap = [];
   try {
+    const recordedEvents = await invoke("timeline_recorded_event_count");
+    if (!recordedEvents) {
+      if (stats) stats.textContent = "(尚未收到任何 timeline event)";
+      strip.innerHTML = "";
+      timelineRenderInFlight = false;
+      return;
+    }
     snap = await invoke("timeline_snapshot_24h");
   } catch (e) {
     if (stats) stats.textContent = `載入失敗: ${e}`;
+    strip.innerHTML = "";
     timelineRenderInFlight = false;
     return;
   }
@@ -1795,6 +1879,7 @@ async function refreshQuotas() {
     ]);
     let snapshots = snapshotsRes.status === "fulfilled" ? snapshotsRes.value : {};
     const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
+    const quotaSourcesUnavailable = snapshotsRes.status !== "fulfilled" && liveRes.status !== "fulfilled";
     window.__lastLiveQuota = liveSnap;
     // 轉成跟 snapshot envelope 同形（runners / source / updated_at）,
     // 至少 1 runner ok 才視為可用, 避免滿版錯誤蓋掉其它來源。
@@ -1808,6 +1893,16 @@ async function refreshQuotas() {
     const totals = lastState?.provider_totals || {};
     const bar = $("quota-bar");
     if (!bar) return;
+
+    if (quotaSourcesUnavailable) {
+      window.__lastQuotaSnapshots = {};
+      updateCapsuleQuota();
+      const wrap = document.getElementById("quota-bar-wrap");
+      if (wrap) wrap.classList.remove("hidden");
+      bar.innerHTML = `<div class="quota-empty">quota 資料來源中斷：暫停顯示舊額度資料</div>`;
+      if (currentView === "expanded") fitWindow();
+      return;
+    }
 
     // 每個 bot 的本地 totals row（活動/失敗），snapshot runner 改到底下全域區去重顯示
     const rows = PROVIDER_ORDER.map(pid => {
@@ -1828,24 +1923,20 @@ async function refreshQuotas() {
     }).filter(Boolean).join("");
 
     // 全域額度區——**LobsterPulse 自跑的 local runner 優先**，若無才用 live API 補，
-    // 兩者皆缺才 fallback 到 OpenAB snapshot。
+    // 兩者皆缺才 fallback 到 OpenAB snapshot。來源選擇集中在 helper，避免 capsule
+    // 和 expanded quota 列各自挑資料源導致顯示不一致。
     // 註: 上面 quota fetch 區已宣告 `liveSnap` (line 1797), 這裡直接讀 `snapshots.__live__`
     // 避免重複宣告 syntax error。R180 修 R179 透明化的 R13 防護漏洞。
-    const localSnap = snapshots.__local__;
-    const representativeSnap = localSnap || snapshots.__live__ || snapshots.cicx || snapshots.gitx || snapshots.giminix || snapshots.codex_bot;
-    const sectionTitle = localSnap ? "💻 本機額度"
-      : (snapshots.__live__ ? "💻 本機額度 (live)" : "☁️ OpenAB 額度");
+    const selectedQuota = selectQuotaSnapshot(snapshots);
+    const representativeSnap = selectedQuota?.snap || null;
+    const sectionTitle = selectedQuota?.title || "";
 
     // freshness badge: 計算 snapshot 年齡
     let freshnessBadge = "";
-    const snapTs = representativeSnap?.updated_at;
-    if (snapTs) {
-      const ageSec = Math.max(0, Math.floor(Date.now() / 1000 - snapTs));
-      const ageText = ageSec < 60 ? "剛剛"
-        : ageSec < 3600 ? `${Math.floor(ageSec / 60)} 分鐘前`
-        : ageSec < 86400 ? `${Math.floor(ageSec / 3600)} 小時前`
-        : `${Math.floor(ageSec / 86400)} 天前`;
-      const freshCls = ageSec < 300 ? "fresh" : ageSec < 3600 ? "" : "stale";
+    const ageSec = quotaSnapshotAgeSeconds(representativeSnap);
+    if (ageSec !== null) {
+      const ageText = quotaSnapshotAgeText(ageSec);
+      const freshCls = ageSec < 300 ? "fresh" : ageSec < QUOTA_STALE_SECONDS ? "" : "stale";
       freshnessBadge = `<span class="quota-freshness ${freshCls}" title="snapshot 更新時間">${ageText}</span>`;
     }
 
@@ -1854,20 +1945,7 @@ async function refreshQuotas() {
     const globalRow = globalRunners.length > 0
       ? `<div class="quota-row-global">
         <div class="quota-section-title">${sectionTitle}${freshnessBadge}</div>
-        ${globalRunners.map(r => {
-          let cls = r.ok === false ? "quota-runner err" : "quota-runner";
-          const pct = runnerPct(r);
-          if (pct !== null) {
-            if (pct < 10) cls += " crit";
-            else if (pct < 20) cls += " warn";
-          }
-          const ring = pct !== null ? `<span class="percent-value">${pct}</span>` : "";
-          const style = pct !== null ? ` style="--pct:${pct}"` : "";
-          const text = (r.text || "").replace(/\*\*/g, "").replace(/`/g, "");
-          // 失敗 runner 顯示錯誤圖示
-          const errBadge = r.ok === false ? `<span class="quota-runner-err" title="Runner 執行失敗">⚠</span>` : "";
-          return `<div class="${cls}" data-provider="${esc(r.name || "")}"${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}${errBadge}</span><span class="quota-runner-text">${esc(text)}</span></div>`;
-        }).join("")}
+        ${globalRunners.map(r => renderQuotaRunner(r, { stale: isQuotaSnapshotStale(representativeSnap), includeProvider: true })).join("")}
       </div>`
       : "";
 
@@ -1888,10 +1966,6 @@ async function refreshQuotas() {
     }
   }
 }
-
-// ─── Providers in settings ───
-// OpenAB bot 優先顯示，本機 CLI 接在後面。codex_bot=OpenAB CODEX，codex=本機 CLI（獨立 id）。
-const PROVIDER_ORDER = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "claude", "codex", "copilot", "gemini"];
 
 async function renderProviders() {
   const detected = await invoke("detect_installed_providers");
@@ -2092,6 +2166,50 @@ async function saveConfig() {
 let lastStructureJson = ""; // tracks session add/remove/state changes (excludes timer)
 let lastState = null;
 
+function renderStateUnavailable(error) {
+  lastState = null;
+  lastStructureJson = "__state_unavailable__";
+  manualActiveProvider = null;
+  const project = $("capsule-project");
+  const status = $("capsule-status");
+  const time = $("capsule-time");
+  const icons = $("capsule-icons");
+  const count = $("capsule-count");
+  const quota = $("capsule-quota");
+  const errorDot = $("capsule-error-dot");
+  if (project) project.textContent = APP_NAME;
+  if (status) {
+    status.textContent = "資料來源中斷";
+    status.className = "capsule-status stale";
+  }
+  if (time) time.style.display = "none";
+  if (icons) icons.innerHTML = "";
+  if (count) count.classList.add("hidden");
+  if (quota) {
+    quota.classList.add("hidden");
+    quota.classList.remove("warn", "crit");
+    delete quota.dataset.provider;
+  }
+  if (errorDot) {
+    errorDot.classList.add("hidden");
+    errorDot.textContent = "";
+  }
+  const sessionList = $("session-list");
+  if (sessionList) {
+    sessionList.innerHTML = `<div class="event-empty">（資料來源中斷，暫停顯示舊 session）</div>`;
+  }
+  const filterBar = $("filter-bar");
+  if (filterBar) {
+    filterBar.classList.add("hidden");
+    filterBar.innerHTML = "";
+  }
+  for (const gridId of ["bot-grid", "local-grid"]) {
+    const grid = $(gridId);
+    if (grid) grid.innerHTML = `<div class="event-empty">（資料來源中斷）</div>`;
+  }
+  if (error) console.warn("[state] get_state failed; cleared stale UI", error);
+}
+
 async function refreshState() {
   if (refreshStateInFlight) {
     refreshStateQueued = true;
@@ -2131,6 +2249,7 @@ async function refreshState() {
       }
     }
   } catch (e) {
+    renderStateUnavailable(e);
   } finally {
     refreshStateInFlight = false;
     if (refreshStateQueued) {
@@ -2162,7 +2281,7 @@ function renderCapsule(st) {
   window.__lastSt = st;  // 給 click handler 用
 
   // Capsule icons: show active provider icons + 標記 current active (manual or auto)
-  const providers = st.active_providers.length > 0 ? st.active_providers : (s ? [s.provider] : ["cicx"]);
+  const providers = st.active_providers.length > 0 ? st.active_providers : (s ? [s.provider] : []);
   const activeProvider = s?.provider;
   $("capsule-icons").innerHTML = providers.map(p => {
     const iconHtml = providerIconHtml(p, 16);
@@ -2198,8 +2317,8 @@ function renderCapsule(st) {
     $("capsule-time").style.display = s.is_active ? "" : "none";
   } else {
     $("capsule-project").textContent = APP_NAME;
-    $("capsule-status").textContent = "";
-    $("capsule-status").className = "capsule-status";
+    $("capsule-status").textContent = st.session_count > 0 ? "尚無執行中" : "尚無事件";
+    $("capsule-status").className = "capsule-status idle";
     $("capsule-time").style.display = "none";
   }
 
@@ -2298,18 +2417,19 @@ function showCapsuleBrief(visible) {
   }
 }
 
-// 掃所有 local runner 的 raw 欄位找「最緊」配額（<100 的最小值），顯示在 capsule
+// 掃目前採用的 quota source 找「最緊」配額（<100 的最小值），顯示在 capsule
 function updateCapsuleQuota() {
   const el = $("capsule-quota");
   if (!el) return;
-  // R90: 合併 local snapshot + live API runners, live 優先（同 name 較新）以避免
-  // snapshot 還在 24h fresh 但 live 已抓到更緊 % 時被舊資料掩蓋。
-  const localRunners = window.__lastQuotaSnapshots?.__local__?.runners || [];
-  const liveRunners = (window.__lastLiveQuota?.runners || []).filter(r => r.ok);
-  const runnersByName = new Map();
-  for (const r of liveRunners) runnersByName.set(r.name, r);
-  for (const r of localRunners) if (!runnersByName.has(r.name)) runnersByName.set(r.name, r);
-  const runners = Array.from(runnersByName.values());
+  const selectedQuota = selectQuotaSnapshot(window.__lastQuotaSnapshots || {});
+  const snap = selectedQuota?.snap || null;
+  if (!snap || isQuotaSnapshotStale(snap)) {
+    el.classList.add("hidden");
+    el.classList.remove("warn", "crit");
+    delete el.dataset.provider;
+    return;
+  }
+  const runners = (snap.runners || []).filter(r => r.ok);
   let tightest = null; // {name, pct, icon}
   const ICONS = { claude: "⏱", codex: "🤖", copilot: "⚡", gemini: "💎" };
   for (const r of runners) {

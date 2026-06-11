@@ -434,6 +434,27 @@
   color: #c04a3e;
 }
 
+.quota-runner.stale{
+  border: 1px solid rgba(192,74,62,0.22);
+  background: rgba(192,74,62,0.08);
+  opacity: 0.82;
+}
+
+.quota-runner.stale .quota-runner-text{
+  color: #8a8680;
+}
+
+.quota-runner-stale{
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #c04a3e;
+  background: rgba(192,74,62,0.12);
+  vertical-align: middle;
+}
+
 /* =============================================================
    11. Quota runner error badge — 失敗 runner 圖示
    ============================================================= */

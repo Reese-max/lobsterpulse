@@ -140,8 +140,7 @@ impl Session {
                 // R144: 改用 `OPENAB_BOT_IDS` 單一 source of truth 對齊 lib.rs 9 隻 OpenAB bot
                 // 補齊。R78 前 inline 5-bot 漏 4 隻 (irisx_bot/grokx/lpbot/mimo) → 走 saturating_add
                 // 倒退風險。對齊 lib.rs:40 設計紀律 (R100 提取 + R67 護衛 chain 16 精神)。
-                let is_openab_bot = crate::OPENAB_BOT_IDS
-                    .contains(&event.provider.as_str());
+                let is_openab_bot = crate::OPENAB_BOT_IDS.contains(&event.provider.as_str());
                 if is_openab_bot {
                     if let Some(i) = event.tokens_input {
                         self.tokens_input = self.tokens_input.max(i);
@@ -590,8 +589,7 @@ impl SessionManager {
                 // 本機 CLI 未來若支援 token 事件預期送「delta」增量，用 add 避免漏累。
                 // R144: 對齊 Session::handle_event, 改用 `OPENAB_BOT_IDS` 單一 source of truth,
                 // 覆蓋 R78 補齊 9 隻 OpenAB bot (含 irisx_bot/grokx/lpbot/mimo)。
-                let is_openab_bot = crate::OPENAB_BOT_IDS
-                    .contains(&event.provider.as_str());
+                let is_openab_bot = crate::OPENAB_BOT_IDS.contains(&event.provider.as_str());
                 if is_openab_bot {
                     if let Some(i) = event.tokens_input {
                         entry.tokens_input = entry.tokens_input.max(i);
@@ -874,12 +872,7 @@ impl SessionManager {
         if let Some(s) = self.sessions.values().find(|s| s.is_active()) {
             return Some(s);
         }
-        if let Some(ref id) = self.active_session_id {
-            if let Some(s) = self.sessions.get(id) {
-                return Some(s);
-            }
-        }
-        self.sessions.values().next()
+        None
     }
 
     pub fn sorted_sessions(&self) -> Vec<SessionInfo> {
@@ -1304,7 +1297,7 @@ pub fn completed_sessions_p95_at(
 /// 1. 語意一致: P50 跟 P95 表徵同一 sliding window, 拆成兩 vec 反而
 ///    語意分裂 (「這份是 P95 sample, 那份是 P50 sample」實際上同一份
 ///    資料切兩次);
-/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 9 provider = 72KB,
+/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 13 provider 約 104KB,
 ///    開兩份 = 144KB (Tauri desktop app 不痛但仍是浪費);
 /// 3. Sort 成本不變: render 端 sort 一次, 兩個 quantile 共享;
 /// 4. 語意釐清成本低: doc comment 明寫「K31 復用 K30 samples」即可。
@@ -1374,7 +1367,7 @@ pub fn completed_sessions_p50_at(
 /// 1. 語意一致: P50/P95/P99 表徵同一 sliding window, 拆成兩/三 vec 反而
 ///    語意分裂 (「這份是 P99 sample, 那份是 P50 sample」實際上同一份
 ///    資料切三次);
-/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 9 provider = 72KB,
+/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 13 provider 約 104KB,
 ///    開三份 = 216KB (Tauri desktop app 不痛但仍是浪費);
 /// 3. Sort 成本不變: render 端 sort 一次, 三個 quantile 共享;
 /// 4. 語意釐清成本低: doc comment 明寫「K32 復用 K30 samples」即可。
@@ -1435,7 +1428,7 @@ pub fn completed_sessions_p99_at(
 /// 為什麼 K33 復用 K30 samples 而不是另開 `Vec<i64>`:
 /// 1. 語意一致: P50/P75/P95/P99 表徵同一 sliding window, 拆成多 vec 反而
 ///    語意分裂 (K33 doc 開頭已明寫共用設計, 跟 K30/K31/K32 同款);
-/// 2. 記憶體節省: 9 provider × 1024 × 8 bytes = 72KB, 開四份 = 288KB;
+/// 2. 記憶體節省: 13 provider × 1024 × 8 bytes 約 104KB, 開四份約 416KB;
 /// 3. Sort 成本不變: render 端 sort 一次, 四個 quantile 共享;
 /// 4. R54 護欄順手驗證 K33 跟 K30/K31/K32 bounds chain (min ≤ P50 ≤
 ///    P75 ≤ P95 ≤ P99 ≤ max) 互不污染。
@@ -1499,7 +1492,7 @@ pub fn completed_sessions_p75_at(
 /// 1. 語意一致: P25/P50/P75/P95/P99 表徵同一 sliding window, 拆成五 vec
 ///    反而語意分裂 (「這份是 P25 sample, 那份是 P75 sample」實際上同一份
 ///    資料切五次);
-/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 9 provider = 72KB,
+/// 2. 記憶體節省: 每個 provider 1024 * 8 bytes = 8KB, 13 provider 約 104KB,
 ///    開五份 = 360KB (Tauri desktop app 不痛但仍是浪費);
 /// 3. Sort 成本不變: render 端 sort 一次, 五個 quantile 共享;
 /// 4. 語意釐清成本低: doc comment 明寫「K34 復用 K30 samples」即可。
@@ -1543,7 +1536,7 @@ mod tests {
         completed_sessions_interarrival_at, completed_sessions_p25_at, completed_sessions_p50_at,
         completed_sessions_p75_at, completed_sessions_p95_at, completed_sessions_p99_at,
         completed_sessions_stddev_at, failure_to_completion_ratio_at, success_rate_at,
-        SessionManager, SessionTransition,
+        SessionManager, SessionState, SessionTransition,
     };
     use crate::hook_event::HookEvent;
     use chrono::{Duration, Utc};
@@ -1625,6 +1618,55 @@ mod tests {
             m.provider_totals.get("codex").map(|t| t.session_count),
             Some(1),
             "codex 累計應為 1"
+        );
+    }
+
+    #[test]
+    fn unknown_provider_totals_do_not_pollute_claude() {
+        // 現行 hook_server 會把未列入白名單的 provider 收斂到固定 "unknown" bucket。
+        // SessionManager 必須保留這個隔離，不能把 unknown event 混進 claude totals
+        // 造成 Claude 看似有假事件或假 session。
+        let mut m = SessionManager::new();
+
+        let _ = m.handle_event(&ev("unknown", "u1", "SessionStart"));
+        let _ = m.handle_event(&ev("unknown", "u1", "PostToolUse"));
+
+        let unknown = m
+            .provider_totals
+            .get("unknown")
+            .expect("unknown provider totals should exist");
+        assert_eq!(unknown.session_count, 1);
+        assert_eq!(unknown.events_total, 2);
+        assert!(
+            !m.provider_totals.contains_key("claude"),
+            "unknown event 不應建立或污染 claude provider_totals"
+        );
+        assert_eq!(
+            m.sessions.get("u1").map(|s| s.provider.as_str()),
+            Some("unknown"),
+            "live session provider 應保留在 unknown bucket"
+        );
+    }
+
+    #[test]
+    fn active_session_is_none_when_only_idle_sessions_remain() {
+        // `active_session` 是 capsule 主焦點資料源；沒有 active work 時不可回傳
+        // idle/stale session，否則 UI 會把歷史專案顯示成目前正在監控的焦點。
+        let mut m = SessionManager::new();
+        let _ = m.handle_event(&ev("claude", "idle-1", "SessionStart"));
+        let _ = m.handle_event(&ev("claude", "idle-1", "Stop"));
+
+        let state = m.get_state();
+        assert_eq!(state.session_count, 1);
+        assert_eq!(state.active_count, 0);
+        assert!(
+            state.active_session.is_none(),
+            "只有 idle session 時 active_session 必須是 None，避免 capsule 顯示假 active 焦點"
+        );
+        assert_eq!(
+            state.sessions.first().map(|s| s.state),
+            Some(SessionState::Idle),
+            "idle session 仍保留在 sessions 清單，只有 active_session 不應指向它"
         );
     }
 
@@ -5013,8 +5055,19 @@ mod tests {
 
         // 13 個 provider × 3 種事件 = 39 條 event 灌進 evaluate_rules
         let providers = [
-            "claude", "codex", "gemini", "copilot", "cicx", "gitx", "giminix",
-            "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo",
+            "claude",
+            "codex",
+            "gemini",
+            "copilot",
+            "cicx",
+            "gitx",
+            "giminix",
+            "codex_bot",
+            "openx",
+            "irisx_bot",
+            "grokx",
+            "lpbot",
+            "mimo",
         ];
         let mut total = 0u64;
         for p in &providers {

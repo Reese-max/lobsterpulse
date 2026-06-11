@@ -193,6 +193,18 @@ fn timeline_snapshot_24h(manager: tauri::State<AppSessionManager>) -> Vec<Vec<u8
     manager.0.lock().unwrap().timeline_ring.snapshot_24h()
 }
 
+/// timeline_recorded_event_count: 回傳成功寫入 timeline 的事件數。
+/// 0 代表 snapshot 只是初始化 Idle 填充，前端不可畫成「100% Idle」假歷史。
+#[tauri::command]
+fn timeline_recorded_event_count(manager: tauri::State<AppSessionManager>) -> u64 {
+    manager
+        .0
+        .lock()
+        .unwrap()
+        .timeline_ring
+        .recorded_event_count()
+}
+
 /// R131 M1.1: timeline_snapshot_7d — 對齊 `cross-provider-timeline/design.md`
 /// §5 開放問題 #1 兩條固定 buffer 提案 (24h 1min × 18.3KB + 7d 1min × 128KB,
 /// 加總 < 150KB 守 K41 紅線)。前端 Timeline view 切 7d 解析度時呼叫,
@@ -1147,7 +1159,7 @@ mod read_usage_snapshot_tests {
     /// (`default_providers` / `default_provider_sounds` /
     /// `default_provider_waiting_sounds` / `detect_providers`) 但漏了第 5 同步點
     /// `hook_server::KNOWN_PROVIDERS`」,IRISX 事件 POST `/hook/irisx_bot` 走完
-    /// parse_provider fallback "claude",K40 metric
+    /// parse_provider 收斂到 unknown（舊版曾 fallback "claude"）,K40 metric
     /// `lobsterpulse_provider_sessions{provider="irisx_bot"}` 永遠 0。
     ///
     /// R73 才補完第 5 同步點。本護欄是 R73 護欄 chain 16 對稱面延伸到「OpenAB
@@ -1166,8 +1178,8 @@ mod read_usage_snapshot_tests {
                 known.contains(bot),
                 "OPENAB_BOT_IDS 含 {bot:?} 但 hook_server::KNOWN_PROVIDERS 沒有, \
                  對齊 R70/R73 spec drift 修:任何 OpenAB bot id 必須同時登錄 \
-                 KNOWN_PROVIDERS 白名單,缺同步會讓 parse_provider 走 fallback \
-                 \"claude\" 害 K40 metric provider=\"{bot}\" 永遠 0 \
+                 KNOWN_PROVIDERS 白名單,缺同步會讓 parse_provider 收斂到 unknown \
+                 害 K40 metric provider=\"{bot}\" 永遠 0 \
                  (KNOWN_PROVIDERS = {:?})",
                 KNOWN_PROVIDERS
             );
@@ -3007,7 +3019,7 @@ fn render_prometheus_body(
     // 對齊 SessionState enum serde 標籤 (idle / working / waiting_for_user / stale)
     // —— Prometheus query label 跟前端 SessionInfo.state JSON 序列化直接一致。
     //
-    // Cardinality 上限:9 provider × 4 state = 36 series,跟 K6 (9 series) 同量級,
+    // Cardinality 上限:13 provider × 4 state = 52 series,跟 K6 (13 series) 同量級,
     // 可控。空 sessions 對應空 map → 沒 sample line (HELP/TYPE 標頭仍輸出,跟 K6/K7/
     // K9/K13 既契約一致)。
     //
@@ -3043,7 +3055,7 @@ fn render_prometheus_body(
     // 跟 K6/K7/K9/K13 lifetime aggregate 對齊：ProviderTotals.event_type_counts
     // session 結束 + 30 min stale 回收後仍保留 → Prometheus 端 counter 不倒退。
     //
-    // Cardinality:9 provider × ~10 known event type ≈ 90 series 上限,可控。
+    // Cardinality:13 provider × ~10 known event type ≈ 130 series 上限,可控。
     // 空 `event_type_counts` 的 provider 不會產出 sample（`for` 自然跳過）。
     // 排序:by (provider, type) 兩段排序,跟既有 K6-K13 排序契約一致。
     out.push_str("# HELP lobsterpulse_provider_event_type_total Lifetime event count per provider per event type (counter; rate() per type label)\n# TYPE lobsterpulse_provider_event_type_total counter\n");
@@ -3132,7 +3144,7 @@ fn render_prometheus_body(
         "lobsterpulse_hook_responses_total{{class=\"5xx\"}} {}\n",
         hook_metrics.responses_5xx
     ));
-    // K46 落地：parse_provider 白名單沒命中 → fallback "claude" 的 lifetime 累計。
+    // K46 落地：parse_provider 白名單沒命中 → 收斂到 "unknown" 的 lifetime 累計。
     // 對齊 K15/K16 模式：counter + rate() = throughput。與 K16 4xx 的差別：
     //   - K16 4xx 計「server wire-level 對外回了 4xx」分類（包含 body 缺失 +
     //     JSON parse 失敗等所有 4xx 原因）
@@ -3140,7 +3152,7 @@ fn render_prometheus_body(
     // 同一個 4xx 不一定 ++ K46（只有 provider 解析階段失敗才會），兩個 metric
     // 維度不同，operator 依需求選用。`rate(...[5m]) > 0` 通常代表 hook config
     // 有 typo 或 CLI 升版改了 provider id — 跟 log warn 配對方便定位。
-    out.push_str("# HELP lobsterpulse_hook_unknown_provider_fallbacks_total Lifetime count of hook_server parse_provider falling back to \"claude\" because provider id was not in the known whitelist (counter; rate() for throughput)\n# TYPE lobsterpulse_hook_unknown_provider_fallbacks_total counter\n");
+    out.push_str("# HELP lobsterpulse_hook_unknown_provider_fallbacks_total Lifetime count of hook_server parse_provider collapsing to \"unknown\" because provider id was not in the known whitelist (counter; rate() for throughput)\n# TYPE lobsterpulse_hook_unknown_provider_fallbacks_total counter\n");
     out.push_str(&format!(
         "lobsterpulse_hook_unknown_provider_fallbacks_total {}\n",
         hook_metrics.unknown_provider_fallbacks
@@ -3880,6 +3892,7 @@ pub fn run() {
             get_quota_history,
             remove_all_sessions,
             timeline_snapshot_24h,
+            timeline_recorded_event_count,
             timeline_toggle_resolution,
             timeline_jump_to_event,
             open_configurator,
@@ -8247,7 +8260,7 @@ mod render_prometheus_tests {
     // 跟 session.rs R55/R56 pure fn 護欄對齊 — 純 fn 端驗 chain 在 ProviderTotals
     // 寫入時成立, render 端驗同一不變式在 emit 後 Prometheus 抓得到的字串上仍成立。
     // K30-K34 五件套共用 `completed_sessions_p95_samples: Vec<i64>` 同一份 reservoir
-    // (跟 K33 doc 開頭 + R54 K30 P95 fixture 同款 — 不開新欄位, 9 provider 72KB),
+    // (跟 K33 doc 開頭 + R54 K30 P95 fixture 同款 — 不開新欄位, 13 provider 約 104KB),
     // K27 `min_completed_session_age_secs: Option<i64>` 獨立 lifetime aggregate。
     //
     // Chain 數學:
@@ -11740,8 +11753,8 @@ mod render_prometheus_tests {
                 ProviderTotals {
                     tokens_input: i * 100,
                     tokens_output: i * 50,
-                    session_count: i * 3,                // K9 lifetime 不為 0
-                    failure_count: idx as u64,            // K7 區分 provider (0 仍 emit 0)
+                    session_count: i * 3,      // K9 lifetime 不為 0
+                    failure_count: idx as u64, // K7 區分 provider (0 仍 emit 0)
                     events_total: i * 5,
                     event_type_counts: std::collections::BTreeMap::new(),
                     since: Some(Utc::now() - chrono::Duration::seconds(60 * (i as i64))),
@@ -12022,9 +12035,9 @@ mod r127_daemon_exclusion_gitignore_tests {
         // 3 個結構性全掃描發現的同類 gap: 既有 R127/R135 護衛 6+1 個 path 都
         // 不收這 3 個, R137 worker 補網閉合 R13 防護線同類特徵全集
         let required = [
-            ".pytest_cache/",        // pytest cache, 跟 __pycache__/ 同源
-            ".supervisor-*.log",     // supervisor daemon log (history + k4-alert)
-            // 行內匹配 + 雙星模式, 跟 R127/R135 護衛風格一致
+            ".pytest_cache/", // pytest cache, 跟 __pycache__/ 同源
+            ".supervisor-*.log", // supervisor daemon log (history + k4-alert)
+                              // 行內匹配 + 雙星模式, 跟 R127/R135 護衛風格一致
         ];
         for pattern in required {
             assert!(

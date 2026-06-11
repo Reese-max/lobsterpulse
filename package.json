@@ -5,6 +5,8 @@
   "scripts": {
     "tauri": "cargo tauri",
     "dev": "cargo tauri dev",
-    "build": "cargo tauri build"
+    "build": "cargo tauri build",
+    "test:provider-inventory": "node scripts/provider_inventory_guard.mjs",
+    "test:ui-no-fake-data": "npm exec --yes --package playwright -- node scripts/ui_no_fake_data_runner.mjs"
   }
 }

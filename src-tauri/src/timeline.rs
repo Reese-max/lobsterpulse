@@ -65,6 +65,8 @@ pub struct TimelineRing {
     provider_index: HashMap<String, usize>,
     /// 最近一次 record_event 收到的 minute 計數 (用於 stale detection)
     current_minute: u32,
+    /// 已成功寫入 timeline 的事件數。用來區分「初始化 Idle 填充」與「真實觀測到 Idle」。
+    recorded_event_count: u64,
 }
 
 /// 將 `SessionState` 對映到 Timeline u8 encoding。SSoT 對齊 R-CPT-4
@@ -92,6 +94,7 @@ impl TimelineRing {
             cells_7d: vec![STATE_IDLE; n * CELLS_PER_PROVIDER_7D],
             provider_index,
             current_minute: 0,
+            recorded_event_count: 0,
         }
     }
 
@@ -117,6 +120,7 @@ impl TimelineRing {
         let idx_7d = row * CELLS_PER_PROVIDER_7D + col_7d;
         self.cells_7d[idx_7d] = state;
         self.current_minute = minute;
+        self.recorded_event_count = self.recorded_event_count.saturating_add(1);
     }
 
     /// 13 row × 1440 cell snapshot。對齊 R-CPT-1 Scenario "24h 解析度 toggle
@@ -151,6 +155,11 @@ impl TimelineRing {
     /// 護衛測試用:current_minute 計數。
     pub fn current_minute(&self) -> u32 {
         self.current_minute
+    }
+
+    /// 成功寫入 timeline 的事件數。0 代表沒有任何觀測資料，前端不可把初始 Idle cell 當真。
+    pub fn recorded_event_count(&self) -> u64 {
+        self.recorded_event_count
     }
 }
 
@@ -266,6 +275,37 @@ mod tests {
         let snap = ring.snapshot_24h();
         assert_eq!(snap[3][100], STATE_IDLE, "未知 provider 不污染 buffer");
         assert_eq!(ring.current_minute(), 1440, "current_minute 走已知最後一次");
+    }
+
+    #[test]
+    fn timeline_ring_tracks_recorded_event_count() {
+        let mut ring = TimelineRing::new();
+        assert_eq!(
+            ring.recorded_event_count(),
+            0,
+            "new timeline ring has no observed data; idle-filled cells must not be treated as real events"
+        );
+
+        ring.record_event("claude", STATE_IDLE, 0);
+        assert_eq!(
+            ring.recorded_event_count(),
+            1,
+            "an explicit idle event is observed data and must be distinguishable from no data"
+        );
+
+        ring.record_event("ghost_provider_xyz", STATE_WORKING, 1);
+        assert_eq!(
+            ring.recorded_event_count(),
+            1,
+            "unknown providers are dropped and must not increase observed timeline data"
+        );
+
+        ring.record_event("claude", STATE_WORKING + 10, 2);
+        assert_eq!(
+            ring.recorded_event_count(),
+            1,
+            "invalid state bytes are dropped and must not increase observed timeline data"
+        );
     }
 
     #[test]

@@ -1534,7 +1534,7 @@ function renderDashboardGrid(gridId, dashboardBots, sessions) {
         <span class="bot-card-state ${stateCls}">${stateLabel}${thinkingDot}</span>
       </div>
       <div class="bot-card-row">
-        <span class="bot-card-meta">${related.length} session${related.length === 1 ? "" : "s"}</span>
+        <span class="bot-card-meta">${related.length} 場</span>
         <span class="bot-card-meta bot-card-time">${lastActivity}</span>
       </div>
       ${toolChip || tokens ? `<div class="bot-card-row">${toolChip}${tokens}</div>` : ""}
@@ -1911,7 +1911,7 @@ async function refreshQuotas() {
       const badges = [
         `<span class="quota-badge" title="累計輸入 token">⬇ ${formatTokens(t.tokens_input)}</span>`,
         `<span class="quota-badge" title="累計輸出 token">⬆ ${formatTokens(t.tokens_output)}</span>`,
-        `<span class="quota-badge" title="session 次數">${t.session_count} sess</span>`,
+        `<span class="quota-badge" title="session 次數">${t.session_count} 場</span>`,
         ...(t.failure_count > 0 ? [`<span class="quota-badge err" title="失敗次數">${t.failure_count} ❌</span>`] : []),
       ].join("");
       const nameShort = appConfig.providers[pid]?.name || pid;
@@ -2530,11 +2530,11 @@ function renderSessions(st) {
     const html = [active.map(s => renderSessionRow(s, aid)).join("")];
     if (idle.length >= 2) {
       html.push(
-        `<div class="session-cluster" data-cluster="idle" style="display:flex;align-items:center;gap:6px;padding:6px 10px;margin:4px 6px;border-radius:6px;background:rgba(128,128,128,0.08);cursor:pointer;font-size:12px;opacity:0.75;">
+        `<div class="session-cluster" data-cluster="idle">
           <span class="session-cluster-toggle">${idleClusterExpanded ? "▾" : "▸"}</span>
-          <span class="session-cluster-label">閒置 · ${idle.length} session${idle.length === 1 ? "" : "s"}</span>
+          <span class="session-cluster-label">閒置 · ${idle.length} 場</span>
           <span class="session-row-spacer"></span>
-          <span class="session-cluster-hint" style="font-size:10px;opacity:0.6;">點擊展開</span>
+          <span class="session-cluster-hint">點擊展開</span>
         </div>`
       );
       if (idleClusterExpanded) {

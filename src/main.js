@@ -1233,11 +1233,43 @@ function renderDashboard(st) {
   renderTrendGrid();
 }
 
+function quotaRunnerCurrentPct(r) {
+  if (!r?.ok || !r.raw) return null;
+  const raw = r.raw;
+  const candidates = [
+    raw.session_5h_remaining, raw.week_7d_remaining,
+    raw.h5_remaining, raw.wk_remaining,
+    raw.remaining_pct,
+  ].filter(v => typeof v === "number" && v >= 0 && v <= 100);
+  if (candidates.length === 0) return null;
+  return Math.round(Math.min(...candidates));
+}
+
+async function loadCurrentTrendQuotaPctByRunner() {
+  let snapshots = window.__lastQuotaSnapshots || {};
+  try {
+    const freshSnapshots = await invoke("read_usage_snapshots");
+    snapshots = { ...snapshots, ...freshSnapshots };
+  } catch (e) {
+    // Trend current can still use the last in-memory quota snapshot.
+  }
+  const selectedQuota = selectQuotaSnapshot(snapshots);
+  const snap = selectedQuota?.snap || null;
+  if (!snap || isQuotaSnapshotStale(snap)) return {};
+  const out = {};
+  for (const r of snap.runners || []) {
+    const pct = quotaRunnerCurrentPct(r);
+    if (pct !== null) out[r.name] = pct;
+  }
+  return out;
+}
+
 async function renderTrendGrid() {
   const grid = document.getElementById("trend-grid");
   if (!grid) return;
   let hist = {};
   try { hist = await invoke("get_quota_history"); } catch (e) { return; }
+  const currentPctByRunner = await loadCurrentTrendQuotaPctByRunner();
 
   // 過濾最近 N 天（7/30 可切）
   const rangeDays = window.__trendRangeDays || 7;
@@ -1277,13 +1309,14 @@ async function renderTrendGrid() {
     const series = filtered[name] || [];
     const pcts = series.map(([_, p]) => p);
     if (pcts.length === 0) return "";
-    const last = pcts[pcts.length - 1];
+    const historyLast = pcts[pcts.length - 1];
+    const current = currentPctByRunner[name] ?? historyLast;
     const min = Math.min(...pcts);
     const max = Math.max(...pcts);
     const color = TREND_COLORS[name] || "rgba(150,150,150,1)";
     return `<div class="bot-card" style="border-left:3px solid ${color}">
       <div class="bot-card-name">${escHtmlT(name)} <span style="opacity:0.5;font-size:10px">${series.length} 點 · ${rangeDays} 天</span></div>
-      <div style="font-size:11px;opacity:0.7">當前 <b>${last}%</b> · 低 ${min}% · 高 ${max}%</div>
+      <div style="font-size:11px;opacity:0.7">當前 <b>${current}%</b> · 低 ${min}% · 高 ${max}%</div>
       <canvas data-trend="${escHtmlT(name)}" width="280" height="40" style="width:100%;height:40px;display:block;margin-top:4px;cursor:crosshair"></canvas>
       <div data-tooltip="${escHtmlT(name)}" style="font-size:10px;opacity:0.6;min-height:12px"></div>
     </div>`;

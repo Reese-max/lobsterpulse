@@ -483,14 +483,14 @@
 }
 
 [data-theme="light"] .bot-grid{
-  gap: 7px;
-  padding: 5px 12px 9px;
+  gap: 6px;
+  padding: 4px 10px 8px;
 }
 
 [data-theme="light"] .bot-card{
-  gap: 3px;
-  min-height: 72px;
-  padding: 9px 10px 8px 13px !important;
+  gap: 2px;
+  min-height: 68px;
+  padding: 8px 9px 7px 12px !important;
 }
 
 [data-theme="light"] .bot-card-empty{
@@ -498,10 +498,16 @@
   background: rgba(255,255,255,0.42) !important;
   border: 1px dashed rgba(26,26,23,0.12);
   box-shadow: none;
+  min-height: 46px;
 }
 
 [data-theme="light"] .bot-card-empty::before{
   background: rgba(138,134,128,0.32);
+}
+
+[data-theme="light"] .bot-card-empty .bot-card-spark,
+[data-theme="light"] .bot-card-empty .bot-card-quota{
+  display: none;
 }
 
 [data-theme="light"] .bot-card-header{
@@ -530,7 +536,8 @@
 }
 
 [data-theme="light"] .bot-card-row{
-  gap: 4px;
+  gap: 3px;
+  min-height: 13px;
 }
 
 [data-theme="light"] .bot-card-meta,
@@ -540,7 +547,7 @@
 }
 
 [data-theme="light"] .bot-card-spark{
-  height: 16px;
+  height: 14px;
 }
 
 [data-theme="light"] .bot-card-quota{
@@ -647,4 +654,41 @@
 .session-cluster-hint{
   font-size: 10px;
   opacity: 0.62;
+}
+
+[data-theme="light"] #view-dashboard .dashboard-header,
+[data-theme="light"] #view-events-log .dashboard-header,
+[data-theme="light"] #view-timeline .dashboard-header{
+  padding: 6px 10px 3px;
+}
+
+[data-theme="light"] #view-dashboard .dashboard-title,
+[data-theme="light"] #view-events-log .dashboard-title,
+[data-theme="light"] #view-timeline .dashboard-title{
+  font-size: 10.5px;
+}
+
+[data-theme="light"] .quota-row-global .quota-runner{
+  --ring-size: 42px;
+  min-height: 48px;
+  padding: 6px 8px 6px 54px !important;
+}
+
+[data-theme="light"] .quota-row-global .quota-runner::before{
+  top: 8px;
+  bottom: 8px;
+}
+
+[data-theme="light"] .quota-row-global .quota-runner .percent-value{
+  left: 7px;
+  font-size: 11px;
+}
+
+[data-theme="light"] .quota-row-global .quota-runner-label{
+  font-size: 9.5px;
+}
+
+[data-theme="light"] .quota-row-global .quota-runner-text{
+  font-size: 8.8px;
+  line-height: 1.25;
 }

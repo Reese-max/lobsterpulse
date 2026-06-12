@@ -119,6 +119,7 @@ async function installMockTauri(page) {
       },
       staleQuota: baseState,
       freshQuota: baseState,
+      nullQuotaText: baseState,
       openabQuota: baseState,
       unknown: {
         ...baseState,
@@ -158,6 +159,23 @@ async function installMockTauri(page) {
         if (scenario === "quotaFailure") throw new Error("mock usage snapshots unavailable");
         if (scenario === "staleQuota") return { __local__: { source: "local", updated_at: staleTs, runners: [quotaRunner] } };
         if (scenario === "freshQuota") return { __local__: { source: "local", updated_at: freshTs, runners: [quotaRunner] } };
+        if (scenario === "nullQuotaText") return {
+          __local__: {
+            source: "local",
+            updated_at: freshTs,
+            runners: [{
+              name: "claude",
+              label: "Claude quota",
+              ok: true,
+              text: "5h **null%** · 7d **null%**",
+              raw: {
+                session_5h_remaining: null,
+                week_7d_remaining: null,
+                rate_headers_found: false,
+              },
+            }],
+          },
+        };
         if (scenario === "openabQuota") return { cicx: { source: "openab", updated_at: freshTs, runners: [quotaRunner] } };
         return {};
       },
@@ -293,6 +311,16 @@ async function run() {
       assert.equal(await page.locator(".quota-runner.stale").count(), 0, "fresh quota must not be downgraded");
       assert.match(await page.locator(".quota-runner .percent-value").innerText(), /7/);
       assert.match(await page.locator(".quota-runner").first().getAttribute("class"), /\bcrit\b/);
+      await page.close();
+    }
+
+    {
+      const page = await openScenario(browser, "nullQuotaText");
+      await page.waitForFunction(() => document.querySelectorAll(".quota-runner").length === 1);
+      assert.doesNotMatch(await page.locator(".quota-runner").innerText(), /null/i, "missing local quota must not render null literal");
+      assert.match(await page.locator(".quota-runner").innerText(), /--/, "missing local quota should render as unavailable");
+      assert.equal(await page.locator(".quota-runner .percent-value").count(), 0, "missing local quota must not render a fake percent ring");
+      assert.match(await page.locator("#capsule-quota").getAttribute("class"), /\bhidden\b/, "missing local quota must not show capsule alert");
       await page.close();
     }
 

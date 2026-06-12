@@ -1381,6 +1381,7 @@ fn render_handlebars(tpl: &str, json: &serde_json::Value) -> String {
         for (k, v) in obj {
             let value = match v {
                 serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => "--".to_string(),
                 _ => v.to_string(),
             };
             // 替 `{{ key }}` 和 `{{key}}` 兩種空白模式
@@ -1388,7 +1389,32 @@ fn render_handlebars(tpl: &str, json: &serde_json::Value) -> String {
             out = out.replace(&format!("{{{{{}}}}}", k), &value);
         }
     }
-    out
+    out.replace("--%", "--")
+}
+
+#[cfg(test)]
+mod render_handlebars_tests {
+    use super::render_handlebars;
+
+    #[test]
+    fn null_values_render_as_dash_not_null_literal() {
+        let json = serde_json::json!({
+            "session_5h_remaining": null,
+            "week_7d_remaining": null,
+            "today_tokens": "22.2M"
+        });
+
+        let rendered = render_handlebars(
+            "5h {{ session_5h_remaining }}% · 7d {{week_7d_remaining}}% · {{ today_tokens }}",
+            &json,
+        );
+
+        assert_eq!(rendered, "5h -- · 7d -- · 22.2M");
+        assert!(
+            !rendered.contains("null"),
+            "quota template must not show JSON null as a fake percent"
+        );
+    }
 }
 
 /// 以臨時檔 + rename 原子替換目標檔，避免讀取端拿到半寫內容。

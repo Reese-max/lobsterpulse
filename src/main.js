@@ -1444,7 +1444,11 @@ function renderQuotaRunner(r, { stale = false, includeProvider = false } = {}) {
   }
   const ring = pct !== null ? `<span class="percent-value">${pct}</span>` : "";
   const style = pct !== null ? ` style="--pct:${pct}"` : "";
-  const text = (r.text || "").replace(/\*\*/g, "").replace(/`/g, "");
+  const text = (r.text || "")
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "")
+    .replace(/\bnull%/gi, "--")
+    .replace(/\bnull\b/gi, "--");
   const errBadge = r.ok === false ? `<span class="quota-runner-err" title="Runner 執行失敗">⚠</span>` : "";
   const staleBadge = stale ? `<span class="quota-runner-stale" title="Snapshot 已超過 1 小時未更新，百分比已停用">舊</span>` : "";
   const providerAttr = includeProvider ? ` data-provider="${esc(r.name || "")}"` : "";

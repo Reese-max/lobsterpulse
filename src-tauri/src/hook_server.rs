@@ -365,9 +365,14 @@ fn parse_provider(data: &[u8], metrics: &MetricsCore) -> String {
     // Extract path from "POST /hook/provider HTTP/1.1"
     if let Some(path_start) = line.find("/hook/") {
         let after = &line[path_start + 6..];
+        // R210: 刪 dead code `else if let Some(end) = after.find(' ')` — 上面
+        // `find([' ', '/', '?'])` 的 char set 已含 ' ',第 2 個 else if 永遠不會
+        // 觸發。鏡像 R207 render_report delta_s 同型 M0 bug (dead branch) 抓法:
+        // Rust 編譯器不會警告 unused branch (control flow analysis 不追蹤 set
+        // 重疊), 只能靠 deep read 抓。修後語意不變: `after` 找得到 ' '/' '?' 任一
+        // → 取首個; 完全找不到 (e.g. `POST /hook/` 沒 provider) → fall through
+        // 視為 claude (backward compat, 既有 r66 adversarial test 守住)。
         let raw = if let Some(end) = after.find([' ', '/', '?']) {
-            after[..end].to_string()
-        } else if let Some(end) = after.find(' ') {
             after[..end].to_string()
         } else {
             return "claude".to_string();

@@ -3,6 +3,7 @@
 //! R82 開工，R85 落地，R89 經 Tauri command 接入 (`quota::anthropic::fetch`)。
 
 use super::RunnerQuota;
+use reqwest::header::{AUTHORIZATION, HeaderValue};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -74,6 +75,11 @@ fn fmt_tokens(n: u64) -> String {
     }
 }
 
+fn claude_oauth_authorization_value(token: &str) -> Result<HeaderValue, String> {
+    HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|e| format!("build authorization header: {e}"))
+}
+
 /// 讀 ~/.claude/.credentials.json 取 OAuth token
 fn read_credentials(home: &Path) -> Result<(String, String), String> {
     let path = home.join(".claude").join(".credentials.json");
@@ -142,7 +148,22 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 
     let resp = client
         .post(ANTHROPIC_API)
-        .header("x-api-key", &token)
+        .header(
+            AUTHORIZATION,
+            match claude_oauth_authorization_value(&token) {
+                Ok(v) => v,
+                Err(e) => {
+                    return RunnerQuota {
+                        name,
+                        label,
+                        color,
+                        ok: false,
+                        text: format!("⚠ {e}"),
+                        raw: None,
+                    };
+                }
+            },
+        )
         .header("anthropic-version", "2023-06-01")
         .json(&body)
         .send()
@@ -256,6 +277,12 @@ mod tests {
     fn fmt_tokens_billions_uses_b() {
         assert_eq!(fmt_tokens(1_000_000_000), "1.0B");
         assert_eq!(fmt_tokens(7_250_000_000), "7.3B");
+    }
+
+    #[test]
+    fn claude_oauth_authorization_value_uses_bearer_not_api_key() {
+        let value = claude_oauth_authorization_value("tok_123").unwrap();
+        assert_eq!(value.to_str().unwrap(), "Bearer tok_123");
     }
 
     #[test]

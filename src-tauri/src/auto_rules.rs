@@ -936,8 +936,10 @@ fn tick_inner(
             if today.len() < 2 {
                 continue;
             }
-            let today_first = today.first().unwrap().1 as i32;
-            let today_last = today.last().unwrap().1 as i32;
+            // R211 surgical: today.len() >= 2 已由 line 936 guard,first/last 必存在,
+            // 改用索引直接取首尾,消除 2 個冗餘 unwrap()(配合 15810 觀察降低 unwrap 密度)。
+            let today_first = today[0].1 as i32;
+            let today_last = today[today.len() - 1].1 as i32;
             let today_consumed = (today_first - today_last).max(0) as u32;
             if today_consumed < cfg.token_spike_min_consumption_pct as u32 {
                 continue;

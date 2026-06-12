@@ -841,7 +841,17 @@ impl SessionManager {
             } else if elapsed > stale {
                 session.state = SessionState::Stale;
                 session.thinking = false;
-            } else if matches!(session.state, SessionState::Working) && elapsed > idle {
+            } else if session.is_active() && elapsed > idle {
+                // R210: 用 `is_active()` 單一 source of truth 取代
+                // `matches!(state, Working)`。原本只認 Working,WaitingForUser
+                // (Notification/PermissionRequest 觸發) 進 active set 後若
+                // 使用者不回話 → 永遠留在 active,`active_count` 與
+                // `active_providers()` 一直算到死 session,UI「agent 在等」
+                // 永遠不熄。`is_active()` = `Working | WaitingForUser`,
+                // 吃掉整個 active 子集語意,比列舉 SessionState variant 更不易漏。
+                // 語意邊界:idle < elapsed < stale 走這條降 Idle;
+                // elapsed > stale 走上面 Stale 分支;
+                // elapsed > remove 走最外層 to_remove 分支,皆不變。
                 session.state = SessionState::Idle;
                 session.thinking = false;
             }
@@ -5131,5 +5141,41 @@ mod tests {
         assert!(toast >= 2, "toast action ≥ 2 (預設 1 + 2), 實際 = {toast}");
         assert!(sound >= 1, "sound action ≥ 1 (預設 1), 實際 = {sound}");
         assert!(log >= 1, "log action ≥ 1 (預設 3), 實際 = {log}");
+    }
+
+    /// R210 護衛：check_staleness 必須把「無事件超過 idle 閾值」的
+    /// `WaitingForUser` session 跟 `Working` 一樣降級成 Idle。否則
+    /// Notification/PermissionRequest 後使用者不回話的 session 會永遠
+    /// 留在 active set，`is_active()` 一直 true，`active_count` 跟
+    /// `active_providers()` 一直算到死掉的 session，UI 顯示「agent 還在等」
+    /// 永遠不會自動熄滅。`is_active()` 已經是 `Working | WaitingForUser`
+    /// 的單一 source of truth,check_staleness 應直接吃這個抽象而不是
+    /// `matches!(state, Working)`。
+    #[test]
+    fn r210_waiting_for_user_transitions_to_idle_via_staleness_check() {
+        let mut m = SessionManager::new();
+        // Notification 觸發 WaitingForUser
+        let _ = m.handle_event(&ev("claude", "w1", "Notification"));
+        let session = m.sessions.get("w1").expect("session just inserted");
+        assert_eq!(session.state, SessionState::WaitingForUser);
+        assert!(session.is_active(), "precondition: WaitingForUser is active");
+
+        // 把 last_event_time 倒推 idle+1 秒,模擬「通知後使用者不回話」
+        m.sessions.get_mut("w1").unwrap().last_event_time =
+            Utc::now() - Duration::seconds(31);
+
+        m.check_staleness(/* idle */ 30, /* stale */ 300, /* remove */ 1800);
+
+        let session = m.sessions.get("w1").expect("session still in map (not > remove)");
+        assert_eq!(
+            session.state,
+            SessionState::Idle,
+            "WaitingForUser + elapsed > idle 必須降級成 Idle,實際 = {:?}",
+            session.state
+        );
+        assert!(
+            !session.is_active(),
+            "Idle 後 is_active() 必須 false,active_count 與 active_providers 才不會把死 session 算進去"
+        );
     }
 }

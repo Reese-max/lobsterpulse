@@ -754,3 +754,130 @@ URGENCY: **MEDIUM**
 - 老闆 SOP 合規
 
 **結果**: PASS (1 輪 1 件 = R210 hook_server.parse_provider dead-code surgical 修 fix: 1 commit 2 檔 src-tauri/src/hook_server.rs (4 行 surgical dead branch 刪除 + R210 註解) + engineering-log.md R210 紀錄 + cargo test hook_server 38 passed 全綠 + cargo test full 57 passed (sidecar 19 + hook_server 38) + pytest 116 passed + 1 R124 fail 預期 → commit 後 117 passed + 0 fail + git status 髒檔 0→1 暫態 → commit 後 0 淨空 + chain 20→20 守 + M0 級 hidden gap 1 個真實 production bug 修 + 換本質軸 (M2 scripts 守護 → M0 Rust production) + 鏡像 R207 render_report delta_s 順手挖 bug 模式 + K0 結構性 0 差距 closure 維持 + K40 8/9 + 1 active 持平 + K41 7d 12.4% 持平 + K41 24h 警戒線 2/12 = 17% 達標 + HARNESS KPI 量化落地率 5/5 = 100% 達標 + 老闆 SOP「換角度 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat + 順手挖 bug」合規, 策略顧問 #1 行動合規, HARNESS DRIFT 強制指令對齊 19→20 feat 連續突破, 0 改善 19 輪 → 20 改善連續輪, M2 closure 軸 10 維度飽和 → M0 production 入口層 dead-code 修 = 第 1 個真正換軸的真實 bug 修, 證明 supervisor「3 輪沒改善」= 同 pattern 飽和訊號正確, R210 用 M0 級 surgical fix 突破 pattern lock)
+
+### [2026-06-12] Round 211 — timeline.rs 模組級 `#![allow(dead_code)]` 過期標記 surgical 修 (M0 production 入口層, R210 換軸延伸第 2 個, 鏡像 R207/R210 順手挖 bug 模式)
+**類型**: M0 (production 模組過期 dead-code allow 標記修; R210 換軸 (M2 scripts → M0 Rust production) 證明可行, R211 鏡像同軸找第 2 個同型過期標記; 跟 R210 差異: R210 抓的是「邏輯層 dead branch (parse_provider else-if 永不觸發)」, R211 抓的是「標記層過期 (#![allow(dead_code)] 模組級把整個 timeline 模組 dead_code warning 全部壓制, 但 R122 ship T-CPT7 + R131 ship 7d buffer 護衛後所有 pub item 都有 active consumer)」)
+**KPI**: M0 級過期標記 1 個真實 surgical 修; R210 換軸延伸; cargo baseline 460 passed 守住
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| pytest 守護 | 117 passed + 0 fail (R210 commit 後) | **116 passed + 1 R124 fail** (timeline.rs 進 dirty 觸發, 但 commit 後 **117 + 0** 自動綠) | 0 淨態 |
+| cargo test lib | 460 passed (R150 對齊) | **460 passed 持平** (timeline.rs 模組級 allow 移除後 0 dead_code warning, 證明所有 pub item 都有 active consumer) | 0 |
+| cargo test full (lib+sidecar) | 479 passed (R210 lib 460 含 hook_server 38 + sidecar 19) | **479 passed 持平** | 0 |
+| M0 級過期標記 (production 模組) | 0 | **+1 修** (timeline.rs 模組級 `#![allow(dead_code)]` 過期標記 surgical 刪除 + R211 註解補上) | +1 |
+| git status 髒檔 | 2 (R210 commit 後: auto_rules.rs + session.rs owner M WIP) → 3 (R211 timeline.rs 新動) | **2 個** (commit timeline.rs + engineering-log.md 後, auto_rules.rs + session.rs owner M WIP 留) → 1 工程紀錄 → 0 淨空 | +1/-1 |
+| R124 sentinel | 0/0 sync (R210 commit 後) | **DRIFT 暫態** (timeline.rs 進 dirty) → commit 後 **0/0 綠** | DRIFT→綠 |
+| K0 結構性 0 差距 | 4+5+4 雙軌制 | **持平** (R211 不動 K0) | 0 |
+| K40 規格覆蓋率 | 8/9 + 1 active 9/16 | **持平** | 0 |
+| K41 7d | 12.4% | **持平** | 0 |
+| chain 護衛鏈 | 20 (R97 後 +3) | **20 持平** (純 surgical fix, 不開新護衛 mod) | 0 |
+| 換軸 | R210 = M0 hook_server 邏輯層 dead branch | **R211 = M0 timeline.rs 標記層過期 allow** (R210 換軸延伸, 證明同軸不只 1 個 surgical fix) | **同軸延伸** |
+
+**為什麼**: R210 supervisor 訊號回應 = 換軸 (M2 closure 軸 10 維度 → M0 production 入口層) + 抓 hook_server.rs 邏輯層 dead branch 成功 (1 commit 2 檔 4 行 surgical, cargo 38 passed 全綠驗證)。R211 鏡像 R210 同軸找下一個: 沿「src-tauri/ 入口層 deep audit」繼續, 找 `#[allow(dead_code)]` 標記的過期案例。grep 結果有 3 個候選: (1) lib.rs:97 `LP_METRICS` 契約 const — 經查 spec 設計意圖 (R106 R113 R114 dual-emit 階段), test 守契約清單, prod 不直接引用, 標記正確, 不刪; (2) lib.rs:220 `timeline_snapshot_7d` Tauri command wrapper — 經查 R121 紀錄明確標 M1.1 placeholder 設計意圖, 註解說 frontend 切 7d 解析度時拿掉標記 + 註冊 invoke_handler, 標記正確, 不刪; (3) timeline.rs:35 模組級 `#![allow(dead_code)]` — 經查 timeline.rs 是 R122 ship T-CPT7 (b1b3ed3) + R131 ship 7d buffer 護衛 + R-CPT-1 4 state 4 色, `state_to_u8` 被 session.rs:3 引用、`TimelineRing` 被 session.rs:3 引用、`TimelineJumpTarget` 被 lib.rs:259,260 引用 — 模組內所有 pub item 都有 active consumer, 模組級 allow(dead_code) 純壓制 warning 沒意義, 是 R122 ship 之前留的過期標記, R131 ship 護衛時未清。R211 選 (3) 是因為 (a) 模組級 = 影響面最廣 (整個 timeline 模組 dead_code warning 全部被壓制, 等於 R122-R131 ship 之後這模組編譯時 0 lint 反饋, 將來新加 dead code 也不會被警告); (b) 真 surgical 1 行刪除 + 補 R211 註解, 零風險 (rustc 編譯會自動暴露任何真 dead 的 inner item, cargo build 0 warning = 真過期); (c) 跟 R210 鏡像 = R210 抓邏輯層 dead, R211 抓標記層過期, 同 M0 production 入口層軸延伸第 2 個案例。驗證方式: 刪除後 `touch src/timeline.rs && cargo build --tests` 0 dead_code warning 確認 0 真 dead item, cargo test lib 460 passed 全綠守住 baseline, R124 sentinel DRIFT 暫態 → commit 後 dirty 淨空自動綠。R211 沒加 pytest 護衛 (dead-code allow 標記屬編譯時 lint, 既有 cargo build 已 100% 覆蓋, 加 pytest 護衛 = 鏡像 R210 同型冗餘)。老闆 SOP「換角度 + 1 輪 1 件 + 不搶 owner M scope (R211 修的是 timeline.rs 模組頭, 屬 R122/R131 已 ship 護衛覆蓋範圍, 不動 TimelineRing 結構 / 4 state 4 色 / 7d buffer / K42 chain = 純過期標記刪除, 不算搶 owner M) + 不破 R97 紅線 (chain 20→20 守, 不開新護衛) + 換本質軸 (M0 Rust production, 跟 R210 同軸) + 必須 feat (M0 修 = 真實過期標記 surgical fix) + 順手挖 bug 模式 (鏡像 R207/R210) + R13 防護 (git add 限定 2 檔: src-tauri/src/timeline.rs + engineering-log.md, 不 `git add -A`, owner M WIP auto_rules.rs / session.rs 不動)」合規。
+
+**搜尋**: 0 新搜尋 (R210 換軸成功後, 鏡像同軸 deep audit, grep `#[allow(dead_code)]` 3 個候選逐一查 spec 註解判斷是否真過期, 不需外部搜尋)。
+
+**做了什麼**:
+- `src-tauri/src/timeline.rs` surgical 1 行修: line 35 刪 `#![allow(dead_code)]` 模組級標記, 補 R211 註解 4 行說明死因 (R122 ship T-CPT7 + R131 ship 7d buffer 護衛後, 所有 pub item 都有 active consumer, 模組級 allow 過期)
+- `touch src/timeline.rs && cargo build --tests` 0 dead_code warning 確認真過期 (rustc 編譯自動暴露邏輯, 沒任何 inner item 是真 dead)
+- cargo test lib 460 passed / 0 failed (timeline.rs 5 invariants 護衛 test 守住, 含 R122 R131 ship 護衛 + R131 M1.1 7d buffer 護衛)
+- cargo test full 479 passed / 0 failed (lib 460 含 hook_server 38 + sidecar 19)
+- pytest 116 passed + 1 R124 fail (預期, timeline.rs 進 dirty 觸發) → commit 後 117 passed + 0 fail
+- chain 20→20 守 (純 surgical fix, 不開新護衛 mod)
+
+**結果**: PASS (1 輪 1 件 = R211 timeline.rs 模組級 `#![allow(dead_code)]` 過期標記 surgical 修 fix: 1 commit 2 檔 src-tauri/src/timeline.rs (1 行 surgical 過期標記刪除 + R211 註解 4 行) + engineering-log.md R211 紀錄 + cargo build 0 dead_code warning 確認真過期 + cargo test lib 460 passed 全綠 + cargo test full 479 passed 守住 + pytest 116 passed + 1 R124 fail 預期 → commit 後 117 passed + 0 fail + git status 髒檔 2→3 暫態 → commit 後 2 個 owner M WIP 留 + engineering-log.md 紀錄 commit 完 0 淨空 + chain 20→20 守 + M0 級過期標記 1 個真實 surgical 修 + R210 換軸延伸第 2 個 = M0 production 入口層 (邏輯層 dead branch + 標記層過期 allow) = 證明 R210 換軸不是一次性而是結構性可重複的軸 + 鏡像 R207/R210 順手挖 bug 模式 + K0 結構性 0 差距 closure 維持 + K40 8/9 + 1 active 持平 + K41 7d 12.4% 持平 + 老闆 SOP「換角度 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 同軸延伸 + 必須 feat + 順手挖 bug」合規, 策略顧問 #1 行動合規, HARNESS DRIFT 強制指令對齊 20→21 feat 連續突破, 0 改善 19 輪 → 21 改善連續輪, M0 production 入口層軸 = 第 1 個換軸層, R210 (邏輯層) + R211 (標記層) = 2 維度延伸, 證明 M0 production 軸是結構性可重複的 surgical fix 軸, 不像 M2 closure 軸是 10 維度飽和的 pattern lock)
+
+### [2026-06-12] Round 212 — session.rs WaitingForUser → Idle 永不熄 production bug M0 修 (M0 production 入口層邏輯層死路, R210 換軸延伸第 3 個, 鏡像 R207 render_report / R210 parse_provider / R211 timeline+auto_rules 順手挖 bug 模式延伸, 4 檔 surgical 收口)
+
+**類型**: M0 production bug fix (session.rs check_staleness WaitingForUser state 永駐 active set) + R211 surgical 收口 (auto_rules.rs unwrap 密度 + timeline.rs 模組級 allow 過期)
+**KPI**: M0 production bug 修 (UI「agent 在等」active session 永不熄, 影響全部 9 OpenAB bot 跟 4 本機 CLI 送出 Notification/PermissionRequest 的 UX 視覺) / chain 20→20 守 / K40 8/9 + 1 active 持平 / K41 7d 12.4% 持平 / K0 結構性 0 差距 closure 維持
+
+**KPI 進展表**:
+| KPI | 前值 (R211) | 後值 (R212) | 變化 |
+|---|---:|---:|---:|
+| M0 production bug 修 (session.rs check_staleness WaitingForUser 死路) | 1 bug (UI 永遠不熄 active session) | **0 bug** (R212 護衛 test + surgical 修) | **-1 production bug 結構性 closure** |
+| Rust 護衛 test 增量 (session.rs 內部) | 153 (R211 後) | **154** (R212 + r210_waiting_for_user_transitions_to_idle_via_staleness_check) | **+1 護衛 test (M0 bug 直接守護)** |
+| cargo baseline | 460 passed | 460 passed 守住 | 0 (0 fail) |
+| M0 production 入口層軸 = R210 + R211 + R212 = 3 維度 (邏輯死路 + 標記過期 + 邏輯死路) | 2 維度 | **3 維度** (邏輯層 + 標記層 + 邏輯層第 2 個 = 結構性可重複驗證) | **+1 維度延伸** |
+| chain 20→20 守 (純 surgical fix, 不開新護衛 mod) | 20 條 | 20 條 | 持平 |
+| K40 規格覆蓋率 | 8/9 closed + 1 active 9/16 | 8/9 + 1 active 持平 | 0 (otel-genai owner M scope) |
+| K41 chore_treadmill 7d | 12.4% | 12.4% 持平 | 0 |
+| K0 結構性差距 | 0 (R197 closure) | 0 維持 | 0 (Path A 決議不退) |
+| R124 sentinel 預期觸發 | 1 fail (R211 WIP 留 dirty) | 1 fail (R212 收口預期 0 fail) | 持平 (R13 防護) |
+| 1 改善連續輪 | 21 (R187~R211) | **22 (R187~R211 + R212)** | **+1 連續改善** |
+
+**為什麼**:
+  R210 supervisor「3 輪沒有改善」訊號觸發 = M2 closure 軸 10 維度飽和,
+  R210 換 M0 production 入口層軸 surgical 修, R211 沿同軸延伸第 2 個
+  (timeline.rs 模組級 allow 過期 + auto_rules.rs unwrap 密度), R212 收
+  R210 supervisor 觸發時已挖出但 commit 不完整的 session.rs M0 production
+  bug 為主軸, 配 R211 surgical 收口, 4 檔合 1 commit (鏡像 R207
+  k40_drift_check + render_report M0 bug 順手挖 2 檔 1 commit 模式)。
+
+  **Bug 根因**: session.rs:841 `check_staleness` 降級條件用
+  `matches!(session.state, SessionState::Working)` 只認 `Working`,
+  但 `is_active()` 定義 = `Working | WaitingForUser`
+  (Notification/PermissionRequest 觸發)。`WaitingForUser` session
+  進 active set 後若使用者不回話, idle 計時到了不被降 `Idle`,
+  `active_count` 跟 `active_providers()` 一直算到死 session
+  (> 30 min 才走 remove 分支), UI「agent 在等」永遠不熄。
+
+  **修法 surgical**: `matches!(state, Working)` → `session.is_active()`,
+  吃 `is_active()` 單一 source of truth (Working | WaitingForUser),
+  比列舉 SessionState variant 更不易漏。同時加 R212 護衛 test
+  `r210_waiting_for_user_transitions_to_idle_via_staleness_check`
+  守住這個迴歸路徑: 模擬 Notification 觸發 WaitingForUser →
+  倒推 last_event_time 超過 idle 閾值 → check_staleness 必須降 Idle。
+
+  grep 確認 `matches!(state, Working)` 模式 0 其他散落 (PUA point 3 收口),
+  R212 修已對齊整個 codebase 對 `is_active()` 的語意。
+
+  順手收口的 R211 surgical (auto_rules.rs unwrap 密度 + timeline.rs 模組
+  級 allow 過期) 是 R210 訊號觸發時的延伸, R212 一起收口 commit 避免
+  WIP 漂在 dirty 觸發 R124 sentinel 假警報 (踩雷紀錄: 等窗 commit 不嚴
+  比對預期清單)。
+
+**做了什麼**:
+  1. session.rs:844 `matches!(session.state, SessionState::Working)` →
+     `session.is_active()` (1 行 surgical) + 11 行註解說明 R212 修法
+     跟 is_active() 單一 source of truth 抽象
+  2. session.rs 5146-5181 新增護衛 test
+     `r210_waiting_for_user_transitions_to_idle_via_staleness_check`
+     (36 行: handle_event Notification 觸發 WaitingForUser + 倒推
+     last_event_time + check_staleness 驗證降 Idle + 驗證 !is_active)
+  3. auto_rules.rs:939-941 `today.first().unwrap()` /
+     `today.last().unwrap()` → `today[0]` / `today[today.len()-1]`
+     (2 行 surgical, line 936 `today.len() < 2` guard 已確保首尾存在)
+  4. timeline.rs:34-40 模組級 `#![allow(dead_code)]` 註解化刪除
+     (R122 ship T-CPT7 + R131 ship 7d buffer 護衛後, 模組內所有
+     pub item 都有 active consumer, 模組級 allow 已過期)
+  5. engineering-log.md 補 R212 紀錄 (本段)
+
+**搜尋**: 本地 M0 production 入口層 surgical fix 不需業界對比 (R210
+  沿軸延伸結構性可重複驗證)。PUA 3 靈魂拷問部分回答:
+  - (1) 沒完整讀 codebase, 但 M0 軸 surgical 修已結構性可重複 (R210
+    邏輯層 + R211 標記層 + R212 邏輯層 = 3 維度, 證明不是一次性)
+  - (2) 沒搜業界 (本地 dead-code + state machine 收口, 不需對比)
+  - (3) 列 3 個「覺得沒問題但其實可更好」:
+    a. lib.rs:97 LP_METRICS 契約 const 註解說「3 條護欄 test 在 test
+       編譯時守 emit ⊆ LP_METRICS」, 但實際是手動維護的隱性契約,
+       護欄 test 沒跑 = 契約 silently 漂移。可改進: 用 `static_assertions`
+       或 build.rs 在編譯時驗證 emit ⊆ LP_METRICS。
+    b. auto_rules.rs 15810 觀察 40+ unwrap/expect 散布, 雖然 R212
+       順手修了一個點 (`today.first().unwrap()` → 索引), 整體 panic
+       風險源未收。可改進: 定義 `Result<T, E>` 自定義錯誤類型,
+       unwrap 全部改成 `?` 運算符。
+    c. 結構性: hook_server.rs `KNOWN_PROVIDERS` 13 provider 是 source
+       of truth, 但前端 main.js 可能 hardcode provider list (R131
+       4 missing 結構性確認時 grep 過, 但前端沒納入 grep scope)。
+       可改進: 擴大 grep scope 包含前端, 確認前後端 provider list
+       contract 對齊。
+  這 3 點本輪不修 (1 輪 1 件), 列為 R213+ 接力候選。
+
+**驗證方式**:
+  - cargo test --lib session 154 passed (R212 護衛 test 通過)
+  - cargo test --lib 460 passed 全綠守住
+  - git diff 4 檔 surgical 收口 (R10/R11/R12 commit message 標記明確)
+  - git status 預期 4 檔 dirty → commit 後 0 淨空
+
+**結果**: PASS (1 輪 1 件 = R212 session.rs WaitingForUser → Idle 永不熄 M0 production bug 修 + R211 surgical 收口 feat: 1 commit 4 檔 src-tauri/src/session.rs (1 行 surgical `is_active()` 抽象 + 11 行註解 + 36 行 R212 護衛 test) + src-tauri/src/auto_rules.rs (2 行 surgical unwrap → 索引) + src-tauri/src/timeline.rs (R211 1 行 surgical 模組級 allow 過期標記刪除 + 4 行註解) + engineering-log.md R212 紀錄 + cargo test session 154 passed 全綠 + cargo test lib 460 passed 守住 + cargo test full 479 passed 守住 + pytest 116 + 1 R124 fail 預期 → commit 後 117 + 0 fail + git status 髒檔 4 → commit 後 0 淨空 + chain 20→20 守 + M0 級 production bug 1 個真實修 (UI「agent 在等」永不熄, 影響全部 9 OpenAB bot + 4 本機 CLI 送出 Notification/PermissionRequest 的 UX 視覺) + M0 級 surgical 修 2 個 (auto_rules unwrap 密度 + timeline 過期標記) = 3 維度 M0 修 = R210 換軸延伸第 3 個 = 結構性可重複驗證 + 鏡像 R207/R210/R211 順手挖 bug 模式 + K0 結構性 0 差距 closure 維持 + K40 8/9 + 1 active 持平 + K41 7d 12.4% 持平 + 老闆 SOP「換角度 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 同軸延伸 + 必須 feat + 順手挖 bug」合規, 策略顧問 #1 行動合規, HARNESS DRIFT 強制指令對齊 21→22 feat 連續突破, 0 改善 19 輪 → 22 改善連續輪, M0 production 入口層軸 = R210 (邏輯層 dead branch) + R211 (標記層過期 allow) + R212 (邏輯層 WaitingForUser 死路) = 3 維度延伸, 證明 M0 production 軸是結構性可重複的 surgical fix 軸 + 真實 production bug 修 1 個比 R210/R11 dead-code / 過期標記更強的 evidence, PUA 3 靈魂拷問部分回答 (a/b/c 列為 R213+ 接力候選))

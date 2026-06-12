@@ -31,8 +31,12 @@
 //! M0 守住 chain 17, M1 加護衛 test → chain 18。架構理由 doc 見
 //! engineering-log.md R122 entry。R131 M1.1 加 7d buffer 護衛 走
 //! timeline::tests 既有 mod (chain 19 內延伸, 對齊 R70 補完模式)。
-
-#![allow(dead_code)]
+//!
+//! R211 surgical fix: 移除模組級 `#![allow(dead_code)]`。R122 ship
+//! T-CPT7 (b1b3ed3) + R131 ship 7d buffer 護衛後, `state_to_u8` 被
+//! session.rs:3 引用、`TimelineRing` 被 session.rs:3 引用、
+//! `TimelineJumpTarget` 被 lib.rs:259,260 引用 — 模組內所有 pub item
+//! 都有 active consumer, 模組級 allow(dead_code) 已過期。
 
 use crate::hook_server::KNOWN_PROVIDERS;
 use crate::session::SessionState;

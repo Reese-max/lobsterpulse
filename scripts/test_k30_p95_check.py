@@ -158,5 +158,136 @@ def test_measure_k30_p95_coverage___local__標籤存在_不計入_emit_count_守
     buggy_emit = set(buggy_metrics.keys())  # 沒過濾 __local__
     assert "__local__" in buggy_emit, \
         "parse_p95_metric_line 不過濾 (合理, parse 純結構), 量化層 measure 才過濾"
-    # K30 measure 守護鏈守住過濾
+    # K30 measure 守衛鏈守住過濾
     assert "__local__" not in k30.measure_k30_p95_coverage(metrics_text)[2]
+
+
+# ---------- R209 4 case M0 級 hidden gap pytest 護衛延伸 ----------
+# 鏡像 R204 k0_drift_check / R206 chain_staleness_drift_check / R207 k40_drift_check
+# 內部函式 hidden gap 守護模式, 跨 5 個不同 KPI 維度對稱 (R201 4 case baseline
+# → R209 +4 = 8 case 合計, closure 軸 10 → 11 維度換 K30 P95 主腳本剩餘
+# fetch_live_metrics / render_report / main + K30_METRIC_NAME 常數契約 4 對象)。
+
+def test_fetch_live_metrics_連線拒絕_不_raise_回_False_空字串_守住():
+    """守 K30 P95 fetch_live_metrics 異常處理不退化為 raise
+
+    Hidden gap: 若有人改 fetch_live_metrics 把 (URLError, OSError) 改成
+    raise 而非 return (False, "") → main() 端 try/except 假定永不 raise,
+    整個 K30 chain 崩潰, 退出碼 0 假陽性 (跟 R188/R198 endpoint DOWN +
+    down_suffix 守護同模式, 跨 K0 → K30 維度對稱)。
+    """
+    import urllib.error
+
+    # OSError (connection refused) 必須 swallow 回 (False, "")
+    with mock.patch("k30_p95_check.urllib.request.urlopen",
+                    side_effect=OSError("Connection refused")):
+        alive, text = k30.fetch_live_metrics(
+            url="http://127.0.0.1:1/metrics", timeout=1)
+    assert alive is False, \
+        "OSError 必須回 False 不 raise, K30 守衛鏈守住 main endpoint_alive 路徑"
+    assert text == "", "alive=False 時 text 必須空字串"
+
+    # URLError (DNS fail) 必須 swallow 回 (False, "")
+    with mock.patch("k30_p95_check.urllib.request.urlopen",
+                    side_effect=urllib.error.URLError("DNS fail")):
+        alive, text = k30.fetch_live_metrics(
+            url="http://invalid.example.host/metrics", timeout=1)
+    assert alive is False
+    assert text == ""
+
+    # happy path: 200 + 文本
+    with mock.patch("k30_p95_check.urllib.request.urlopen") as m:
+        m.return_value.__enter__.return_value.read.return_value = b"ok"
+        alive, text = k30.fetch_live_metrics(
+            url="http://127.0.0.1:19380/metrics", timeout=1)
+    assert alive is True
+    assert text == "ok"
+
+
+def test_render_report_emit_providers_排序_鎖定_alphabetical_守住():
+    """守 K30 P95 render_report 報表 emit_providers 排序契約不退
+
+    Hidden gap: 若有人改 render_report 把 `sorted(emit_set)` 拿掉 →
+    報表 emit_providers 順序隨 set 內部 hash 浮動, 對齊 R198 K0 endpoint
+    live render 契約 (sorted 鎖定), 防「row 順序漂移」silent 造假。
+    雖然 main() 傳入前已 sorted, 但 render 端需守住 sorted 契約, 將來
+    若有人直接傳 unsorted emit_set 進 render 仍能鎖定順序。
+    """
+    # 給一個未排序的 emit_set (模擬 caller 端漏 sorted)
+    unsorted_emit = {"openx", "claude", "gemini", "copilot", "codex"}
+    out = {"chain_invariant_ok": True}
+    report = k30.render_report(True, 5, 13, unsorted_emit, out)
+
+    # 守 sorted 鎖定: 報表內 emit_providers 順序應為 alphabetical
+    expected = "emit providers : ['claude', 'codex', 'copilot', 'gemini', 'openx']"
+    assert expected in report, \
+        f"emit_providers 排序必須 alphabetical 鎖定, 缺契約: {expected!r} not in {report!r}"
+
+    # 守 chain_invariant_ok 顯示
+    assert "chain OK       : True" in report, \
+        f"chain_invariant_ok 顯示契約不退, 缺 True 顯示: {report!r}"
+
+    # 守 K30 P95 emit 覆蓋率顯示契約
+    assert "K30 P95 emit   : 5/13" in report, \
+        f"K30 emit 覆蓋率顯示契約不退, 缺 5/13: {report!r}"
+
+
+def test_K30_METRIC_NAME_常量_完整_對齊_lib_rs_2797_契約_不退():
+    """守 K30 P95 metric name 完整字串契約不退化
+
+    Hidden gap: 若有人改 K30_METRIC_NAME 拿掉某段 (e.g. `completed_sessions_`)
+    → parse_p95_metric_line regex 仍認, 但 emit 端 lib.rs:2797 完整 name
+    含 `completed_sessions_` 段, 量化閉合鏈 silent 漂移。對齊 R188 /
+    R196 / R198 / R206 / R207 同模式 (K0 / K40 / chain_staleness / k30
+    metric name 契約守護)。
+    """
+    expected_main = "lobsterpulse_provider_completed_sessions_p95_duration_seconds"
+    assert k30.K30_METRIC_NAME == expected_main, \
+        f"K30 P95 metric name 必須對齊 lib.rs:2797 emit 端, 實得 {k30.K30_METRIC_NAME!r}"
+
+    # 守 K30-K34 五件套 chain invariant 用的 percentile metrics 全部對齊
+    expected_p25 = "lobsterpulse_provider_completed_sessions_p25_duration_seconds"
+    expected_p50 = "lobsterpulse_provider_completed_sessions_p50_duration_seconds"
+    expected_p75 = "lobsterpulse_provider_completed_sessions_p75_duration_seconds"
+    expected_p95 = "lobsterpulse_provider_completed_sessions_p95_duration_seconds"
+    expected_p99 = "lobsterpulse_provider_completed_sessions_p99_duration_seconds"
+    assert k30.K30_PERCENTILE_METRICS["p25"] == expected_p25
+    assert k30.K30_PERCENTILE_METRICS["p50"] == expected_p50
+    assert k30.K30_PERCENTILE_METRICS["p75"] == expected_p75
+    assert k30.K30_PERCENTILE_METRICS["p95"] == expected_p95
+    assert k30.K30_PERCENTILE_METRICS["p99"] == expected_p99
+
+    # p25/p50/p75/p95/p99 五件套齊備, 守住 R53 chain invariant 5 量化口徑
+    assert set(k30.K30_PERCENTILE_METRICS.keys()) == {"p25", "p50", "p75", "p95", "p99"}, \
+        "K30-K34 五件套 percentile keys 必須齊備不退"
+
+
+def test_main_chain_invariant_漂移_退出碼_1_守住_fail_closed():
+    """守 K30 P95 main() chain_invariant 漂移 → 退出碼 1 fail-closed
+
+    Hidden gap: 若有人改 main 把 chain invariant 漂移當 warning 不阻斷
+    (return 0) → R53 chain 護衛 K-Foundation 量化口徑悄悄漂移, K30 chain
+    invariant 失去 fail-closed 保護。對齊 R196 / R197 / R204 fail-closed
+    行為守護模式, 跨 K0 / K40 / K30 維度對稱。
+    """
+    # 模擬 endpoint 活 + chain 漂移 (P99 > max), 退出碼必須 1
+    with mock.patch.object(k30, "fetch_live_metrics",
+                           return_value=(True, "fake metrics")):
+        with mock.patch.object(k30, "measure_k30_p95_coverage",
+                               return_value=(5, 13, {"claude", "codex"})):
+            with mock.patch.object(k30, "verify_p95_chain_invariant",
+                                   return_value=False):  # chain 漂移觸發
+                rc = k30.main()
+    assert rc == 1, \
+        f"K30 chain invariant 漂移必須退出碼 1 fail-closed, 實得 {rc}, " \
+        "守住 R53 chain 護衛不退"
+
+    # 正常路徑 (endpoint 活 + chain OK) 應退出碼 0
+    with mock.patch.object(k30, "fetch_live_metrics",
+                           return_value=(True, "fake metrics")):
+        with mock.patch.object(k30, "measure_k30_p95_coverage",
+                               return_value=(5, 13, {"claude"})):
+            with mock.patch.object(k30, "verify_p95_chain_invariant",
+                                   return_value=True):
+                rc = k30.main()
+    assert rc == 0, "正常路徑 (chain OK) 退出碼 0 守住, K30 happy path 不退"

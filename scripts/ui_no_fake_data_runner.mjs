@@ -120,6 +120,7 @@ async function installMockTauri(page) {
       staleQuota: baseState,
       freshQuota: baseState,
       nullQuotaText: baseState,
+      trendFreshQuota: baseState,
       openabQuota: baseState,
       unknown: {
         ...baseState,
@@ -154,11 +155,30 @@ async function installMockTauri(page) {
         if (scenario === "stateFailure" || scenario === "eventFailure") throw new Error("mock recent events unavailable");
         return [];
       },
-      get_quota_history: () => ({}),
+      get_quota_history: () => {
+        if (scenario === "trendFreshQuota") return { codex: [[freshTs - 3600, 80], [freshTs - 120, 5]] };
+        return {};
+      },
       read_usage_snapshots: () => {
         if (scenario === "quotaFailure") throw new Error("mock usage snapshots unavailable");
         if (scenario === "staleQuota") return { __local__: { source: "local", updated_at: staleTs, runners: [quotaRunner] } };
         if (scenario === "freshQuota") return { __local__: { source: "local", updated_at: freshTs, runners: [quotaRunner] } };
+        if (scenario === "trendFreshQuota") return {
+          __local__: {
+            source: "local",
+            updated_at: freshTs,
+            runners: [{
+              name: "codex",
+              label: "Codex quota",
+              ok: true,
+              text: "⏱ 5h **99%** · 📅 Wk **62%**",
+              raw: {
+                h5_remaining: 99,
+                wk_remaining: 62,
+              },
+            }],
+          },
+        };
         if (scenario === "nullQuotaText") return {
           __local__: {
             source: "local",
@@ -321,6 +341,16 @@ async function run() {
       assert.match(await page.locator(".quota-runner").innerText(), /--/, "missing local quota should render as unavailable");
       assert.equal(await page.locator(".quota-runner .percent-value").count(), 0, "missing local quota must not render a fake percent ring");
       assert.match(await page.locator("#capsule-quota").getAttribute("class"), /\bhidden\b/, "missing local quota must not show capsule alert");
+      await page.close();
+    }
+
+    {
+      const page = await openScenario(browser, "trendFreshQuota");
+      await page.evaluate(() => window.showView("dashboard"));
+      await page.waitForFunction(() => document.querySelector("#trend-grid")?.textContent.includes("codex"));
+      const trendText = await page.locator("#trend-grid").innerText();
+      assert.match(trendText, /當前\s+62%/, "trend current must use fresh usage-local quota, not stale CSV tail");
+      assert.doesNotMatch(trendText, /當前\s+5%/, "trend current must not use stale quota-history tail");
       await page.close();
     }
 

@@ -139,6 +139,35 @@ pub fn latest_quota_pct_at(
     Ok(out)
 }
 
+/// 從 fresh `usage-local.json` 讀目前每個 local runner 的剩餘百分比。
+/// 這是 Prometheus current gauge 的即時資料源；`quota-history.csv` 只適合趨勢。
+pub fn current_quota_pct_from_usage_snapshot_at(
+    path: &std::path::Path,
+) -> Result<std::collections::HashMap<String, u8>, String> {
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&data).map_err(|e| e.to_string())?;
+    let Some(runners) = v.get("runners").and_then(|x| x.as_array()) else {
+        return Ok(std::collections::HashMap::new());
+    };
+
+    let mut out: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
+    for r in runners {
+        let name = r.get("name").and_then(|x| x.as_str()).unwrap_or("?");
+        let ok = r.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
+        if !ok {
+            continue;
+        }
+        let text = r.get("text").and_then(|x| x.as_str()).unwrap_or("");
+        if let Some(pct) = extract_min_percent(text) {
+            out.insert(name.to_string(), pct);
+        }
+    }
+    Ok(out)
+}
+
 /// 從指定 path 讀 quota-history。抽成 pure fn 方便 unit test 鎖 contract：
 /// - NotFound（檔不存在）→ `Ok(HashMap::new())`（first-run 預期，不算 silent-fail）
 /// - IO 錯（權限拒絕 / 磁碟鎖住）→ `Err(String)`（caller 端要 log warn）
@@ -549,6 +578,50 @@ mod tests {
         assert!(
             r.is_err(),
             "目錄 path 應回 Err（load_history_at 內部 read 失敗）讓 caller log warn，實際: {r:?}"
+        );
+    }
+
+    #[test]
+    fn current_quota_pct_from_usage_snapshot_at_reads_fresh_runner_text() {
+        let dir = tempfile_dir();
+        let path = dir.join("usage-local.json");
+        let body = serde_json::json!({
+            "source": "local",
+            "updated_at": 1_780_000_000u64,
+            "runners": [
+                {
+                    "name": "claude",
+                    "ok": true,
+                    "text": "⏱ 5h **--** · 7d **--**",
+                    "raw": {
+                        "session_5h_remaining": null,
+                        "week_7d_remaining": null
+                    }
+                },
+                {
+                    "name": "codex",
+                    "ok": true,
+                    "text": "⏱ 5h **50%** · 📅 Wk **70%**"
+                },
+                {
+                    "name": "gemini",
+                    "ok": false,
+                    "text": "5h 100%"
+                }
+            ]
+        });
+        std::fs::write(&path, serde_json::to_vec(&body).unwrap()).expect("write usage snapshot");
+
+        let r = current_quota_pct_from_usage_snapshot_at(&path).expect("valid usage snapshot");
+
+        assert_eq!(r.get("codex"), Some(&50), "current gauge 應讀 fresh usage-local 最小百分比");
+        assert!(
+            !r.contains_key("claude"),
+            "缺值 '--' 不應產生 fake quota percent"
+        );
+        assert!(
+            !r.contains_key("gemini"),
+            "failed runner 不應進 current quota pct"
         );
     }
 

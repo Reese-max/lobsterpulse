@@ -2070,26 +2070,36 @@ fn render_prometheus(handle: &tauri::AppHandle) -> String {
             compute_quota_snapshot_age_seconds(now, *m).map(|age| (p.clone(), age))
         })
         .collect();
-    // K20 落地：讀 quota-history.csv 取「每 runner 最新 pct」→ 餵
-    // `lobsterpulse_provider_quota_remaining_pct` gauge。對齊 R30 `get_quota_history`
-    // silent-fail surfacing 模式：match Err → log warn + 留空 HashMap（不部分 emit），
-    // render 端見空 map 走「header only」契約。
-    //
-    // 對齊上面 `quota_snapshot_mtimes` 同一 pattern:先取 home dir → 拼 path →
-    // 走 `latest_quota_pct_at` pure fn（內部已呼叫 `load_history_at`,檔案只讀一次,
-    // 不重複 IO）。無 home dir / IO 錯 / parse 錯 → log warn + 整段留空,跟 K11
-    // 「header only」契約一致。
+    // K20 落地：current gauge 優先讀 fresh usage-local.json，讓 metrics 和 UI 同步。
+    // quota-history.csv 保留給趨勢/回溯；只有 current snapshot 沒樣本時才 fallback，
+    // 避免 `lobsterpulse_provider_quota_remaining_pct` 慢 1 小時才更新。
     let quota_remaining_pct: std::collections::HashMap<String, u8> = match dirs::home_dir() {
         Some(home) => {
-            let path = home.join(".lobsterpulse").join("quota-history.csv");
-            match quota_history::latest_quota_pct_at(&path) {
+            let usage_path = home.join(".lobsterpulse").join("usage-local.json");
+            let current = match quota_history::current_quota_pct_from_usage_snapshot_at(&usage_path)
+            {
                 Ok(m) => m,
                 Err(e) => {
                     log::warn!(
-                        "[lib::render_prometheus] quota_remaining_pct 讀取失敗: {e} \
-                         — provider_quota_remaining_pct 段留空（header only）"
+                        "[lib::render_prometheus] usage-local current quota 讀取失敗: {e} \
+                         — fallback quota-history.csv"
                     );
                     std::collections::HashMap::new()
+                }
+            };
+            if !current.is_empty() {
+                current
+            } else {
+                let path = home.join(".lobsterpulse").join("quota-history.csv");
+                match quota_history::latest_quota_pct_at(&path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::warn!(
+                            "[lib::render_prometheus] quota_remaining_pct 讀取失敗: {e} \
+                             — provider_quota_remaining_pct 段留空（header only）"
+                        );
+                        std::collections::HashMap::new()
+                    }
                 }
             }
         }
@@ -2581,13 +2591,13 @@ fn render_prometheus_body(
     // 語意關鍵:0 是有效資料(runner quota 已耗盡 → operator 必須看到),不能
     // 在 emit 階段當作 None 跳過 → map 缺 entry 才不出 sample(對齊 K11「寧可
     // 少一條 sample 也不要假裝 0」相反:K20 的 0 是 critical signal,必須保留)。
-    // 資料源:`render_prometheus` 端從 quota-history.csv 透過 `latest_quota_pct_at`
-    // 純 fn 載入,match Err → log warn + 整段留空(不部分 emit 假資料)對齊
-    // R30 `get_quota_history` 模式。
+    // 資料源:`render_prometheus` 端優先讀 fresh usage-local.json；沒有 current
+    // sample 時才 fallback quota-history.csv。match Err → log warn + 整段留空
+    // (不部分 emit 假資料)對齊 R30 `get_quota_history` 模式。
     //
     // 排序:by provider alphabetical,跟 K6-K19 既契約一致;空 map → 沒 sample line
     // (HELP/TYPE 標頭仍輸出,跟 K11 同一 header-only 契約)。
-    out.push_str("# HELP lobsterpulse_provider_quota_remaining_pct Latest quota remaining percent per runner from quota-history.csv (0=exhausted, missing=no sample)\n# TYPE lobsterpulse_provider_quota_remaining_pct gauge\n");
+    out.push_str("# HELP lobsterpulse_provider_quota_remaining_pct Current quota remaining percent per runner from fresh usage-local.json, with quota-history.csv fallback (0=exhausted, missing=no sample)\n# TYPE lobsterpulse_provider_quota_remaining_pct gauge\n");
     let mut quota_remaining_pct_sorted: Vec<_> = quota_remaining_pct.iter().collect();
     quota_remaining_pct_sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (p, pct) in &quota_remaining_pct_sorted {

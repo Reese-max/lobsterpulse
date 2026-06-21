@@ -125,7 +125,10 @@ def render_table(results: list[ChangeProgress]) -> str:
     rows = [header, "-" * len(header)]
     closed_count = 0
     active_count = 0
-    for r in sorted(results, key=lambda x: (x.is_closed, x.name)):
+    # sort: closed 群在前, active 群在後, 同群按 name 字母排 (R211 護衛
+    # test_render_table_sort_穩定性 守口徑; 改回 (x.is_closed, x.name) 會
+    # 讓 active 群排前, UX 反直覺 — 完成的 change 先看比 active 變更滯後更好讀)
+    for r in sorted(results, key=lambda x: (not x.is_closed, x.name)):
         state = "closed" if r.is_closed else "active"
         if r.is_closed:
             closed_count += 1

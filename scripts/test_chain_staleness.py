@@ -9,7 +9,8 @@ hidden gap。 1 個 Python pytest 模組, 走 R132/R137 同樣模式 (純量化
 腳本 + pytest, 不破 K42 chain 20 Rust 護衛飽和契約)。
 
 R172 5 case:
-  1. test_量測_回傳_16_個_test_檔 — 對齊 src-tauri/src 16 個 test-bearing 檔
+  1. test_量測_回傳_17_個_test_檔 — 對齊 src-tauri/src 17 個 test-bearing 檔
+     (R172 grep 16 + T-OGRE15 telemetry.rs)
   2. test_守衛鏈_計數_健康檢查 — chain_count_min 20 守住
   3. test_過期判定_stale_超過_threshold — mock now_unix 提前 STALE_DAYS*2
   4. test_過期判定_fresh_未超過_threshold — mock now_unix = last_commit
@@ -41,10 +42,11 @@ REPO_SRC = cs.SRC_TAURI
 
 # ---------- 1. 量測主路徑 ----------
 
-def test_量測_回傳_16_個_test_檔():
-    """src-tauri/src 含 #\[test\] 檔應 = 16 (跟 R172 grep 對齊)"""
+def test_量測_回傳_17_個_test_檔():
+    """src-tauri/src 含 #\[test\] 檔應 = 17 (R172 grep 16 + T-OGRE15
+    telemetry.rs 護衛 mod, otel-genai-runtime-emit-2026-q3 Phase 3)"""
     results = cs.measure(src_root=REPO_SRC)
-    assert len(results) == 16, f"預期 16 個 test 檔, 實際 {len(results)}: {[r.relpath for r in results]}"
+    assert len(results) == 17, f"預期 17 個 test 檔, 實際 {len(results)}: {[r.relpath for r in results]}"
 
 
 # ---------- 2. 計數健康檢查 ----------

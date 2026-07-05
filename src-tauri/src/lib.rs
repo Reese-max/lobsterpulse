@@ -8,6 +8,7 @@ mod openab_bridge;
 mod quota;
 mod quota_history;
 mod session;
+mod telemetry;
 mod timeline;
 
 use chrono::{DateTime, Utc};
@@ -3422,6 +3423,16 @@ pub fn run() {
             // Session manager
             app.manage(AppSessionManager(Mutex::new(SessionManager::new())));
 
+            // OGRE-R1 (T-OGRE11/T-OGRE12): OTel SDK init at startup。讀
+            // OTEL_EXPORTER_OTLP_ENDPOINT env var（預設 localhost:4317 gRPC）。
+            // 失敗 fail-closed：log error + span 停用（global tracer 維持
+            // noop），不 silent fallback 假裝有 export，也不擋 app 啟動
+            //（監控 app 本體功能不依賴 OTel 外送）。
+            match telemetry::init_otel_sdk() {
+                Ok(endpoint) => info!("OTel SDK initialized, OTLP endpoint {endpoint}"),
+                Err(e) => log::error!("OTel SDK init failed (gen_ai spans disabled): {e}"),
+            }
+
             // Hook server
             let handle = app.handle().clone();
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -3944,6 +3955,7 @@ pub fn run() {
             toggle_rule,
             add_rule,
             remove_rule,
+            telemetry::start_otlp_exporter,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LobsterPulse");
@@ -12081,6 +12093,29 @@ mod r127_daemon_exclusion_gitignore_tests {
                 ".gitignore 漏收 R137 結構性全掃描同類 gap `{pattern}`, \
                  會被 `git status --short` 列為 untracked, R13 髒檔基線無法降。\
                  請在 .gitignore 加該行 (跟 R127 6 path + R135 __pycache__/ 補網同模式)。"
+            );
+        }
+    }
+
+    // T-OGRE16 (otel-genai-runtime-emit-2026-q3 Phase 3): OTel exporter 本機
+    // 設定檔不入 repo — endpoint / auth header 可能含 collector token,
+    // 一旦 commit 就是 secret 洩漏。走既有 mod +1 test (R135/R137 同模式,
+    // 護衛 chain mod 數不因此擴張), 對齊 spec.md OGRE-R1 fail-closed 同段
+    // 引述的「R127 `.gitignore` 護衛 +1 同性質」。
+    #[test]
+    fn ogre16_gitignore_contains_otel_config_exclusions() {
+        let gitignore_path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", ".gitignore"]
+            .iter()
+            .collect();
+
+        let content = std::fs::read_to_string(&gitignore_path)
+            .unwrap_or_else(|e| panic!("read {} failed: {e}", gitignore_path.display()));
+
+        for pattern in [".otel-config.json", ".otlp-endpoint"] {
+            assert!(
+                content.contains(pattern),
+                ".gitignore 漏收 OTel exporter 本機設定 `{pattern}` (T-OGRE16), \
+                 endpoint/auth token 可能被 commit 洩漏。請在 .gitignore 加該行。"
             );
         }
     }

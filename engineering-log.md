@@ -901,3 +901,66 @@ URGENCY: **MEDIUM**
   - git status 預期 3 檔 dirty → commit 後 0 淨空 (k40_measure.py + test_k40_measure.py + engineering-log.md)
   - chain 20→20 守 (本檔走既 `test_k40_measure.py` mod, R97 後 +3 例外架構理由明確 = R196 K40 producer + R211 補完 = 第 4 個 K40 producer 端例外的延伸, 不開新 mod)
 **結果**: PASS (1 輪 1 件 = R211 k40_measure 內部函式 hidden gap 守護延伸 4 case + render_table sort UX 修復 feat: 1 commit 3 檔 scripts/test_k40_measure.py (225 行 = 4 case pytest 9-12: render_table sort/空 list + ChangeProgress frozen + main argv+JSON schema) + scripts/k40_measure.py (1 行 surgical 修 sort key `(x.is_closed, x.name)` → `(not x.is_closed, x.name)` + 3 行註解) + engineering-log.md R211 紀錄 + pytest 13/13 全綠 + pytest 120/121 (1 R124 WIP sentinel 預期 fail → commit 後 dirty 淨空自動綠) + chain 20→20 守 + M2 KPI 量測 closure 軸換對齊 K40 producer 端 4 個剩餘內部函式維度 = 第 11 個不同 KPI 維度對稱 (鏡像 R188 k0_measure / R195 chain_staleness / R196 K40 producer 3 內部函式既守 / R198 K0 endpoint live / R201 K30 P95 / R202 K41 drift / R203 k0_target_baseline_check / R204 k0_drift_check / R206 chain_staleness_drift_check / R207 k40_drift_check) + 真實 UX bug 修 1 個 (sort 順序 closed 群優先 = 已完成 change 先看, active 滯後, 改善 stdout 表格可讀性) + K-Foundation 量化口徑閉合 92→96 case (R211 +4 pytest 4 增量) + K0 結構性 0 差距 closure 維持 + K40 8/9 closed + 1 active 持平 + K41 7d 12.4% 持平 + 老闆 SOP「換角度 + 卡住不硬幹 + 1 輪 1 件 + 不搶 owner M scope + 不破 R97 紅線 + 換本質軸 + 必須 feat + M2 軸換對齊 K40 producer 內部函式維度復活」合規, HARNESS DRIFT 強制指令對齊 16→17 feat 連續突破, 0 改善 19 輪 → 17 改善連續輪)
+
+---
+
+### [2026-07-05] M1 接力 — otel-genai Phase 2/3 落地 (T-OGRE10~16 全 7 task ship, K40 唯一 owner M active change closure)
+
+**類型**: M1 owner M 接力落地 (R126 Phase 1 spec closure 後懸置 ~1 個月的
+Phase 2/3 runtime code, 非 PUA round; spec 依 R126/R204 既有 4 檔, 0 spec 變更)
+**KPI**: K40 otel-genai 16/16 closed / K42 chain 20 → 21 / cargo baseline 470
+
+**KPI 進展表**:
+| KPI | 前值 | 後值 | 變化 |
+|---|---:|---:|---:|
+| K40 otel-genai-runtime-emit-2026-q3 | 9/16 active (T-OGRE10~16 owner M scope 懸置) | **16/16 closed** (.openspec.yaml status closed, phase 3/3) | **+7 task closure** |
+| K40 量測口徑 (k40_measure) | 8 closed + 2 active | **9 closed + 1 active** (唯一 active = mission-k0 Path B, R197 決議已取代不開工) | **+1 closed, -1 active** |
+| K42 護衛 chain (r124_sentinel mod 計數) | 20 條 | **21 條** (`telemetry::tests` 新 mod, R97 後 +4 例外; 架構理由 = 跨 session.rs ↔ hook_server.rs ↔ telemetry.rs 3 mod 邊界, spec.md「對齊 R97 紅線」段預告) | **+1 mod** |
+| cargo test --lib baseline | 460 passed (R197 記 452, R198~R212 累加後推得 470-10=460) | **470 passed 0 failed** | **+10 test** (telemetry 9 + ogre16 gitignore 1) |
+| chain_staleness test-bearing 檔數 | 16 | **17** (telemetry.rs; test_chain_staleness.py baseline 16→17 同 commit 更新) | +1 |
+| pytest scripts/ (扣 r124_sentinel) | 110 passed + 2 failed (test_chain_staleness 16 檔 baseline 未更新前) | **112 passed** | 全綠 |
+| OTel emit 能力 | 0 (R100 競品過時風險觀察: Claude Code 官方已有 OTel, LP 只有 Prometheus 私有 metric) | **4 事件點 gen_ai.* span + OTLP gRPC export** (任何 OTel-compatible backend 可收) | 結構性 +1 觀測維度 |
+
+**做了什麼** (1 主題 = otel-genai Phase 2/3):
+- `Cargo.toml`: OTel 0.31 release train 4 crate (opentelemetry / opentelemetry_sdk /
+  opentelemetry-otlp grpc-tonic / opentelemetry-semantic-conventions) +
+  dev-dep opentelemetry_sdk testing feature (T-OGRE10; 0.32 系列較新但 0.31
+  發布 >9 個月, 走保守版)
+- 新建 `src-tauri/src/telemetry.rs` (~640 行含護衛 mod): `init_otel_sdk()`
+  fail-closed 4 個 Err variant + endpoint fail-fast 驗證 (tonic 對 "not-a-url"
+  到 connect 才炸, 必須前置驗) + `PROVIDER_OTEL_NAMES` 13 條 +
+  `provider_mapping()` fail-closed + `emit_session_event_span()` +
+  `start_otlp_exporter` Tauri command (T-OGRE11/12/14)
+- `session.rs::SessionManager::handle_event`: E1/E2/E3 emit 在 borrow 釋放後,
+  E4 在 SessionEnd early-return 分支 (duration_ms) (T-OGRE13)
+- `lib.rs`: `mod telemetry` + setup() 啟動 init (失敗 log error 不擋啟動) +
+  invoke_handler 註冊 command + r127 gitignore mod 內 +1 test (T-OGRE16)
+- `.gitignore`: `.otel-config.json` + `.otlp-endpoint` 2 行 (T-OGRE16)
+- `scripts/test_chain_staleness.py`: 16 → 17 test-bearing 檔 baseline 更新
+- `MISSION.md` M1 補段 + K40 驗收差距 cell 更新; `tasks.md` 7 task 勾 [x];
+  `.openspec.yaml` status open → closed; `CLAUDE.md` 關鍵設計決策 +1 條
+- **spec 衝突裁決**: design.md `codex_bot → openai (bot alias)` vs spec.md
+  OGRE-R3-S3「bot MUST NOT 用本機 CLI 標準名」→ 依 spec.md (source of truth)
+  採 `codex_bot → custom.codex_bot`, 記錄在 telemetry.rs 檔頭 + tasks.md
+- **OGRE-R2-S3 矛盾解讀**: 「4 span 獨立 trace_id」+「parent-child via context
+  propagation」互斥, 採獨立 root span (獨立 trace_id 是 MUST, parenting 語意
+  留給未來 context propagation 需求)
+
+**驗證方式**:
+- ✅ `cargo test --lib` → 470 passed / 0 failed (12.2s)
+- ✅ `cargo check --lib` → 0 error, 1 warning (timeline.rs 既有 dead_code, 非本次)
+- ✅ `python -m pytest scripts/ --ignore=scripts/test_r124_sentinel.py -q` → 112 passed
+- ✅ `cargo tauri build --no-bundle` → release build 通過 (Build SOP, exe lock
+  走 python os.replace 改名 .bak 釋放)
+- ✅ k40_drift_check 口徑: closed 8→9 (>=8 PASS) + active 2→1 (<=2 PASS) +
+  active_names {mission-k0} ⊂ baseline (PASS), BASELINE 不需改 (只擋倒退)
+- 未驗證: 對真實 OTel collector 的 gRPC export (本機無 collector; exporter
+  build + batch processor 啟動路徑已由 init 護衛 + noop 路徑由 470 test 蓋)
+
+**SOP 合規**:
+- ✅ 不破 R13 (working tree 開工時乾淨, git add 限定路徑)
+- ✅ R97 例外有架構理由 (telemetry::tests mod 頭 + spec.md 預告段對齊)
+- ✅ 不搶 scope: mission-k0 Path B (T-MKRB1~6) 不動 (R197 Path A 已取代);
+  R117 capsule-brief 不動
+- ✅ 明確拒做守住: 0 SaaS backend 整合 / 0 Prometheus label 改動 /
+  0 render_prometheus_body 觸碰

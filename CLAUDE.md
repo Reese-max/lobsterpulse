@@ -54,6 +54,7 @@
 - **Session 狀態本地累計**：`SessionManager.provider_totals` 在 handle_event 裡累加（TokenUpdate 取 max、SessionStart/PostToolUseFailure 各 ++）。Quota 不依賴外部 snapshot。
 - **OPENX legacy alias**：OpenAB `BackendType::Other` 寫 `usage-bot.json`，hook_server 的 `parse_provider("bot") → "openx"` 自動 rewrite。
 - **Metrics server 獨立 runtime**：`std::thread::spawn` + `tokio::runtime::Runtime::new()`，**不能** tokio::spawn（setup rt 已 `std::mem::forget`）。
+- **OTel GenAI span emit（2026-07-05 M1 落地）**：`telemetry.rs` 走 OTLP gRPC（`OTEL_EXPORTER_OTLP_ENDPOINT`，預設 `localhost:4317`），SessionManager 4 事件點（SessionStart/UserPromptSubmit/PostToolUseFailure/SessionEnd）各 emit 1 個 `gen_ai.client.*` span；13 provider → `gen_ai.provider.name` mapping fail-closed（未知 id 不 emit）。tonic exporter 同樣自建 runtime + `mem::forget`。跟 Prometheus `/metrics` 是 2 條平行 data path，互不取代。
 - **Forward migration 強制刷新 name**：`load_config` 用 `.and_modify(|ex| ex.name = default.name)` 覆寫 name 但保留 enabled/settings_path。
 - **Tray 左鍵 toggle**：`show_menu_on_left_click(false) + on_tray_icon_event` 接 `MouseButton::Left + ButtonState::Up`；叫回來時自動置中避膠囊跑出螢幕。
 

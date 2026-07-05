@@ -60,7 +60,7 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 | K0-A2 sample 覆蓋 | 0/13 | 0/13 (endpoint DOWN) | 0/13 (endpoint 仍 DOWN) | **2/13** (claude=11 + cicx=1 真有 sessions) | 缺 11 (非本機 scope, 需 OpenAB 端跑起來) | **1/13 持平 R119** (claude=3 sessions 累加, endpoint sessions 隨時間浮動) | 缺 12 (非本機 scope) | 1/13 持平 R132 | 缺 12 (非本機 scope) |
 | K0 程式碼定義層 (R101) | 0/13 | 13/13 (R101 達標) | 13/13 (守住) | 13/13 (守住) | 達標 |
 | K0 Quota 監控即時性 | 6 OpenAB snapshot；本機無 | **K0-B fresh 4/13 + K0-Q 8/13** | **K0-B fresh 4/13 + K0-Q 9/13** (R114 修 openx alias: openx 從 missing 變 stale, +1) | **K0-B fresh 4/13 + K0-Q 9/13** 持平 R114 (4 missing: irisx_bot/grokx/lpbot/mimo 非本機 scope) | **K0-B fresh 4/13 + K0-Q 9/13 持平 R119** (R128 不開新 snapshot, 對齊 R-CPT-4 不開新 data path 護衛) | 缺 4 (irisx_bot/grokx/lpbot/mimo 完全 missing, 非本機 scope) | K0-B 4/13 + K0-Q 9/13 持平 R132 | 缺 4 (非本機 scope) |
-| K40 規格覆蓋率 | 1/1 (openab-bot-sync 12/12) | 5/5 active change 全 closed (43/43 tasks) | 5/5 持續 closed | **7/7** (R116 R115 lobster-rules-engine closure 接力) | **7/7 持續 + R-CPT M1 進度條 8/8 closure** (R128 ship T-CPT10, R-CPT change 整體待 R131+ 收 closure 接力) | **7/7** 持平 R119 (R130 spec closure, R131 4 missing 結構性確認) | **8/9 closed + 1 active 9/16** (R135 收 R-CPT 整體 15/15 + prometheus-counter-rename 6/6 入庫 8 change N/N closed; otel-genai-runtime-emit-2026-q3 [9/16] 仍 active, 缺 T-OGRE10~16 7 tasks) | **8/9 closed + 1 active 9/16 持平 R132** (R144 修 R135 樂觀 closure 寫入: 9/9 錯記 → 8/9 + 1 active; otel-genai owner M scope) | 缺 1 (otel-genai owner M scope, 7 tasks T-OGRE10~16) |
+| K40 規格覆蓋率 | 1/1 (openab-bot-sync 12/12) | 5/5 active change 全 closed (43/43 tasks) | 5/5 持續 closed | **7/7** (R116 R115 lobster-rules-engine closure 接力) | **7/7 持續 + R-CPT M1 進度條 8/8 closure** (R128 ship T-CPT10, R-CPT change 整體待 R131+ 收 closure 接力) | **7/7** 持平 R119 (R130 spec closure, R131 4 missing 結構性確認) | **8/9 closed + 1 active 9/16** (R135 收 R-CPT 整體 15/15 + prometheus-counter-rename 6/6 入庫 8 change N/N closed; otel-genai-runtime-emit-2026-q3 [9/16] 仍 active, 缺 T-OGRE10~16 7 tasks) | **8/9 closed + 1 active 9/16 持平 R132** (R144 修 R135 樂觀 closure 寫入: 9/9 錯記 → 8/9 + 1 active; otel-genai owner M scope) | **達標 (2026-07-05 M1 落地 T-OGRE10~16 7 tasks, otel-genai 16/16 closed; K40 量測口徑 9/10 closed + 1 active = mission-k0 Path B owner M 未選)** |
 | K41 chore_treadmill 24h | 55% | **R108 k41_chore_treadmill.py 7d: 13/206 = 6.3%** | 達標延續 | 達標延續 | 達標 (<30%) | 達標 | 達標 (<30%) |
 | K42 護衛 chain | 17 條 | 17 條 (R113.1 owner M dual-emit value guard 提案中) | 17 條 (R114 落地 dual-emit value guard 進既有 `render_prometheus_tests` mod, chain 17→17 不擴張守住) | 17 條 持平 (R115 護衛 test 三條加進既 `auto_rules::tests` mod, 走既有 mod 17→17) | **19 條** (R122 ship `timeline::tests` mod 走 R97 飽和契約例外 +1, R127 ship `.gitignore` 護衛 +1, R97 後 +2 例外架構理由明確; baseline 446/446 全綠) | **20 條** (R131 ship plugin registry 護衛 +1 走既 `auto_rules::tests` mod, R97 後 +3 例外架構理由明確; baseline 450/450 全綠) | **20 條 持平 R131** (R135 .gitignore 補網 __pycache__/ 護衛 test +1 走既護衛, chain 不擴張; baseline 451/451 全綠) | **20 條 持平 R132** (R144 不開新護衛, doc-level 修, chain 20→20 守住) | 達標 (R97 後 +3 例外守住) |
 
@@ -107,6 +107,18 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 **未選 Path B 原因**: 1 sprint 工作量 (~500 行 Rust + 9 handler + 護衛), owner M capacity
 未確認, 結構性風險 > 結構性收益 (Path A 已能 0 結構性差距達標, Path B 的 4 missing
 unblock 收益不抵 sprint 級投入)。
+
+### M1 補 (2026-07-05): otel-genai Phase 2/3 落地 closure
+
+- `otel-genai-runtime-emit-2026-q3` T-OGRE10~16 全 7 task owner M M1 接力落地
+  (OTel 0.31 SDK + `telemetry.rs` + `start_otlp_exporter` command + SessionManager
+  4 事件點 emit span + 13 條 provider mapping + `telemetry::tests` 護衛 mod +
+  .gitignore 護衛), change 16/16 closed。
+- K40 量測口徑: 9/10 closed + 1 active (唯一 active = mission-k0 Path B 6 task +
+  Phase 4 placeholder, R197 Path A 決議已取代, owner M 未選不開工)。
+- K42 護衛 chain 20 → **21** (`telemetry::tests` 走 R97 後 +4 例外, 架構理由 =
+  跨 session.rs ↔ hook_server.rs ↔ telemetry.rs 3 mod 邊界)。cargo test --lib
+  baseline 452 → **470** (460 既有 + 10 新增) 全綠。
 
 任一指標連 2 週落後 → 觸發策略重審（不是「再補一輪」）。
 

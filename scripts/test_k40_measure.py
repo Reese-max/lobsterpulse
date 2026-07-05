@@ -74,27 +74,28 @@ def test_active_算法_有_空白_算_active_不回歸():
     assert results[0].total_tasks == 9
 
 
-# ----- case 3: 守 K40 真實 active 數 = 2 (mission-k0 3/15 + otel-genai 9/16) -----
-def test_K40_真實_active_2_mission_k0_加_otel_genai_不回歸():
+# ----- case 3: 守 K40 真實 active 數 = 1 (mission-k0 Path B, R197 決議已取代) -----
+def test_K40_真實_active_1_mission_k0_不回歸():
     """
-    對齊 R192 量化真實值: 2 active (mission-k0-restructure-2026-q3 3/15 +
-    otel-genai-runtime-emit-2026-q3 9/16)。MISSION 表寫 1 active (otel-genai
-    only) 是 K40 spec drift 證據; 守護守住「量化真實 = 2 active」這條口徑
-    不漂移, PUA 不 patch MISSION (owner M scope Path A 才動)。
+    對齊 R192 量化真實值 2 active → 2026-07-05 M1 落地 otel-genai Phase 2/3
+    (T-OGRE10~16 全 7 task ship) 後量化真實 = 1 active (mission-k0 Path B
+    T-MKRB1~6 + Phase 4 placeholder, R197 Path A 決議已取代不開工)。守護守住
+    「量化真實 = 1 active」這條口徑不漂移 (新 active change 出現 / otel-genai
+    被解勾都會 fail)。
     """
     results = k40.measure()
     actives = sorted(r.name for r in results if not r.is_closed)
     assert actives == [
         "mission-k0-restructure-2026-q3",
-        "otel-genai-runtime-emit-2026-q3",
-    ], f"K40 量化真實 active 應為 2 個, 實際: {actives}"
+    ], f"K40 量化真實 active 應為 1 個, 實際: {actives}"
 
 
-# ----- case 4: 守 K40 真實 closed 數 = 8 (全 [x] 8 個) -----
-def test_K40_真實_closed_8_全_x_的_8_change_不回歸():
+# ----- case 4: 守 K40 真實 closed 數 = 9 (全 [x] 9 個) -----
+def test_K40_真實_closed_9_全_x_的_9_change_不回歸():
     """
-    對齊 R192 量化真實值: 8 個 change 全部 tasks [x] (closed) — 對齊 MISSION
-    R132 K40 8 closed 量化值守住。改 K40 量化算法或 grep 正則會 fail。
+    對齊量化真實值: 9 個 change 全部 tasks [x] (closed) — R192 8 個 +
+    2026-07-05 M1 落地 otel-genai-runtime-emit-2026-q3 16/16。
+    改 K40 量化算法或 grep 正則或解勾既 closed change 會 fail。
     """
     results = k40.measure()
     closed = sorted(r.name for r in results if r.is_closed)
@@ -103,12 +104,13 @@ def test_K40_真實_closed_8_全_x_的_8_change_不回歸():
         "cross-provider-timeline",
         "lobster-rules-engine",
         "openab-bot-sync",
+        "otel-genai-runtime-emit-2026-q3",
         "otel-provider-metrics-contract",
         "prometheus-counter-convention",
         "prometheus-counter-rename-2026-q3",
         "r114-k0-coverage-and-dual-emit-guard",
     ]
-    assert closed == expected, f"K40 量化真實 closed 應為 8 個, 實際: {closed}"
+    assert closed == expected, f"K40 量化真實 closed 應為 9 個, 實際: {closed}"
 
 
 # ----- case 5: 守空 tasks.md 邊界 + tasks 解析正則 -----

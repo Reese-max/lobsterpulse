@@ -49,3 +49,9 @@ __pycache__/
 .pytest_cache/
 **/.pytest_cache/
 .supervisor-*.log
+
+# T-OGRE16: OTel exporter 本機設定不入 repo (endpoint / auth header 可能含
+# collector token; 走 OTEL_EXPORTER_OTLP_ENDPOINT env var 或本機檔配置,
+# 護衛 test 見 lib.rs r127_daemon_exclusion_gitignore_tests)
+.otel-config.json
+.otlp-endpoint

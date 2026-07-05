@@ -638,6 +638,24 @@ impl SessionManager {
                     .num_seconds();
                 self.record_completed_session_age(&s.provider, age);
             }
+            // OGRE-R2 E4 (T-OGRE13): SessionEnd emit `gen_ai.client.session.end`
+            // span + operation.duration (ms)。session 不在 map（duration 無從算）
+            // 時 duration 記 0。未知 provider fail-closed 不 emit（`let _ =` 吞
+            // Err —— 監控 emit 不能反噬事件處理主路徑）。
+            let duration_ms = removed
+                .as_ref()
+                .map(|s| {
+                    s.last_event_time
+                        .signed_duration_since(s.start_time)
+                        .num_milliseconds()
+                        .max(0) as u64
+                })
+                .unwrap_or(0);
+            let _ = crate::telemetry::emit_session_event_span(
+                &event.provider,
+                &event.session_id,
+                crate::telemetry::SessionSpanEvent::SessionEnd { duration_ms },
+            );
             if removed.is_some() && self.active_session_id.as_deref() == Some(&event.session_id) {
                 self.active_session_id = self.sessions.keys().next().cloned();
             }
@@ -704,6 +722,46 @@ impl SessionManager {
 
         if let Some((provider, age)) = completed_data {
             self.record_completed_session_age(&provider, age);
+        }
+
+        // OGRE-R2 E1/E2/E3 (T-OGRE13): 3 個事件點各 emit 1 個獨立 OTel span
+        // (E4 SessionEnd 在前面 early-return 分支)。放在 session borrow 釋放後
+        // (E1 需要讀 self.provider_totals 的 session_count)。未知 provider
+        // fail-closed 不 emit (`let _ =` 吞 Err)。SDK 未 init 時 global tracer
+        // 是 noop —— 既有事件處理路徑零成本。
+        match event.hook_event_name.as_str() {
+            "SessionStart" => {
+                let session_count = self
+                    .provider_totals
+                    .get(&event.provider)
+                    .map(|t| t.session_count)
+                    .unwrap_or(0);
+                let _ = crate::telemetry::emit_session_event_span(
+                    &event.provider,
+                    &event.session_id,
+                    crate::telemetry::SessionSpanEvent::SessionStart { session_count },
+                );
+            }
+            "UserPromptSubmit" => {
+                let _ = crate::telemetry::emit_session_event_span(
+                    &event.provider,
+                    &event.session_id,
+                    crate::telemetry::SessionSpanEvent::UserPromptSubmit {
+                        tokens_input: event.tokens_input.unwrap_or(0),
+                    },
+                );
+            }
+            "PostToolUseFailure" => {
+                let _ = crate::telemetry::emit_session_event_span(
+                    &event.provider,
+                    &event.session_id,
+                    crate::telemetry::SessionSpanEvent::PostToolUseFailure {
+                        tool_name: event.tool_name.as_deref().unwrap_or(""),
+                        error_type: event.error.as_deref().unwrap_or("unknown"),
+                    },
+                );
+            }
+            _ => {}
         }
 
         // R115 規則引擎：handle_event 結尾串接 evaluate_rules，把命中累積進

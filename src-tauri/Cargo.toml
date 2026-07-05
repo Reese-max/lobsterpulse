@@ -29,8 +29,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }
 rodio = { version = "0.20", default-features = false, features = ["mp3", "wav", "vorbis"] }
+opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.31", features = ["trace"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry-semantic-conventions = "0.31"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
 gdk = "0.18"
 gtk = "0.18"
+
+[dev-dependencies]
+opentelemetry_sdk = { version = "0.31", features = ["trace", "testing"] }

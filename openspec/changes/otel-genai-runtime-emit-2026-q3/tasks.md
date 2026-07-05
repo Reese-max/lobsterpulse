@@ -59,44 +59,71 @@
       ↪ 對齊 MISSION.md K40 量測
       驗證: MISSION.md K40 column 補 R126 row, 從 9/9 → 10/10
 
-## Phase 2: OTel SDK init (owner M M1 接力, 不在 R126 scope)
+## Phase 2: OTel SDK init (owner M M1 接力 — 2026-07-05 落地 ✅)
 
-- [ ] **T-OGRE10: Cargo.toml 加 3 個 OTel crate** —
+- [x] **T-OGRE10: Cargo.toml 加 3 個 OTel crate** —
       `opentelemetry` (RUNTIME trait) +
       `opentelemetry-otlp` (exporter) +
       `opentelemetry-semantic-conventions` (attribute key 常數)
       驗證: `cargo build` 通過, binary 大小 +2-5MB, build time +10-30s
+      ✅ M1 ship: 0.31 release train 4 crate (`opentelemetry` /
+      `opentelemetry_sdk` (SDK 實作, 0.31 起與 API crate 分拆, 實務上必加) /
+      `opentelemetry-otlp` grpc-tonic / `opentelemetry-semantic-conventions`)
+      + dev-dependency `opentelemetry_sdk` testing feature; cargo check 通過
 
-- [ ] **T-OGRE11: 開新 `src-tauri/src/telemetry.rs` mod** —
+- [x] **T-OGRE11: 開新 `src-tauri/src/telemetry.rs` mod** —
       OTel SDK init + tracer provider + OTLP exporter
       驗證: `cargo build` 通過, 0 panic 0 silent fallback
+      ✅ M1 ship: `init_otel_sdk()` fail-closed (InvalidEndpoint /
+      RuntimeBuild / ExporterBuild / AlreadyInitialized 4 個 Err variant,
+      0 silent fallback); tonic exporter 走 CLAUDE.md「Metrics server
+      獨立 runtime」同款 pattern (自建 runtime + `std::mem::forget` 常駐)
 
-- [ ] **T-OGRE12: Tauri command `start_otlp_exporter`** —
+- [x] **T-OGRE12: Tauri command `start_otlp_exporter`** —
       接 `OTEL_EXPORTER_OTLP_ENDPOINT` env var, 預設
       `http://localhost:4317` gRPC
       驗證: command 在 lib.rs 註冊, 啟動時呼叫 telemetry::init_otel_sdk()
+      ✅ M1 ship: `telemetry::start_otlp_exporter` 註冊進 invoke_handler +
+      `lib.rs::setup()` 啟動時呼叫 init (失敗 log error, 不擋 app 啟動)
 
-## Phase 3: Runtime emit (owner M M1 接力, 不在 R126 scope)
+## Phase 3: Runtime emit (owner M M1 接力 — 2026-07-05 落地 ✅)
 
-- [ ] **T-OGRE13: SessionManager 4 個事件點 emit span** —
+- [x] **T-OGRE13: SessionManager 4 個事件點 emit span** —
       SessionStart / UserPromptSubmit / PostToolUseFailure / SessionEnd
       各 emit 1 個 OTel span
       ↪ design.md 4 個 design topic reference: e1: sessionstart /
         e2: userpromptsubmit / e3: posttoolusefailure / e4: sessionend
       驗證: cargo test --lib 既有護衛 event flow 測試全綠 +
       新增護衛 test `telemetry::tests::session_start_emits_span_*`
+      ✅ M1 ship: `SessionManager::handle_event` E1/E2/E3 在 borrow 釋放後
+      emit, E4 在 SessionEnd early-return 分支 emit (duration_ms);
+      cargo test --lib 470 passed (460 既有 + 10 新增) 0 failed;
+      護衛 test `session_start_emits_span_with_provider_name_attribute` 綠
 
-- [ ] **T-OGRE14: provider → OTel `gen_ai.provider.name` mapping lookup** —
+- [x] **T-OGRE14: provider → OTel `gen_ai.provider.name` mapping lookup** —
       13 條靜態 lookup table (4 本機 CLI + 9 OpenAB bot)
       驗證: 新增護衛 test `telemetry::tests::provider_mapping_size_is_13_*`
+      ✅ M1 ship: `PROVIDER_OTEL_NAMES` 13 條 + `provider_mapping()`
+      fail-closed (UnknownProvider Err, 0 fallback); 護衛 test
+      `provider_mapping_size_is_13_matching_known_providers` 對齊
+      KNOWN_PROVIDERS SSoT。註: design.md `codex_bot → openai (bot alias)`
+      與 spec.md OGRE-R3-S3「bot MUST NOT 用本機 CLI 標準名」衝突,
+      依 spec.md (source of truth) 裁決 `codex_bot → custom.codex_bot`
 
-- [ ] **T-OGRE15: `telemetry::tests` 護衛 mod** —
+- [x] **T-OGRE15: `telemetry::tests` 護衛 mod** —
       走 R97 後 +4 例外架構理由, 守住 emit 路徑 + mapping 表大小
       驗證: K42 chain 20 → 21, 護衛 mod 大小 < 800 行
+      ✅ M1 ship: 9 test case 蓋 OGRE-R1-S1/S2/S3 + OGRE-R2-S1/S2/S3 +
+      OGRE-R3-S1/S2/S3 全 9 scenario; 架構理由 (跨 session.rs ↔
+      hook_server.rs ↔ telemetry.rs 3 mod 邊界) 寫在 mod 頭;
+      K42 chain 20 → 21 (r124_sentinel >= 20 守住), mod < 800 行
 
-- [ ] **T-OGRE16: .gitignore 護衛 +1 (OTel config 不入 repo)** —
+- [x] **T-OGRE16: .gitignore 護衛 +1 (OTel config 不入 repo)** —
       走 `r127_daemon_exclusion_gitignore_tests` 既有 mod, chain 不擴張
       驗證: K42 chain 不變, OTel config token 不入 git
+      ✅ M1 ship: .gitignore 加 `.otel-config.json` + `.otlp-endpoint` 2 行
+      + 既有 mod 內 `ogre16_gitignore_contains_otel_config_exclusions`
+      test (mod 數不擴張, 走 R135/R137 同模式)
 
 ## 不在本 change scope (明確拒做)
 

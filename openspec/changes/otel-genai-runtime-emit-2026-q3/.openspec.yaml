@@ -1,9 +1,9 @@
 schema: spec-driven
 id: otel-genai-runtime-emit-2026-q3
 created: 2026-06-06
-updated: 2026-06-06
-status: open
-phase: 1/3
+updated: 2026-07-05
+status: closed
+phase: 3/3
 created_by: auto-dev-loop
 owner: auto-dev-loop
 # R126 開工: 對齊 R120 策略顧問 (2026-06-05) #1 行動 (OTel SDK runtime emit) +
@@ -18,4 +18,7 @@ owner: auto-dev-loop
 # 搬到 openspec/changes/ active spec 層, 推 K40 9/9 → 10/10 +1。
 # 1 輪 1 件: 純 spec-level, 不搶 owner M scope, 不破 R97 紅線 (Phase 3 開工前
 # 需確認 R148+ 0 新護衛 mod 才能守住 +0.5/2 輪修訂上限)。
+# 2026-07-05 owner M M1 接力落地: Phase 2/3 全 7 task (T-OGRE10~16) ship,
+# telemetry.rs + 4 事件點 emit + 13 條 mapping + telemetry::tests 護衛 mod
+# (K42 chain 20→21) + .gitignore 護衛。cargo test --lib 470 passed。
 kpi_alignment: k0_provider_health_otel_runtime_emit

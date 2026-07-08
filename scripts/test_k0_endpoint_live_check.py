@@ -12,9 +12,9 @@ live 雙源 hidden gap:
   - case 3 JSON 缺失 boundary: .harness-k0.json 不存在 →
     json_emit_count=None + drift 雙源比對跳過 (空 list 守住)
   - case 4 雙源一致 happy path: live emit = {4 KNOWN + __local__} +
-    JSON providers = {4 KNOWN} → drift = {live_new:['__local__'],
-    json_stale:[]} (mirror production: JSON 不寫 __local__ 因為只算
-    KNOWN_PROVIDERS)
+    JSON providers = {4 KNOWN} → drift = {live_new:[], json_stale:[]}
+    (__local__ 保留在 live_provider_labels 診斷, 但不屬 KNOWN_PROVIDERS
+    scope, 不算雙源漂移)
   - case 5 雙源漂移 hidden gap: live emit = {claude, codex} + JSON
     providers = {claude, codex, copilot, gemini} → drift =
     {live_new:[], json_stale:['copilot', 'gemini']} (JSON 寫死但端點
@@ -193,15 +193,12 @@ def test_JSON_缺失_雙源比對_跳過_drift_空_守住():
 
 # ---------- case 4: 雙源一致 happy path (mirror production 真實狀態) ----------
 
-def test_雙源一致_drift_OK_live_new_含__local__守住():
+def test_雙源一致_drift_OK___local__不算_drift_守住():
     """守 endpoint live 維度 5 happy path: 雙源一致 (production 真實狀態
     鏡像 — live 端點 emit 5 label 含 __local__, JSON 寫 4 KNOWN_PROVIDERS
-    對齊 K0-A1 emit 維度過濾 __local__)。結果 drift.live_new = ['__local__']
-    (端點 emit 但 JSON 不寫 — 預期, 因為 JSON 對齊 K0-A1 只算
-    KNOWN_PROVIDERS), drift.json_stale = [] (JSON 寫的 4 個都還在
-    emit 中, 沒 stale)。
-    防有人改寬 JSON 寫入邏輯把 __local__ 也算進去, 或拿掉 live_new
-    偵測 (把空集合跟空集合 drift 算「OK」變成「真無漂移」假 PASS)。
+    對齊 K0-A1 emit 維度過濾 __local__)。結果 drift.live_new = []、
+    drift.json_stale = []；__local__ 保留在 live_provider_labels 診斷, 但
+    不屬 13 provider scope, 不該造成 main() exit 1。
     """
     with tempfile.TemporaryDirectory() as tmp:
         json_path = Path(tmp) / "k0.json"
@@ -223,11 +220,10 @@ def test_雙源一致_drift_OK_live_new_含__local__守住():
     assert result["json_emit_count"] == 4, (
         f"JSON 寫 4 個, 實際 {result['json_emit_count']}."
     )
-    # 雙源一致 happy path: drift.live_new 含 __local__ (預期), json_stale 空
-    assert result["drift"]["live_new"] == ["__local__"], (
-        f"JSON 不寫 __local__ 是預期 (對齊 K0-A1 KNOWN_PROVIDERS scope), "
-        f"應 live_new=['__local__'], 實際 {result['drift']['live_new']}. "
-        f"拿掉 live_new 偵測 → __local__ 漂移 silent 失真。"
+    # 雙源一致 happy path: __local__ 不屬 KNOWN_PROVIDERS, 不算 drift
+    assert result["drift"]["live_new"] == [], (
+        f"__local__ 不屬 K0-A1 KNOWN_PROVIDERS scope, 不應造成 live_new drift, "
+        f"實際 {result['drift']['live_new']}."
     )
     assert result["drift"]["json_stale"] == [], (
         f"JSON 寫的 4 個都還在 emit, 應 json_stale=[], 實際 {result['drift']['json_stale']}."

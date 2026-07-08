@@ -251,21 +251,27 @@ def test_scan_quota_snapshots_STALE_MARKER_分流(tmp_path, monkeypatch):
     )
 
 
-# ---------- 7. 本機 4 CLI 共用 usage-local.json 邏輯守護 ----------
+# ---------- 7. 本機 CLI usage-local.json runners 邏輯守護 ----------
 
 def test_scan_quota_snapshots_本機_4_CLI_共用_usage_local_json(tmp_path, monkeypatch):
-    """R108 量測事實守護: 4 本機 CLI 共用 1 個 usage-local.json (R85 設計)
+    """本機 CLI 共用 1 個 usage-local.json, 但以 runners[].name 判定 provider
 
-    守: 若有人改成本機 4 CLI 各讀 `usage-{cli}.json` 或新增 split 邏輯 →
-    4 個本機 CLI 全部 missing (OpenAB hook 端只寫 usage-local.json) →
-    K0-B fresh 從 4/13 立刻 0/13 (M0 級 KPI 倒退, R108 量化守住 4/13 為
-    本機穩態下限)。R132 接力清源 + R176 補 K41 護衛時同步確認此口徑。
+    守: 若有人改成本機 4 CLI 各讀 `usage-{cli}.json`, 4 個本機 CLI 會
+    全部 missing；但若有人只看 usage-local.json 檔案存在, 又會把沒有
+    runner snapshot 的 provider 誤算 fresh。本測試用 4 個 runner 齊全情境
+    守住「共用檔 + 逐 runner 判定」兩個條件。
     """
     monkeypatch.setattr(k0, "QUOTA_DIR", tmp_path)
 
-    # 模擬 R108 量測事實: 只有 1 個 usage-local.json, 4 本機 CLI 共用
+    # 模擬 4 個本機 CLI runner 都有寫入同一個 usage-local.json
     local = tmp_path / "usage-local.json"
-    local.write_text("{}", encoding="utf-8")
+    local.write_text(
+        '{"runners": ['
+        '{"name": "claude"}, {"name": "codex"}, '
+        '{"name": "copilot"}, {"name": "gemini"}'
+        ']}',
+        encoding="utf-8",
+    )
     fresh_mtime = time.time() - 3600  # 1 小時前, fresh
     os.utime(local, (fresh_mtime, fresh_mtime))
 
@@ -285,6 +291,33 @@ def test_scan_quota_snapshots_本機_4_CLI_共用_usage_local_json(tmp_path, mon
         assert out[p]["state"] == "missing", (
             f"{p} 應 = missing (空目錄), 實際 {out[p]['state']}"
         )
+
+
+def test_scan_quota_snapshots_usage_local_只算實際_runner_不造假(tmp_path, monkeypatch):
+    """usage-local.json 缺 copilot/gemini runner 時不可把它們誤算 fresh。
+
+    這是實際 bug regression test：真實 usage-local.json 目前只含 claude/codex，
+    舊版 scan_quota_snapshots 只要看到檔案存在就把 4 個本機 provider 全部
+    算 fresh，造成 K0-B / K0-Q 數據膨脹。
+    """
+    monkeypatch.setattr(k0, "QUOTA_DIR", tmp_path)
+
+    local = tmp_path / "usage-local.json"
+    local.write_text(
+        '{"runners": [{"name": "claude"}, {"name": "codex"}]}',
+        encoding="utf-8",
+    )
+    fresh_mtime = time.time() - 3600
+    os.utime(local, (fresh_mtime, fresh_mtime))
+
+    out = k0.scan_quota_snapshots()
+
+    assert out["claude"]["state"] == "fresh"
+    assert out["codex"]["state"] == "fresh"
+    assert out["copilot"]["state"] == "missing"
+    assert out["gemini"]["state"] == "missing"
+    assert out["copilot"]["path"] is None
+    assert out["gemini"]["path"] is None
 
 
 # ---------- 8. QUOTA_DIR 不存在時全 13 provider no_dir 守護 ----------

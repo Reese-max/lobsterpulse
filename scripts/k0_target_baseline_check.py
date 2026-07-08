@@ -6,10 +6,11 @@ R197 落地。對應 openspec/changes/mission-k0-restructure-2026-q3/proposal.md
 「MCAP-2: Path A (降級) 設計草案」+ Decision Asks 段的 Path A 決議。
 
 Path A 降級口徑 (R182 結構性決議, owner M 選 A 不選 B):
-  K0-A1 emit 覆蓋: 4/13 (本機穩態下限) + 5/13 (OpenAB scope 受 cicx 等浮動)
+  K0-A1 emit 覆蓋: 2/13 (目前 claude/codex live emit) + OpenAB scope 浮動
   K0-A2 sample 覆蓋: 1/13 (claude=3 sessions 累加) + 4/13 永久非 scope
-  K0 Quota: K0-B fresh 4/13 + K0-Q 9/13 (缺 4 個 = irisx_bot/grokx/lpbot/mimo
-           完全不寫 usage-*.json snapshot, OpenAB 端永遠不可達, 永久非本機 scope)
+  K0 Quota: K0-B fresh 2/13 + K0-Q 7/13 (usage-local.json 只含
+           claude/codex runner；5 個 OpenAB stale snapshot 算 data path；4 個
+           irisx_bot/grokx/lpbot/mimo 完全不寫 usage-*.json snapshot)
 
 守護鏈 (5 維度):
   1. k0_measure.py KNOWN_PROVIDERS 結構 = 4 LOCAL_CLI + 9 OPENAB_BOT = 13
@@ -41,11 +42,11 @@ LOCAL_CLI = frozenset(["claude", "codex", "copilot", "gemini"])
 # 對齊 k0_measure.py KNOWN_PROVIDERS source of truth
 EXPECTED_PROVIDER_COUNT = 13  # 4 LOCAL_CLI + 9 OPENAB_BOT
 
-# Path A 90 天量化目標 (R182 結構性決議, 寫死 BASELINE 防悄悄漂回 13/13)
-EXPECTED_K0A1_TARGET = "4/13"  # 本機穩態下限
+# Path A 90 天量化目標 (寫死 BASELINE 防悄悄漂回 13/13 或假算本機 4/13)
+EXPECTED_K0A1_TARGET = "2/13"  # 目前 claude/codex live emit
 EXPECTED_K0A2_TARGET = "1/13"  # claude=3 sessions 累加現況
-EXPECTED_K0Q_TARGET = "9/13"   # 4 missing permanent skip
-EXPECTED_K0B_TARGET = "4/13"   # 本機 fresh 4/13
+EXPECTED_K0Q_TARGET = "7/13"   # 2 local fresh + 5 OpenAB stale data path
+EXPECTED_K0B_TARGET = "2/13"   # usage-local runners: claude/codex
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 K0_MEASURE = REPO_ROOT / "scripts" / "k0_measure.py"
@@ -158,7 +159,7 @@ def check_local_cli_4(k0_src: str) -> DriftResult:
 
 
 def check_mission_k0_target(mission_src: str) -> DriftResult:
-    """維度 5: MISSION.md 90 天目標反映 Path A 降級 (4/13+5/13+4 missing 永久非 scope)
+    """維度 5: MISSION.md 90 天目標反映 Path A 降級 (2/13+5/13+4 missing 永久非 scope)
 
     對應 R182 結構性決議, 守住「不悄悄改回 13/13 不可達目標」+ 「4 missing 永久非 scope」標記不退。
     """

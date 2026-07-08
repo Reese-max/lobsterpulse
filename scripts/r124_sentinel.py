@@ -18,7 +18,9 @@ R124 PUA 結構性飽和 7 輪延伸後的升維 sentinel 腳本。
   1. cargo test 計數 >= 471 (R137 守 452 lib unittests, R164 sidecar M0 fix ship +19,
      總計 471; 過往 sentinel 只 parse 第一行 = 452 漏算 sidecar + doc, 掩蓋 19 test 守衛,
      R177 修為 sum 全部 binary)
-  2. .harness-k0.json K0-A1 emit >= 4/13 (R131/R150 持平, 5→4 對齊實跑: cicx OpenAB scope 浮動, 4 為本機穩態下限), K0-B fresh >= 4/13
+  2. .harness-k0.json K0-A1 emit >= 2/13, K0-B fresh >= 2/13
+     (2026-07-08 修正 usage-local.json 逐 runners[].name 判定；目前
+     claude/codex 有 snapshot，copilot/gemini 缺 runner 不造假)
   3. 3 髒檔 git status 仍 tracked (owner M WIP 0 動 = sentinel 守住, R138 收為 3 條)
   4. 護衛 mod 計數 pattern matches >= 20 (R97 紅線, 不破; 實際 ≥33 = 護衛 test 函式總數, R131 doc drift 統一口徑 R97 後 +3 例外 mod 數 = 20)
   5. .harness-k41.json 7d chore ratio < 30% (R108 達標 6.3%)
@@ -50,9 +52,10 @@ K41_JSON: Final[Path] = REPO_ROOT / ".harness-k41.json"
 # fix ship +19 (lobster-pulse-hook 護衛) → 471 全 binary 總計 → R177 修 sentinel
 # 從「只 parse 第一行」改為「sum 全部 `test result: ok. N passed` 行」守住總計
 CARGO_TEST_MIN: Final[int] = 471
-# R150 (f56180d) 對齊實跑: K0-A1 4/13 emit baseline (本機 CLI 永續 4 + cicx OpenAB scope 浮動)
-K0_A1_MIN: Final[int] = 4
-K0_B_MIN: Final[int] = 4
+# R212 對齊實跑: K0-A1/K0-B 2/13 truthful baseline
+# (usage-local.json 目前只含 claude/codex runner, 不把 copilot/gemini 誤算 fresh)
+K0_A1_MIN: Final[int] = 2
+K0_B_MIN: Final[int] = 2
 # R97 紅線: 護衛 chain 不擴張但也不低於 R97 後累計 baseline
 GUARD_MOD_MIN: Final[int] = 20
 # MISSION 90 天 KPI: 7d chore_treadmill < 30%
@@ -171,7 +174,7 @@ def check_k0_emit() -> CheckResult:
         actual=f"{a1}/13",
         threshold=f">= {K0_A1_MIN}/13",
         note=(
-            f"K0-A1 emit 持平 {a1} >= {K0_A1_MIN} (R132 基準)"
+            f"K0-A1 emit 持平 {a1} >= {K0_A1_MIN} (R212 truthful runner 基準)"
             if passed
             else f"DRIFT: K0-A1 emit {a1} < {K0_A1_MIN}, 需查 endpoint 是否 DOWN"
         ),
@@ -197,7 +200,7 @@ def check_k0_fresh() -> CheckResult:
         actual=f"{fresh}/13",
         threshold=f">= {K0_B_MIN}/13",
         note=(
-            f"K0-B fresh 持平 {fresh} >= {K0_B_MIN} (R132 基準 4 本機 CLI)"
+            f"K0-B fresh 持平 {fresh} >= {K0_B_MIN} (R212 truthful runner 基準)"
             if passed
             else f"DRIFT: K0-B fresh {fresh} < {K0_B_MIN}, 本機 CLI quota 退化"
         ),

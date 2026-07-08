@@ -16,7 +16,7 @@ k0_drift_check.py 5 case + R187 k0_measure 9 case 模式, Python script
      (把 irisx_bot/grokx/lpbot/mimo 從 OPENAB_BOT 拿掉 → 結構性確認失效,
      R182 決議「永久非本機 scope」不攻自破)
   4. test_LOCAL_CLI_被_誤改_觸發_REGRESS — 守 M0 級 hidden gap 3
-     (把 LOCAL_CLI 改壞 e.g. 拿掉 gemini → 本機 4/13 降為 3/13, K0 量化
+     (把 LOCAL_CLI 改壞 e.g. 拿掉 gemini → 本機 CLI 結構從 4 個降為 3 個, K0 量化
      倒退, 結構性決議受損)
   5. test_MISSION_缺_R182_補欄_標記_觸發_REGRESS — 守 M0 級 hidden gap 4
      (有人把 MISSION.md R182 補欄拿掉, 4 missing 永久非 scope 標記消失,
@@ -96,7 +96,7 @@ OPENAB_BOT = ["cicx", "gitx", "giminix", "codex_bot", "openx"]
 
 def test_LOCAL_CLI_被_誤改_觸發_REGRESS():
     """守 M0 級 hidden gap 3: LOCAL_CLI 改壞 (e.g. 拿掉 gemini)
-    → 本機 4/13 降為 3/13, K0 量化倒退, R182 決議受損
+    → 本機 CLI 結構從 4 個降為 3 個, K0 量化倒退, R182 決議受損
     """
     bad_k0 = '''LOCAL_CLI = ["claude", "codex", "copilot"]
 OPENAB_BOT = ["cicx", "gitx", "giminix", "codex_bot", "openx",
@@ -158,7 +158,7 @@ def test_check_mission_k0_target_只缺_永久非_scope_標記_觸發_REGRESS():
         "# LobsterPulse\n\n"
         "## 90 天成功指標\n\n"
         "| KPI | 目標 |\n|---|---|\n"
-        "| K0-A1 | 4/13 |\n\n"
+        "| K0-A1 | 2/13 |\n\n"
         "## R182 補 (Path A 降級決議)\n\n"
         "4 missing bot (irisx_bot/grokx/lpbot/mimo) 標記為 OpenAB scope 不可達。\n"
     )

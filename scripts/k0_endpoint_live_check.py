@@ -112,13 +112,16 @@ def measure_endpoint_live(url: str = LIVE_URL,
         歷史 baseline, JSON 不存在 → None)
       - json_emit_providers: Optional[List[str]] (JSON 寫的 provider 清單)
       - drift: Dict (雙源比對漂移偵測):
-        - live_new: JSON 沒寫但當下 emit (新增 provider 端點 emit, JSON 沒更新)
+        - live_new: JSON 沒寫但當下 emit (只比對 KNOWN_PROVIDERS；__local__
+          等內部 label 保留在 live_provider_labels 診斷, 不算 drift)
         - json_stale: JSON 寫了但當下沒 emit (JSON 寫死 baseline, 端點已停)
     """
     endpoint_alive, metrics_text = fetch_live_metrics(url)
     live_labels = parse_live_providers(metrics_text)
     # live_emit_count 對齊 K0-A1: 只算 KNOWN_PROVIDERS 中的 (13 provider scope)
-    live_emit_count = sum(1 for p in KNOWN_PROVIDERS if p in live_labels)
+    known_provider_set = set(KNOWN_PROVIDERS)
+    live_known_labels = live_labels & known_provider_set
+    live_emit_count = len(live_known_labels)
 
     json_providers = read_json_emit_providers(json_path)
     if json_providers is None:
@@ -130,9 +133,11 @@ def measure_endpoint_live(url: str = LIVE_URL,
         json_emit_providers = sorted(json_providers)
         # 雙源漂移: live - json = 端點新 emit 但 JSON 沒更新;
         #           json - live = JSON 寫死但端點已停 (stale JSON 隱藏 bug)
+        # 只比對 KNOWN_PROVIDERS。__local__ 是內部 quota freshness label,
+        # 不屬 13 provider scope；保留在 live_provider_labels 供診斷即可。
         drift = {
-            "live_new": sorted(live_labels - json_providers),
-            "json_stale": sorted(json_providers - live_labels),
+            "live_new": sorted(live_known_labels - json_providers),
+            "json_stale": sorted(json_providers - live_known_labels),
         }
 
     return {

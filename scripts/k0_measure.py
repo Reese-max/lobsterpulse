@@ -30,7 +30,7 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 # 13 provider 真實清單 (對齊 CLAUDE.md v5.1 「4 本機 CLI + 9 OpenAB bot」)
 # hook_server.rs::KNOWN_PROVIDERS 為 source of truth: 4 + 9 = 13。
@@ -47,6 +47,32 @@ QUOTA_DIR = Path(os.environ.get("LOBSTERPULSE_QUOTA_DIR",
                                  str(Path.home() / ".lobsterpulse")))
 FRESH_HOURS = 24
 STALE_MARKER = re.compile(r"\.stale-\d{8}$")
+
+
+def read_usage_local_runner_names(local_path: Path) -> Set[str]:
+    """讀 usage-local.json 裡實際有 snapshot 的本機 runner 名稱。
+
+    usage-local.json 是多 runner 聚合檔；檔案存在只代表本機 quota pipeline 有
+    寫入，不能直接推論 claude/codex/copilot/gemini 四個 provider 都有新鮮
+    資料。只有 runners[].name 內真的出現的本機 provider 才能計為 fresh/stale。
+    """
+    try:
+        data = json.loads(local_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return set()
+
+    runners = data.get("runners")
+    if not isinstance(runners, list):
+        return set()
+
+    names: Set[str] = set()
+    for runner in runners:
+        if not isinstance(runner, dict):
+            continue
+        name = str(runner.get("name", "")).strip()
+        if name in LOCAL_CLI:
+            names.add(name)
+    return names
 
 
 def fetch_metrics() -> str:
@@ -109,16 +135,23 @@ def scan_quota_snapshots() -> Dict[str, Dict]:
                    "path": None} for p in KNOWN_PROVIDERS}
 
     now = time.time()
-    # 本機 4 個共用 usage-local.json
+    # 本機 CLI 共用 usage-local.json, 但只把 runners[].name 實際出現的
+    # provider 算成有 snapshot。檔案存在但缺 copilot/gemini runner 時, 不能
+    # 把 copilot/gemini 誤算 fresh。
     local_path = QUOTA_DIR / "usage-local.json"
     if local_path.exists():
         age_h = (now - local_path.stat().st_mtime) / 3600.0
+        local_runners = read_usage_local_runner_names(local_path)
         for p in LOCAL_CLI:
-            out[p] = {
-                "state": "fresh" if age_h < FRESH_HOURS else "stale",
-                "mtime_age_hours": round(age_h, 2),
-                "path": str(local_path),
-            }
+            if p in local_runners:
+                out[p] = {
+                    "state": "fresh" if age_h < FRESH_HOURS else "stale",
+                    "mtime_age_hours": round(age_h, 2),
+                    "path": str(local_path),
+                }
+            else:
+                out[p] = {"state": "missing", "mtime_age_hours": None,
+                          "path": None}
     else:
         for p in LOCAL_CLI:
             out[p] = {"state": "missing", "mtime_age_hours": None,

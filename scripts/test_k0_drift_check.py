@@ -47,35 +47,36 @@ def run_drift(json_path: Path, *args: str) -> subprocess.CompletedProcess:
 
 # ---------- 5 case 護衛 ----------
 
-def test_持平_對齊_R150_baseline(write_k0_json):
-    """持平 (4/1/4/9) → exit 0, 訊息含「全部持平」
+def test_持平_對齊_R212_truthful_runner_baseline(write_k0_json):
+    """持平 (2/1/2/7) → exit 0, 訊息含「全部持平」
 
-    R150 baseline 對齊: K0-A1 5→4 (cicx OpenAB scope 浮動, 4 為本機穩態下限)。
+    R212 baseline 對齊: usage-local.json 只含 claude/codex runner, 不再把
+    copilot/gemini 誤算 fresh。
     """
-    p = write_k0_json(emit=4, sample=1, fresh=4, coverage=9)
+    p = write_k0_json(emit=2, sample=1, fresh=2, coverage=7)
     r = run_drift(p)
     assert r.returncode == 0, f"預期 PASS, 實際 exit={r.returncode}\n{r.stdout}{r.stderr}"
     assert "全部持平" in r.stdout
 
 
-def test_倒退_K0_A1_從_4_掉到_3_觸發_REGRESS(write_k0_json):
-    """K0-A1 倒退 (3 < 4) → exit 1, 訊息含「1 維度倒退」+ 指出 K0-A1
+def test_倒退_K0_A1_從_2_掉到_1_觸發_REGRESS(write_k0_json):
+    """K0-A1 倒退 (1 < 2) → exit 1, 訊息含「1 維度倒退」+ 指出 K0-A1
 
-    R150 baseline 對齊: 倒退偵測仍守住 (3 < R150 baseline 4)。
+    R212 baseline 對齊: 倒退偵測仍守住 (1 < R212 baseline 2)。
     """
-    p = write_k0_json(emit=3, sample=1, fresh=4, coverage=9)
+    p = write_k0_json(emit=1, sample=1, fresh=2, coverage=7)
     r = run_drift(p)
     assert r.returncode == 1, f"預期 FAIL, 實際 exit={r.returncode}\n{r.stdout}{r.stderr}"
     assert "1 維度倒退" in r.stdout
     assert "k0a1_emit_covered" in r.stdout
 
 
-def test_進步_K0_A1_從_4_升到_5_預設_PASS_strict_FAIL(write_k0_json):
-    """K0-A1 進步 (5 > 4) → 預設 exit 0 PASS, --strict exit 1 FAIL
+def test_進步_K0_A1_從_2_升到_3_預設_PASS_strict_FAIL(write_k0_json):
+    """K0-A1 進步 (3 > 2) → 預設 exit 0 PASS, --strict exit 1 FAIL
 
-    R150 baseline 對齊: 進步偵測門檻 4→5。
+    R212 baseline 對齊: 進步偵測門檻 2→3。
     """
-    p = write_k0_json(emit=5, sample=1, fresh=4, coverage=9)
+    p = write_k0_json(emit=3, sample=1, fresh=2, coverage=7)
     # 預設模式
     r1 = run_drift(p)
     assert r1.returncode == 0
@@ -132,8 +133,8 @@ def test_load_current_缺_k0a1_health_emit_nested_KeyError(tmp_path):
         "providers_total": 13,
         # k0a1_health_emit 整個 missing
         "k0a2_health_sample": {"covered": 1, "total": 13, "pct": 7.7},
-        "k0b_quota_freshness": {"fresh": 4, "total": 13, "pct": 30.8},
-        "k0q_quota_coverage": {"covered": 9, "total": 13, "pct": 69.2},
+        "k0b_quota_freshness": {"fresh": 2, "total": 13, "pct": 15.4},
+        "k0q_quota_coverage": {"covered": 7, "total": 13, "pct": 53.8},
     }
     bad.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(KeyError) as exc_info:
@@ -141,8 +142,8 @@ def test_load_current_缺_k0a1_health_emit_nested_KeyError(tmp_path):
     assert "k0a1_health_emit" in str(exc_info.value)
 
 
-def test_load_current_covered_是字串_自動轉_int_4():
-    """load_current() covered 欄位是字串 "4" → int("4") = 4 (type coercion 守護)
+def test_load_current_covered_是字串_自動轉_int_2():
+    """load_current() covered 欄位是字串 "2" → int("2") = 2 (type coercion 守護)
 
     守住 load_current() 內 int(data[...]["covered"]) 的 type coercion 邏輯
     (對齊 chain_staleness 內 _compute_delta 同模式)。防有人改 k0_measure.py
@@ -154,24 +155,24 @@ def test_load_current_covered_是字串_自動轉_int_4():
         mode="w", suffix=".json", delete=False, encoding="utf-8"
     ) as f:
         payload = {
-            "k0a1_health_emit": {"covered": "4", "total": 13, "pct": 30.8},
+            "k0a1_health_emit": {"covered": "2", "total": 13, "pct": 15.4},
             "k0a2_health_sample": {"covered": "1", "total": 13, "pct": 7.7},
-            "k0b_quota_freshness": {"fresh": "4", "total": 13, "pct": 30.8},
-            "k0q_quota_coverage": {"covered": "9", "total": 13, "pct": 69.2},
+            "k0b_quota_freshness": {"fresh": "2", "total": 13, "pct": 15.4},
+            "k0q_quota_coverage": {"covered": "7", "total": 13, "pct": 53.8},
         }
         f.write(json.dumps(payload))
         f.flush()
         cur = _k0_dc.load_current(Path(f.name))
     assert cur == {
-        "k0a1_emit_covered": 4,
+        "k0a1_emit_covered": 2,
         "k0a2_sample_covered": 1,
-        "k0b_fresh": 4,
-        "k0q_coverage": 9,
+        "k0b_fresh": 2,
+        "k0q_coverage": 7,
     }
 
 
 def test_compute_drift_current_缺_key_預設_0_觸發_REGRESS():
-    """compute_drift() current 缺 k0a1_emit_covered → 預設 0, delta=-4 → REGRESS
+    """compute_drift() current 缺 k0a1_emit_covered → 預設 0, delta=-2 → REGRESS
 
     守住 M0 級 hidden gap: 防止 k0_measure.py schema 改時 k0_drift_check
     假 PASS (current.get(key, 0) 預設 0 不 raise 而是悄悄退步)。
@@ -183,13 +184,13 @@ def test_compute_drift_current_缺_key_預設_0_觸發_REGRESS():
     current = {
         # k0a1_emit_covered 缺 (模擬 schema 漂移 / k0_measure.py 量化少算 1 維)
         "k0a2_sample_covered": 1,
-        "k0b_fresh": 4,
-        "k0q_coverage": 9,
+        "k0b_fresh": 2,
+        "k0q_coverage": 7,
     }
     results = _k0_dc.compute_drift(current)
     k0a1 = next(r for r in results if r.key == "k0a1_emit_covered")
     assert k0a1.current == 0, f"缺 key 應預設 0, 實際 current={k0a1.current}"
-    assert k0a1.delta == -4, f"BASELINE=4 缺 key 預設 0 → delta=-4, 實際={k0a1.delta}"
+    assert k0a1.delta == -2, f"BASELINE=2 缺 key 預設 0 → delta=-2, 實際={k0a1.delta}"
     assert k0a1.status == "REGRESS", f"delta<0 必觸發 REGRESS, 實際={k0a1.status}"
 
 
@@ -202,9 +203,9 @@ def test_render_report_delta_為_0_顯示_兩空格_不帶_sign():
 
     對齊 R188 6→9 / R195 8→11 內部函式 hidden gap 邊界守護模式。
     """
-    r0 = _k0_dc.DriftResult("k0a1_emit_covered", 4, 4, 0, "PASS")  # 持平
+    r0 = _k0_dc.DriftResult("k0a1_emit_covered", 2, 2, 0, "PASS")  # 持平
     r1 = _k0_dc.DriftResult("k0a2_sample_covered", 1, 2, 1, "PASS")  # 進步
-    r2 = _k0_dc.DriftResult("k0b_fresh", 4, 3, -1, "REGRESS")  # 倒退
+    r2 = _k0_dc.DriftResult("k0b_fresh", 2, 1, -1, "REGRESS")  # 倒退
     report = _k0_dc.render_report([r0, r1, r2])
     assert "  0" in report, f"delta=0 該顯示 '  0' (兩個空格 + 0), 實際報表:\n{report}"
     assert "+1" in report, f"delta=+1 該有 +sign, 實際報表:\n{report}"

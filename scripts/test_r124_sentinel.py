@@ -56,7 +56,7 @@ def write_k0_json(tmp_path, monkeypatch):
 
 # ---------- 5 case 護衛 ----------
 
-def test_全部_持平_對齊_R132_baseline(monkeypatch, write_k0_json):
+def test_全部_持平_對齊_R212_truthful_runner_baseline(monkeypatch, write_k0_json):
     """全 5 項 sentinel check 持平 → exit 0 PASS"""
     import r124_sentinel
     # 確保 K41_JSON 存在且 ratio 達標 (K41 KPI 7d chore < 30%)
@@ -64,7 +64,7 @@ def test_全部_持平_對齊_R132_baseline(monkeypatch, write_k0_json):
     if not k41.exists():
         k41.write_text(json.dumps({"ratio": 0.07}), encoding="utf-8")
         monkeypatch.setattr(r124_sentinel, "K41_JSON", k41)
-    write_k0_json(emit=4, sample=1, fresh=4, coverage=9)
+    write_k0_json(emit=2, sample=1, fresh=2, coverage=7)
     # 跳過 cargo_test (慢) 跟 owner_m_wip 之外的純 module 級測試
     results = [r124_sentinel.check_k0_emit(),
                r124_sentinel.check_k0_fresh(),
@@ -73,24 +73,24 @@ def test_全部_持平_對齊_R132_baseline(monkeypatch, write_k0_json):
         f"預期全 PASS, 實際 {[r.name + ':' + str(r.passed) for r in results]}"
 
 
-def test_K0_A1_倒退_從_4_掉到_3_觸發_FAIL(write_k0_json):
-    """K0-A1 emit 4 → 3 (低於 K0_A1_MIN=4) → check_k0_emit 報 FAIL"""
-    # .harness-k0.json 寫成 3 emit (低於 baseline 4)
+def test_K0_A1_倒退_從_2_掉到_1_觸發_FAIL(write_k0_json):
+    """K0-A1 emit 2 → 1 (低於 K0_A1_MIN=2) → check_k0_emit 報 FAIL"""
+    # .harness-k0.json 寫成 1 emit (低於 baseline 2)
     import r124_sentinel
-    write_k0_json(emit=3, sample=1, fresh=4, coverage=9)
+    write_k0_json(emit=1, sample=1, fresh=2, coverage=7)
     result = r124_sentinel.check_k0_emit()
     assert result.passed is False
-    assert "3" in result.actual
-    assert "DRIFT" in result.note or "3" in result.actual
+    assert "1" in result.actual
+    assert "DRIFT" in result.note or "1" in result.actual
 
 
-def test_K0_B_fresh_倒退_從_4_掉到_3_觸發_FAIL(write_k0_json):
-    """K0-B fresh 4 → 3 → check_k0_fresh 報 FAIL"""
+def test_K0_B_fresh_倒退_從_2_掉到_1_觸發_FAIL(write_k0_json):
+    """K0-B fresh 2 → 1 → check_k0_fresh 報 FAIL"""
     import r124_sentinel
-    write_k0_json(emit=4, sample=1, fresh=3, coverage=9)
+    write_k0_json(emit=2, sample=1, fresh=1, coverage=7)
     result = r124_sentinel.check_k0_fresh()
     assert result.passed is False
-    assert "3" in result.actual
+    assert "1" in result.actual
 
 
 def test_K0_JSON_缺失_不_NameError_退回_FAIL(monkeypatch):
@@ -107,8 +107,8 @@ def test_K0_JSON_缺失_不_NameError_退回_FAIL(monkeypatch):
     assert result.passed is False
     assert result.name == "k0_a1_emit"
     assert "missing" in result.actual
-    # threshold 應顯示「>= 4」(K0_A1_MIN 的值), 不是 K0_A_MIN
-    assert "4" in result.threshold
+    # threshold 應顯示「>= 2」(K0_A1_MIN 的值), 不是 K0_A_MIN
+    assert "2" in result.threshold
     assert "K0_A_MIN" not in result.threshold  # 確認不再引用不存在常數
 
 

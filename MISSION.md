@@ -86,16 +86,16 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 
 | 子指標 | 本機可達 | OpenAB scope (受 cicx 等浮動) | 永久非本機 scope (永久 skip) | 結構性差距 |
 |---|---:|---:|---:|---:|
-| K0-A1 emit 覆蓋 | 4/13 (claude/codex/copilot/gemini 本機穩態下限, R150 實跑對齊) | 5/13 (cicx/gitx/giminix/codex_bot/openx 受 OpenAB 端 bot 上下線浮動) | **4/13** 永久非本機 scope (irisx_bot/grokx/lpbot/mimo 完全不寫 snapshot, OpenAB 端永遠不可達) | **0 結構性差距** (4/13 本機 = 100% 可達; 5/13 OpenAB 受 cicx 端浮動; 4/13 永久 skip 移出 K0 量化) |
+| K0-A1 emit 覆蓋 | 2/13 (claude/codex live emit；copilot/gemini 目前無 runner snapshot, R212 修正不造假) | 5/13 (cicx/gitx/giminix/codex_bot/openx 受 OpenAB 端 bot 上下線浮動) | **4/13** 永久非本機 scope (irisx_bot/grokx/lpbot/mimo 完全不寫 snapshot, OpenAB 端永遠不可達) | **0 結構性差距** (2/13 本機當前真實值; OpenAB 受 cicx 端浮動; 4/13 永久 skip 移出 K0 量化) |
 | K0-A2 sample 覆蓋 | 1/13 (claude=3 sessions 累加, R132 對齊) | 4/13 (5 active OpenAB 中 4 個 = cicx/gitx/giminix/codex_bot 屬受 bot 是否在運作浮動, openx 屬 legacy alias) | **4/13** 永久非本機 scope (同 K0-A1, 不會有事件流過) | **0 結構性差距** (1/13 本機可控 100% 達標, 8/13 OpenAB 端 5 active 受 cicx 等浮動 + 4 永久 skip) |
 | K0 程式碼定義層 (R101) | 13/13 (R101 達標, 跟 K0-A1/A2 量化口徑解耦) | — | — | 達標 |
-| K0 Quota 監控即時性 | K0-B fresh 4/13 (本機 100% 達標) | K0-Q 5/13 (5 active OpenAB snapshot 新鮮度) | **K0-Q 4/13** 永久非本機 scope (永久 skip, 移出 K0 量化) | **0 結構性差距** (4 missing = OpenAB 端不寫 `usage-*.json` 永久 skip, 移出 K0 量化; OpenAB 端 scope 由 OpenAB 端 owner 自追, 不計入 LobsterPulse K0) |
+| K0 Quota 監控即時性 | K0-B fresh 2/13 (usage-local.json 目前實際 runners: claude/codex；copilot/gemini 缺 runner 不算 fresh) | K0-Q 5/13 (5 active OpenAB stale snapshot 有 data path, 但非 fresh) | **K0-Q 4/13** 永久非本機 scope (永久 skip, 移出 K0 量化) | **0 結構性差距** (4 missing = OpenAB 端不寫 `usage-*.json` 永久 skip, 移出 K0 量化; OpenAB 端 scope 由 OpenAB 端 owner 自追, 不計入 LobsterPulse K0) |
 
 **決議文字 (R182 → R197 寫入 MISSION)**:
-- K0 目標從 13/13 全 scope 改為 **本機 4/13 + OpenAB 5/13 + 4 missing 永久非本機 scope 雙軌制**
+- K0 目標從 13/13 全 scope 改為 **本機當前 2/13 + OpenAB 5/13 + 4 missing 永久非本機 scope 雙軌制**；本機數值以 `usage-local.json` 實際 `runners[].name` 為準, 不再由檔案存在推論 4/13
 - 4 missing (irisx_bot/grokx/lpbot/mimo) 明確標註為 **永久非本機 scope**, 移出 K0 量化口徑
 - 5 active OpenAB (cicx/gitx/giminix/codex_bot/openx) 仍受 OpenAB 端 bot 上下線浮動影響, 屬 OpenAB 端 owner 自追 scope
-- 4 本機 CLI (claude/codex/copilot/gemini) 永遠可達, 不可被誤降為「永久非 scope」, 結構性永久守住
+- 4 本機 CLI (claude/codex/copilot/gemini) 程式碼定義仍在, 不可被誤降為「永久非 scope」；但 K0-B fresh 只計實際存在的 runner snapshot
 - R182 接力順位 #1 (K0 Quota 4 missing 補鏈路) → **永久 skip** (R182 決議移出 K0 量化)
 - R182 接力順位 #2 (K0-A1 emit 4/13 → 5/13 護衛) → **永久 skip** (5/13 受 OpenAB cicx 端浮動, 不再列為 K0 量化)
 - R182 接力順位 #5 (R175-R180 transparent 透明化軸延伸) → **unblock** (結構性失靈真因 = 結構性死結, 死結已解)

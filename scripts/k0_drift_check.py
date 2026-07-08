@@ -34,20 +34,21 @@ if sys.platform == "win32":
             _stream.reconfigure(encoding="utf-8", errors="replace")
 
 
-# R131 MISSION column K0 量化值 (寫死, baseline 改時同步改本常數)
-# 對齊 engineering-log.md R131 entry 「KPI 進展表」前值欄:
-#   K0-A1 emit 覆蓋 4/13 (本機 CLI 穩態下限: claude/codex/copilot/gemini),
+# 當前真實 K0 量化值 (寫死, baseline 改時同步改本常數)
+# 對齊 2026-07-08 修正: usage-local.json 改為逐 runners[].name 判定 provider,
+# 不再因檔案存在就把 copilot/gemini 誤算 fresh；endpoint live 只 emit
+# claude/codex。
+#   K0-A1 emit 覆蓋 2/13 (claude/codex),
 #   K0-A2 sample 覆蓋 1/13,
-#   K0 Quota K0-B fresh 4/13, K0 Quota K0-Q 覆蓋 9/13
+#   K0 Quota K0-B fresh 2/13, K0 Quota K0-Q 覆蓋 7/13
 #
-# R150 修正: K0-A1 baseline 5→4, 對齊當前實測 (cicx 屬 OpenAB scope,
-# 端點 emit 隨 OpenAB bot 上下線浮動, R111 5/13 為一次性觀察快照,
-# 非本機可達穩態; 本機 4 個 CLI 為可達下限)。
+# R212 修正: 舊 4/13 來自「usage-local.json 存在即 4 本機 CLI 全 fresh」
+# 的假設；實際 usage-local.json 目前只含 claude/codex runner。
 BASELINE: Dict[str, int] = {
-    "k0a1_emit_covered": 4,
+    "k0a1_emit_covered": 2,
     "k0a2_sample_covered": 1,
-    "k0b_fresh": 4,
-    "k0q_coverage": 9,
+    "k0b_fresh": 2,
+    "k0q_coverage": 7,
 }
 
 K0_TOTAL = 13  # 對齊 hook_server.rs::KNOWN_PROVIDERS 4+9

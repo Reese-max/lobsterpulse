@@ -1,0 +1,56 @@
+import json
+
+import machine_collector.notify as notify_mod
+from machine_collector.config import NotifyCfg
+from machine_collector.notify import TelegramNotifier
+
+
+def test_disabled_when_no_token():
+    n = TelegramNotifier("", "")
+    assert n.enabled is False
+    assert n.send("hi") is False
+    assert n.queue == []  # 未啟用不進 queue
+
+
+def test_send_failure_queues_then_flush_retries(monkeypatch):
+    n = TelegramNotifier("tok", "chat")
+    calls = {"n": 0}
+
+    def flaky_post(url, json=None, timeout=None):
+        calls["n"] += 1
+        class _R:
+            status_code = 500 if calls["n"] == 1 else 200
+        return _R()
+
+    monkeypatch.setattr(notify_mod.requests, "post", flaky_post)
+    assert n.send("msg1") is False
+    assert n.queue == ["msg1"]
+    n.flush()
+    assert n.queue == []
+
+
+def test_queue_cap(monkeypatch):
+    n = TelegramNotifier("tok", "chat")
+    monkeypatch.setattr(notify_mod.requests, "post",
+                        lambda *a, **k: type("R", (), {"status_code": 500})())
+    for i in range(150):
+        n.send(f"m{i}")
+    assert len(n.queue) == 100
+
+
+def test_from_config_fallback_to_lobsterpulse(monkeypatch, tmp_path):
+    lp = tmp_path / "config.json"
+    lp.write_text(json.dumps({"appearance": {
+        "telegram_bot_token": "lp-tok", "telegram_chat_id": "lp-chat"}}),
+        encoding="utf-8")
+    monkeypatch.setattr(notify_mod, "LOBSTERPULSE_CONFIG", lp)
+    n = TelegramNotifier.from_config(NotifyCfg())
+    assert n.token == "lp-tok"
+    assert n.chat_id == "lp-chat"
+
+
+def test_from_config_own_values_win(monkeypatch, tmp_path):
+    monkeypatch.setattr(notify_mod, "LOBSTERPULSE_CONFIG", tmp_path / "nope.json")
+    n = TelegramNotifier.from_config(
+        NotifyCfg(telegram_bot_token="own", telegram_chat_id="c1"))
+    assert n.token == "own"

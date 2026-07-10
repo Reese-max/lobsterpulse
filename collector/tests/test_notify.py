@@ -44,6 +44,8 @@ def test_from_config_fallback_to_lobsterpulse(monkeypatch, tmp_path):
         "telegram_bot_token": "lp-tok", "telegram_chat_id": "lp-chat"}}),
         encoding="utf-8")
     monkeypatch.setattr(notify_mod, "LOBSTERPULSE_CONFIG", lp)
+    # Isolate from real home directory by monkeypatching collector config to nonexistent path
+    monkeypatch.setattr(notify_mod, "COLLECTOR_TELEGRAM_CONFIG", tmp_path / "nonexistent_collector.json")
     n = TelegramNotifier.from_config(NotifyCfg())
     assert n.token == "lp-tok"
     assert n.chat_id == "lp-chat"
@@ -84,3 +86,42 @@ def test_non_200_logs_status(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         assert n.send("hi") is False
     assert "401" in caplog.text
+
+
+def test_from_config_collector_file_wins_over_lobsterpulse(monkeypatch, tmp_path):
+    """collector file exists and has values -> use them over lobsterpulse"""
+    collector_cfg = tmp_path / "collector_telegram.json"
+    collector_cfg.write_text(
+        json.dumps({"telegram_bot_token": "col-tok", "telegram_chat_id": "col-chat"}),
+        encoding="utf-8")
+
+    lobster_cfg = tmp_path / "lobster_config.json"
+    lobster_cfg.write_text(
+        json.dumps({"appearance": {
+            "telegram_bot_token": "lp-tok", "telegram_chat_id": "lp-chat"}}),
+        encoding="utf-8")
+
+    monkeypatch.setattr(notify_mod, "COLLECTOR_TELEGRAM_CONFIG", collector_cfg)
+    monkeypatch.setattr(notify_mod, "LOBSTERPULSE_CONFIG", lobster_cfg)
+
+    n = TelegramNotifier.from_config(NotifyCfg())
+    assert n.token == "col-tok"
+    assert n.chat_id == "col-chat"
+
+
+def test_from_config_collector_file_missing_falls_to_lobsterpulse(monkeypatch, tmp_path):
+    """collector file doesn't exist -> fallback to lobsterpulse"""
+    collector_cfg = tmp_path / "nonexistent.json"
+
+    lobster_cfg = tmp_path / "lobster_config.json"
+    lobster_cfg.write_text(
+        json.dumps({"appearance": {
+            "telegram_bot_token": "lp-tok", "telegram_chat_id": "lp-chat"}}),
+        encoding="utf-8")
+
+    monkeypatch.setattr(notify_mod, "COLLECTOR_TELEGRAM_CONFIG", collector_cfg)
+    monkeypatch.setattr(notify_mod, "LOBSTERPULSE_CONFIG", lobster_cfg)
+
+    n = TelegramNotifier.from_config(NotifyCfg())
+    assert n.token == "lp-tok"
+    assert n.chat_id == "lp-chat"

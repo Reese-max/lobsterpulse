@@ -12,7 +12,16 @@ from .config import NotifyCfg
 
 log = logging.getLogger(__name__)
 LOBSTERPULSE_CONFIG = Path(os.environ.get("APPDATA", "")) / "lobsterpulse" / "config.json"
+COLLECTOR_TELEGRAM_CONFIG = Path.home() / ".lobsterpulse" / "telegram.json"
 MAX_QUEUE = 100
+
+
+def _fallback_from_collector_file() -> tuple[str, str]:
+    try:
+        d = json.loads(COLLECTOR_TELEGRAM_CONFIG.read_text(encoding="utf-8"))
+        return d.get("telegram_bot_token", ""), d.get("telegram_chat_id", "")
+    except (OSError, json.JSONDecodeError):
+        return "", ""
 
 
 def _fallback_from_lobsterpulse() -> tuple[str, str]:
@@ -34,9 +43,13 @@ class TelegramNotifier:
     def from_config(cls, cfg: NotifyCfg) -> "TelegramNotifier":
         token, chat_id = cfg.telegram_bot_token, cfg.telegram_chat_id
         if not token or not chat_id:
-            fb_token, fb_chat = _fallback_from_lobsterpulse()
+            fb_token, fb_chat = _fallback_from_collector_file()
             token = token or fb_token
             chat_id = chat_id or fb_chat
+            if not token or not chat_id:
+                fb_token, fb_chat = _fallback_from_lobsterpulse()
+                token = token or fb_token
+                chat_id = chat_id or fb_chat
         return cls(token, chat_id)
 
     @property

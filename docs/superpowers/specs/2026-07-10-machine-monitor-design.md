@@ -69,7 +69,7 @@ OpenAB WSL 後端、多個專案 repo——全部沒有被監控。使用者的�
 | **services** | port owner 是否為預期進程、healthz、有流量時 log 是否在長（Hermes 8318、ProxyPilot 8317、n8n、OpenAB WSL 後端…） | 硬規則 8「健康≠活著」、踩雷 §22 死 socket |
 | **schedules** | schtasks 最近結果碼（0x0/0x1/0x41301）、該跑的窗口沒跑、n8n 失敗 execution（n8n REST API）、各 loop state 檔新鮮度 | §23、§26 監督腳本路徑 |
 | **resources** | CPU、RAM、commit charge %、磁碟空間、GPU（nvidia-smi）、殭屍/孤兒進程數 | §16 0xc0000142 前兆預警 |
-| **projects** | 註冊 repo 的 git dirty 檔數、未推 commit 積壓天數、關鍵產物新鮮度 | — |
+| **projects** | 註冊 repo 的 git dirty 檔數、未推 commit 積壓天數、關鍵產物新鮮度（per-repo 選配：於 monitor-config.yaml 指定檔案路徑 + 最大年齡，逾期告黃） | — |
 
 每個 check 獨立失敗隔離：單項 try/except，錯誤記入 `check_results`，
 不影響同輪其他 check。讀不到的對象（如 WSL 未起）顯示「無法採集」而非假綠。

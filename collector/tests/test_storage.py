@@ -46,3 +46,12 @@ def test_open_alerts_multiple_ids(tmp_path):
     assert "check.id.2" in alerts
     assert alerts["check.id.1"]["severity"] == "yellow"
     assert alerts["check.id.2"]["severity"] == "red"
+
+
+def test_reopen_after_close(tmp_path):
+    s = Storage(tmp_path / "t.db")
+    assert s.open_alert("service.x.port_owner", "red", "第一輪") is True
+    assert s.close_alert("service.x.port_owner") is True
+    # 關閉後同 check_id 應可重開（partial unique index 只約束 open 中的告警）
+    assert s.open_alert("service.x.port_owner", "red", "第二輪") is True
+    assert "service.x.port_owner" in s.open_alerts()

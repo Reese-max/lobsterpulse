@@ -6,7 +6,24 @@
 $ErrorActionPreference = "Stop"
 
 $CollectorDir = Split-Path -Parent $PSScriptRoot
-$PythonW = (Get-Command pythonw.exe).Source
+
+# Interpreter must actually have the collector's deps (psutil/yaml/requests) -
+# `(Get-Command pythonw.exe).Source` alone can resolve to an unrelated venv's
+# pythonw (e.g. a foreign tool's venv) that lacks them. Validate candidates.
+$Candidates = @()
+$py = (Get-Command python.exe -ErrorAction SilentlyContinue)?.Source
+if ($py) { $Candidates += (Join-Path (Split-Path $py) "pythonw.exe") }
+$pyw = (Get-Command pythonw.exe -ErrorAction SilentlyContinue)?.Source
+if ($pyw) { $Candidates += $pyw }
+$PythonW = $null
+foreach ($c in $Candidates | Select-Object -Unique) {
+    if ((Test-Path $c) -and $(& $c -c "import psutil, yaml, requests" 2>$null; $LASTEXITCODE -eq 0)) {
+        $PythonW = $c; break
+    }
+}
+if (-not $PythonW) { throw "No pythonw.exe with required deps (psutil/yaml/requests) found" }
+Write-Output "Using interpreter: $PythonW"
+
 $RunScript = Join-Path $CollectorDir "run_collector.py"
 $WatchdogScript = Join-Path $PSScriptRoot "watchdog.py"
 

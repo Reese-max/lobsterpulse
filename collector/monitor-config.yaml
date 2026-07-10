@@ -15,10 +15,10 @@ services:
     process_pattern: "proxypilot"
   - id: hermes-proxy
     port: 8318
-    process_pattern: "python"   # Hermes proxy 實測以 python3.11 進程監聽
+    process_pattern: "hermes"   # 實測 cmdline 含 hermes.exe（venv 內），port owner 為 python.exe 宿主
   - id: n8n
     port: 5678
-    process_pattern: "node"
+    process_pattern: "n8n"
     healthz_url: "http://127.0.0.1:5678/healthz"
   - id: lobsterpulse-metrics
     port: 19380

@@ -68,3 +68,19 @@ def test_post_failure_does_not_leak_token(monkeypatch, caplog):
         assert n.send("hi") is False
     assert "SECRET-TOKEN-123" not in caplog.text
     assert "<token>" in caplog.text
+
+
+def test_non_200_logs_status(monkeypatch, caplog):
+    import logging
+    n = TelegramNotifier("tok", "chat")
+
+    def bad_post(url, json=None, timeout=None):
+        class _R:
+            status_code = 401
+            text = "Unauthorized"
+        return _R()
+
+    monkeypatch.setattr(notify_mod.requests, "post", bad_post)
+    with caplog.at_level(logging.WARNING):
+        assert n.send("hi") is False
+    assert "401" in caplog.text

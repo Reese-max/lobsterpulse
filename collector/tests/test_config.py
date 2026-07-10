@@ -35,3 +35,21 @@ def test_load_config_empty_file_uses_defaults(tmp_path):
     assert cfg.interval_secs == 60
     assert cfg.services == []
     assert cfg.notify.cooldown_secs == 1800
+
+
+def test_load_config_null_sections(tmp_path):
+    f = tmp_path / "m.yaml"
+    f.write_text(
+        """
+interval_secs: 45
+services:
+resources:
+notify:
+""",
+        encoding="utf-8",
+    )
+    cfg = load_config(f)
+    assert cfg.interval_secs == 45
+    assert cfg.services == []
+    assert cfg.resources.commit_charge_alert_pct == 85.0
+    assert cfg.notify.cooldown_secs == 1800

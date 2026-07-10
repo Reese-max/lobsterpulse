@@ -86,16 +86,16 @@ def run_service_checks(services: list[ServiceCfg], log_state: dict) -> list[Chec
     results: list[CheckResult] = []
     for svc in services:
         probes = (
-            lambda s=svc: check_port_owner(s),
-            lambda s=svc: check_healthz(s),
-            lambda s=svc: check_log_growth(s, log_state),
+            ("port_owner", lambda s=svc: check_port_owner(s)),
+            ("healthz", lambda s=svc: check_healthz(s)),
+            ("log_growth", lambda s=svc: check_log_growth(s, log_state)),
         )
-        for probe in probes:
+        for name, probe in probes:
             try:
                 r = probe()
             except Exception as e:
-                r = CheckResult(f"service.{svc.id}.error", False,
-                                f"{type(e).__name__}: {e}")
+                r = CheckResult(f"service.{svc.id}.{name}", False,
+                                f"探針例外: {type(e).__name__}: {e}")
             if r is not None:
                 results.append(r)
     return results

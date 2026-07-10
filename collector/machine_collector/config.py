@@ -46,7 +46,7 @@ def load_config(path: str | Path) -> MonitorConfig:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     return MonitorConfig(
         interval_secs=raw.get("interval_secs", 60),
-        services=[ServiceCfg(**s) for s in raw.get("services", [])],
-        resources=ResourceCfg(**raw.get("resources", {})),
-        notify=NotifyCfg(**raw.get("notify", {})),
+        services=[ServiceCfg(**s) for s in raw.get("services") or []],
+        resources=ResourceCfg(**(raw.get("resources") or {})),
+        notify=NotifyCfg(**(raw.get("notify") or {})),
     )

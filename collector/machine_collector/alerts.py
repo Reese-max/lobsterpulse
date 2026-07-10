@@ -59,4 +59,9 @@ class AlertEngine:
             msg = f"{icon} {r.check_id} 異常：{r.detail}"
             if self.storage.open_alert(r.check_id, sev, msg):
                 out.append(Notification("alert", r.check_id, msg))
+        # 本輪未回報的 check_id 不累計「連續」失敗（缺席 ≠ 失敗）
+        seen = {r.check_id for r in results}
+        for cid in list(self._consecutive):
+            if cid not in seen:
+                self._consecutive[cid] = 0
         return out

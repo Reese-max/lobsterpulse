@@ -115,5 +115,6 @@ def test_run_service_checks_isolated(monkeypatch):
     monkeypatch.setattr(svc_mod, "check_port_owner", boom)
     results = svc_mod.run_service_checks([_svc()], {})
     assert len(results) == 1
-    assert results[0].check_id == "service.pp.error"
+    assert results[0].check_id == "service.pp.port_owner"
     assert results[0].ok is False
+    assert "探針例外" in results[0].detail

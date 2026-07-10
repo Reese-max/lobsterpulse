@@ -51,6 +51,12 @@ class TelegramNotifier:
             r = requests.post(
                 f"https://api.telegram.org/bot{self.token}/sendMessage",
                 json={"chat_id": self.chat_id, "text": text}, timeout=10)
+            if r.status_code != 200:
+                try:
+                    body = r.text[:200]
+                except Exception:
+                    body = ""
+                log.warning("telegram HTTP %s: %s", r.status_code, self._redact(body))
             return r.status_code == 200
         except requests.RequestException as e:
             log.warning("telegram 送出失敗: %s: %s", type(e).__name__, self._redact(str(e)))
@@ -64,6 +70,8 @@ class TelegramNotifier:
             return True
         if len(self.queue) < MAX_QUEUE:
             self.queue.append(text)
+        else:
+            log.warning("telegram queue 已滿（%d），丟棄訊息", MAX_QUEUE)
         return False
 
     def flush(self) -> None:

@@ -62,3 +62,24 @@ def test_fail_rounds_override_for_cpu(tmp_path):
 def test_severity_mapping():
     assert severity_of("resource.cpu") == "yellow"
     assert severity_of("service.pp.port_owner") == "red"
+
+
+def test_probe_crash_then_recover_closes_alert(tmp_path):
+    eng = AlertEngine(Storage(tmp_path / "t.db"))
+    crash = CheckResult("service.pp.port_owner", False, "探針例外: RuntimeError")
+    assert eng.process([crash]) == []             # 第 1 輪：探針例外，還不告警
+    notes = eng.process([crash])                  # 第 2 輪：開告警
+    assert len(notes) == 1
+    assert notes[0].kind == "alert"
+    recovery = eng.process([_ok("service.pp.port_owner")])
+    assert len(recovery) == 1
+    assert recovery[0].kind == "recovery"
+    assert eng.storage.open_alerts() == {}
+
+
+def test_absent_check_id_resets_consecutive(tmp_path):
+    eng = AlertEngine(Storage(tmp_path / "t.db"))
+    fail_a = CheckResult("service.a", False, "fail")
+    assert eng.process([fail_a]) == []   # 第 1 輪失敗（id A）
+    assert eng.process([]) == []         # 本輪不含 A -> 缺席歸零
+    assert eng.process([fail_a]) == []   # 重新從 1 算，還不告警

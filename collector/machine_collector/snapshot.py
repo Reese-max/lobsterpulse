@@ -24,4 +24,7 @@ def write_snapshot(path: str | Path, results: list[CheckResult],
 
 
 def write_heartbeat(path: str | Path) -> None:
-    Path(path).write_text(str(time.time()), encoding="utf-8")
+    path = Path(path)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(str(time.time()), encoding="utf-8")
+    tmp.replace(path)

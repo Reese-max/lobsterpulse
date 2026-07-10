@@ -25,3 +25,4 @@ def test_write_heartbeat(tmp_path):
     p = tmp_path / "hb"
     write_heartbeat(p)
     assert abs(float(p.read_text()) - time.time()) < 5
+    assert not p.with_suffix(".tmp").exists()

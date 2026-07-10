@@ -1,0 +1,33 @@
+# collector/monitor-config.yaml
+# 監控清單：加對象改這裡，不改碼。process_pattern 是對 "name cmdline" 的
+# case-insensitive regex（踩雷 §6：匹配盡量帶路徑/專案雙鍵，勿只用泛名）。
+interval_secs: 60
+
+notify:
+  # 留空 = fallback 讀 %APPDATA%\lobsterpulse\config.json 的 appearance.telegram_*
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  cooldown_secs: 1800
+
+services:
+  - id: proxypilot
+    port: 8317
+    process_pattern: "proxypilot"
+  - id: hermes-proxy
+    port: 8318
+    process_pattern: "python"   # Hermes proxy 實測以 python3.11 進程監聽
+  - id: n8n
+    port: 5678
+    process_pattern: "node"
+    healthz_url: "http://127.0.0.1:5678/healthz"
+  - id: lobsterpulse-metrics
+    port: 19380
+    process_pattern: "lobster-pulse"
+    healthz_url: "http://127.0.0.1:19380/metrics"
+
+resources:
+  commit_charge_alert_pct: 85
+  disk_min_free_pct: 10
+  cpu_alert_pct: 90
+  cpu_alert_sustain_rounds: 10   # 60s x 10 輪 = 持續 10 分鐘才告警
+  disks: ["C:", "D:"]

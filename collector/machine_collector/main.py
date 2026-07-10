@@ -30,7 +30,7 @@ def setup_logging(log_path: Path = LOG_PATH) -> None:
     handlers: list[logging.Handler] = [logging.FileHandler(log_path, encoding="utf-8")]
     if sys.stdout is not None:
         handlers.append(logging.StreamHandler())
-    logging.basicConfig(level=logging.INFO, handlers=handlers,
+    logging.basicConfig(level=logging.INFO, handlers=handlers, force=True,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 

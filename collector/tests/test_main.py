@@ -46,3 +46,16 @@ def test_run_once_survives_module_crash(monkeypatch, tmp_path):
                       TelegramNotifier("", ""), {}, snap, hb)
     d = json.loads(snap.read_text(encoding="utf-8"))
     assert len(d["checks"]) == 1  # resources 那半照常完成
+
+
+def test_setup_logging_overrides_preconfigured_root(tmp_path):
+    import logging
+    # 模擬宿主先配置過 root logger
+    logging.basicConfig(level=logging.WARNING)
+    log_file = tmp_path / "m.log"
+    main_mod.setup_logging(log_file)
+    root = logging.getLogger()
+    assert any(isinstance(h, logging.FileHandler) for h in root.handlers)
+    # 清理：避免影響其他測試
+    for h in list(root.handlers):
+        root.removeHandler(h)

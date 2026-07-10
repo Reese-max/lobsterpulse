@@ -11,7 +11,7 @@ from .alerts import AlertEngine
 from .checks.resources import collect_resources
 from .checks.services import run_service_checks
 from .config import MonitorConfig, load_config
-from .notify import TelegramNotifier
+from .notify import TelegramNotifier, DiscordNotifier, MultiNotifier
 from .snapshot import write_heartbeat, write_snapshot
 from .storage import Storage
 
@@ -75,10 +75,13 @@ def main(argv: list[str] | None = None) -> None:
     engine = AlertEngine(
         storage, cooldown_secs=cfg.notify.cooldown_secs,
         fail_rounds={"resource.cpu": cfg.resources.cpu_alert_sustain_rounds})
-    notifier = TelegramNotifier.from_config(cfg.notify)
-    log.info("machine-collector 啟動 interval=%ss services=%d telegram=%s",
+    tg = TelegramNotifier.from_config(cfg.notify)
+    dc = DiscordNotifier.from_config(cfg.notify)
+    notifier = MultiNotifier([tg, dc])
+    log.info("machine-collector 啟動 interval=%ss services=%d telegram=%s discord=%s",
              cfg.interval_secs, len(cfg.services),
-             "enabled" if notifier.enabled else "disabled")
+             "enabled" if tg.enabled else "disabled",
+             "enabled" if dc.enabled else "disabled")
 
     log_state: dict = {}
     last_prune = 0.0

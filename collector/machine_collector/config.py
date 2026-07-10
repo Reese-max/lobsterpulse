@@ -31,6 +31,8 @@ class ResourceCfg:
 class NotifyCfg:
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    discord_bot_token: str = ""
+    discord_channel_id: str = ""
     cooldown_secs: int = 1800
 
 

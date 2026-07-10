@@ -7,6 +7,10 @@ notify:
   # 留空 = fallback 讀 %APPDATA%\lobsterpulse\config.json 的 appearance.telegram_*
   telegram_bot_token: ""
   telegram_chat_id: ""
+  # discord 憑證同理：留空 = 讀 ~/.lobsterpulse/discord.json，再 fallback
+  # lobsterpulse config.json 的 appearance.discord
+  discord_bot_token: ""
+  discord_channel_id: ""
   cooldown_secs: 1800
 
 services:

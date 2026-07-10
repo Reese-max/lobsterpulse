@@ -125,3 +125,112 @@ def test_from_config_collector_file_missing_falls_to_lobsterpulse(monkeypatch, t
     n = TelegramNotifier.from_config(NotifyCfg())
     assert n.token == "lp-tok"
     assert n.chat_id == "lp-chat"
+
+
+# Discord tests
+def test_discord_from_config_collector_file_wins(monkeypatch, tmp_path):
+    """collector discord.json 值勝過 lobsterpulse appearance.discord"""
+    from machine_collector.notify import DiscordNotifier
+
+    collector_cfg = tmp_path / "collector_discord.json"
+    collector_cfg.write_text(
+        json.dumps({"discord_bot_token": "col-tok", "discord_channel_id": "col-ch"}),
+        encoding="utf-8")
+
+    lobster_cfg = tmp_path / "lobster_config.json"
+    lobster_cfg.write_text(
+        json.dumps({"appearance": {
+            "discord": {"bot_token": "lp-tok", "channel_id": "lp-ch"}}}),
+        encoding="utf-8")
+
+    monkeypatch.setattr(notify_mod, "COLLECTOR_DISCORD_CONFIG", collector_cfg)
+    monkeypatch.setattr(notify_mod, "LOBSTERPULSE_CONFIG", lobster_cfg)
+
+    n = DiscordNotifier.from_config(NotifyCfg())
+    assert n.token == "col-tok"
+    assert n.channel_id == "col-ch"
+
+
+def test_discord_send_success_and_non_200_logs(monkeypatch, caplog):
+    """200 回 True；401 回 False 且 caplog 含 "401" """
+    import logging
+    from machine_collector.notify import DiscordNotifier
+
+    n = DiscordNotifier("tok", "ch123")
+
+    # 測試 200 成功
+    def ok_post(url, json=None, headers=None, timeout=None):
+        class _R:
+            status_code = 200
+        return _R()
+
+    monkeypatch.setattr(notify_mod.requests, "post", ok_post)
+    assert n.send("ok") is True
+
+    # 測試 401 失敗
+    def bad_post(url, json=None, headers=None, timeout=None):
+        class _R:
+            status_code = 401
+            text = "Unauthorized"
+        return _R()
+
+    monkeypatch.setattr(notify_mod.requests, "post", bad_post)
+    with caplog.at_level(logging.WARNING):
+        assert n.send("bad") is False
+    assert "401" in caplog.text
+
+
+def test_discord_disabled_no_queue(monkeypatch):
+    """無 token 時 send False、queue 空"""
+    from machine_collector.notify import DiscordNotifier
+
+    n = DiscordNotifier("", "")
+    assert n.enabled is False
+    assert n.send("hi") is False
+    assert n.queue == []
+
+
+def test_multi_notifier_fans_out_and_filters(monkeypatch):
+    """兩個 stub notifier（一 enabled 一 disabled），send 後只有 enabled 的收到；
+    一成功一失敗時回 True；flush 傳遞"""
+    from machine_collector.notify import MultiNotifier
+
+    # Stub notifier
+    class StubNotifier:
+        def __init__(self, enabled, send_result=True):
+            self.enabled = enabled
+            self.send_result = send_result
+            self.sent = []
+
+        def send(self, text):
+            if self.enabled:
+                self.sent.append(text)
+                return self.send_result
+            return False
+
+        def flush(self):
+            pass
+
+    enabled_ok = StubNotifier(enabled=True, send_result=True)
+    enabled_fail = StubNotifier(enabled=True, send_result=False)
+    disabled = StubNotifier(enabled=False, send_result=True)
+
+    # 測試過濾掉 disabled
+    m = MultiNotifier([enabled_ok, disabled])
+    assert m.enabled is True
+    assert len(m.notifiers) == 1
+
+    # 測試 send 都送到
+    result = m.send("msg1")
+    assert result is True
+    assert enabled_ok.sent == ["msg1"]
+
+    # 測試一成功一失敗回 True
+    m2 = MultiNotifier([enabled_ok, enabled_fail])
+    result = m2.send("msg2")
+    assert result is True
+    assert enabled_ok.sent == ["msg1", "msg2"]
+    assert enabled_fail.sent == ["msg2"]
+
+    # 測試 flush 傳遞
+    m2.flush()  # Should not raise

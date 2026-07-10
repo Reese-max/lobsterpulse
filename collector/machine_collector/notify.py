@@ -43,6 +43,9 @@ class TelegramNotifier:
     def enabled(self) -> bool:
         return bool(self.token and self.chat_id)
 
+    def _redact(self, text: str) -> str:
+        return text.replace(self.token, "<token>") if self.token else text
+
     def _post(self, text: str) -> bool:
         try:
             r = requests.post(
@@ -50,7 +53,7 @@ class TelegramNotifier:
                 json={"chat_id": self.chat_id, "text": text}, timeout=10)
             return r.status_code == 200
         except requests.RequestException as e:
-            log.warning("telegram 送出失敗: %s", e)
+            log.warning("telegram 送出失敗: %s: %s", type(e).__name__, self._redact(str(e)))
             return False
 
     def send(self, text: str) -> bool:

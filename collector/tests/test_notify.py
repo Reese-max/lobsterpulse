@@ -54,3 +54,17 @@ def test_from_config_own_values_win(monkeypatch, tmp_path):
     n = TelegramNotifier.from_config(
         NotifyCfg(telegram_bot_token="own", telegram_chat_id="c1"))
     assert n.token == "own"
+
+
+def test_post_failure_does_not_leak_token(monkeypatch, caplog):
+    import logging
+    n = TelegramNotifier("SECRET-TOKEN-123", "chat")
+
+    def boom(url, json=None, timeout=None):
+        raise notify_mod.requests.ConnectionError(
+            f"Max retries exceeded with url: /botSECRET-TOKEN-123/sendMessage")
+    monkeypatch.setattr(notify_mod.requests, "post", boom)
+    with caplog.at_level(logging.WARNING):
+        assert n.send("hi") is False
+    assert "SECRET-TOKEN-123" not in caplog.text
+    assert "<token>" in caplog.text

@@ -49,3 +49,20 @@ def test_single_probe_failure_does_not_kill_round(monkeypatch):
     assert by_id["resource.commit_charge"].ok is False
     assert "OSError" in by_id["resource.commit_charge"].detail
     assert "resource.cpu_pct" in samples  # 其他探針照常
+
+
+def test_gpu_probe_failure_does_not_kill_round(monkeypatch):
+    """GPU 探針失敗時，其他探針應照常完成採集。"""
+    _patch_all(monkeypatch)
+    def boom():
+        raise RuntimeError("GPU parsing failed")
+    monkeypatch.setattr(res, "gpu_stats", boom)
+    results, samples = res.collect_resources(ResourceCfg(disks=["C:"]))
+    by_id = {r.check_id: r for r in results}
+    # (a) 不拋例外
+    # (b) 其他 samples 照常
+    assert "resource.cpu_pct" in samples
+    assert "resource.process_count" in samples
+    # (c) results 中有 GPU 的失敗 CheckResult
+    assert by_id["resource.gpu"].ok is False
+    assert "RuntimeError" in by_id["resource.gpu"].detail

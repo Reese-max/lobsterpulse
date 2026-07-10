@@ -46,12 +46,12 @@ def gpu_stats() -> dict | None:
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=10)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        if out.returncode != 0 or not out.stdout.strip():
+            return None
+        util, used, total = [float(x) for x in out.stdout.strip().splitlines()[0].split(",")]
+        return {"gpu_util_pct": util, "gpu_mem_used_mb": used, "gpu_mem_total_mb": total}
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
         return None
-    if out.returncode != 0 or not out.stdout.strip():
-        return None
-    util, used, total = [float(x) for x in out.stdout.strip().splitlines()[0].split(",")]
-    return {"gpu_util_pct": util, "gpu_mem_used_mb": used, "gpu_mem_total_mb": total}
 
 
 def collect_resources(cfg: ResourceCfg) -> tuple[list[CheckResult], dict[str, float]]:
@@ -92,9 +92,12 @@ def collect_resources(cfg: ResourceCfg) -> tuple[list[CheckResult], dict[str, fl
         except Exception as e:
             results.append(CheckResult(cid, False, f"{type(e).__name__}: {e}"))
 
-    gpu = gpu_stats()
-    if gpu:
-        samples.update({f"resource.{k}": v for k, v in gpu.items()})
+    try:
+        gpu = gpu_stats()
+        if gpu:
+            samples.update({f"resource.{k}": v for k, v in gpu.items()})
+    except Exception as e:
+        results.append(CheckResult("resource.gpu", False, f"{type(e).__name__}: {e}"))
 
     try:
         samples["resource.process_count"] = float(len(psutil.pids()))

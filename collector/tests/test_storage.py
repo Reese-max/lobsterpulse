@@ -29,3 +29,20 @@ def test_samples_checks_and_prune(tmp_path):
     n_checks = s.conn.execute("SELECT COUNT(*) FROM check_results").fetchone()[0]
     assert n_samples == 1
     assert n_checks == 1
+
+
+def test_last_alert_opened_never_opened_returns_none(tmp_path):
+    s = Storage(tmp_path / "t.db")
+    assert s.last_alert_opened("never.opened.check") is None
+
+
+def test_open_alerts_multiple_ids(tmp_path):
+    s = Storage(tmp_path / "t.db")
+    assert s.open_alert("check.id.1", "yellow", "warning 1") is True
+    assert s.open_alert("check.id.2", "red", "warning 2") is True
+    alerts = s.open_alerts()
+    assert len(alerts) == 2
+    assert "check.id.1" in alerts
+    assert "check.id.2" in alerts
+    assert alerts["check.id.1"]["severity"] == "yellow"
+    assert alerts["check.id.2"]["severity"] == "red"

@@ -29,12 +29,14 @@ CREATE TABLE IF NOT EXISTS alerts (
     closed_ts REAL
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_check ON alerts (check_id, opened_ts);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_unique ON alerts (check_id) WHERE closed_ts IS NULL;
 """
 
 
 class Storage:
     def __init__(self, db_path: str | Path):
-        self.conn = sqlite3.connect(str(db_path))
+        # 單進程單線程設計：daemon 只有一個執行路徑，無需 check_same_thread
+        self.conn = sqlite3.connect(str(db_path), timeout=10)
         self.conn.executescript(_SCHEMA)
         self.conn.commit()
 
@@ -57,13 +59,14 @@ class Storage:
         return {r[0]: {"severity": r[1], "message": r[2], "opened_ts": r[3]} for r in rows}
 
     def open_alert(self, check_id: str, severity: str, message: str) -> bool:
-        if check_id in self.open_alerts():
+        try:
+            self.conn.execute(
+                "INSERT INTO alerts (check_id, severity, message, opened_ts) VALUES (?,?,?,?)",
+                (check_id, severity, message, time.time()))
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
             return False
-        self.conn.execute(
-            "INSERT INTO alerts (check_id, severity, message, opened_ts) VALUES (?,?,?,?)",
-            (check_id, severity, message, time.time()))
-        self.conn.commit()
-        return True
 
     def close_alert(self, check_id: str) -> bool:
         cur = self.conn.execute(

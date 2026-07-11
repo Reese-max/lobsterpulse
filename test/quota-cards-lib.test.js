@@ -51,11 +51,35 @@ test("單一 remaining_pct -> simple 卡", () => {
   assert.strictEqual(c.pct, 55);
 });
 
-test("ok:false / 無 raw / 無合法欄位 -> none", () => {
-  assert.strictEqual(normalizeRunnerCard({ name: "x", ok: false, raw: { h5_remaining: 5 } }).kind, "none");
+test("無 raw / 無合法欄位 -> none", () => {
   assert.strictEqual(normalizeRunnerCard({ name: "x", ok: true }).kind, "none");
   assert.strictEqual(normalizeRunnerCard({ name: "x", ok: true, raw: { foo: 1, h5_remaining: 999 } }).kind, "none");
   assert.strictEqual(normalizeRunnerCard(null).kind, "none");
+});
+
+test("ok:false 有 raw 且有合法 % -> 降級 simple 卡，failed: true", () => {
+  const c = normalizeRunnerCard({ name: "x", ok: false, raw: { h5_remaining: 5 } });
+  assert.strictEqual(c.kind, "simple");
+  assert.strictEqual(c.failed, true);
+  assert.strictEqual(c.pct, 5);
+});
+
+test("ok:false 無 raw -> none", () => {
+  assert.strictEqual(normalizeRunnerCard({ name: "x", ok: false }).kind, "none");
+});
+
+test("ok:false 有 raw 但無合法 % -> none", () => {
+  assert.strictEqual(normalizeRunnerCard({ name: "x", ok: false, raw: { foo: 1 } }).kind, "none");
+});
+
+test("正常 simple/full 卡 failed 為 falsy", () => {
+  const full = normalizeRunnerCard({
+    name: "claude", label: "C", ok: true,
+    raw: { session_5h_remaining: 64, week_7d_remaining: 61, tier: "Max" },
+  });
+  const simple = normalizeRunnerCard({ name: "cicx", label: "C", ok: true, raw: { remaining_pct: 55 } });
+  assert.ok(!full.failed);
+  assert.ok(!simple.failed);
 });
 
 test("reset 壞字串 -> full 卡照出、resetText null", () => {

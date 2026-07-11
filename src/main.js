@@ -1528,10 +1528,16 @@ function renderQuotaCard(card, { stale = false } = {}) {
   const collapsed = qcCollapsed(card.name);
   const sub = card.subtitle ? `<span class="qc-subtitle">${esc(card.subtitle)}</span>` : "";
   const staleCls = stale ? " stale" : "";
+  const titleText = (card.failed ? "⚠ " : "") + esc(card.label);
+  const staleBadge = stale ? `<span class="qc-stale-badge">舊</span>` : "";
+  const titleMsgs = [];
+  if (card.failed) titleMsgs.push("runner 回報失敗，顯示最後已知值");
+  if (stale) titleMsgs.push("快照過舊，數字可能非即時");
+  const rootTitleAttr = titleMsgs.length ? ` title="${esc(titleMsgs.join("；"))}"` : "";
   if (collapsed) {
-    return `<div class="quota-card qc-collapsed${staleCls}" data-provider="${esc(card.name)}">
+    return `<div class="quota-card qc-collapsed${staleCls}" data-provider="${esc(card.name)}"${rootTitleAttr}>
       <div class="qc-header" data-qc-toggle="${esc(card.name)}">
-        <span class="qc-title">${esc(card.label)}</span>${sub}
+        <span class="qc-title">${titleText}</span>${staleBadge}${sub}
         <span class="qc-summary">${card.pct}%</span>
         <span class="qc-chevron">▸</span>
       </div>
@@ -1543,9 +1549,9 @@ function renderQuotaCard(card, { stale = false } = {}) {
         <canvas class="qc-spark" data-qc-spark="${esc(card.name)}" width="240" height="28"></canvas>
       </div>`
     : "";
-  return `<div class="quota-card${staleCls}" data-provider="${esc(card.name)}">
+  return `<div class="quota-card${staleCls}" data-provider="${esc(card.name)}"${rootTitleAttr}>
     <div class="qc-header" data-qc-toggle="${esc(card.name)}">
-      <span class="qc-title">${esc(card.label)}</span>${sub}
+      <span class="qc-title">${titleText}</span>${staleBadge}${sub}
       <span class="qc-chevron">▾</span>
     </div>
     ${card.windows.map(renderQcWindow).join("")}
@@ -1582,6 +1588,7 @@ async function drawQuotaCardSparks(names) {
 }
 
 function drawQcSpark(canvas, series) {
+  if (!series || series.length === 0) return;
   const ctx = canvas.getContext("2d");
   const cssW = Math.round(canvas.clientWidth || 0);
   if (cssW > 0 && canvas.width !== cssW) canvas.width = cssW;
@@ -2644,8 +2651,8 @@ function bindCapsuleInteractions() {
     showView("expanded");
     // 等 fitWindow 完成再 scroll
     setTimeout(() => {
-      const row = document.querySelector(`.quota-card[data-provider="${prov}"]`)
-        || document.querySelector(`.quota-runner[data-provider="${prov}"]`);
+      const row = document.querySelector(`.quota-card[data-provider="${cssEsc(prov)}"]`)
+        || document.querySelector(`.quota-runner[data-provider="${cssEsc(prov)}"]`);
       if (row) {
         row.scrollIntoView({ behavior: "smooth", block: "center" });
         row.classList.add("flash");
@@ -2877,7 +2884,7 @@ async function playProviderSound(provider, kind = "completion") {
   if (sound && sound !== "__none__") await playSound(sound);
 }
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML.replace(/"/g, "&quot;"); }
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => {

@@ -19,7 +19,25 @@
   }
 
   function normalizeRunnerCard(r) {
-    if (!r || r.ok === false || !r.raw) return { kind: "none", name: (r && r.name) || "" };
+    if (!r) return { kind: "none", name: "" };
+    if (r.ok === false) {
+      // 降級路徑：ok:false 但有 raw 且有合法 % -> 簡化卡（帶 failed: true）；否則 none。
+      const raw = r.raw;
+      if (!raw) return { kind: "none", name: r.name || "" };
+      const base = { name: r.name, label: r.label || r.name, color: r.color || "" };
+      const singles = [
+        _pct(raw.session_5h_remaining), _pct(raw.week_7d_remaining),
+        _pct(raw.h5_remaining), _pct(raw.wk_remaining), _pct(raw.remaining_pct),
+      ].filter(function (v) { return v !== null; });
+      if (singles.length === 0) return { kind: "none", name: r.name || "" };
+      const pct = Math.round(Math.min.apply(null, singles));
+      return Object.assign({
+        kind: "simple", subtitle: "",
+        windows: [{ key: "quota", label: "Quota", remainPct: pct, resetText: null }],
+        pct, failed: true,
+      }, base);
+    }
+    if (!r.raw) return { kind: "none", name: r.name || "" };
     const raw = r.raw;
     const base = { name: r.name, label: r.label || r.name, color: r.color || "" };
     const sessA = _pct(raw.session_5h_remaining);
@@ -44,7 +62,7 @@
     }
     if (windows) {
       const pct = Math.round(Math.min(windows[0].remainPct, windows[1].remainPct));
-      return Object.assign({ kind: "full", subtitle, windows, pct }, base);
+      return Object.assign({ kind: "full", subtitle, windows, pct, failed: false }, base);
     }
     const singles = [sessA, weekA, sessB, weekB, _pct(raw.remaining_pct)].filter(function (v) { return v !== null; });
     if (singles.length === 0) return { kind: "none", name: r.name };
@@ -52,7 +70,7 @@
     return Object.assign({
       kind: "simple", subtitle: "",
       windows: [{ key: "quota", label: "Quota", remainPct: pct, resetText: null }],
-      pct,
+      pct, failed: false,
     }, base);
   }
 

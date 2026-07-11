@@ -1566,7 +1566,7 @@ async function drawQuotaCardSparks(names) {
     const hist = __qcHistCache.data || {};
     const cutoff = Math.floor(now / 1000) - 7 * 86400;
     for (const name of names) {
-      const canvas = document.querySelector(`canvas[data-qc-spark="${name}"]`);
+      const canvas = document.querySelector(`canvas[data-qc-spark="${cssEsc(name)}"]`);
       if (!canvas) continue;
       const series = (hist[name] || []).filter((pt) => pt[0] >= cutoff);
       if (series.length === 0) {
@@ -1583,6 +1583,8 @@ async function drawQuotaCardSparks(names) {
 
 function drawQcSpark(canvas, series) {
   const ctx = canvas.getContext("2d");
+  const cssW = Math.round(canvas.clientWidth || 0);
+  if (cssW > 0 && canvas.width !== cssW) canvas.width = cssW;
   const W = canvas.width;
   const H = canvas.height;
   ctx.clearRect(0, 0, W, H);

@@ -1028,6 +1028,15 @@ async function init() {
     fitWindow();
   });
 
+  // Quota 卡片個別收合（click delegation，#quota-bar 只掛一次）
+  document.getElementById("quota-bar").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-qc-toggle]");
+    if (!t) return;
+    const name = t.getAttribute("data-qc-toggle");
+    qcSetCollapsed(name, !qcCollapsed(name));
+    refreshQuotas();
+  });
+
   refreshState();
   setInterval(refreshState, 1000);
   refreshQuotas();
@@ -1488,6 +1497,64 @@ function renderQuotaRunner(r, { stale = false, includeProvider = false } = {}) {
   const titleAttr = stale ? ` title="Snapshot 已超過 1 小時未更新，百分比已停用；請確認 quota runner 是否仍在寫入"` : "";
   return `<div class="${cls}"${providerAttr}${titleAttr}${style}>${ring}<span class="quota-runner-label">${esc(r.label || "")}${errBadge}${staleBadge}</span><span class="quota-runner-text">${esc(text)}</span></div>`;
 }
+
+// ===== Quota 卡片面板（spec: docs/superpowers/specs/2026-07-11-quota-cards-design.md）=====
+const QC_COLLAPSE_PREFIX = "lp-qc-collapsed:";
+
+function qcCollapsed(name) {
+  try { return localStorage.getItem(QC_COLLAPSE_PREFIX + name) === "1"; }
+  catch (_) { return false; }
+}
+
+function qcSetCollapsed(name, v) {
+  try {
+    if (v) localStorage.setItem(QC_COLLAPSE_PREFIX + name, "1");
+    else localStorage.removeItem(QC_COLLAPSE_PREFIX + name);
+  } catch (_) { /* localStorage 不可用時收合僅存活於當次 render */ }
+}
+
+function renderQcWindow(w) {
+  const warn = w.remainPct < 20;
+  const reset = w.resetText ? `Resets in ${w.resetText}` : "—";
+  return `
+    <div class="qc-window${warn ? " qc-warn" : ""}">
+      <div class="qc-window-label">${w.label}${warn ? " 🔥" : ""}</div>
+      <div class="qc-bar"><div class="qc-bar-fill" style="width:${w.remainPct}%"></div></div>
+      <div class="qc-window-meta"><span>${w.remainPct}% left</span><span>${reset}</span></div>
+    </div>`;
+}
+
+function renderQuotaCard(card, { stale = false } = {}) {
+  const collapsed = qcCollapsed(card.name);
+  const sub = card.subtitle ? `<span class="qc-subtitle">${card.subtitle}</span>` : "";
+  const staleCls = stale ? " stale" : "";
+  if (collapsed) {
+    return `<div class="quota-card qc-collapsed${staleCls}" data-provider="${card.name}">
+      <div class="qc-header" data-qc-toggle="${card.name}">
+        <span class="qc-title">${card.label}</span>${sub}
+        <span class="qc-summary">${card.pct}%</span>
+        <span class="qc-chevron">▸</span>
+      </div>
+    </div>`;
+  }
+  const spark = card.kind === "full"
+    ? `<div class="qc-trend">
+        <span class="qc-window-label">Usage Trend</span>
+        <canvas class="qc-spark" data-qc-spark="${card.name}" width="240" height="28"></canvas>
+      </div>`
+    : "";
+  return `<div class="quota-card${staleCls}" data-provider="${card.name}">
+    <div class="qc-header" data-qc-toggle="${card.name}">
+      <span class="qc-title">${card.label}</span>${sub}
+      <span class="qc-chevron">▾</span>
+    </div>
+    ${card.windows.map(renderQcWindow).join("")}
+    ${spark}
+  </div>`;
+}
+
+// Task 4 才實作 sparkline；先佔位避免呼叫點炸掉
+function drawQuotaCardSparks(_names) {}
 
 // Trend 控制列：7/30 切換 + CSV export
 function wireTrendCtrls(grid) {
@@ -1979,10 +2046,14 @@ async function refreshQuotas() {
 
     // 本機 runner 需要各自獨立顯示（每個 runner 有獨立 ring + 狀態）
     const globalRunners = representativeSnap?.runners || [];
-    const globalRow = globalRunners.length > 0
+    const globalStale = isQuotaSnapshotStale(representativeSnap);
+    const cards = globalRunners
+      .map((r) => window.QuotaCards.normalizeRunnerCard(r))
+      .filter((c) => c.kind !== "none");
+    const globalRow = cards.length > 0
       ? `<div class="quota-row-global">
         <div class="quota-section-title">${sectionTitle}${freshnessBadge}</div>
-        ${globalRunners.map(r => renderQuotaRunner(r, { stale: isQuotaSnapshotStale(representativeSnap), includeProvider: true })).join("")}
+        ${cards.map((c) => renderQuotaCard(c, { stale: globalStale })).join("")}
       </div>`
       : "";
 
@@ -1991,6 +2062,7 @@ async function refreshQuotas() {
     const wrap = document.getElementById("quota-bar-wrap");
     if (wrap) wrap.classList.remove("hidden"); // 永遠顯示 wrap，沒資料時給 hint
     bar.innerHTML = finalRows || `<div class="quota-empty">暫無 quota 資料：等 OpenAB 寫 <code>~/.lobsterpulse/usage-*.json</code> 或 session 送 TokenUpdate event</div>`;
+    drawQuotaCardSparks(cards.filter((c) => c.kind === "full").map((c) => c.name));
     if (currentView === "dashboard" && lastState) {
       renderDashboard(lastState);
     }
@@ -2524,7 +2596,8 @@ function bindCapsuleInteractions() {
     showView("expanded");
     // 等 fitWindow 完成再 scroll
     setTimeout(() => {
-      const row = document.querySelector(`.quota-runner[data-provider="${prov}"]`);
+      const row = document.querySelector(`.quota-card[data-provider="${prov}"]`)
+        || document.querySelector(`.quota-runner[data-provider="${prov}"]`);
       if (row) {
         row.scrollIntoView({ behavior: "smooth", block: "center" });
         row.classList.add("flash");

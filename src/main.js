@@ -1553,8 +1553,54 @@ function renderQuotaCard(card, { stale = false } = {}) {
   </div>`;
 }
 
-// Task 4 才實作 sparkline；先佔位避免呼叫點炸掉
-function drawQuotaCardSparks(_names) {}
+// Task 4: 7d sparkline（Canvas + 5min 快取）
+let __qcHistCache = { ts: 0, data: null };
+
+async function drawQuotaCardSparks(names) {
+  if (!names || names.length === 0) return;
+  try {
+    const now = Date.now();
+    if (!__qcHistCache.data || now - __qcHistCache.ts > 300000) {
+      __qcHistCache = { ts: now, data: await invoke("get_quota_history") };
+    }
+    const hist = __qcHistCache.data || {};
+    const cutoff = Math.floor(now / 1000) - 7 * 86400;
+    for (const name of names) {
+      const canvas = document.querySelector(`canvas[data-qc-spark="${name}"]`);
+      if (!canvas) continue;
+      const series = (hist[name] || []).filter((pt) => pt[0] >= cutoff);
+      if (series.length === 0) {
+        const wrap = canvas.closest(".qc-trend");
+        if (wrap) wrap.classList.add("hidden");   // spec §4：無歷史 -> 該列隱藏
+        continue;
+      }
+      drawQcSpark(canvas, series);
+    }
+  } catch (e) {
+    console.warn("quota card sparkline 失敗", e);
+  }
+}
+
+function drawQcSpark(canvas, series) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const accent = getComputedStyle(document.documentElement)
+    .getPropertyValue("--accent").trim() || "#f93";
+  const n = Math.min(series.length, 60);
+  const pts = series.slice(-n);
+  const slot = W / n;
+  const bw = Math.max(2, Math.floor(slot) - 1);
+  ctx.fillStyle = accent;
+  ctx.globalAlpha = 0.85;
+  pts.forEach((pt, i) => {
+    const used = 100 - pt[1];   // 畫「使用量」高度，對齊截圖語意（用越多柱越高）
+    const h = Math.max(1, Math.round((used / 100) * (H - 2)));
+    ctx.fillRect(Math.round(i * slot), H - h, bw, h);
+  });
+  ctx.globalAlpha = 1;
+}
 
 // Trend 控制列：7/30 切換 + CSV export
 function wireTrendCtrls(grid) {

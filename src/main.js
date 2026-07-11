@@ -1526,12 +1526,12 @@ function renderQcWindow(w) {
 
 function renderQuotaCard(card, { stale = false } = {}) {
   const collapsed = qcCollapsed(card.name);
-  const sub = card.subtitle ? `<span class="qc-subtitle">${card.subtitle}</span>` : "";
+  const sub = card.subtitle ? `<span class="qc-subtitle">${esc(card.subtitle)}</span>` : "";
   const staleCls = stale ? " stale" : "";
   if (collapsed) {
-    return `<div class="quota-card qc-collapsed${staleCls}" data-provider="${card.name}">
-      <div class="qc-header" data-qc-toggle="${card.name}">
-        <span class="qc-title">${card.label}</span>${sub}
+    return `<div class="quota-card qc-collapsed${staleCls}" data-provider="${esc(card.name)}">
+      <div class="qc-header" data-qc-toggle="${esc(card.name)}">
+        <span class="qc-title">${esc(card.label)}</span>${sub}
         <span class="qc-summary">${card.pct}%</span>
         <span class="qc-chevron">▸</span>
       </div>
@@ -1540,12 +1540,12 @@ function renderQuotaCard(card, { stale = false } = {}) {
   const spark = card.kind === "full"
     ? `<div class="qc-trend">
         <span class="qc-window-label">Usage Trend</span>
-        <canvas class="qc-spark" data-qc-spark="${card.name}" width="240" height="28"></canvas>
+        <canvas class="qc-spark" data-qc-spark="${esc(card.name)}" width="240" height="28"></canvas>
       </div>`
     : "";
-  return `<div class="quota-card${staleCls}" data-provider="${card.name}">
-    <div class="qc-header" data-qc-toggle="${card.name}">
-      <span class="qc-title">${card.label}</span>${sub}
+  return `<div class="quota-card${staleCls}" data-provider="${esc(card.name)}">
+    <div class="qc-header" data-qc-toggle="${esc(card.name)}">
+      <span class="qc-title">${esc(card.label)}</span>${sub}
       <span class="qc-chevron">▾</span>
     </div>
     ${card.windows.map(renderQcWindow).join("")}

@@ -114,8 +114,12 @@ if (!/renderQuotaRunner\(r,\s*\{[^}]*stale:\s*isQuotaSnapshotStale\(snap\)/s.tes
   fail("bot-card quota runners must pass their snapshot stale state into renderQuotaRunner");
 }
 
-if (!/renderQuotaRunner\(r,\s*\{[^}]*stale:\s*isQuotaSnapshotStale\(representativeSnap\)/s.test(mainJs)) {
-  fail("global quota runners must pass representative snapshot stale state into renderQuotaRunner");
+if (!/const\s+globalStale\s*=\s*isQuotaSnapshotStale\(representativeSnap\)/.test(mainJs)) {
+  fail("global quota row must derive stale state from representative snapshot");
+}
+
+if (!/renderQuotaCard\(c,\s*\{\s*stale:\s*globalStale\s*\}\)/.test(mainJs)) {
+  fail("global quota runners must pass representative snapshot stale state into renderQuotaCard");
 }
 
 if (!/const\s+selectedQuota\s*=\s*selectQuotaSnapshot\(snapshots\)/.test(mainJs)) {

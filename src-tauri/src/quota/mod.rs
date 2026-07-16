@@ -5,9 +5,12 @@
 //! R109 加 copilot 對齊 4 本機 CLI 中第 4 個 (K0 Quota 9/13 → 10/13)。
 
 pub mod anthropic;
+pub mod antigravity;
 pub mod codex;
 pub mod copilot;
+pub mod devin;
 pub mod gemini;
+pub mod grok;
 
 use serde::{Deserialize, Serialize};
 

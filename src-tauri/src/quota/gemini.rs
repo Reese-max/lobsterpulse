@@ -15,12 +15,20 @@ use super::RunnerQuota;
 use serde::Deserialize;
 use std::path::Path;
 
-const GEMINI_MODELS_API: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+/// Cloud Code（gemini CLI 後端）：quota 用兩步 loadCodeAssist → retrieveUserQuota
+const CODE_ASSIST_BASE: &str = "https://cloudcode-pa.googleapis.com/v1internal";
+/// gemini-cli 內建的公開 installed-app OAuth client（bundle 內同值）
+const GEMINI_OAUTH_CLIENT_ID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const GEMINI_OAUTH_CLIENT_SECRET: &str = "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";
 
 #[derive(Debug, Deserialize)]
 struct GeminiCredentials {
     access_token: Option<String>,
+    refresh_token: Option<String>,
     expiry: Option<String>,
+    /// gemini CLI 實際寫的是毫秒 epoch `expiry_date`
+    expiry_date: Option<u64>,
     #[serde(rename = "token_type")]
     _token_type: Option<String>,
 }
@@ -54,9 +62,9 @@ fn fmt_countdown(epoch_secs: u64) -> String {
     }
 }
 
-/// 讀 `~/.gemini/oauth_creds.json`，回 (access_token, expiry_rfc3339)。
+/// 讀 `~/.gemini/oauth_creds.json`。
 /// 0 bytes 視同「未登入」(gemini CLI 登出後會清空檔案),早返 ⚠ 友善提示。
-fn read_credentials(home: &Path) -> Result<(String, Option<String>), String> {
+fn read_credentials(home: &Path) -> Result<GeminiCredentials, String> {
     let path = home.join(".gemini").join("oauth_creds.json");
     let data = std::fs::read_to_string(&path).map_err(|e| format!("read oauth_creds.json: {e}"))?;
     if data.trim().is_empty() {
@@ -64,17 +72,80 @@ fn read_credentials(home: &Path) -> Result<(String, Option<String>), String> {
     }
     let creds: GeminiCredentials =
         serde_json::from_str(&data).map_err(|e| format!("parse oauth_creds.json: {e}"))?;
-    let token = creds.access_token.ok_or("missing access_token")?;
-    Ok((token, creds.expiry))
+    if creds.access_token.is_none() {
+        return Err("missing access_token".to_string());
+    }
+    Ok(creds)
 }
 
-/// 呼叫 Google Generative Language API 探 token 有效性（200 = ok，401 = expired/invalid）。
+/// access_token 過期（expiry_date 毫秒 epoch 或 expiry RFC3339）→ true
+fn token_expired(creds: &GeminiCredentials, now_secs: u64) -> bool {
+    if let Some(ms) = creds.expiry_date {
+        return ms / 1000 <= now_secs + 60;
+    }
+    if let Some(exp) = creds.expiry.as_deref().and_then(parse_expiry) {
+        return exp <= now_secs + 60;
+    }
+    false // 沒有到期資訊 → 直接試打，401 再說
+}
+
+/// 用 refresh_token 換新 access_token（公開 installed-app client 憑證）
+async fn refresh_access_token(client: &reqwest::Client, refresh_token: &str) -> Option<String> {
+    let resp = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("client_id", GEMINI_OAUTH_CLIENT_ID),
+            ("client_secret", GEMINI_OAUTH_CLIENT_SECRET),
+            ("refresh_token", refresh_token),
+            ("grant_type", "refresh_token"),
+        ])
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    v.get("access_token").and_then(|t| t.as_str()).map(String::from)
+}
+
+/// 從 retrieveUserQuota 的 buckets 取「最緊」bucket。
+/// remainingFraction 是 0-1 比例（不是百分比）。回 (remaining_pct, reset_text, buckets_raw)。
+fn tightest_bucket(body: &serde_json::Value) -> (Option<i64>, Option<String>, serde_json::Value) {
+    let buckets = body.get("buckets").and_then(|b| b.as_array());
+    let Some(buckets) = buckets else {
+        return (None, None, serde_json::Value::Null);
+    };
+    let mut best: Option<(f64, Option<String>)> = None;
+    for b in buckets {
+        let Some(frac) = b.get("remainingFraction").and_then(|v| v.as_f64()) else {
+            continue; // 缺 remainingFraction 不腦補 0/100
+        };
+        let reset = b.get("resetTime").and_then(|v| v.as_str()).map(String::from);
+        if best.as_ref().map(|(f, _)| frac < *f).unwrap_or(true) {
+            best = Some((frac, reset));
+        }
+    }
+    match best {
+        Some((frac, reset)) => {
+            let pct = (frac * 100.0).round().clamp(0.0, 100.0) as i64;
+            let reset_text = reset
+                .as_deref()
+                .and_then(parse_expiry)
+                .map(fmt_countdown);
+            (Some(pct), reset_text, body.get("buckets").cloned().unwrap_or(serde_json::Value::Null))
+        }
+        None => (None, None, serde_json::Value::Null),
+    }
+}
+
+/// 兩步 Cloud Code API：loadCodeAssist（拿 project）→ retrieveUserQuota（拿 buckets）
 pub async fn fetch(home: &Path) -> RunnerQuota {
     let label = "💻 Gemini CLI（本機）".to_string();
     let color = "#4285f4".to_string();
     let name = "gemini".to_string();
 
-    let (token, expiry) = match read_credentials(home) {
+    let creds = match read_credentials(home) {
         Ok(v) => v,
         Err(e) => {
             return RunnerQuota {
@@ -88,25 +159,81 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         }
     };
 
-    let token_exp = expiry
-        .as_deref()
-        .and_then(parse_expiry)
-        .map(fmt_countdown)
-        .unwrap_or_else(|| "—".to_string());
-
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_default();
 
-    let resp = client
-        .get(GEMINI_MODELS_API)
-        .bearer_auth(&token)
-        .send()
-        .await;
+    // token 過期 → 先 refresh（不寫回 oauth_creds.json，CLI 自己管自己的檔）
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut token = creds.access_token.clone().unwrap_or_default();
+    if token_expired(&creds, now) {
+        match creds.refresh_token.as_deref() {
+            Some(rt) => match refresh_access_token(&client, rt).await {
+                Some(t) => token = t,
+                None => {
+                    return RunnerQuota {
+                        name,
+                        label,
+                        color,
+                        ok: false,
+                        text: "⚠ token 過期且 refresh 失敗（跑一次 gemini 可重登）".to_string(),
+                        raw: None,
+                    };
+                }
+            },
+            None => {
+                return RunnerQuota {
+                    name,
+                    label,
+                    color,
+                    ok: false,
+                    text: "⚠ token 過期且無 refresh_token".to_string(),
+                    raw: None,
+                };
+            }
+        }
+    }
 
-    let (api_ok, status_code) = match resp {
-        Ok(r) => (r.status().is_success(), r.status().as_u16()),
+    // Step 1: loadCodeAssist → cloudaicompanionProject（免費 tier 可能沒有，容許空）
+    let load_body = serde_json::json!({
+        "metadata": { "ideType": "GEMINI_CLI", "pluginType": "GEMINI" }
+    });
+    let project = match client
+        .post(format!("{CODE_ASSIST_BASE}:loadCodeAssist"))
+        .bearer_auth(&token)
+        .json(&load_body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
+            let p = v.get("cloudaicompanionProject");
+            p.and_then(|p| {
+                p.as_str().map(String::from).or_else(|| {
+                    p.get("id")
+                        .or_else(|| p.get("projectId"))
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
+            })
+        }
+        Ok(r) => {
+            let code = r.status().as_u16();
+            return RunnerQuota {
+                name,
+                label,
+                color,
+                ok: false,
+                text: format!("⚠ loadCodeAssist {code}"),
+                raw: Some(serde_json::json!({
+                    "ok": false, "status_code": code, "ts": chrono::Utc::now().to_rfc3339(),
+                })),
+            };
+        }
         Err(e) => {
             return RunnerQuota {
                 name,
@@ -119,16 +246,58 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         }
     };
 
-    let text = if api_ok {
-        format!("✓ Gemini CLI · token {token_exp}")
-    } else {
-        format!("⚠ token rejected ({status_code})\ntoken {token_exp}")
+    // Step 2: retrieveUserQuota → buckets（按 model 分桶；取最緊）
+    let quota_body = match project.as_deref() {
+        Some(p) => serde_json::json!({ "project": p }),
+        None => serde_json::json!({}),
+    };
+    let resp = client
+        .post(format!("{CODE_ASSIST_BASE}:retrieveUserQuota"))
+        .bearer_auth(&token)
+        .json(&quota_body)
+        .send()
+        .await;
+    let body: serde_json::Value = match resp {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or(serde_json::Value::Null),
+        Ok(r) => {
+            let code = r.status().as_u16();
+            return RunnerQuota {
+                name,
+                label,
+                color,
+                ok: false,
+                text: format!("⚠ retrieveUserQuota {code}"),
+                raw: Some(serde_json::json!({
+                    "ok": false, "status_code": code, "ts": chrono::Utc::now().to_rfc3339(),
+                })),
+            };
+        }
+        Err(e) => {
+            return RunnerQuota {
+                name,
+                label,
+                color,
+                ok: false,
+                text: format!("⚠ API error: {e}"),
+                raw: None,
+            };
+        }
+    };
+
+    let (pct, reset, buckets) = tightest_bucket(&body);
+    let text = match pct {
+        Some(p) => format!("⏱ Daily {p}%"),
+        None => "✓ Gemini CLI（無額度資料）".to_string(),
     };
 
     let raw = serde_json::json!({
-        "ok": api_ok,
-        "token_expires_in": token_exp,
-        "status_code": status_code,
+        "ok": true,
+        // 按 model 分桶的日額度：借 h5 slot + Daily label
+        "h5_remaining": pct,
+        "h5_reset": reset,
+        "session_label": "Daily",
+        "plan": "Code Assist",
+        "buckets": buckets,
         "ts": chrono::Utc::now().to_rfc3339(),
     });
 
@@ -136,7 +305,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         name,
         label,
         color,
-        ok: api_ok,
+        ok: true,
         text,
         raw: Some(raw),
     }
@@ -235,9 +404,38 @@ mod tests {
             r#"{"access_token":"ya29.test","expiry":"2026-12-31T23:59:59Z"}"#,
         )
         .expect("write");
-        let (token, expiry) = read_credentials(&dir).expect("valid 應成功");
-        assert_eq!(token, "ya29.test");
-        assert_eq!(expiry, Some("2026-12-31T23:59:59Z".to_string()));
+        let creds = read_credentials(&dir).expect("valid 應成功");
+        assert_eq!(creds.access_token.as_deref(), Some("ya29.test"));
+        assert_eq!(creds.expiry.as_deref(), Some("2026-12-31T23:59:59Z"));
+    }
+
+    #[test]
+    fn token_expired_uses_expiry_date_ms() {
+        let creds: GeminiCredentials = serde_json::from_str(
+            r#"{"access_token":"t","expiry_date":1700000000000}"#,
+        )
+        .unwrap();
+        assert!(token_expired(&creds, 1700000001)); // 已過
+        assert!(!token_expired(&creds, 1600000000)); // 未過
+    }
+
+    #[test]
+    fn tightest_bucket_picks_min_fraction() {
+        let body = serde_json::json!({ "buckets": [
+            { "modelId": "gemini-2.5-pro", "remainingFraction": 0.83, "resetTime": "2099-01-01T00:00:00Z" },
+            { "modelId": "gemini-2.5-flash", "remainingFraction": 0.97 },
+            { "modelId": "broken-no-fraction" }
+        ]});
+        let (pct, reset, buckets) = tightest_bucket(&body);
+        assert_eq!(pct, Some(83));
+        assert!(reset.is_some());
+        assert_eq!(buckets.as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn tightest_bucket_empty_returns_none() {
+        let (pct, reset, _) = tightest_bucket(&serde_json::json!({}));
+        assert!(pct.is_none() && reset.is_none());
     }
 
     #[test]

@@ -8,6 +8,8 @@ use serde::Deserialize;
 use std::path::Path;
 
 const OPENAI_MODELS_API: &str = "https://api.openai.com/v1/models";
+/// ChatGPT 訂閱額度（Codex CLI /status 同源；OpenUsage/CodexBar 皆用此 endpoint）
+const CHATGPT_USAGE_API: &str = "https://chatgpt.com/backend-api/wham/usage";
 
 #[derive(Debug, Deserialize)]
 struct CodexAuth {
@@ -58,7 +60,7 @@ fn base64_lookup(c: u8) -> i8 {
     }
 }
 
-fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(s.len() * 3 / 4);
     let mut buf: u32 = 0;
     let mut bits: u32 = 0;
@@ -168,7 +170,43 @@ fn read_model(home: &Path) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
-/// 呼叫 OpenAI API 探 token 有效性
+/// 從 wham/usage 的 rate_limit 抽 (session, weekly) 兩窗。
+/// 關鍵陷阱：不可假設 primary=5h、secondary=weekly——要用 limit_window_seconds
+/// 分類（<=24h 視為 session、其餘 weekly）；任一窗可為 null。
+/// 回傳 (remaining_pct, reset_countdown_text)。
+fn classify_windows(
+    rate_limit: &serde_json::Value,
+    now: u64,
+) -> (Option<(i64, String)>, Option<(i64, String)>) {
+    let mut session = None;
+    let mut weekly = None;
+    for key in ["primary_window", "secondary_window"] {
+        let Some(w) = rate_limit.get(key).filter(|v| !v.is_null()) else {
+            continue;
+        };
+        let Some(win_secs) = w.get("limit_window_seconds").and_then(|v| v.as_u64()) else {
+            continue;
+        };
+        let Some(used) = w.get("used_percent").and_then(|v| v.as_f64()) else {
+            continue;
+        };
+        let remaining = (100.0 - used).round().clamp(0.0, 100.0) as i64;
+        let reset_epoch = w
+            .get("reset_at")
+            .and_then(|v| v.as_u64())
+            .or_else(|| {
+                w.get("reset_after_seconds")
+                    .and_then(|v| v.as_u64())
+                    .map(|d| now + d)
+            });
+        let reset = reset_epoch.map(fmt_countdown).unwrap_or_else(|| "—".to_string());
+        let slot = if win_secs <= 86400 { &mut session } else { &mut weekly };
+        *slot = Some((remaining, reset));
+    }
+    (session, weekly)
+}
+
+/// 呼叫 ChatGPT wham/usage 拿訂閱額度；API-key-only 用戶 fallback 舊探活路徑
 pub async fn fetch(home: &Path) -> RunnerQuota {
     let label = "💻 Codex CLI（本機）".to_string();
     let color = "#10a37f".to_string();
@@ -193,20 +231,50 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         .map(fmt_countdown)
         .unwrap_or_else(|| "—".to_string());
 
-    // 探 token 有效（200 = ok，401 = expired/invalid）
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_default();
 
-    let resp = client
-        .get(OPENAI_MODELS_API)
-        .bearer_auth(&token)
-        .send()
-        .await;
+    // API-key-only 用戶沒有 ChatGPT 訂閱額度，保留舊探活路徑
+    if plan == "API key" {
+        let resp = client.get(OPENAI_MODELS_API).bearer_auth(&token).send().await;
+        let (api_ok, status_code) = match resp {
+            Ok(r) => (r.status().is_success(), r.status().as_u16()),
+            Err(e) => {
+                return RunnerQuota {
+                    name,
+                    label,
+                    color,
+                    ok: false,
+                    text: format!("⚠ API error: {e}"),
+                    raw: None,
+                }
+            }
+        };
+        let text = if api_ok {
+            format!("✓ API key · model {model}")
+        } else {
+            format!("⚠ token rejected ({status_code})\nmodel {model}")
+        };
+        let raw = serde_json::json!({
+            "ok": api_ok, "plan": plan, "model": model,
+            "token_expires_in": token_exp, "account_id": account,
+            "status_code": status_code, "ts": chrono::Utc::now().to_rfc3339(),
+        });
+        return RunnerQuota { name, label, color, ok: api_ok, text, raw: Some(raw) };
+    }
 
-    let (api_ok, status_code) = match resp {
-        Ok(r) => (r.status().is_success(), r.status().as_u16()),
+    // ChatGPT 訂閱：wham/usage 一次拿 plan + 5h/weekly 額度
+    let mut req = client
+        .get(CHATGPT_USAGE_API)
+        .bearer_auth(&token)
+        .header("Accept", "application/json");
+    if account != "—" {
+        req = req.header("ChatGPT-Account-Id", &account);
+    }
+    let resp = match req.send().await {
+        Ok(r) => r,
         Err(e) => {
             return RunnerQuota {
                 name,
@@ -218,16 +286,63 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             }
         }
     };
-
-    let text = if api_ok {
-        format!("✓ {plan} · model {model}\n⏱ token {token_exp}")
-    } else {
-        format!("⚠ token rejected ({status_code})\nmodel {model}")
+    let status_code = resp.status().as_u16();
+    if !resp.status().is_success() {
+        return RunnerQuota {
+            name,
+            label,
+            color,
+            ok: false,
+            text: format!("⚠ usage API {status_code}（token 可能過期，跑一次 codex 可刷新）"),
+            raw: Some(serde_json::json!({
+                "ok": false, "plan": plan, "model": model,
+                "status_code": status_code, "ts": chrono::Utc::now().to_rfc3339(),
+            })),
+        };
+    }
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            return RunnerQuota {
+                name,
+                label,
+                color,
+                ok: false,
+                text: format!("⚠ parse usage: {e}"),
+                raw: None,
+            }
+        }
     };
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let empty = serde_json::json!({});
+    let (session, weekly) = classify_windows(body.get("rate_limit").unwrap_or(&empty), now);
+    // plan_type 以 API 回應為準（比 id_token claim 新），首字大寫顯示
+    let tier = body
+        .get("plan_type")
+        .and_then(|v| v.as_str())
+        .map(|p| {
+            let mut c = p.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .unwrap_or(plan);
+
+    let fmt_win = |w: &Option<(i64, String)>| {
+        w.as_ref().map(|(p, _)| format!("{p}%")).unwrap_or_else(|| "--".to_string())
+    };
+    let text = format!("⏱ 5h {} · 7d {}\n{}", fmt_win(&session), fmt_win(&weekly), tier);
+
     let raw = serde_json::json!({
-        "ok": api_ok,
-        "plan": plan,
+        "ok": true,
+        "session_5h_remaining": session.as_ref().map(|s| s.0),
+        "session_5h_reset": session.as_ref().map(|s| s.1.clone()),
+        "week_7d_remaining": weekly.as_ref().map(|w| w.0),
+        "week_7d_reset": weekly.as_ref().map(|w| w.1.clone()),
+        "tier": tier,
+        "plan": tier,
         "model": model,
         "token_expires_in": token_exp,
         "account_id": account,
@@ -239,7 +354,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         name,
         label,
         color,
-        ok: api_ok,
+        ok: true,
         text,
         raw: Some(raw),
     }
@@ -336,6 +451,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         assert_eq!(read_model(&dir), "—");
+    }
+
+    #[test]
+    fn classify_windows_by_window_seconds_not_position() {
+        // weekly 在 primary、session 缺席（本機實測 2026-07-16 的真實形狀）
+        let rl = serde_json::json!({
+            "primary_window": { "used_percent": 9, "limit_window_seconds": 604800,
+                                 "reset_after_seconds": 592387, "reset_at": 1784780145u64 },
+            "secondary_window": null
+        });
+        let (session, weekly) = classify_windows(&rl, 1784100000);
+        assert!(session.is_none());
+        let (pct, _reset) = weekly.expect("weekly window");
+        assert_eq!(pct, 91);
+    }
+
+    #[test]
+    fn classify_windows_both_present() {
+        let rl = serde_json::json!({
+            "primary_window": { "used_percent": 25.4, "limit_window_seconds": 18000,
+                                 "reset_after_seconds": 3600 },
+            "secondary_window": { "used_percent": 3, "limit_window_seconds": 604800,
+                                   "reset_after_seconds": 500000 }
+        });
+        let (session, weekly) = classify_windows(&rl, 1784100000);
+        assert_eq!(session.expect("session").0, 75);
+        assert_eq!(weekly.expect("weekly").0, 97);
+    }
+
+    #[test]
+    fn classify_windows_empty_rate_limit() {
+        let (session, weekly) = classify_windows(&serde_json::json!({}), 0);
+        assert!(session.is_none() && weekly.is_none());
     }
 
     #[test]

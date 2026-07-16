@@ -14,25 +14,95 @@
 use super::RunnerQuota;
 use std::path::Path;
 
-const GITHUB_USER_API: &str = "https://api.github.com/user";
+/// Copilot 額度（quota_snapshots）：必須帶 IDE 模擬 headers 才會回額度欄位
+const COPILOT_USER_API: &str = "https://api.github.com/copilot_internal/user";
 
-/// 從 env var 拿 GitHub token。優先序：GH_TOKEN > GITHUB_TOKEN > COPILOT_TOKEN。
-/// Copilot CLI 內部走 `gh auth token` 取 token，三個 env var 都是
-/// `gh auth token` 會採用的同源（見 gh CLI 文件）。
+/// 從 env var 拿 GitHub token。優先序：GH_TOKEN > GITHUB_TOKEN > COPILOT_TOKEN
+/// > `gh auth token` subprocess（本機 gh CLI 把 token 存 Windows Credential
+/// Manager，hosts.yml 只有 user 名，subprocess 是最穩取法）。
 /// 0 bytes / whitespace-only 視同「未登入」,早返 ⚠ 友善提示。
 fn read_credentials() -> Result<String, String> {
-    for key in ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_TOKEN"] {
-        if let Ok(v) = std::env::var(key) {
-            let trimmed = v.trim();
-            if !trimmed.is_empty() {
-                return Ok(trimmed.to_string());
-            }
-        }
+    if let Some(t) = env_token() {
+        return Ok(t);
+    }
+    if let Some(t) = gh_auth_token() {
+        return Ok(t);
     }
     Err(
         "no GitHub token in env (set GH_TOKEN / GITHUB_TOKEN / COPILOT_TOKEN, or run `gh auth login`)"
             .to_string(),
     )
+}
+
+/// env 層單獨拆出：測試不受本機 gh 登入狀態影響
+fn env_token() -> Option<String> {
+    for key in ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_TOKEN"] {
+        if let Ok(v) = std::env::var(key) {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// shell out `gh auth token`。GUI app 下必帶 CREATE_NO_WINDOW（0x08000000）
+/// 否則每次刷新閃一個黑色 console 窗（踩雷 §25）。
+fn gh_auth_token() -> Option<String> {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(["auth", "token"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if t.is_empty() { None } else { Some(t) }
+}
+
+/// 從 copilot_internal/user 回應抽額度。回 (plan, premium_pct, reset_text, snapshots_raw)。
+/// `unlimited: true` 視為 100% 剩餘；欄位缺 → None（前端 No data），不腦補 0。
+fn parse_copilot_quota(
+    body: &serde_json::Value,
+) -> (Option<String>, Option<i64>, Option<String>, serde_json::Value) {
+    let plan = body
+        .get("copilot_plan")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let premium = body
+        .get("quota_snapshots")
+        .and_then(|q| q.get("premium_interactions"));
+    let pct = premium.and_then(|p| {
+        if p.get("unlimited").and_then(|v| v.as_bool()) == Some(true) {
+            return Some(100);
+        }
+        p.get("percent_remaining")
+            .and_then(|v| v.as_f64())
+            .map(|v| v.round().clamp(0.0, 100.0) as i64)
+    });
+    // quota_reset_date "YYYY-MM-DD"（月重置）→ 距今小時數 "XhYm" 供前端天數換算
+    let reset = body
+        .get("quota_reset_date")
+        .and_then(|v| v.as_str())
+        .and_then(|d| {
+            let date = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()?;
+            let reset_dt = date.and_hms_opt(0, 0, 0)?.and_utc();
+            let delta = (reset_dt - chrono::Utc::now()).num_minutes();
+            if delta <= 0 {
+                return None;
+            }
+            Some(format!("{}h{}m", delta / 60, delta % 60))
+        });
+    let snaps = body
+        .get("quota_snapshots")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    (plan, pct, reset, snaps)
 }
 
 /// 取 token 末 4 碼當遮罩（不暴露完整 secret）。長度 < 4 時回 "****"。
@@ -44,20 +114,7 @@ fn token_preview(token: &str) -> String {
     format!("****{tail}")
 }
 
-/// 寬鬆從 GitHub /user response body 抓 `login` 欄位。
-/// 為何不用 serde_json::from_str 直接 parse 整個 GitHubUser struct?
-/// fetch 路徑要容忍 GitHub 回其他形狀 (rate limit / 401 error body),
-/// 寬鬆從 JSON 抓 `login` 即可,不要 strict struct 把 200 + 沒 login 欄位
-/// 判成 fatal error。
-fn parse_user_login(json_body: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(json_body).ok()?;
-    v.get("login")
-        .and_then(|l| l.as_str())
-        .map(|s| s.to_string())
-}
-
-/// 呼叫 GitHub /user API 探 token 有效性（200 = ok，401 = invalid）。
-/// 解 login 欄位供前端顯示,其他欄位丟棄(避免暴露個資)。
+/// 呼叫 copilot_internal/user 拿 Copilot 額度（premium requests % + 月重置日）。
 pub async fn fetch(home: &Path) -> RunnerQuota {
     let label = "💻 Copilot CLI（本機）".to_string();
     let color = "#6e40c9".to_string();
@@ -88,47 +145,76 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         .build()
         .unwrap_or_default();
 
-    let resp = client
-        .get(GITHUB_USER_API)
-        .bearer_auth(&token)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await;
-
-    let (api_ok, status_code, login) = match resp {
-        Ok(r) => {
-            let code = r.status().as_u16();
-            let ok = r.status().is_success();
-            let body = if ok {
-                r.text().await.unwrap_or_default()
-            } else {
-                String::new()
-            };
-            (ok, code, parse_user_login(&body))
+    // copilot_internal/user：IDE 模擬 headers 是硬需求（缺了 quota_snapshots 不出現）。
+    // auth scheme 先 `token`，401/403 再試 `Bearer`（PAT 與 OAuth token 偏好不同）。
+    let mut api_ok = false;
+    let mut status_code = 0u16;
+    let mut body = serde_json::Value::Null;
+    for scheme in ["token", "Bearer"] {
+        let resp = client
+            .get(COPILOT_USER_API)
+            .header("Authorization", format!("{scheme} {token}"))
+            .header("Editor-Version", "vscode/1.107.0")
+            .header("Editor-Plugin-Version", "copilot-chat/0.35.0")
+            .header("User-Agent", "GitHubCopilotChat/0.35.0")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await;
+        match resp {
+            Ok(r) => {
+                status_code = r.status().as_u16();
+                if r.status().is_success() {
+                    body = r.json().await.unwrap_or(serde_json::Value::Null);
+                    api_ok = true;
+                    break;
+                }
+                if status_code != 401 && status_code != 403 {
+                    break; // 非認證錯不用換 scheme
+                }
+            }
+            Err(e) => {
+                return RunnerQuota {
+                    name,
+                    label,
+                    color,
+                    ok: false,
+                    text: format!("⚠ API error: {e}"),
+                    raw: None,
+                };
+            }
         }
-        Err(e) => {
-            return RunnerQuota {
-                name,
-                label,
-                color,
-                ok: false,
-                text: format!("⚠ API error: {e}"),
-                raw: None,
-            };
-        }
-    };
+    }
 
-    let text = if api_ok {
-        let user = login.as_deref().unwrap_or("unknown");
-        format!("✓ Copilot CLI · {user} · token {preview}")
-    } else {
-        format!("⚠ token rejected ({status_code})\ntoken {preview}")
+    if !api_ok {
+        return RunnerQuota {
+            name,
+            label,
+            color,
+            ok: false,
+            text: format!("⚠ token rejected ({status_code})\ntoken {preview}"),
+            raw: Some(serde_json::json!({
+                "ok": false, "status_code": status_code,
+                "ts": chrono::Utc::now().to_rfc3339(),
+            })),
+        };
+    }
+
+    let (plan, premium_pct, reset, snaps) = parse_copilot_quota(&body);
+    let plan_disp = plan.clone().unwrap_or_else(|| "Copilot".to_string());
+    let text = match premium_pct {
+        Some(p) => format!("⏱ Premium {p}%\n{plan_disp}"),
+        None => format!("✓ {plan_disp} · token {preview}"),
     };
 
     let raw = serde_json::json!({
-        "ok": api_ok,
+        "ok": true,
         "status_code": status_code,
-        "login": login,
+        // Premium requests 是月配額：借 h5 slot + 自訂 label 顯示
+        "h5_remaining": premium_pct,
+        "h5_reset": reset,
+        "session_label": "Premium",
+        "plan": plan_disp,
+        "quota_snapshots": snaps,
         "ts": chrono::Utc::now().to_rfc3339(),
     });
 
@@ -136,7 +222,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         name,
         label,
         color,
-        ok: api_ok,
+        ok: true,
         text,
         raw: Some(raw),
     }
@@ -168,29 +254,37 @@ mod tests {
     }
 
     #[test]
-    fn parse_user_login_extracts_login_field() {
-        let body = r#"{"login":"Reese-max","id":12345,"name":"Reese"}"#;
-        assert_eq!(parse_user_login(body), Some("Reese-max".to_string()));
+    fn parse_copilot_quota_extracts_premium_percent() {
+        let body = serde_json::json!({
+            "copilot_plan": "individual_pro",
+            "quota_reset_date": "2099-08-01",
+            "quota_snapshots": {
+                "premium_interactions": { "percent_remaining": 87.5, "unlimited": false,
+                                           "entitlement": 300, "remaining": 262 },
+                "chat": { "unlimited": true },
+                "completions": { "unlimited": true }
+            }
+        });
+        let (plan, pct, reset, snaps) = parse_copilot_quota(&body);
+        assert_eq!(plan.as_deref(), Some("individual_pro"));
+        assert_eq!(pct, Some(88));
+        assert!(reset.is_some(), "未來的 reset date 應有 countdown");
+        assert!(snaps.get("premium_interactions").is_some());
     }
 
     #[test]
-    fn parse_user_login_missing_field_returns_none() {
-        let body = r#"{"id":12345}"#;
-        assert_eq!(parse_user_login(body), None);
+    fn parse_copilot_quota_unlimited_is_full() {
+        let body = serde_json::json!({
+            "quota_snapshots": { "premium_interactions": { "unlimited": true } }
+        });
+        let (_, pct, _, _) = parse_copilot_quota(&body);
+        assert_eq!(pct, Some(100));
     }
 
     #[test]
-    fn parse_user_login_invalid_json_returns_none() {
-        assert_eq!(parse_user_login("not json"), None);
-        assert_eq!(parse_user_login(""), None);
-    }
-
-    #[test]
-    fn parse_user_login_handles_error_body() {
-        // GitHub 401 / rate limit 回 {"message":"Bad credentials",...}
-        // 沒有 login 欄位 → None,不 panic
-        let body = r#"{"message":"Bad credentials","documentation_url":"..."}"#;
-        assert_eq!(parse_user_login(body), None);
+    fn parse_copilot_quota_missing_snapshots_yields_none() {
+        let (plan, pct, reset, _) = parse_copilot_quota(&serde_json::json!({"message":"Bad credentials"}));
+        assert!(plan.is_none() && pct.is_none() && reset.is_none());
     }
 
     /// 透過 env 注入 token 測 read_credentials 優先序。
@@ -207,7 +301,7 @@ mod tests {
         std::env::remove_var("COPILOT_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
         std::env::set_var("GH_TOKEN", "ghp_gh_token_value");
-        let t = read_credentials().expect("GH_TOKEN 應成功");
+        let t = env_token().expect("GH_TOKEN 應成功");
         assert_eq!(t, "ghp_gh_token_value");
         std::env::remove_var("GH_TOKEN");
     }
@@ -218,7 +312,7 @@ mod tests {
         std::env::remove_var("COPILOT_TOKEN");
         std::env::remove_var("GH_TOKEN");
         std::env::set_var("GITHUB_TOKEN", "ghp_github_token_value");
-        let t = read_credentials().expect("GITHUB_TOKEN 應成功");
+        let t = env_token().expect("GITHUB_TOKEN 應成功");
         assert_eq!(t, "ghp_github_token_value");
         std::env::remove_var("GITHUB_TOKEN");
     }
@@ -229,7 +323,7 @@ mod tests {
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
         std::env::set_var("COPILOT_TOKEN", "ghp_copilot_token_value");
-        let t = read_credentials().expect("COPILOT_TOKEN 應成功");
+        let t = env_token().expect("COPILOT_TOKEN 應成功");
         assert_eq!(t, "ghp_copilot_token_value");
         std::env::remove_var("COPILOT_TOKEN");
     }
@@ -252,9 +346,6 @@ mod tests {
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
         std::env::remove_var("COPILOT_TOKEN");
-        let err = read_credentials().expect_err("無 env 應失敗");
-        assert!(err.contains("no GitHub token"), "got: {err}");
-        assert!(err.contains("GH_TOKEN"), "got: {err}");
-        assert!(err.contains("gh auth login"), "got: {err}");
+        assert!(env_token().is_none(), "無 env 應回 None（gh fallback 另計）");
     }
 }

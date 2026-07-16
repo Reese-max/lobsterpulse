@@ -719,14 +719,23 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
             updated_at,
         };
     };
-    // 四個 fetch 各自打不同 API endpoint（Anthropic + OpenAI + Google + GitHub），
-    // 即使平行也省不到一半（網路 RTT 為主），這裡採 sequential 簡化。
-    let claude = quota::anthropic::fetch(home).await;
-    let codex = quota::codex::fetch(home).await;
-    let gemini = quota::gemini::fetch(home).await;
-    let copilot = quota::copilot::fetch(home).await;
+    // 7 個 fetch 各打不同 API endpoint；sequential 最壞 7×10s timeout 會拖爆
+    // 刷新週期，改 tokio::join! 並行（wall-clock = 最慢的一支）。
+    // Devin 的 credentials 在 %APPDATA%\devin，其餘讀 home。
+    let appdata = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Roaming"));
+    let (claude, codex, gemini, copilot, grok, devin, agy) = tokio::join!(
+        quota::anthropic::fetch(home),
+        quota::codex::fetch(home),
+        quota::gemini::fetch(home),
+        quota::copilot::fetch(home),
+        quota::grok::fetch(home),
+        quota::devin::fetch(&appdata),
+        quota::antigravity::fetch(home),
+    );
     quota::LiveQuotaSnapshot {
-        runners: vec![claude, codex, gemini, copilot],
+        runners: vec![claude, codex, gemini, copilot, grok, devin, agy],
         source: "live_api".to_string(),
         updated_at,
     }
@@ -1286,13 +1295,17 @@ mod collect_live_quota_snapshot_tests {
         let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
         assert_eq!(
             out.runners.len(),
-            4,
-            "應有 4 runner (claude + codex + gemini + copilot),實際 {}",
+            7,
+            "應有 7 runner (claude/codex/gemini/copilot/grok/devin/agy),實際 {}",
             out.runners.len()
         );
         assert_eq!(out.source, "live_api");
 
-        for runner in &out.runners {
+        // 只有讀「注入 home」下憑證檔的 runner 能靠空 home 保證失敗；
+        // copilot（fallback gh auth token）、devin（%APPDATA%）、agy（Credential
+        // Manager）讀機器全域憑證，本機是否登入不可控，不對其 ok 斷言。
+        let home_scoped = ["claude", "codex", "gemini", "grok"];
+        for runner in out.runners.iter().filter(|r| home_scoped.contains(&r.name.as_str())) {
             assert!(
                 !runner.ok,
                 "{} credentials 不存在時應 ok=false,實際 ok={}",
@@ -1346,6 +1359,12 @@ mod collect_live_quota_snapshot_tests {
             "應含 copilot runner,實際 {:?}",
             names
         );
+        for expected in ["grok", "devin", "agy"] {
+            assert!(
+                names.contains(&expected),
+                "應含 {expected} runner,實際 {names:?}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&home);
     }

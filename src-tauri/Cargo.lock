@@ -2451,6 +2451,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "webkit2gtk",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

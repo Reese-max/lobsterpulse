@@ -92,3 +92,27 @@ test("reset 壞字串 -> full 卡照出、resetText null", () => {
   assert.strictEqual(c.windows[0].resetText, null);
   assert.strictEqual(c.windows[1].resetText, null);
 });
+
+test("部分窗（只有 weekly）-> full 卡單窗", () => {
+  const c = normalizeRunnerCard({
+    name: "codex", label: "Codex CLI", ok: true,
+    raw: { week_7d_remaining: 91, week_7d_reset: "164h33m", tier: "Pro" },
+  });
+  assert.strictEqual(c.kind, "full");
+  assert.strictEqual(c.windows.length, 1);
+  assert.strictEqual(c.windows[0].label, "Weekly");
+  assert.strictEqual(c.windows[0].remainPct, 91);
+  assert.strictEqual(c.pct, 91);
+  assert.strictEqual(c.subtitle, "Pro");
+});
+
+test("部分窗（只有 session alias）-> full 卡單窗", () => {
+  const c = normalizeRunnerCard({
+    name: "x", label: "X", ok: true,
+    raw: { h5_remaining: 40, h5_reset: "1h5m", plan: "Free" },
+  });
+  assert.strictEqual(c.kind, "full");
+  assert.strictEqual(c.windows.length, 1);
+  assert.strictEqual(c.windows[0].label, "Session");
+  assert.strictEqual(c.pct, 40);
+});

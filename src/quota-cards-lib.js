@@ -45,23 +45,27 @@
     const sessB = _pct(raw.h5_remaining);
     const weekB = _pct(raw.wk_remaining);
 
+    // 部分窗也接受（如 Codex 只回 weekly）：有幾個窗畫幾條，不再要求成對。
+    // raw.session_label / raw.weekly_label 可覆寫預設窗名（Copilot=Premium、Devin=Daily）。
+    const sessLabel = raw.session_label || "Session";
+    const weekLabel = raw.weekly_label || "Weekly";
     let windows = null;
     let subtitle = "";
-    if (sessA !== null && weekA !== null) {
+    if (sessA !== null || weekA !== null) {
       windows = [
-        { key: "session", label: "Session", remainPct: sessA, resetText: parseResetDuration(raw.session_5h_reset) },
-        { key: "weekly", label: "Weekly", remainPct: weekA, resetText: parseResetDuration(raw.week_7d_reset) },
-      ];
+        sessA !== null ? { key: "session", label: sessLabel, remainPct: sessA, resetText: parseResetDuration(raw.session_5h_reset) } : null,
+        weekA !== null ? { key: "weekly", label: weekLabel, remainPct: weekA, resetText: parseResetDuration(raw.week_7d_reset) } : null,
+      ].filter(Boolean);
       subtitle = raw.tier || "";
-    } else if (sessB !== null && weekB !== null) {
+    } else if (sessB !== null || weekB !== null) {
       windows = [
-        { key: "session", label: "Session", remainPct: sessB, resetText: parseResetDuration(raw.h5_reset) },
-        { key: "weekly", label: "Weekly", remainPct: weekB, resetText: parseResetDuration(raw.wk_reset) },
-      ];
+        sessB !== null ? { key: "session", label: sessLabel, remainPct: sessB, resetText: parseResetDuration(raw.h5_reset) } : null,
+        weekB !== null ? { key: "weekly", label: weekLabel, remainPct: weekB, resetText: parseResetDuration(raw.wk_reset) } : null,
+      ].filter(Boolean);
       subtitle = raw.plan || "";
     }
     if (windows) {
-      const pct = Math.round(Math.min(windows[0].remainPct, windows[1].remainPct));
+      const pct = Math.round(Math.min.apply(null, windows.map(function (w) { return w.remainPct; })));
       return Object.assign({ kind: "full", subtitle, windows, pct, failed: false }, base);
     }
     const singles = [sessA, weekA, sessB, weekB, _pct(raw.remaining_pct)].filter(function (v) { return v !== null; });

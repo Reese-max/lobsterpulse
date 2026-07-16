@@ -23,7 +23,7 @@ struct ClaudeOAuth {
     subscription_type: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct StatsCache {
     #[serde(rename = "totalSessions")]
     total_sessions: Option<u64>,
@@ -31,6 +31,25 @@ struct StatsCache {
     total_messages: Option<u64>,
     #[serde(rename = "dailyActivity")]
     daily_activity: Option<Vec<DailyActivity>>,
+    #[serde(rename = "dailyModelTokens")]
+    daily_model_tokens: Option<Vec<DailyModelTokens>>,
+    #[serde(rename = "modelUsage")]
+    model_usage: Option<std::collections::HashMap<String, ModelUsageEntry>>,
+    #[serde(rename = "lastComputedDate")]
+    last_computed_date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DailyModelTokens {
+    date: String,
+    #[serde(rename = "tokensByModel")]
+    tokens_by_model: Option<std::collections::HashMap<String, u64>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelUsageEntry {
+    #[serde(rename = "costUSD")]
+    cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,11 +117,53 @@ fn read_stats(home: &Path) -> StatsCache {
     std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(StatsCache {
-            total_sessions: None,
-            total_messages: None,
-            daily_activity: None,
-        })
+        .unwrap_or_default()
+}
+
+fn sum_tokens_for(dmt: &[DailyModelTokens], pred: impl Fn(&str) -> bool) -> u64 {
+    dmt.iter()
+        .filter(|d| pred(&d.date))
+        .filter_map(|d| d.tokens_by_model.as_ref())
+        .flat_map(|m| m.values())
+        .sum()
+}
+
+/// 聚合 stats-cache 每日 token：today/yesterday/近 30 天 + 累計 cost。
+/// 日期是 YYYY-MM-DD 字串，字典序 == 時間序，直接比較。
+fn aggregate_daily_stats(
+    stats: &StatsCache,
+    today: &str,
+    yesterday: &str,
+    cutoff_30d: &str,
+) -> serde_json::Value {
+    let dmt = stats.daily_model_tokens.as_deref().unwrap_or(&[]);
+    let total_cost_usd = stats
+        .model_usage
+        .as_ref()
+        .map(|m| m.values().filter_map(|e| e.cost_usd).sum::<f64>());
+    serde_json::json!({
+        "today_tokens": sum_tokens_for(dmt, |d| d == today),
+        "yesterday_tokens": sum_tokens_for(dmt, |d| d == yesterday),
+        "tokens_30d": sum_tokens_for(dmt, |d| d >= cutoff_30d),
+        "total_cost_usd": total_cost_usd,
+        "computed_date": stats.last_computed_date,
+    })
+}
+
+/// Usage 面板資料源：讀 stats-cache.json 聚合每日 token 統計。
+/// 檔案缺 / 壞 JSON → None（前端顯示 No data，不誤報 0）。
+pub fn daily_stats(home: &Path) -> Option<serde_json::Value> {
+    let path = home.join(".claude").join("stats-cache.json");
+    let s = std::fs::read_to_string(&path).ok()?;
+    let stats: StatsCache = serde_json::from_str(&s).ok()?;
+    let now = chrono::Local::now();
+    let fmt = |d: chrono::DateTime<chrono::Local>| d.format("%Y-%m-%d").to_string();
+    Some(aggregate_daily_stats(
+        &stats,
+        &fmt(now),
+        &fmt(now - chrono::Duration::days(1)),
+        &fmt(now - chrono::Duration::days(30)),
+    ))
 }
 
 /// 呼叫 Anthropic API 取 rate limit headers
@@ -203,7 +264,14 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             let h5_reset_str = h5r.map(fmt_countdown).unwrap_or_else(|| "N/A".to_string());
             let d7_reset_str = d7r.map(fmt_countdown).unwrap_or_else(|| "N/A".to_string());
 
-            let today_tokens = fmt_tokens(0);
+            // R124 前這裡硬編 fmt_tokens(0)；改讀 dailyModelTokens 實值
+            let today_tokens = fmt_tokens(
+                stats
+                    .daily_model_tokens
+                    .as_deref()
+                    .map(|dmt| sum_tokens_for(dmt, |d| d == today))
+                    .unwrap_or(0),
+            );
             let today_msgs = today_activity.and_then(|a| a.message_count).unwrap_or(0);
             let total_sessions = stats.total_sessions.unwrap_or(0);
             let total_messages = stats.total_messages.unwrap_or(0);
@@ -313,5 +381,40 @@ mod tests {
         let s = fmt_countdown(future);
         assert!(s.starts_with("2h"), "expected '2h' prefix, got {s:?}");
         assert!(s.contains("15m"), "expected '15m' in {s:?}");
+    }
+
+    #[test]
+    fn aggregate_daily_stats_sums_today_yesterday_30d() {
+        let stats: StatsCache = serde_json::from_str(
+            r#"{
+            "lastComputedDate": "2026-07-16",
+            "dailyModelTokens": [
+                {"date": "2026-05-01", "tokensByModel": {"a": 100}},
+                {"date": "2026-07-15", "tokensByModel": {"a": 10, "b": 5}},
+                {"date": "2026-07-16", "tokensByModel": {"a": 7}}
+            ],
+            "modelUsage": {
+                "a": {"costUSD": 1.5},
+                "b": {"costUSD": 0.5}
+            }
+        }"#,
+        )
+        .unwrap();
+        let v = aggregate_daily_stats(&stats, "2026-07-16", "2026-07-15", "2026-06-16");
+        assert_eq!(v["today_tokens"], 7);
+        assert_eq!(v["yesterday_tokens"], 15);
+        assert_eq!(v["tokens_30d"], 22); // 05-01 在 cutoff 之前，不計
+        assert_eq!(v["total_cost_usd"], 2.0);
+        assert_eq!(v["computed_date"], "2026-07-16");
+    }
+
+    #[test]
+    fn aggregate_daily_stats_empty_cache_yields_zeros_and_nulls() {
+        let stats = StatsCache::default();
+        let v = aggregate_daily_stats(&stats, "2026-07-16", "2026-07-15", "2026-06-16");
+        assert_eq!(v["today_tokens"], 0);
+        assert_eq!(v["tokens_30d"], 0);
+        assert!(v["total_cost_usd"].is_null());
+        assert!(v["computed_date"].is_null());
     }
 }

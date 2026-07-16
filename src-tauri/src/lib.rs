@@ -686,6 +686,13 @@ async fn get_live_quota_snapshot() -> quota::LiveQuotaSnapshot {
     collect_live_quota_snapshot_with_home(dirs::home_dir().as_deref()).await
 }
 
+/// Usage 面板：讀 ~/.claude/stats-cache.json 聚合 today/yesterday/30d token 統計。
+/// 檔案缺 / 壞 JSON → None（前端顯示 No data），不誤報 0。
+#[tauri::command]
+fn get_claude_daily_stats() -> Option<serde_json::Value> {
+    dirs::home_dir().and_then(|h| quota::anthropic::daily_stats(&h))
+}
+
 /// 對齊 R33 `read_usage_snapshots_with_home` 模式：純 async fn + home 注入，
 /// Tauri command 殼只負責撈 `dirs::home_dir()` 傳入，testable。
 pub(crate) async fn collect_live_quota_snapshot_with_home(
@@ -3937,6 +3944,7 @@ pub fn run() {
             send_discord_test,
             test_usage_runner,
             get_quota_history,
+            get_claude_daily_stats,
             remove_all_sessions,
             timeline_snapshot_24h,
             timeline_recorded_event_count,

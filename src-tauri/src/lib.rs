@@ -681,9 +681,45 @@ fn read_usage_snapshots() -> std::collections::HashMap<String, Option<serde_json
 /// 聚合兩個本機 CLI runner 的 live API fetch 結果回前端，補 K0 Quota 即時性
 /// 第二層來源（OpenAB snapshot 是「別人寫的」,這條是「自己即時抓的」）。
 /// `home = None`（無 HOME env 罕見）→ 回空 runners[] 對齊 R11 邊界契約。
+///
+/// 2026-07-17 TTL cache：前端有兩個輪詢源（main.js refreshQuotas 15s +
+/// usage-view 60s），無 cache 等於 ~5 req/min 轟各家 quota API——實測 grok /
+/// copilot 首抓成功後即被 rate-limit 洗成空卡。cache 放 command 殼這層，
+/// 所有 caller 共用一份；`collect_live_quota_snapshot_with_home` 保持無狀態
+/// 可測。TTL 內回 cache，過期才真打。
+/// ponytail: 過期瞬間兩個 caller 可能同時 miss 雙抓一次，量級無害不加鎖等待。
+const LIVE_QUOTA_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+static LIVE_QUOTA_CACHE: std::sync::Mutex<
+    Option<(std::time::Instant, quota::LiveQuotaSnapshot)>,
+> = std::sync::Mutex::new(None);
+
 #[tauri::command]
 async fn get_live_quota_snapshot() -> quota::LiveQuotaSnapshot {
-    collect_live_quota_snapshot_with_home(dirs::home_dir().as_deref()).await
+    if let Some((at, snap)) = LIVE_QUOTA_CACHE
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(t, s)| (*t, s.clone())))
+    {
+        if at.elapsed() < LIVE_QUOTA_TTL {
+            return snap;
+        }
+    }
+    let mut snap = collect_live_quota_snapshot_with_home(dirs::home_dir().as_deref()).await;
+    if let Ok(mut g) = LIVE_QUOTA_CACHE.lock() {
+        // last-known-good 併入：本輪失敗的 runner 若上一份 cache 有成功值，
+        // 沿用舊值（VPN 間歇斷線時卡片不被洗成空白）。
+        if let Some((_, prev)) = g.as_ref() {
+            for r in snap.runners.iter_mut() {
+                if !r.ok {
+                    if let Some(old) = prev.runners.iter().find(|o| o.ok && o.name == r.name) {
+                        *r = old.clone();
+                    }
+                }
+            }
+        }
+        *g = Some((std::time::Instant::now(), snap.clone()));
+    }
+    snap
 }
 
 /// Usage 面板：讀 ~/.claude/stats-cache.json 聚合 today/yesterday/30d token 統計。
@@ -719,23 +755,38 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
             updated_at,
         };
     };
-    // 7 個 fetch 各打不同 API endpoint；sequential 最壞 7×10s timeout 會拖爆
+    // 6 個 fetch 各打不同 API endpoint；sequential 最壞 6×10s timeout 會拖爆
     // 刷新週期，改 tokio::join! 並行（wall-clock = 最慢的一支）。
     // Devin 的 credentials 在 %APPDATA%\devin，其餘讀 home。
+    // 2026-07-17 使用者裁掉 gemini 卡（CLI 沒在用），fetcher 隨之下架。
+    //
+    // retry_net：本機走 VPN，對單一 host 的首發連線會間歇 timeout（實測
+    // copilot 3 連發第 1 發 send error、第 2 發即 200）。網路型失敗（⚠ API
+    // error）原地重試一次；credentials 缺失/4xx 重試無意義不重試。
+    async fn retry_net<F, Fut>(f: F) -> quota::RunnerQuota
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = quota::RunnerQuota>,
+    {
+        let r = f().await;
+        if !r.ok && r.text.contains("API error") {
+            return f().await;
+        }
+        r
+    }
     let appdata = std::env::var_os("APPDATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| home.join("AppData").join("Roaming"));
-    let (claude, codex, gemini, copilot, grok, devin, agy) = tokio::join!(
-        quota::anthropic::fetch(home),
-        quota::codex::fetch(home),
-        quota::gemini::fetch(home),
-        quota::copilot::fetch(home),
-        quota::grok::fetch(home),
-        quota::devin::fetch(&appdata),
-        quota::antigravity::fetch(home),
+    let (claude, codex, copilot, grok, devin, agy) = tokio::join!(
+        retry_net(|| quota::anthropic::fetch(home)),
+        retry_net(|| quota::codex::fetch(home)),
+        retry_net(|| quota::copilot::fetch(home)),
+        retry_net(|| quota::grok::fetch(home)),
+        retry_net(|| quota::devin::fetch(&appdata)),
+        retry_net(|| quota::antigravity::fetch(home)),
     );
     quota::LiveQuotaSnapshot {
-        runners: vec![claude, codex, gemini, copilot, grok, devin, agy],
+        runners: vec![claude, codex, copilot, grok, devin, agy],
         source: "live_api".to_string(),
         updated_at,
     }
@@ -1295,8 +1346,8 @@ mod collect_live_quota_snapshot_tests {
         let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
         assert_eq!(
             out.runners.len(),
-            7,
-            "應有 7 runner (claude/codex/gemini/copilot/grok/devin/agy),實際 {}",
+            6,
+            "應有 6 runner (claude/codex/copilot/grok/devin/agy),實際 {}",
             out.runners.len()
         );
         assert_eq!(out.source, "live_api");
@@ -1304,7 +1355,7 @@ mod collect_live_quota_snapshot_tests {
         // 只有讀「注入 home」下憑證檔的 runner 能靠空 home 保證失敗；
         // copilot（fallback gh auth token）、devin（%APPDATA%）、agy（Credential
         // Manager）讀機器全域憑證，本機是否登入不可控，不對其 ok 斷言。
-        let home_scoped = ["claude", "codex", "gemini", "grok"];
+        let home_scoped = ["claude", "codex", "grok"];
         for runner in out.runners.iter().filter(|r| home_scoped.contains(&r.name.as_str())) {
             assert!(
                 !runner.ok,
@@ -1323,9 +1374,9 @@ mod collect_live_quota_snapshot_tests {
     }
 
     #[test]
-    fn collect_live_quota_snapshot_runners_have_known_names_claude_codex_gemini_copilot() {
-        // 前端 contract:runner.name 嚴格是 "claude" / "codex" / "gemini" / "copilot",
-        // 對齊 hook_server.rs KNOWN_PROVIDERS 本機 CLI 段(R109 起 4 個 live quota runner)。
+    fn collect_live_quota_snapshot_runners_have_known_names() {
+        // 前端 contract:runner.name 嚴格對齊本機在用 CLI 清單
+        // (2026-07-17 使用者裁掉 gemini,現為 claude/codex/copilot/grok/devin/agy)。
         // 任何改名 / 新加 / 漏掉 → 前端分組錯亂。
         let home = tmp_home("names");
         std::fs::create_dir_all(&home).unwrap();
@@ -1350,8 +1401,8 @@ mod collect_live_quota_snapshot_tests {
             names
         );
         assert!(
-            names.contains(&"gemini"),
-            "應含 gemini runner,實際 {:?}",
+            !names.contains(&"gemini"),
+            "gemini 已下架不應出現,實際 {:?}",
             names
         );
         assert!(

@@ -9,7 +9,6 @@ pub mod antigravity;
 pub mod codex;
 pub mod copilot;
 pub mod devin;
-pub mod gemini;
 pub mod grok;
 
 use serde::{Deserialize, Serialize};
@@ -51,19 +50,16 @@ pub fn detect_installed_clis_with_roots(
     localappdata: Option<&std::path::Path>,
 ) -> Vec<InstalledCli> {
     let h = |rel: &str| home.map(|p| p.join(rel));
-    let a = |rel: &str| appdata.map(|p| p.join(rel));
+    let _ = appdata; // 2026-07-17 使用者裁掉 opencode 卡後暫無 APPDATA probe，參數保留簽名穩定
     let l = |rel: &str| localappdata.map(|p| p.join(rel));
     // (id, label, color, 任一存在即算安裝)
+    // 2026-07-17 使用者指示移除沒在用/抓不到額度的卡：gemini、qwen、opencode、hermes
     let table: Vec<(&str, &str, &str, Vec<Option<std::path::PathBuf>>)> = vec![
         ("claude", "Claude Code", "#d97757", vec![h(".claude")]),
         ("codex", "Codex CLI", "#10a37f", vec![h(".codex")]),
-        ("gemini", "Gemini CLI", "#4796e3", vec![h(".gemini")]),
         ("copilot", "Copilot CLI", "#8957e5", vec![h(".copilot")]),
         ("grok", "Grok CLI", "#9aa0a6", vec![h(".grok")]),
-        ("qwen", "Qwen Code", "#6b4fd8", vec![h(".qwen")]),
-        ("opencode", "OpenCode", "#fab005", vec![a("npm/opencode.ps1"), a("npm/node_modules/opencode-ai")]),
         ("agy", "Antigravity CLI", "#f59e0b", vec![h("bin/agy.ps1")]),
-        ("hermes", "Hermes Agent", "#ff6b6b", vec![l("hermes")]),
         ("devin", "Devin CLI", "#2ea3ff", vec![l("devin")]),
     ];
     table

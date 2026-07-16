@@ -28,14 +28,23 @@
 
   // 卡片清單以本機實際安裝的 CLI 為準（detect_installed_clis），
   // quota 資料（live fetch）按 id 併入；沒安裝的 CLI 不顯示、OpenAB bot 不混入。
+  // last-known-good：單輪 API 瞬失不把已顯示的好資料洗成「—」，退回上次成功值並標 stale。
+  const lastGood = new Map(); // name -> 最近一次帶 raw 且 ok 的 runner
   function cliRunners(clis, liveSnap) {
     const byName = new Map();
     for (const r of (liveSnap && liveSnap.runners) || []) {
       if (r && r.name) byName.set(r.name, r);
     }
-    return clis.map((cli) =>
-      byName.get(cli.id) || { name: cli.id, label: cli.label, color: cli.color, ok: true, text: "", raw: null }
-    );
+    return clis.map((cli) => {
+      const fresh = byName.get(cli.id);
+      if (fresh && fresh.raw && fresh.ok !== false) {
+        lastGood.set(cli.id, fresh);
+        return fresh;
+      }
+      const cached = lastGood.get(cli.id);
+      if (cached) return Object.assign({}, cached, { stale: true });
+      return fresh || { name: cli.id, label: cli.label, color: cli.color, ok: true, text: "", raw: null };
+    });
   }
 
   function barRow(label, remainPct, resetText) {
@@ -69,6 +78,7 @@
     const label = (runner.label || name).replace(/^[^\w]*\s/, ""); // 去掉開頭 emoji
     const plan = (card.kind !== "none" && card.subtitle) ? `<span class="uv-plan">${esc(card.subtitle)}</span>` : "";
     const failed = runner.ok === false ? `<span class="uv-err" title="runner 回報失敗">⚠</span>` : "";
+    const stale = runner.stale ? `<span class="uv-err" title="本輪抓取失敗，顯示上次成功值">⏳</span>` : "";
 
     let body;
     if (card.kind === "full" || card.kind === "simple") {
@@ -91,7 +101,7 @@
       : "";
 
     return `<div class="uv-card" data-provider="${esc(name)}">
-      <div class="uv-head">${providerIconHtml(name, 16)}<span class="uv-name">${esc(label)}</span>${failed}${plan}</div>
+      <div class="uv-head">${providerIconHtml(name, 16)}<span class="uv-name">${esc(label)}</span>${failed}${stale}${plan}</div>
       ${body}${trend}${detail}
     </div>`;
   }

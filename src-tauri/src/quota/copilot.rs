@@ -349,3 +349,16 @@ mod tests {
         assert!(env_token().is_none(), "無 env 應回 None（gh fallback 另計）");
     }
 }
+
+#[cfg(test)]
+mod live_probe {
+    // 手動診斷用：cargo test --release live_copilot -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_copilot_fetch_prints_result() {
+        for i in 0..3 {
+            let r = super::fetch(&dirs::home_dir().unwrap()).await;
+            println!("[{i}] ok={} text={:?} raw={:?}", r.ok, r.text, r.raw.map(|v| v.to_string()));
+        }
+    }
+}

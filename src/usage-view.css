@@ -1,0 +1,122 @@
+/* OpenUsage 風格 Usage 面板（scoped #view-usage；深色半透明卡片、藍色進度條） */
+#view-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 6px;
+}
+#view-usage.hidden { display: none; }
+
+#usage-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.uv-card {
+  background: rgba(28, 36, 44, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  padding: 10px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.uv-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.uv-name { font-size: 13px; font-weight: 700; color: rgba(255, 255, 255, 0.92); }
+.uv-plan { font-size: 11px; color: rgba(255, 255, 255, 0.45); margin-left: 2px; }
+.uv-err { font-size: 11px; }
+
+.uv-sec {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 4px;
+}
+
+.uv-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+.uv-bar-empty { background: rgba(255, 255, 255, 0.09); }
+.uv-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: #3d9bff;
+}
+.uv-fill.uv-warn { background: #ff5b5b; }
+
+.uv-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.uv-trendrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+.uv-trendrow.hidden { display: none; }
+.uv-spark { flex: 0 0 auto; }
+
+.uv-chevron {
+  align-self: center;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 2px 18px 0;
+  line-height: 1;
+}
+.uv-chevron:hover { color: rgba(255, 255, 255, 0.8); }
+
+.uv-detail {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 6px;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.uv-detail.hidden { display: none; }
+.uv-krow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+}
+.uv-krow span:first-child { color: rgba(255, 255, 255, 0.75); font-weight: 600; }
+.uv-krow span:last-child { color: rgba(255, 255, 255, 0.55); }
+.uv-note { font-size: 10px; color: rgba(255, 255, 255, 0.35); margin-top: 2px; }
+
+.uv-empty {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+  padding: 12px 0;
+}
+
+.uv-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.4);
+  padding: 2px 2px 0;
+}
+.uv-footer-btns { display: flex; gap: 2px; }
+
+/* 淺色主題最低限度適配：卡片維持深色（OpenUsage 樣式本體），僅外框透明度微調 */
+body.light .uv-card { background: rgba(30, 38, 48, 0.88); }

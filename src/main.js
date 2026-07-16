@@ -126,6 +126,7 @@ function showView(view) {
   const wasExpanded = currentView !== "capsule";
   const prevView = currentView;
   currentView = view;
+  $("view-usage").classList.toggle("hidden", view !== "usage");
   $("view-expanded").classList.toggle("hidden", view !== "expanded");
   $("view-settings").classList.toggle("hidden", view !== "settings");
   $("view-dashboard").classList.toggle("hidden", view !== "dashboard");
@@ -133,7 +134,7 @@ function showView(view) {
   $("view-timeline").classList.toggle("hidden", view !== "timeline");
   $("capsule").classList.toggle(
     "has-panel-below",
-    view === "expanded" || view === "settings" || view === "dashboard" || view === "events" || view === "timeline"
+    view === "usage" || view === "expanded" || view === "settings" || view === "dashboard" || view === "events" || view === "timeline"
   );
   // PUA R112: 離開 capsule view 一定要收掉 brief（避免 brief 飄在 expanded view 上面）
   if (view !== "capsule") showCapsuleBrief(false);
@@ -158,6 +159,11 @@ function showView(view) {
     startTimelineAutoRefresh();
   } else if (view !== "timeline" && prevView === "timeline") {
     stopTimelineAutoRefresh();
+  }
+  if (view === "usage" && prevView !== "usage") {
+    window.UsageView?.start();
+  } else if (view !== "usage" && prevView === "usage") {
+    window.UsageView?.stop();
   }
 }
 
@@ -330,7 +336,7 @@ async function init() {
     await fitWindow();
     if (appConfig.appearance.pin_expanded) {
       $("btn-pin").classList.add("active");
-      showView("expanded");
+      showView("usage");
     }
   }
 
@@ -339,10 +345,10 @@ async function init() {
     if (e.buttons === 1) invoke("plugin:window|start_dragging", { label: "main" }).catch(() => {});
   });
 
-  // Hover expand
+  // Hover expand（主視圖改為 OpenUsage 風格 usage 面板；session 列表經 footer 按鈕可達）
   $("capsule").addEventListener("mouseenter", () => {
     if (currentView === "capsule" && !appConfig.appearance.pin_expanded && (Date.now() - collapsedAt > 500)) {
-      showView("expanded");
+      showView("usage");
     }
   });
 
@@ -370,12 +376,12 @@ async function init() {
 
   // Collapse via cursor-left
   const collapseCallbackId = window.__TAURI_INTERNALS__.transformCallback(() => {
-    if (currentView === "expanded" && !appConfig.appearance.pin_expanded) showView("capsule");
+    if ((currentView === "expanded" || currentView === "usage") && !appConfig.appearance.pin_expanded) showView("capsule");
   });
   invoke("plugin:event|listen", { event: "cursor-left", target: { kind: "Any" }, handler: collapseCallbackId }).catch(() => {});
 
   setInterval(() => {
-    if (currentView !== "expanded" || appConfig.appearance.pin_expanded) return;
+    if ((currentView !== "expanded" && currentView !== "usage") || appConfig.appearance.pin_expanded) return;
     if (!document.getElementById("app").matches(":hover")) showView("capsule");
   }, 200);
 
@@ -444,7 +450,7 @@ async function init() {
   // Re-register after delay
   setTimeout(() => {
     const cb2 = window.__TAURI_INTERNALS__.transformCallback(() => {
-      if (currentView === "expanded" && !appConfig.appearance.pin_expanded) showView("capsule");
+      if ((currentView === "expanded" || currentView === "usage") && !appConfig.appearance.pin_expanded) showView("capsule");
     });
     invoke("plugin:event|listen", { event: "cursor-left", target: { kind: "Any" }, handler: cb2 }).catch(() => {});
 
@@ -482,7 +488,7 @@ async function init() {
     appConfig.appearance.pin_expanded = !appConfig.appearance.pin_expanded;
     $("toggle-pin").checked = appConfig.appearance.pin_expanded;
     $("btn-pin").classList.toggle("active", appConfig.appearance.pin_expanded);
-    if (!appConfig.appearance.pin_expanded && currentView === "expanded") showView("capsule");
+    if (!appConfig.appearance.pin_expanded && (currentView === "expanded" || currentView === "usage")) showView("capsule");
     saveConfig();
   });
 
@@ -496,13 +502,13 @@ async function init() {
   });
   $("btn-close-settings").addEventListener("click", () => {
     appConfig.setup_done = true; saveConfig();
-    showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
+    showView(appConfig.appearance.pin_expanded ? "usage" : "capsule");
   });
 
   $("toggle-pin").addEventListener("change", (e) => {
     appConfig.appearance.pin_expanded = e.target.checked;
     $("btn-pin").classList.toggle("active", appConfig.appearance.pin_expanded);
-    if (!appConfig.appearance.pin_expanded) showView("capsule"); else showView("expanded");
+    if (!appConfig.appearance.pin_expanded) showView("capsule"); else showView("usage");
     saveConfig();
   });
 
@@ -557,6 +563,10 @@ async function init() {
   $("btn-github").addEventListener("click", () => {
     invoke("open_app_config").catch(() => {});
   });
+
+  // Usage 面板 footer 按鈕
+  $("btn-usage-sessions")?.addEventListener("click", () => showView("expanded"));
+  $("btn-usage-settings")?.addEventListener("click", () => $("btn-settings").click());
 
   $("btn-hide").addEventListener("click", () => {
     invoke("hide_window").catch(() => {});
@@ -614,10 +624,10 @@ async function init() {
   $("btn-refresh-events").addEventListener("click", () => renderEventsLog());
 
   $("btn-close-dashboard").addEventListener("click", () => {
-    showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
+    showView(appConfig.appearance.pin_expanded ? "usage" : "capsule");
   });
   $("btn-close-events").addEventListener("click", () => {
-    showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
+    showView(appConfig.appearance.pin_expanded ? "usage" : "capsule");
   });
 
   // ─── R-CPT M1 T-CPT10 — Timeline 視圖 (6th view) ───
@@ -625,7 +635,7 @@ async function init() {
     showView("timeline");
   });
   $("btn-close-timeline").addEventListener("click", () => {
-    showView(appConfig.appearance.pin_expanded ? "expanded" : "capsule");
+    showView(appConfig.appearance.pin_expanded ? "usage" : "capsule");
   });
   $("btn-timeline-refresh").addEventListener("click", () => renderTimeline());
   $("btn-timeline-toggle-resolution").addEventListener("click", async () => {

@@ -11,6 +11,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* 卡片數 = 本機安裝 CLI 數（可能 10+），上限內捲動避免視窗高過螢幕 */
+  max-height: 620px;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .uv-card {

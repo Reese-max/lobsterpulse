@@ -693,6 +693,16 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
     dirs::home_dir().and_then(|h| quota::anthropic::daily_stats(&h))
 }
 
+/// Usage 面板卡片清單：偵測本機實際安裝的 AI CLI（沒安裝的不顯示）。
+#[tauri::command]
+fn detect_installed_clis() -> Vec<quota::InstalledCli> {
+    quota::detect_installed_clis_with_roots(
+        dirs::home_dir().as_deref(),
+        std::env::var_os("APPDATA").map(std::path::PathBuf::from).as_deref(),
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).as_deref(),
+    )
+}
+
 /// 對齊 R33 `read_usage_snapshots_with_home` 模式：純 async fn + home 注入，
 /// Tauri command 殼只負責撈 `dirs::home_dir()` 傳入，testable。
 pub(crate) async fn collect_live_quota_snapshot_with_home(
@@ -3945,6 +3955,7 @@ pub fn run() {
             test_usage_runner,
             get_quota_history,
             get_claude_daily_stats,
+            detect_installed_clis,
             remove_all_sessions,
             timeline_snapshot_24h,
             timeline_recorded_event_count,

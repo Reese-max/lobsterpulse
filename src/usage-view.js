@@ -26,22 +26,16 @@
     return "$" + v.toFixed(2);
   }
 
-  // 合併 live + 選定 snapshot 的 runner；同名先出現者優先（live 較即時）
-  function mergeRunners(snapshots) {
-    const out = [];
-    const seen = new Set();
-    const sources = [];
-    if (snapshots.__live__) sources.push(snapshots.__live__);
-    const sel = selectQuotaSnapshot(snapshots);
-    if (sel && sel.snap && sel.snap !== snapshots.__live__) sources.push(sel.snap);
-    for (const src of sources) {
-      for (const r of (src && src.runners) || []) {
-        if (!r || !r.name || seen.has(r.name)) continue;
-        seen.add(r.name);
-        out.push(r);
-      }
+  // 卡片清單以本機實際安裝的 CLI 為準（detect_installed_clis），
+  // quota 資料（live fetch）按 id 併入；沒安裝的 CLI 不顯示、OpenAB bot 不混入。
+  function cliRunners(clis, liveSnap) {
+    const byName = new Map();
+    for (const r of (liveSnap && liveSnap.runners) || []) {
+      if (r && r.name) byName.set(r.name, r);
     }
-    return out;
+    return clis.map((cli) =>
+      byName.get(cli.id) || { name: cli.id, label: cli.label, color: cli.color, ok: true, text: "", raw: null }
+    );
   }
 
   function barRow(label, remainPct, resetText) {
@@ -108,21 +102,18 @@
     if (renderInFlight) return;
     renderInFlight = true;
     try {
-      const [snapRes, liveRes, statsRes] = await Promise.allSettled([
-        invoke("read_usage_snapshots"),
+      const [cliRes, liveRes, statsRes] = await Promise.allSettled([
+        invoke("detect_installed_clis"),
         invoke("get_live_quota_snapshot"),
         invoke("get_claude_daily_stats"),
       ]);
-      const snapshots = snapRes.status === "fulfilled" ? (snapRes.value || {}) : {};
+      const clis = cliRes.status === "fulfilled" ? (cliRes.value || []) : [];
       const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
       const dailyStats = statsRes.status === "fulfilled" ? statsRes.value : null;
-      snapshots.__live__ = (liveSnap && (liveSnap.runners || []).length)
-        ? { runners: liveSnap.runners, source: liveSnap.source || "live_api", updated_at: liveSnap.updated_at || 0 }
-        : null;
 
-      const runners = mergeRunners(snapshots);
+      const runners = cliRunners(clis, liveSnap);
       if (runners.length === 0) {
-        root.innerHTML = `<div class="uv-empty">尚無額度資料來源（live API 與 snapshot 皆空）</div>`;
+        root.innerHTML = `<div class="uv-empty">未偵測到本機安裝的 AI CLI</div>`;
       } else {
         root.innerHTML = runners.map((r) => renderCard(r, dailyStats)).join("");
         drawSparks(runners.map((r) => r.name));

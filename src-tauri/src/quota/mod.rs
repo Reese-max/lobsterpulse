@@ -30,3 +30,72 @@ pub struct LiveQuotaSnapshot {
     pub source: String,
     pub updated_at: u64,
 }
+
+/// Usage 面板卡片清單的資料源：本機實際安裝的 AI CLI。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstalledCli {
+    pub id: String,
+    pub label: String,
+    pub color: String,
+}
+
+/// 偵測本機安裝了哪些 AI CLI（設定目錄 / 已知安裝路徑存在即視為已安裝）。
+/// 面板卡片以此清單為準——沒安裝的不顯示，不寫死。
+/// `extra_roots`: (APPDATA, LOCALAPPDATA)，None 的 probe 直接跳過。
+pub fn detect_installed_clis_with_roots(
+    home: Option<&std::path::Path>,
+    appdata: Option<&std::path::Path>,
+    localappdata: Option<&std::path::Path>,
+) -> Vec<InstalledCli> {
+    let h = |rel: &str| home.map(|p| p.join(rel));
+    let a = |rel: &str| appdata.map(|p| p.join(rel));
+    let l = |rel: &str| localappdata.map(|p| p.join(rel));
+    // (id, label, color, 任一存在即算安裝)
+    let table: Vec<(&str, &str, &str, Vec<Option<std::path::PathBuf>>)> = vec![
+        ("claude", "Claude Code", "#d97757", vec![h(".claude")]),
+        ("codex", "Codex CLI", "#10a37f", vec![h(".codex")]),
+        ("gemini", "Gemini CLI", "#4796e3", vec![h(".gemini")]),
+        ("copilot", "Copilot CLI", "#8957e5", vec![h(".copilot")]),
+        ("grok", "Grok CLI", "#9aa0a6", vec![h(".grok")]),
+        ("qwen", "Qwen Code", "#6b4fd8", vec![h(".qwen")]),
+        ("opencode", "OpenCode", "#fab005", vec![a("npm/opencode.ps1"), a("npm/node_modules/opencode-ai")]),
+        ("agy", "Antigravity CLI", "#f59e0b", vec![h("bin/agy.ps1")]),
+        ("hermes", "Hermes Agent", "#ff6b6b", vec![l("hermes")]),
+        ("devin", "Devin CLI", "#2ea3ff", vec![l("devin")]),
+    ];
+    table
+        .into_iter()
+        .filter(|(_, _, _, probes)| probes.iter().flatten().any(|p| p.exists()))
+        .map(|(id, label, color, _)| InstalledCli {
+            id: id.to_string(),
+            label: label.to_string(),
+            color: color.to_string(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod detect_tests {
+    use super::*;
+
+    #[test]
+    fn detect_uses_config_dir_presence() {
+        let tmp = std::env::temp_dir().join(format!("lp-detect-test-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".claude")).unwrap();
+        std::fs::create_dir_all(tmp.join(".grok")).unwrap();
+        let got = detect_installed_clis_with_roots(Some(&tmp), None, None);
+        let ids: Vec<_> = got.iter().map(|c| c.id.as_str()).collect();
+        assert!(ids.contains(&"claude"), "expected claude in {ids:?}");
+        assert!(ids.contains(&"grok"), "expected grok in {ids:?}");
+        assert!(!ids.contains(&"codex"), "codex 不該被偵測到: {ids:?}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn detect_empty_home_yields_empty() {
+        let tmp = std::env::temp_dir().join(format!("lp-detect-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert!(detect_installed_clis_with_roots(Some(&tmp), None, None).is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}

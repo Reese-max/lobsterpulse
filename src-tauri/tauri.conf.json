@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "龍蝦監控",
+  "productName": "額度監控",
   "version": "0.5.4",
   "identifier": "com.lobsterpulse.desktop",
   "build": {
@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "龍蝦監控",
+        "title": "額度監控",
         "width": 300,
         "height": 46,
         "resizable": false,

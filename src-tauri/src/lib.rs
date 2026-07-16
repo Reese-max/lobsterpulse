@@ -3757,7 +3757,7 @@ pub fn run() {
             let openab_restart = MenuItemBuilder::with_id("openab_restart", "重啟 OpenAB").build(app)?;
             let open_config = MenuItemBuilder::with_id("open_config", "開啟設定檔").build(app)?;
             let restart = MenuItemBuilder::with_id("restart", "重新啟動").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "結束龍蝦監控").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "結束額度監控").build(app)?;
             let menu = MenuBuilder::new(app)
                 .item(&show)
                 .item(&dashboard)
@@ -3776,7 +3776,7 @@ pub fn run() {
 
             TrayIconBuilder::new()
                 .icon(icon)
-                .tooltip("龍蝦監控 · 左鍵=切換顯示／隱藏 · Ctrl+Shift+L")
+                .tooltip("額度監控 · 左鍵=切換顯示／隱藏 · Ctrl+Shift+L")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {

@@ -42,7 +42,7 @@ const PROVIDER_COLORS = {
   unknown: "#888888",
 };
 
-const APP_NAME = "龍蝦監控";
+const APP_NAME = "額度監控";
 const OPENAB_BOTS = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo"];
 const LOCAL_PROVIDERS = ["claude", "codex", "copilot", "gemini"];
 // OpenAB bot 優先顯示，本機 CLI 接在後面。codex_bot=OpenAB CODEX，codex=本機 CLI（獨立 id）。
@@ -533,7 +533,7 @@ async function init() {
   $("toggle-notify").addEventListener("change", (e) => {
     appConfig.appearance.system_notifications = e.target.checked;
     saveConfig();
-    if (e.target.checked) systemNotify("龍蝦監控", "系統通知已啟用");
+    if (e.target.checked) systemNotify("額度監控", "系統通知已啟用");
   });
 
   $("toggle-sound").addEventListener("change", (e) => {

@@ -687,22 +687,33 @@ fn read_usage_snapshots() -> std::collections::HashMap<String, Option<serde_json
 /// copilot 首抓成功後即被 rate-limit 洗成空卡。cache 放 command 殼這層，
 /// 所有 caller 共用一份；`collect_live_quota_snapshot_with_home` 保持無狀態
 /// 可測。TTL 內回 cache，過期才真打。
-/// ponytail: 過期瞬間兩個 caller 可能同時 miss 雙抓一次，量級無害不加鎖等待。
+/// 2026-07-17 加固：TTL 過期瞬間 15s/60s 兩個輪詢源會同時 miss 並發雙抓
+/// （rate-limit 事故的縮小版），REFRESH 鎖序列化真打——後到者拿鎖後 re-check
+/// cache，直接吃前者剛寫的結果。
 const LIVE_QUOTA_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 static LIVE_QUOTA_CACHE: std::sync::Mutex<
     Option<(std::time::Instant, quota::LiveQuotaSnapshot)>,
 > = std::sync::Mutex::new(None);
+static LIVE_QUOTA_REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-#[tauri::command]
-async fn get_live_quota_snapshot() -> quota::LiveQuotaSnapshot {
-    if let Some((at, snap)) = LIVE_QUOTA_CACHE
+fn cached_live_snapshot() -> Option<quota::LiveQuotaSnapshot> {
+    LIVE_QUOTA_CACHE
         .lock()
         .ok()
         .and_then(|g| g.as_ref().map(|(t, s)| (*t, s.clone())))
-    {
-        if at.elapsed() < LIVE_QUOTA_TTL {
-            return snap;
-        }
+        .filter(|(at, _)| at.elapsed() < LIVE_QUOTA_TTL)
+        .map(|(_, snap)| snap)
+}
+
+#[tauri::command]
+async fn get_live_quota_snapshot() -> quota::LiveQuotaSnapshot {
+    if let Some(snap) = cached_live_snapshot() {
+        return snap;
+    }
+    let _refresh = LIVE_QUOTA_REFRESH.lock().await;
+    // 等鎖期間別人可能已刷新完，re-check 免重複打 API
+    if let Some(snap) = cached_live_snapshot() {
+        return snap;
     }
     let mut snap = collect_live_quota_snapshot_with_home(dirs::home_dir().as_deref()).await;
     if let Ok(mut g) = LIVE_QUOTA_CACHE.lock() {

@@ -145,15 +145,33 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     // (未來若改讀 ~/.copilot/ 檔案,沿用同簽名免破 wire),本輪用 env var 暫忽略。
     let _ = home;
 
-    let token = match read_credentials() {
-        Ok(t) => t,
-        Err(e) => {
+    // read_credentials 內含 `gh auth token` 同步子進程——直接在 async fn 裡呼叫
+    // 會佔住 tokio worker，gh 若卡住（credential manager 互動等）整個 snapshot
+    // 永久卡死。spawn_blocking 隔離 + 5s 逾時；逾時非網路型錯誤，不觸發 retry_net。
+    let cred = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(read_credentials),
+    )
+    .await;
+    let token = match cred {
+        Ok(Ok(Ok(t))) => t,
+        Ok(Ok(Err(e))) => {
             return RunnerQuota {
                 name,
                 label,
                 color,
                 ok: false,
                 text: format!("⚠ {e}"),
+                raw: None,
+            };
+        }
+        _ => {
+            return RunnerQuota {
+                name,
+                label,
+                color,
+                ok: false,
+                text: "⚠ gh auth token 逾時（>5s），檢查 gh CLI 狀態".to_string(),
                 raw: None,
             };
         }

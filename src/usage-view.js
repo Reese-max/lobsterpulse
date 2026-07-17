@@ -36,7 +36,9 @@
       if (r && r.name) byName.set(r.name, r);
     }
     return clis.map((cli) => {
-      const fresh = byName.get(cli.id);
+      // 標題一律用 detect 表的乾淨名稱（runner.label 帶「💻 …（本機）」是舊 quota bar 的格式）
+      const fresh0 = byName.get(cli.id);
+      const fresh = fresh0 && Object.assign({}, fresh0, { label: cli.label });
       if (fresh && fresh.raw && fresh.ok !== false) {
         lastGood.set(cli.id, fresh);
         return fresh;

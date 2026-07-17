@@ -65,26 +65,51 @@ fn gh_auth_token() -> Option<String> {
     if t.is_empty() { None } else { Some(t) }
 }
 
-/// 從 copilot_internal/user 回應抽額度。回 (plan, premium_pct, reset_text, snapshots_raw)。
-/// `unlimited: true` 視為 100% 剩餘；欄位缺 → None（前端 No data），不腦補 0。
+/// 從 copilot_internal/user 回應抽額度。回 (plan, buckets, reset_text, snapshots_raw)。
+/// buckets 是至多 2 個 (顯示名, 剩餘%)，優先序 Premium > Chat > Completions。
+/// 關鍵陷阱（2026-07-17 實測）：individual plan 的 premium_interactions 是
+/// `has_quota: false`、entitlement 0——不是「用光了」而是「這個 plan 沒這種額度」，
+/// 寫死 premium 會顯示誤導的 0%。`has_quota: false` 的 bucket 一律跳過。
+/// `unlimited: true` 視為 100% 剩餘；欄位缺 → 不出 bucket（前端 No data），不腦補 0。
 fn parse_copilot_quota(
     body: &serde_json::Value,
-) -> (Option<String>, Option<i64>, Option<String>, serde_json::Value) {
+) -> (
+    Option<String>,
+    Vec<(&'static str, i64)>,
+    Option<String>,
+    serde_json::Value,
+) {
     let plan = body
         .get("copilot_plan")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let premium = body
-        .get("quota_snapshots")
-        .and_then(|q| q.get("premium_interactions"));
-    let pct = premium.and_then(|p| {
-        if p.get("unlimited").and_then(|v| v.as_bool()) == Some(true) {
-            return Some(100);
+    let snapshots = body.get("quota_snapshots");
+    let mut buckets = Vec::new();
+    for (key, label) in [
+        ("premium_interactions", "Premium"),
+        ("chat", "Chat"),
+        ("completions", "Completions"),
+    ] {
+        if buckets.len() == 2 {
+            break;
         }
-        p.get("percent_remaining")
-            .and_then(|v| v.as_f64())
-            .map(|v| v.round().clamp(0.0, 100.0) as i64)
-    });
+        let Some(b) = snapshots.and_then(|q| q.get(key)) else {
+            continue;
+        };
+        if b.get("has_quota").and_then(|v| v.as_bool()) == Some(false) {
+            continue;
+        }
+        let pct = if b.get("unlimited").and_then(|v| v.as_bool()) == Some(true) {
+            Some(100)
+        } else {
+            b.get("percent_remaining")
+                .and_then(|v| v.as_f64())
+                .map(|v| v.round().clamp(0.0, 100.0) as i64)
+        };
+        if let Some(p) = pct {
+            buckets.push((label, p));
+        }
+    }
     // quota_reset_date "YYYY-MM-DD"（月重置）→ 距今小時數 "XhYm" 供前端天數換算
     let reset = body
         .get("quota_reset_date")
@@ -98,11 +123,8 @@ fn parse_copilot_quota(
             }
             Some(format!("{}h{}m", delta / 60, delta % 60))
         });
-    let snaps = body
-        .get("quota_snapshots")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    (plan, pct, reset, snaps)
+    let snaps = snapshots.cloned().unwrap_or(serde_json::Value::Null);
+    (plan, buckets, reset, snaps)
 }
 
 /// 取 token 末 4 碼當遮罩（不暴露完整 secret）。長度 < 4 時回 "****"。
@@ -199,20 +221,25 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         };
     }
 
-    let (plan, premium_pct, reset, snaps) = parse_copilot_quota(&body);
+    let (plan, buckets, reset, snaps) = parse_copilot_quota(&body);
     let plan_disp = plan.clone().unwrap_or_else(|| "Copilot".to_string());
-    let text = match premium_pct {
-        Some(p) => format!("⏱ Premium {p}%\n{plan_disp}"),
-        None => format!("✓ {plan_disp} · token {preview}"),
+    let text = if buckets.is_empty() {
+        format!("✓ {plan_disp} · token {preview}")
+    } else {
+        let parts: Vec<String> = buckets.iter().map(|(l, p)| format!("{l} {p}%")).collect();
+        format!("⏱ {}\n{plan_disp}", parts.join(" · "))
     };
 
+    // 月配額借 h5/wk 兩個 slot + 自訂 label 顯示；reset 是同一個月重置日
     let raw = serde_json::json!({
         "ok": true,
         "status_code": status_code,
-        // Premium requests 是月配額：借 h5 slot + 自訂 label 顯示
-        "h5_remaining": premium_pct,
-        "h5_reset": reset,
-        "session_label": "Premium",
+        "h5_remaining": buckets.first().map(|(_, p)| *p),
+        "h5_reset": buckets.first().map(|_| reset.clone()),
+        "session_label": buckets.first().map(|(l, _)| *l),
+        "wk_remaining": buckets.get(1).map(|(_, p)| *p),
+        "wk_reset": buckets.get(1).map(|_| reset.clone()),
+        "weekly_label": buckets.get(1).map(|(l, _)| *l),
         "plan": plan_disp,
         "quota_snapshots": snaps,
         "ts": chrono::Utc::now().to_rfc3339(),
@@ -265,11 +292,30 @@ mod tests {
                 "completions": { "unlimited": true }
             }
         });
-        let (plan, pct, reset, snaps) = parse_copilot_quota(&body);
+        let (plan, buckets, reset, snaps) = parse_copilot_quota(&body);
         assert_eq!(plan.as_deref(), Some("individual_pro"));
-        assert_eq!(pct, Some(88));
+        assert_eq!(buckets, vec![("Premium", 88), ("Chat", 100)]);
         assert!(reset.is_some(), "未來的 reset date 應有 countdown");
         assert!(snaps.get("premium_interactions").is_some());
+    }
+
+    #[test]
+    fn parse_copilot_quota_skips_has_quota_false_buckets() {
+        // 2026-07-17 本機 individual plan 實測形狀：premium 是 has_quota:false /
+        // entitlement 0（plan 沒這種額度，不是用光），真額度在 chat + completions。
+        let body = serde_json::json!({
+            "copilot_plan": "individual",
+            "quota_snapshots": {
+                "premium_interactions": { "percent_remaining": 0.0, "unlimited": false,
+                                           "has_quota": false, "entitlement": 0, "remaining": 0 },
+                "chat": { "percent_remaining": 95.3, "unlimited": false,
+                          "has_quota": true, "entitlement": 200, "remaining": 190 },
+                "completions": { "percent_remaining": 100.0, "unlimited": false,
+                                  "has_quota": true, "entitlement": 2000, "remaining": 2000 }
+            }
+        });
+        let (_, buckets, _, _) = parse_copilot_quota(&body);
+        assert_eq!(buckets, vec![("Chat", 95), ("Completions", 100)]);
     }
 
     #[test]
@@ -277,14 +323,15 @@ mod tests {
         let body = serde_json::json!({
             "quota_snapshots": { "premium_interactions": { "unlimited": true } }
         });
-        let (_, pct, _, _) = parse_copilot_quota(&body);
-        assert_eq!(pct, Some(100));
+        let (_, buckets, _, _) = parse_copilot_quota(&body);
+        assert_eq!(buckets, vec![("Premium", 100)]);
     }
 
     #[test]
     fn parse_copilot_quota_missing_snapshots_yields_none() {
-        let (plan, pct, reset, _) = parse_copilot_quota(&serde_json::json!({"message":"Bad credentials"}));
-        assert!(plan.is_none() && pct.is_none() && reset.is_none());
+        let (plan, buckets, reset, _) =
+            parse_copilot_quota(&serde_json::json!({"message":"Bad credentials"}));
+        assert!(plan.is_none() && buckets.is_empty() && reset.is_none());
     }
 
     /// 透過 env 注入 token 測 read_credentials 優先序。

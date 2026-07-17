@@ -1460,6 +1460,25 @@ mod collect_live_quota_snapshot_tests {
 
         let _ = std::fs::remove_dir_all(&home);
     }
+
+    /// 診斷用：對真實 home 打全部 6 個 provider API，印出每個 runner 的實際結果。
+    /// 平時 ignore，需要時 `cargo test --release live_snapshot -- --ignored --nocapture`。
+    #[test]
+    #[ignore]
+    fn live_snapshot_prints_all_runners() {
+        let out = block_on(collect_live_quota_snapshot_with_home(
+            dirs::home_dir().as_deref(),
+        ));
+        for r in &out.runners {
+            println!(
+                "[{}] ok={} raw={} text={}",
+                r.name,
+                r.ok,
+                r.raw.is_some(),
+                r.text
+            );
+        }
+    }
 }
 
 /// 簡易 Handlebars 替換 — 只支援 `{{ key }}` 從 JSON top-level 取值（對齊 OpenAB template 語意）。

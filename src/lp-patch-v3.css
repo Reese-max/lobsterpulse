@@ -41,16 +41,9 @@
   width: 26px; height: 26px;
   margin-right: 4px;
   border-radius: 9px;
-  background:
-    linear-gradient(160deg, #f0906d 0%, #d97757 55%, #b85a3d 100%),
-    #d97757;
-  background-size: 22px 22px, cover;
-  background-repeat: no-repeat, no-repeat;
-  background-position: -999px -999px, center; /* hide v2 big SVG */
-  box-shadow:
-    0 2px 6px rgba(217,119,87,0.35),
-    inset 0 1px 0 rgba(255,255,255,0.45);
-  /* 用 mask 畫 white star overlay */
+  /* 2026-07-17 產品轉向額度監控：舊 coral 漸層章換成新量表 app icon（與桌面 icon 同源） */
+  background: url("brand-icon.png") center / cover no-repeat;
+  box-shadow: 0 2px 6px rgba(28, 36, 44, 0.35);
   position: relative;
   transition: filter .25s ease, transform .35s cubic-bezier(.2,.7,.25,1);
 }

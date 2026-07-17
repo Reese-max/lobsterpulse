@@ -43,8 +43,8 @@ const PROVIDER_COLORS = {
   grokx: "#111827",
   lpbot: "#ef4444",
   mimo: "#f59e0b",
-  // 本機 CLI 卡（usage 面板）—— grok 品牌黑在深色底看不見，改亮灰
-  grok: "#e8eaed",
+  // 本機 CLI 卡（usage 面板）—— grok 品牌黑/灰在深色半透明底看不清，改飽和青
+  grok: "#22d3ee",
   agy: "#f59e0b",
   devin: "#2ea3ff",
   unknown: "#888888",
@@ -2462,60 +2462,20 @@ function renderCapsule(st) {
   }
   window.__lastSt = st;  // 給 click handler 用
 
-  // Capsule icons: show active provider icons + 標記 current active (manual or auto)
-  const providers = st.active_providers.length > 0 ? st.active_providers : (s ? [s.provider] : []);
-  const activeProvider = s?.provider;
-  $("capsule-icons").innerHTML = providers.map(p => {
-    const iconHtml = providerIconHtml(p, 16);
-    const cls = p === activeProvider ? 'provider-icon-slot active' : 'provider-icon-slot';
-    return `<span class="${cls}" data-provider-slot="${p}">${iconHtml}</span>`;
-  }).join('');
-
-  // 多 active provider 時啟用漸變底色
-  $("capsule").classList.toggle("multi-active", providers.length > 1);
+  // 2026-07-17 產品轉向額度監控：capsule 不再顯示 session 舊資訊
+  // （專案名/執行中/計時/計數），改為固定 app 名 + per-CLI 額度 chips
+  // （updateCapsuleQuota 渲染）。session 細節仍在 expanded view。
+  $("capsule").classList.remove("multi-active");
+  $("capsule-project").textContent = APP_NAME;
+  $("capsule-status").textContent = "";
+  $("capsule-status").className = "capsule-status idle";
+  $("capsule-time").style.display = "none";
+  $("capsule-count").classList.add("hidden");
 
   // 近 10 分鐘失敗計數 → 紅點
   checkRecentFailures();
 
-  if (s) {
-    $("capsule-project").textContent = s.project_name;
-    // 細粒度狀態優先：思考中 > 工具中 > 預設 working
-    let statusText;
-    if (s.state === "working" && s.thinking) {
-      statusText = "思考中...";
-    } else if (s.state === "working" && s.tool_calls && s.tool_calls.length > 0) {
-      const lastRunning = [...s.tool_calls].reverse().find(t => t.status === "running");
-      statusText = lastRunning
-        ? `工具: ${lastRunning.title || "tool"}`
-        : "執行中...";
-    } else {
-      const stMap = { working: "執行中...", waiting_for_user: "等待處理", stale: "閒置過久" };
-      statusText = stMap[s.state] || "閒置";
-    }
-    $("capsule-status").textContent = statusText;
-    const stClass = ({ working: "working", waiting_for_user: "waiting_for_user", stale: "stale" })[s.state] || "idle";
-    $("capsule-status").className = "capsule-status " + stClass;
-    $("capsule-time").textContent = s.is_active ? s.formatted_time : "";
-    $("capsule-time").style.display = s.is_active ? "" : "none";
-  } else {
-    $("capsule-project").textContent = APP_NAME;
-    $("capsule-status").textContent = st.session_count > 0 ? "尚無執行中" : "尚無事件";
-    $("capsule-status").className = "capsule-status idle";
-    $("capsule-time").style.display = "none";
-  }
-
-  if (st.session_count > 1) {
-    $("capsule-count").classList.remove("hidden");
-    let h = "";
-    if (st.active_count > 0) {
-      h += `<span class="count-active">${st.active_count}</span>`;
-      h += `<span class="count-sep">/</span>`;
-    }
-    h += `<span class="count-total">${st.session_count}</span>`;
-    $("capsule-count").innerHTML = h;
-  } else $("capsule-count").classList.add("hidden");
-
-  // 顶层设计：capsule 顯示最緊 provider 的剩餘 %（snapshots.__local__ 由 refreshQuotas 填）
+  // capsule 額度 chips（snapshots.__local__ 由 refreshQuotas 填）
   updateCapsuleQuota();
 
   // PUA R112 Capsule Brief: 同步更新 brief 內容（hover 才顯示，但內容隨 state 持續更新）
@@ -2600,45 +2560,43 @@ function showCapsuleBrief(visible) {
 }
 
 // 掃目前採用的 quota source 找「最緊」配額（<100 的最小值），顯示在 capsule
+// 2026-07-17 capsule 額度 chips：每個抓得到 % 的 CLI 一顆「icon+剩餘%」
+// （OpenUsage menubar 概念），取代舊的「最緊 provider 單一徽章」。
+// 舊 #capsule-quota 徽章隱藏保留（click-nav 綁定不拆），chips 進 #capsule-icons。
 function updateCapsuleQuota() {
-  const el = $("capsule-quota");
-  if (!el) return;
-  const selectedQuota = selectQuotaSnapshot(window.__lastQuotaSnapshots || {});
-  const snap = selectedQuota?.snap || null;
-  if (!snap || isQuotaSnapshotStale(snap)) {
-    el.classList.add("hidden");
-    el.classList.remove("warn", "crit");
-    delete el.dataset.provider;
-    return;
+  const badge = $("capsule-quota");
+  if (badge) {
+    badge.classList.add("hidden");
+    badge.classList.remove("warn", "crit");
+    delete badge.dataset.provider;
   }
-  const runners = (snap.runners || []).filter(r => r.ok);
-  let tightest = null; // {name, pct, icon}
-  const ICONS = { claude: "⏱", codex: "🤖", copilot: "⚡", gemini: "💎" };
-  for (const r of runners) {
-    if (!r.ok || !r.raw) continue;
-    const raw = r.raw;
-    // 可能的 %-style 欄位（按 provider 差異）
-    const candidates = [
-      raw.session_5h_remaining, raw.week_7d_remaining,
-      raw.h5_remaining, raw.wk_remaining,
-      raw.remaining_pct,
-    ].filter(v => typeof v === "number" && v >= 0 && v <= 100);
-    if (candidates.length === 0) continue;
-    const min = Math.min(...candidates);
-    if (tightest === null || min < tightest.pct) {
-      tightest = { name: r.name, pct: min, icon: ICONS[r.name] || "·" };
-    }
-  }
-  if (tightest) {
-    el.classList.remove("hidden");
-    el.textContent = `${tightest.icon} ${Math.round(tightest.pct)}%`;
-    el.classList.toggle("warn", tightest.pct < 20);
-    el.classList.toggle("crit", tightest.pct < 10);
-    el.dataset.provider = tightest.name;
-  } else {
-    el.classList.add("hidden");
-    delete el.dataset.provider;
-  }
+  const iconsEl = $("capsule-icons");
+  if (!iconsEl) return;
+  // 優先吃 __live__（6 個本機 CLI 即時 fetch）；__local__ 舊 snapshot 檔只有
+  // claude/codex 兩家，只在 live 缺席時 fallback。
+  const snapshots = window.__lastQuotaSnapshots || {};
+  const snap =
+    (snapshots.__live__ && (snapshots.__live__.runners || []).length > 0)
+      ? snapshots.__live__
+      : (selectQuotaSnapshot(snapshots)?.snap || null);
+  const runners =
+    snap && !isQuotaSnapshotStale(snap) ? (snap.runners || []).filter(r => r.ok && r.raw) : [];
+  iconsEl.innerHTML = runners
+    .map(r => {
+      const raw = r.raw;
+      // 可能的 %-style 欄位（按 provider 差異），取最緊的一窗
+      const candidates = [
+        raw.session_5h_remaining, raw.week_7d_remaining,
+        raw.h5_remaining, raw.wk_remaining,
+        raw.remaining_pct,
+      ].filter(v => typeof v === "number" && v >= 0 && v <= 100);
+      if (candidates.length === 0) return "";
+      const pct = Math.round(Math.min(...candidates));
+      const warn = pct < 20 ? " warn" : "";
+      const label = (r.label || r.name).replace(/^[^\w]*\s/, "");
+      return `<span class="cq-chip${warn}" data-provider-chip="${esc(r.name)}" title="${esc(label)} 剩 ${pct}%">${providerIconHtml(r.name, 12)}<b>${pct}</b></span>`;
+    })
+    .join("");
 }
 
 let capsuleInteractionsBound = false;
@@ -2647,16 +2605,19 @@ let capsuleInteractionsBound = false;
 function bindCapsuleInteractions() {
   if (capsuleInteractionsBound) return;
   capsuleInteractionsBound = true;
-  // #10 Capsule icon 點擊切換 active provider（multi-provider 並行時）
+  // 額度 chip 點擊 → 開 usage 面板並捲到該 CLI 卡
   const icons = document.getElementById("capsule-icons");
   if (icons) {
     icons.addEventListener("click", (e) => {
-      const slot = e.target.closest("[data-provider-slot]");
-      if (!slot) return;
+      const chip = e.target.closest("[data-provider-chip]");
+      if (!chip) return;
       e.stopPropagation();
-      manualActiveProvider = slot.dataset.providerSlot;
-      const st = window.__lastSt;
-      if (st) renderCapsule(st);
+      const prov = chip.dataset.providerChip;
+      showView("usage");
+      setTimeout(() => {
+        const card = document.querySelector(`.uv-card[data-provider="${cssEsc(prov)}"]`);
+        if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 150);
     });
   }
 

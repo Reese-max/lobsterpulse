@@ -1215,7 +1215,23 @@ body.has-bg #view-events-log {
 /* ═══ 徹底隱藏所有 row 左側 icon（大頭貼） ═══ */
 .session-provider-icon { display: none !important; }
 .bot-card-header .provider-icon { display: none !important; }
-.capsule-icons { display: none !important; }
+/* 2026-07-17 產品轉向額度監控：capsule-icons 復活，改裝 per-CLI 額度 chips */
+.capsule-icons { display: flex !important; gap: 5px; min-width: 0; overflow: hidden; }
+.capsule-icons .provider-icon { width: 12px !important; height: 12px !important; }
+/* capsule 額度 chip（cq- 前綴避免撞 bot 卡片既有 .quota-chip） */
+.cq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+  line-height: 1;
+  cursor: pointer;
+}
+.cq-chip:hover b { opacity: 1; text-decoration: underline; }
+.cq-chip b { font-weight: 700; opacity: 0.88; }
+.cq-chip.warn b { color: rgb(255, 80, 80); }
 
 /* ═══════════════════════════════════════════════════════════════
    Claude Design 主題 patch — 從 mockup HTML 提取的 design tokens

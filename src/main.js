@@ -2560,9 +2560,8 @@ function showCapsuleBrief(visible) {
 }
 
 // 掃目前採用的 quota source 找「最緊」配額（<100 的最小值），顯示在 capsule
-// 2026-07-17 capsule 額度 chips：每個抓得到 % 的 CLI 一顆「icon+剩餘%」
-// （OpenUsage menubar 概念），取代舊的「最緊 provider 單一徽章」。
-// 舊 #capsule-quota 徽章隱藏保留（click-nav 綁定不拆），chips 進 #capsule-icons。
+// 2026-07-17 使用者定案：capsule 極簡——品牌章 + app 名，不放任何額度資訊
+// （chips 與最緊徽章都撤），額度細節一律在 hover 展開的 usage 面板看。
 function updateCapsuleQuota() {
   const badge = $("capsule-quota");
   if (badge) {
@@ -2571,36 +2570,7 @@ function updateCapsuleQuota() {
     delete badge.dataset.provider;
   }
   const iconsEl = $("capsule-icons");
-  if (!iconsEl) return;
-  // 優先吃 __live__（6 個本機 CLI 即時 fetch）；__local__ 舊 snapshot 檔只有
-  // claude/codex 兩家，只在 live 缺席時 fallback。
-  const snapshots = window.__lastQuotaSnapshots || {};
-  const snap =
-    (snapshots.__live__ && (snapshots.__live__.runners || []).length > 0)
-      ? snapshots.__live__
-      : (selectQuotaSnapshot(snapshots)?.snap || null);
-  const runners =
-    snap && !isQuotaSnapshotStale(snap) ? (snap.runners || []).filter(r => r.ok && r.raw) : [];
-  iconsEl.innerHTML = runners
-    .map(r => {
-      const raw = r.raw;
-      // 可能的 %-style 欄位（按 provider 差異），取最緊的一窗
-      const candidates = [
-        raw.session_5h_remaining, raw.week_7d_remaining,
-        raw.h5_remaining, raw.wk_remaining,
-        raw.remaining_pct,
-      ].filter(v => typeof v === "number" && v >= 0 && v <= 100);
-      if (candidates.length === 0) return "";
-      const pct = Math.round(Math.min(...candidates));
-      const warn = pct < 20 ? " warn" : "";
-      const label = (r.label || r.name).replace(/^[^\w]*\s/, "");
-      const color = PROVIDER_COLORS[r.name] || PROVIDER_COLORS.unknown;
-      return `<span class="cq-chip${warn}" data-provider-chip="${esc(r.name)}" title="${esc(label)} 剩 ${pct}%" style="color:${color}">${providerIconHtml(r.name, 12)}<b>${pct}</b></span>`;
-    })
-    .join("");
-  // 有 chips 時撤掉「額度監控」標題字（品牌章已足以識別 app），沒資料時留著當佔位
-  const project = $("capsule-project");
-  if (project) project.style.display = iconsEl.innerHTML ? "none" : "";
+  if (iconsEl) iconsEl.innerHTML = "";
 }
 
 let capsuleInteractionsBound = false;
@@ -2609,21 +2579,6 @@ let capsuleInteractionsBound = false;
 function bindCapsuleInteractions() {
   if (capsuleInteractionsBound) return;
   capsuleInteractionsBound = true;
-  // 額度 chip 點擊 → 開 usage 面板並捲到該 CLI 卡
-  const icons = document.getElementById("capsule-icons");
-  if (icons) {
-    icons.addEventListener("click", (e) => {
-      const chip = e.target.closest("[data-provider-chip]");
-      if (!chip) return;
-      e.stopPropagation();
-      const prov = chip.dataset.providerChip;
-      showView("usage");
-      setTimeout(() => {
-        const card = document.querySelector(`.uv-card[data-provider="${cssEsc(prov)}"]`);
-        if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
-      }, 150);
-    });
-  }
 
   const cq = document.getElementById("capsule-quota");
   if (!cq) return;

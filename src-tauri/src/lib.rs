@@ -743,10 +743,14 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
 /// Usage 面板卡片清單：偵測本機實際安裝的 AI CLI（沒安裝的不顯示）。
 #[tauri::command]
 fn detect_installed_clis() -> Vec<quota::InstalledCli> {
+    let has_minimax = ["MINIMAX_API_KEY", "MINIMAX_DIRECT_KEY"]
+        .iter()
+        .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
     quota::detect_installed_clis_with_roots(
         dirs::home_dir().as_deref(),
         std::env::var_os("APPDATA").map(std::path::PathBuf::from).as_deref(),
         std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).as_deref(),
+        has_minimax,
     )
 }
 
@@ -788,16 +792,17 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
     let appdata = std::env::var_os("APPDATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| home.join("AppData").join("Roaming"));
-    let (claude, codex, copilot, grok, devin, agy) = tokio::join!(
+    let (claude, codex, copilot, grok, devin, agy, minimax) = tokio::join!(
         retry_net(|| quota::anthropic::fetch(home)),
         retry_net(|| quota::codex::fetch(home)),
         retry_net(|| quota::copilot::fetch(home)),
         retry_net(|| quota::grok::fetch(home)),
         retry_net(|| quota::devin::fetch(&appdata)),
         retry_net(|| quota::antigravity::fetch(home)),
+        retry_net(quota::minimax::fetch),
     );
     quota::LiveQuotaSnapshot {
-        runners: vec![claude, codex, copilot, grok, devin, agy],
+        runners: vec![claude, codex, copilot, grok, devin, agy, minimax],
         source: "live_api".to_string(),
         updated_at,
     }
@@ -1357,15 +1362,16 @@ mod collect_live_quota_snapshot_tests {
         let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
         assert_eq!(
             out.runners.len(),
-            6,
-            "應有 6 runner (claude/codex/copilot/grok/devin/agy),實際 {}",
+            7,
+            "應有 7 runner (claude/codex/copilot/grok/devin/agy/minimax),實際 {}",
             out.runners.len()
         );
         assert_eq!(out.source, "live_api");
 
         // 只有讀「注入 home」下憑證檔的 runner 能靠空 home 保證失敗；
         // copilot（fallback gh auth token）、devin（%APPDATA%）、agy（Credential
-        // Manager）讀機器全域憑證，本機是否登入不可控，不對其 ok 斷言。
+        // Manager）、minimax（env key）讀機器全域憑證，本機是否登入不可控，
+        // 不對其 ok 斷言。
         let home_scoped = ["claude", "codex", "grok"];
         for runner in out.runners.iter().filter(|r| home_scoped.contains(&r.name.as_str())) {
             assert!(
@@ -1409,6 +1415,11 @@ mod collect_live_quota_snapshot_tests {
         assert!(
             names.contains(&"codex"),
             "應含 codex runner,實際 {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"minimax"),
+            "應含 minimax runner,實際 {:?}",
             names
         );
         assert!(

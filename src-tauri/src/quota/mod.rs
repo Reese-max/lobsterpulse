@@ -10,6 +10,7 @@ pub mod codex;
 pub mod copilot;
 pub mod devin;
 pub mod grok;
+pub mod minimax;
 
 use serde::{Deserialize, Serialize};
 
@@ -44,10 +45,13 @@ pub struct InstalledCli {
 /// 偵測本機安裝了哪些 AI CLI（設定目錄 / 已知安裝路徑存在即視為已安裝）。
 /// 面板卡片以此清單為準——沒安裝的不顯示，不寫死。
 /// `extra_roots`: (APPDATA, LOCALAPPDATA)，None 的 probe 直接跳過。
+/// `has_minimax`: MiniMax 無設定目錄，以「env 有 MINIMAX_API_KEY」為安裝訊號，
+/// caller（Tauri command 殼）查 env 傳入，本函式保持純路徑可測。
 pub fn detect_installed_clis_with_roots(
     home: Option<&std::path::Path>,
     appdata: Option<&std::path::Path>,
     localappdata: Option<&std::path::Path>,
+    has_minimax: bool,
 ) -> Vec<InstalledCli> {
     let h = |rel: &str| home.map(|p| p.join(rel));
     let _ = appdata; // 2026-07-17 使用者裁掉 opencode 卡後暫無 APPDATA probe，參數保留簽名穩定
@@ -62,7 +66,7 @@ pub fn detect_installed_clis_with_roots(
         ("agy", "Antigravity CLI", "#f59e0b", vec![h("bin/agy.ps1")]),
         ("devin", "Devin CLI", "#2ea3ff", vec![l("devin")]),
     ];
-    table
+    let mut out: Vec<InstalledCli> = table
         .into_iter()
         .filter(|(_, _, _, probes)| probes.iter().flatten().any(|p| p.exists()))
         .map(|(id, label, color, _)| InstalledCli {
@@ -70,7 +74,15 @@ pub fn detect_installed_clis_with_roots(
             label: label.to_string(),
             color: color.to_string(),
         })
-        .collect()
+        .collect();
+    if has_minimax {
+        out.push(InstalledCli {
+            id: "minimax".to_string(),
+            label: "MiniMax".to_string(),
+            color: "#ec4899".to_string(),
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -82,11 +94,12 @@ mod detect_tests {
         let tmp = std::env::temp_dir().join(format!("lp-detect-test-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
         std::fs::create_dir_all(tmp.join(".grok")).unwrap();
-        let got = detect_installed_clis_with_roots(Some(&tmp), None, None);
+        let got = detect_installed_clis_with_roots(Some(&tmp), None, None, false);
         let ids: Vec<_> = got.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"claude"), "expected claude in {ids:?}");
         assert!(ids.contains(&"grok"), "expected grok in {ids:?}");
         assert!(!ids.contains(&"codex"), "codex 不該被偵測到: {ids:?}");
+        assert!(!ids.contains(&"minimax"), "has_minimax=false 不該出 minimax: {ids:?}");
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -94,7 +107,18 @@ mod detect_tests {
     fn detect_empty_home_yields_empty() {
         let tmp = std::env::temp_dir().join(format!("lp-detect-empty-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        assert!(detect_installed_clis_with_roots(Some(&tmp), None, None).is_empty());
+        assert!(detect_installed_clis_with_roots(Some(&tmp), None, None, false).is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn detect_minimax_via_env_flag() {
+        let tmp = std::env::temp_dir().join(format!("lp-detect-mm-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let got = detect_installed_clis_with_roots(Some(&tmp), None, None, true);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "minimax");
+        assert_eq!(got[0].label, "MiniMax");
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

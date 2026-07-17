@@ -1216,22 +1216,27 @@ body.has-bg #view-events-log {
 .session-provider-icon { display: none !important; }
 .bot-card-header .provider-icon { display: none !important; }
 /* 2026-07-17 產品轉向額度監控：capsule-icons 復活，改裝 per-CLI 額度 chips */
-.capsule-icons { display: flex !important; gap: 5px; min-width: 0; overflow: hidden; }
-.capsule-icons .provider-icon { width: 12px !important; height: 12px !important; }
-/* capsule 額度 chip（cq- 前綴避免撞 bot 卡片既有 .quota-chip） */
+.capsule-icons { display: flex !important; gap: 4px; min-width: 0; overflow: hidden; }
+.capsule-icons .provider-icon { width: 11px !important; height: 11px !important; }
+/* capsule 額度 chip（cq- 前綴避免撞 bot 卡片既有 .quota-chip）
+   藥丸型：品牌色 12% 底、icon 品牌色、數字用主題文字色保可讀性 */
 .cq-chip {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  font-size: 10.5px;
+  padding: 2px 5px 2px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
   line-height: 1;
   cursor: pointer;
 }
-.cq-chip:hover b { opacity: 1; text-decoration: underline; }
-.cq-chip b { font-weight: 700; opacity: 0.88; }
-.cq-chip.warn b { color: rgb(255, 80, 80); }
+.cq-chip:hover { background: color-mix(in srgb, currentColor 22%, transparent); }
+.cq-chip b { font-weight: 700; color: rgba(255, 255, 255, 0.88); }
+[data-theme="light"] .cq-chip b { color: rgba(30, 35, 40, 0.85); }
+.cq-chip.warn b { color: rgb(220, 38, 38); }
 
 /* ═══════════════════════════════════════════════════════════════
    Claude Design 主題 patch — 從 mockup HTML 提取的 design tokens

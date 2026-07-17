@@ -2594,9 +2594,13 @@ function updateCapsuleQuota() {
       const pct = Math.round(Math.min(...candidates));
       const warn = pct < 20 ? " warn" : "";
       const label = (r.label || r.name).replace(/^[^\w]*\s/, "");
-      return `<span class="cq-chip${warn}" data-provider-chip="${esc(r.name)}" title="${esc(label)} 剩 ${pct}%">${providerIconHtml(r.name, 12)}<b>${pct}</b></span>`;
+      const color = PROVIDER_COLORS[r.name] || PROVIDER_COLORS.unknown;
+      return `<span class="cq-chip${warn}" data-provider-chip="${esc(r.name)}" title="${esc(label)} 剩 ${pct}%" style="color:${color}">${providerIconHtml(r.name, 12)}<b>${pct}</b></span>`;
     })
     .join("");
+  // 有 chips 時撤掉「額度監控」標題字（品牌章已足以識別 app），沒資料時留著當佔位
+  const project = $("capsule-project");
+  if (project) project.style.display = iconsEl.innerHTML ? "none" : "";
 }
 
 let capsuleInteractionsBound = false;

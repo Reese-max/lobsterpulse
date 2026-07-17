@@ -40,6 +40,8 @@
       const fresh0 = byName.get(cli.id);
       const fresh = fresh0 && Object.assign({}, fresh0, { label: cli.label });
       if (fresh && fresh.raw && fresh.ok !== false) {
+        // 後端 last-known-good 替換值帶 raw.stale：照樣顯示但亮 ⏳，且不得寫進 lastGood
+        if (fresh.raw.stale) return Object.assign({}, fresh, { stale: true });
         lastGood.set(cli.id, fresh);
         return fresh;
       }

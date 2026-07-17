@@ -717,20 +717,35 @@ async fn get_live_quota_snapshot() -> quota::LiveQuotaSnapshot {
     }
     let mut snap = collect_live_quota_snapshot_with_home(dirs::home_dir().as_deref()).await;
     if let Ok(mut g) = LIVE_QUOTA_CACHE.lock() {
-        // last-known-good 併入：本輪失敗的 runner 若上一份 cache 有成功值，
-        // 沿用舊值（VPN 間歇斷線時卡片不被洗成空白）。
         if let Some((_, prev)) = g.as_ref() {
-            for r in snap.runners.iter_mut() {
-                if !r.ok {
-                    if let Some(old) = prev.runners.iter().find(|o| o.ok && o.name == r.name) {
-                        *r = old.clone();
-                    }
-                }
-            }
+            merge_last_known_good(&mut snap, prev);
         }
         *g = Some((std::time::Instant::now(), snap.clone()));
     }
     snap
+}
+
+/// last-known-good 併入：本輪失敗的 runner 若上一份 cache 有成功值，沿用舊值
+/// （VPN 間歇斷線時卡片不被洗成空白），並在 raw 打 `stale: true` 標記——前端
+/// 據此亮 ⏳，避免把凍結資料偽裝成新鮮（2026-07-17 審查發現：無標記時 provider
+/// 長期斷線會永遠顯示最後一次成功值且無任何視覺提示）。
+/// 重複替換是冪等的：舊值已含 stale 標記時再插一次不變。
+/// ponytail: 不設過期上限——⏳ + tooltip 已足以提示，真要看資料多舊可看 raw.ts。
+fn merge_last_known_good(
+    snap: &mut quota::LiveQuotaSnapshot,
+    prev: &quota::LiveQuotaSnapshot,
+) {
+    for r in snap.runners.iter_mut() {
+        if !r.ok {
+            if let Some(old) = prev.runners.iter().find(|o| o.ok && o.name == r.name) {
+                let mut sub = old.clone();
+                if let Some(obj) = sub.raw.as_mut().and_then(|v| v.as_object_mut()) {
+                    obj.insert("stale".to_string(), serde_json::Value::Bool(true));
+                }
+                *r = sub;
+            }
+        }
+    }
 }
 
 /// Usage 面板：讀 ~/.claude/stats-cache.json 聚合 today/yesterday/30d token 統計。
@@ -1481,6 +1496,84 @@ mod collect_live_quota_snapshot_tests {
         }
 
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    fn mk_runner(name: &str, ok: bool, raw: Option<serde_json::Value>) -> quota::RunnerQuota {
+        quota::RunnerQuota {
+            name: name.to_string(),
+            label: name.to_string(),
+            color: "#000".to_string(),
+            ok,
+            text: String::new(),
+            raw,
+        }
+    }
+
+    fn mk_snap(runners: Vec<quota::RunnerQuota>) -> quota::LiveQuotaSnapshot {
+        quota::LiveQuotaSnapshot {
+            runners,
+            source: "live_api".to_string(),
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn merge_last_known_good_substitutes_failed_with_stale_marker() {
+        let mut snap = mk_snap(vec![mk_runner("grok", false, None)]);
+        let prev = mk_snap(vec![mk_runner(
+            "grok",
+            true,
+            Some(serde_json::json!({"week_7d_remaining": 45, "ts": "old"})),
+        )]);
+        merge_last_known_good(&mut snap, &prev);
+        let r = &snap.runners[0];
+        assert!(r.ok, "應沿用舊成功值");
+        let raw = r.raw.as_ref().expect("raw 應存在");
+        assert_eq!(raw["week_7d_remaining"], 45, "舊資料應保留");
+        assert_eq!(raw["stale"], true, "替換值必須帶 stale 標記讓前端亮 ⏳");
+        assert_eq!(raw["ts"], "old", "原始抓取時間戳應保留供查資料多舊");
+    }
+
+    #[test]
+    fn merge_last_known_good_leaves_ok_runner_untouched() {
+        let mut snap = mk_snap(vec![mk_runner(
+            "claude",
+            true,
+            Some(serde_json::json!({"session_5h_remaining": 80})),
+        )]);
+        let prev = mk_snap(vec![mk_runner(
+            "claude",
+            true,
+            Some(serde_json::json!({"session_5h_remaining": 99})),
+        )]);
+        merge_last_known_good(&mut snap, &prev);
+        let raw = snap.runners[0].raw.as_ref().unwrap();
+        assert_eq!(raw["session_5h_remaining"], 80, "本輪成功值不得被舊值蓋掉");
+        assert!(raw.get("stale").is_none(), "新鮮值不得帶 stale 標記");
+    }
+
+    #[test]
+    fn merge_last_known_good_no_prev_success_keeps_failure() {
+        let mut snap = mk_snap(vec![mk_runner("devin", false, None)]);
+        let prev = mk_snap(vec![mk_runner("devin", false, None)]);
+        merge_last_known_good(&mut snap, &prev);
+        assert!(!snap.runners[0].ok, "prev 也失敗時本輪失敗要如實呈現");
+    }
+
+    #[test]
+    fn merge_last_known_good_is_idempotent_across_rounds() {
+        // 第 2 輪之後 prev 的值本身已帶 stale 標記，再替換一次結果不變
+        let stale_old = mk_runner(
+            "grok",
+            true,
+            Some(serde_json::json!({"week_7d_remaining": 45, "stale": true})),
+        );
+        let mut snap = mk_snap(vec![mk_runner("grok", false, None)]);
+        let prev = mk_snap(vec![stale_old]);
+        merge_last_known_good(&mut snap, &prev);
+        let raw = snap.runners[0].raw.as_ref().unwrap();
+        assert_eq!(raw["stale"], true);
+        assert_eq!(raw["week_7d_remaining"], 45);
     }
 
     /// 診斷用：對真實 home 打全部 6 個 provider API，印出每個 runner 的實際結果。

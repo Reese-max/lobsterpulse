@@ -147,9 +147,12 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 
     // read_credentials 內含 `gh auth token` 同步子進程——直接在 async fn 裡呼叫
     // 會佔住 tokio worker，gh 若卡住（credential manager 互動等）整個 snapshot
-    // 永久卡死。spawn_blocking 隔離 + 5s 逾時；逾時非網路型錯誤，不觸發 retry_net。
+    // 永久卡死。spawn_blocking 隔離 + 10s 逾時（基線 ~0.8s，但本機 24/7 跑
+    // 自動化，2026-07-17 實測編譯尖峰下 5s 會誤殺）；逾時非網路型錯誤，不觸發 retry_net。
+    // ponytail: 逾時只放棄等待，卡死的 gh 子進程不會被殺——若 gh 永久掛住，每個
+    // TTL 週期會漏一條 blocking 執行緒；真發生時改為顯式 kill 子進程。
     let cred = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(10),
         tokio::task::spawn_blocking(read_credentials),
     )
     .await;
@@ -171,7 +174,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
                 label,
                 color,
                 ok: false,
-                text: "⚠ gh auth token 逾時（>5s），檢查 gh CLI 狀態".to_string(),
+                text: "⚠ gh auth token 逾時或執行失敗（>10s），檢查 gh CLI 狀態".to_string(),
                 raw: None,
             };
         }

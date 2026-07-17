@@ -185,9 +185,6 @@ function providerIconHtml(providerId, size = 16) {
   return `<span class="provider-icon" data-provider="${esc(providerId || "unknown")}" style="width:${size}px;height:${size}px;color:${color}">${svg}</span>`;
 }
 
-// #10 Multi-provider capsule tab —— frontend 覆寫 active_session
-let manualActiveProvider = null;
-
 // ─── R115 規則引擎 UI ───
 // 載入 + render 規則清單, 綁定 toggle / 新增 / 刪除按鈕
 async function initRulesUI() {
@@ -2353,7 +2350,6 @@ let lastState = null;
 function renderStateUnavailable(error) {
   lastState = null;
   lastStructureJson = "__state_unavailable__";
-  manualActiveProvider = null;
   const project = $("capsule-project");
   const status = $("capsule-status");
   const time = $("capsule-time");
@@ -2454,14 +2450,8 @@ function updateTimers(st) {
 }
 
 function renderCapsule(st) {
-  let s = st.active_session;
-
-  // #10 Multi-provider tab：若有 manual override 且該 provider 真的有 active session，切過去
-  if (manualActiveProvider) {
-    const override = st.sessions.find(x => x.provider === manualActiveProvider && x.is_active);
-    if (override) s = override;
-    else manualActiveProvider = null;  // provider 退場 → 還原 auto
-  }
+  // manual provider override（#10 multi-provider tab）已隨 capsule chips 一併退役
+  const s = st.active_session;
   window.__lastSt = st;  // 給 click handler 用
 
   // 2026-07-17 產品轉向額度監控：capsule 不再顯示 session 舊資訊

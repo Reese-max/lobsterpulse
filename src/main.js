@@ -27,6 +27,7 @@ PROVIDER_ICONS.grok = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor
 PROVIDER_ICONS.agy = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7.5" r="3.2"/><path d="M4.5 19c2.2-2.8 4.7-4.2 7.5-4.2s5.3 1.4 7.5 4.2"/></svg>`;
 PROVIDER_ICONS.devin = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4v16"/><path d="M8 4h4a8 8 0 010 16H8"/><circle cx="11.5" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>`;
 PROVIDER_ICONS.minimax = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17V7l4.5 6L12 7l4.5 6L21 7v10"/></svg>`;
+PROVIDER_ICONS.openrouter = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 11l10-4"/><path d="M7 13l10 4"/></svg>`;
 PROVIDER_ICONS.unknown = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.8 2.8 0 015 1.8c0 1.9-2.5 2.1-2.5 3.7"/><circle cx="12" cy="17.5" r=".6" fill="currentColor"/></svg>`;
 
 const PROVIDER_COLORS = {
@@ -49,6 +50,7 @@ const PROVIDER_COLORS = {
   agy: "#f59e0b",
   devin: "#2ea3ff",
   minimax: "#ec4899",
+  openrouter: "#6366f1",
   unknown: "#888888",
 };
 

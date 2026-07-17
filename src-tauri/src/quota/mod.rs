@@ -11,6 +11,7 @@ pub mod copilot;
 pub mod devin;
 pub mod grok;
 pub mod minimax;
+pub mod openrouter;
 
 use serde::{Deserialize, Serialize};
 
@@ -45,13 +46,14 @@ pub struct InstalledCli {
 /// 偵測本機安裝了哪些 AI CLI（設定目錄 / 已知安裝路徑存在即視為已安裝）。
 /// 面板卡片以此清單為準——沒安裝的不顯示，不寫死。
 /// `extra_roots`: (APPDATA, LOCALAPPDATA)，None 的 probe 直接跳過。
-/// `has_minimax`: MiniMax 無設定目錄，以「env 有 MINIMAX_API_KEY」為安裝訊號，
-/// caller（Tauri command 殼）查 env 傳入，本函式保持純路徑可測。
+/// `has_minimax` / `has_openrouter`: 這兩家無設定目錄，以「env 有對應 API key」
+/// 為安裝訊號，caller（Tauri command 殼）查 env 傳入，本函式保持純路徑可測。
 pub fn detect_installed_clis_with_roots(
     home: Option<&std::path::Path>,
     appdata: Option<&std::path::Path>,
     localappdata: Option<&std::path::Path>,
     has_minimax: bool,
+    has_openrouter: bool,
 ) -> Vec<InstalledCli> {
     let h = |rel: &str| home.map(|p| p.join(rel));
     let _ = appdata; // 2026-07-17 使用者裁掉 opencode 卡後暫無 APPDATA probe，參數保留簽名穩定
@@ -82,6 +84,13 @@ pub fn detect_installed_clis_with_roots(
             color: "#ec4899".to_string(),
         });
     }
+    if has_openrouter {
+        out.push(InstalledCli {
+            id: "openrouter".to_string(),
+            label: "OpenRouter".to_string(),
+            color: "#6366f1".to_string(),
+        });
+    }
     out
 }
 
@@ -94,7 +103,7 @@ mod detect_tests {
         let tmp = std::env::temp_dir().join(format!("lp-detect-test-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
         std::fs::create_dir_all(tmp.join(".grok")).unwrap();
-        let got = detect_installed_clis_with_roots(Some(&tmp), None, None, false);
+        let got = detect_installed_clis_with_roots(Some(&tmp), None, None, false, false);
         let ids: Vec<_> = got.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"claude"), "expected claude in {ids:?}");
         assert!(ids.contains(&"grok"), "expected grok in {ids:?}");
@@ -107,7 +116,7 @@ mod detect_tests {
     fn detect_empty_home_yields_empty() {
         let tmp = std::env::temp_dir().join(format!("lp-detect-empty-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        assert!(detect_installed_clis_with_roots(Some(&tmp), None, None, false).is_empty());
+        assert!(detect_installed_clis_with_roots(Some(&tmp), None, None, false, false).is_empty());
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -115,10 +124,21 @@ mod detect_tests {
     fn detect_minimax_via_env_flag() {
         let tmp = std::env::temp_dir().join(format!("lp-detect-mm-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let got = detect_installed_clis_with_roots(Some(&tmp), None, None, true);
+        let got = detect_installed_clis_with_roots(Some(&tmp), None, None, true, false);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].id, "minimax");
         assert_eq!(got[0].label, "MiniMax");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn detect_openrouter_via_env_flag() {
+        let tmp = std::env::temp_dir().join(format!("lp-detect-or-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let got = detect_installed_clis_with_roots(Some(&tmp), None, None, false, true);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "openrouter");
+        assert_eq!(got[0].label, "OpenRouter");
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

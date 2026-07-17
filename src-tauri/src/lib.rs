@@ -761,11 +761,14 @@ fn detect_installed_clis() -> Vec<quota::InstalledCli> {
     let has_minimax = ["MINIMAX_API_KEY", "MINIMAX_DIRECT_KEY"]
         .iter()
         .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
+    let has_openrouter = std::env::vars()
+        .any(|(k, v)| k.starts_with("OPENROUTER_API_KEY") && !v.trim().is_empty());
     quota::detect_installed_clis_with_roots(
         dirs::home_dir().as_deref(),
         std::env::var_os("APPDATA").map(std::path::PathBuf::from).as_deref(),
         std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).as_deref(),
         has_minimax,
+        has_openrouter,
     )
 }
 
@@ -807,7 +810,7 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
     let appdata = std::env::var_os("APPDATA")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| home.join("AppData").join("Roaming"));
-    let (claude, codex, copilot, grok, devin, agy, minimax) = tokio::join!(
+    let (claude, codex, copilot, grok, devin, agy, minimax, openrouter) = tokio::join!(
         retry_net(|| quota::anthropic::fetch(home)),
         retry_net(|| quota::codex::fetch(home)),
         retry_net(|| quota::copilot::fetch(home)),
@@ -815,9 +818,10 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
         retry_net(|| quota::devin::fetch(&appdata)),
         retry_net(|| quota::antigravity::fetch(home)),
         retry_net(quota::minimax::fetch),
+        retry_net(quota::openrouter::fetch),
     );
     quota::LiveQuotaSnapshot {
-        runners: vec![claude, codex, copilot, grok, devin, agy, minimax],
+        runners: vec![claude, codex, copilot, grok, devin, agy, minimax, openrouter],
         source: "live_api".to_string(),
         updated_at,
     }
@@ -1377,8 +1381,8 @@ mod collect_live_quota_snapshot_tests {
         let out = block_on(collect_live_quota_snapshot_with_home(Some(&home)));
         assert_eq!(
             out.runners.len(),
-            7,
-            "應有 7 runner (claude/codex/copilot/grok/devin/agy/minimax),實際 {}",
+            8,
+            "應有 8 runner (claude/codex/copilot/grok/devin/agy/minimax/openrouter),實際 {}",
             out.runners.len()
         );
         assert_eq!(out.source, "live_api");
@@ -1435,6 +1439,11 @@ mod collect_live_quota_snapshot_tests {
         assert!(
             names.contains(&"minimax"),
             "應含 minimax runner,實際 {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"openrouter"),
+            "應含 openrouter runner,實際 {:?}",
             names
         );
         assert!(

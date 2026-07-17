@@ -41,31 +41,6 @@ fn parse_credits(body: &serde_json::Value) -> Option<(f64, f64)> {
     Some(((credits - usage).max(0.0), credits))
 }
 
-/// 聚合多帳號：(總剩餘%, 最低帳號標籤, 最低帳號%, 總剩餘美元)。
-/// rows: (label, 剩餘美元, 總額美元)。總額<=0 的帳號不參與 %。
-type Aggregate = (Option<i64>, Option<(String, i64)>, f64);
-fn aggregate(rows: &[(String, f64, f64)]) -> Aggregate {
-    let mut sum_left = 0.0;
-    let mut sum_total = 0.0;
-    let mut lowest: Option<(String, i64)> = None;
-    for (label, left, total) in rows {
-        sum_left += left;
-        if *total > 0.0 {
-            sum_total += total;
-            let pct = ((left / total) * 100.0).round().clamp(0.0, 100.0) as i64;
-            if lowest.as_ref().map(|(_, p)| pct < *p).unwrap_or(true) {
-                lowest = Some((label.clone(), pct));
-            }
-        }
-    }
-    let total_pct = if sum_total > 0.0 {
-        Some(((sum_left / sum_total) * 100.0).round().clamp(0.0, 100.0) as i64)
-    } else {
-        None
-    };
-    (total_pct, lowest, sum_left)
-}
-
 async fn fetch_one(
     client: reqwest::Client,
     label: String,
@@ -137,26 +112,22 @@ pub async fn fetch() -> RunnerQuota {
         };
     }
 
-    let (total_pct, lowest, dollars_left) = aggregate(&rows);
-    let plan = format!("{} keys · ${:.0} left", rows.len(), dollars_left);
-    let low_disp = lowest
-        .as_ref()
-        .map(|(l, p)| format!(" · Low {l} {p}%"))
-        .unwrap_or_default();
-    let pct_disp = total_pct.map(|p| format!("{p}%")).unwrap_or_else(|| "--".to_string());
-    let mut text = format!("⏱ Credits {pct_disp}{low_disp}\n{plan}");
+    // 2026-07-17 使用者反饋：跨帳號加總 % 與「最低帳號」都是無效資訊（帳號額度
+    // 大小差 60 倍），卡片改為 per-key 明細（前端據 raw.accounts 一把 key 一條
+    // bar，右側顯示 $剩餘/$總額），這裡只留總剩餘美元當副標摘要。
+    let dollars_left: f64 = rows.iter().map(|(_, left, _)| left).sum();
+    let plan = format!(
+        "{} key{} · ${dollars_left:.0} left",
+        rows.len(),
+        if rows.len() == 1 { "" } else { "s" }
+    );
+    let mut text = format!("⏱ {plan}");
     if !errors.is_empty() {
         text.push_str(&format!("\n⚠ {} key 失敗", errors.len()));
     }
 
-    // 只有 1 把 key 時 Low bar 沒資訊量，抑制
-    let low_bar = if rows.len() > 1 { lowest.clone() } else { None };
     let raw = serde_json::json!({
         "ok": true,
-        "h5_remaining": total_pct,
-        "session_label": "Credits",
-        "wk_remaining": low_bar.as_ref().map(|(_, p)| *p),
-        "weekly_label": low_bar.as_ref().map(|(l, _)| format!("Low {l}")),
         "plan": plan,
         "accounts": rows.iter().map(|(l, left, total)| serde_json::json!({
             "key": l, "left_usd": left, "total_usd": total,
@@ -200,40 +171,6 @@ mod tests {
     fn parse_credits_missing_fields_returns_none() {
         assert!(parse_credits(&serde_json::json!({"data":{}})).is_none());
         assert!(parse_credits(&serde_json::json!({"error":"x"})).is_none());
-    }
-
-    #[test]
-    fn aggregate_real_five_accounts() {
-        // 2026-07-17 本機五帳號實測值
-        let rows = vec![
-            ("A".to_string(), 288.27, 610.0),
-            ("B".to_string(), 9.18, 10.0),
-            ("C".to_string(), 10.92, 30.0),
-            ("D".to_string(), 9.69, 10.0),
-            ("E".to_string(), 0.0, 10.0),
-        ];
-        let (total_pct, lowest, dollars) = aggregate(&rows);
-        assert_eq!(total_pct, Some(47), "總剩餘 318.06/670 = 47.47% → 47");
-        assert_eq!(lowest, Some(("E".to_string(), 0)), "最低應是透支的 E");
-        assert!((dollars - 318.06).abs() < 0.01);
-    }
-
-    #[test]
-    fn aggregate_skips_zero_total_accounts_in_pct() {
-        let rows = vec![
-            ("A".to_string(), 5.0, 10.0),
-            ("Z".to_string(), 0.0, 0.0), // credits 0，不參與 %
-        ];
-        let (total_pct, lowest, _) = aggregate(&rows);
-        assert_eq!(total_pct, Some(50));
-        assert_eq!(lowest, Some(("A".to_string(), 50)), "credits 0 的帳號不該成為 Low");
-    }
-
-    #[test]
-    fn aggregate_empty_rows_yields_none() {
-        let (total_pct, lowest, dollars) = aggregate(&[]);
-        assert!(total_pct.is_none() && lowest.is_none());
-        assert_eq!(dollars, 0.0);
     }
 
     #[test]

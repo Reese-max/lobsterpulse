@@ -51,18 +51,24 @@
     });
   }
 
-  function barRow(label, remainPct, resetText, color) {
+  function barRow(label, remainPct, resetText, color, metaRight) {
     const warn = remainPct !== null && remainPct < 20;
+    const right = metaRight ? esc(metaRight) : resetText ? "Resets in " + esc(resetText) : "No data";
     if (remainPct === null) {
       return `<div class="uv-sec">${esc(label)}</div>
         <div class="uv-bar uv-bar-empty"></div>
-        <div class="uv-meta"><span>—</span><span>No data</span></div>`;
+        <div class="uv-meta"><span>—</span><span>${right}</span></div>`;
     }
     // 進度條用各家品牌色（warn 紅色由 class 蓋 inline，不另設）
     const fill = warn ? "" : `;background:${esc(color || "#3d9bff")}`;
     return `<div class="uv-sec">${esc(label)}</div>
       <div class="uv-bar"><div class="uv-fill${warn ? " uv-warn" : ""}" style="width:${remainPct}%${fill}"></div></div>
-      <div class="uv-meta"><span>${remainPct}% left${warn ? " 🔥" : ""}</span><span>${resetText ? "Resets in " + esc(resetText) : "No data"}</span></div>`;
+      <div class="uv-meta"><span>${remainPct}% left${warn ? " 🔥" : ""}</span><span>${right}</span></div>`;
+  }
+
+  function fmtUsd(v) {
+    if (typeof v !== "number" || !Number.isFinite(v)) return "—";
+    return "$" + (v >= 100 ? Math.round(v) : v.toFixed(2));
   }
 
   function detailRows(stats) {
@@ -82,15 +88,27 @@
     const card = window.QuotaCards.normalizeRunnerCard(runner);
     const name = runner.name || "";
     const label = (runner.label || name).replace(/^[^\w]*\s/, ""); // 去掉開頭 emoji
-    const plan = (card.kind !== "none" && card.subtitle) ? `<span class="uv-plan">${esc(card.subtitle)}</span>` : "";
+    // per-key 明細卡（如 openrouter）沒有標準 % 欄位，副標直接取 raw.plan
+    const subtitle = (card.kind !== "none" && card.subtitle) || (runner.raw && runner.raw.plan) || "";
+    const plan = subtitle ? `<span class="uv-plan">${esc(subtitle)}</span>` : "";
     const failed = runner.ok === false ? `<span class="uv-err" title="runner 回報失敗">⚠</span>` : "";
     const stale = runner.stale ? `<span class="uv-err uv-stale" title="本輪抓取失敗，顯示上次成功值">⏳</span>` : "";
 
     // 條色與 icon 同源：PROVIDER_COLORS 優先（深色底可讀性已調過），退回 runner.color
     const barColor =
       (typeof PROVIDER_COLORS !== "undefined" && PROVIDER_COLORS[name]) || runner.color;
+    const accounts = runner.raw && Array.isArray(runner.raw.accounts) ? runner.raw.accounts : null;
     let body;
-    if (card.kind === "full" || card.kind === "simple") {
+    if (accounts && accounts.length > 0) {
+      // per-key 明細（openrouter 多帳號）：一把 key 一條 bar，右側顯示 $剩餘/$總額
+      // （跨帳號加總 % 沒資訊量——帳號額度大小差距可達數十倍）
+      body = accounts
+        .map((a) => {
+          const pct = a.total_usd > 0 ? Math.round((a.left_usd / a.total_usd) * 100) : 0;
+          return barRow(`Key ${a.key}`, pct, null, barColor, `${fmtUsd(a.left_usd)} / ${fmtUsd(a.total_usd)}`);
+        })
+        .join("");
+    } else if (card.kind === "full" || card.kind === "simple") {
       body = card.windows.map((w) => barRow(w.label, w.remainPct, w.resetText, barColor)).join("");
     } else {
       // 無配額 %：保留骨架列，對齊 OpenUsage 的 No data 樣式

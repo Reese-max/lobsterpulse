@@ -22,6 +22,10 @@ PROVIDER_ICONS.irisx_bot = `<svg viewBox="0 0 24 24" fill="none" stroke="current
 PROVIDER_ICONS.grokx = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18L18 4"/><path d="M9 4h9v9"/><path d="M5 7l12 10"/></svg>`;
 PROVIDER_ICONS.lpbot = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-6 4 12 2-6h6"/><circle cx="12" cy="12" r="10"/></svg>`;
 PROVIDER_ICONS.mimo = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18V6l8 6 8-6v12"/><path d="M4 6l8 12L20 6"/></svg>`;
+// 本機 CLI 卡（usage 面板）：grok=xAI 式不對稱 X、agy=懸浮球+地平弧（反重力）、devin=D 字+節點眼
+PROVIDER_ICONS.grok = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5l14 14"/><path d="M19 5l-5.6 5.6"/><path d="M10.6 13.4L5 19"/></svg>`;
+PROVIDER_ICONS.agy = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7.5" r="3.2"/><path d="M4.5 19c2.2-2.8 4.7-4.2 7.5-4.2s5.3 1.4 7.5 4.2"/></svg>`;
+PROVIDER_ICONS.devin = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4v16"/><path d="M8 4h4a8 8 0 010 16H8"/><circle cx="11.5" cy="12" r="1.3" fill="currentColor" stroke="none"/></svg>`;
 PROVIDER_ICONS.unknown = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.8 2.8 0 015 1.8c0 1.9-2.5 2.1-2.5 3.7"/><circle cx="12" cy="17.5" r=".6" fill="currentColor"/></svg>`;
 
 const PROVIDER_COLORS = {
@@ -39,6 +43,10 @@ const PROVIDER_COLORS = {
   grokx: "#111827",
   lpbot: "#ef4444",
   mimo: "#f59e0b",
+  // 本機 CLI 卡（usage 面板）—— grok 品牌黑在深色底看不見，改亮灰
+  grok: "#e8eaed",
+  agy: "#f59e0b",
+  devin: "#2ea3ff",
   unknown: "#888888",
 };
 

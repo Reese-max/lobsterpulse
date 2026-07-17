@@ -36,6 +36,16 @@
 .uv-name { font-size: 13px; font-weight: 700; color: rgba(255, 255, 255, 0.92); }
 .uv-plan { font-size: 11px; color: rgba(255, 255, 255, 0.45); margin-left: 2px; }
 .uv-err { font-size: 11px; }
+/* stale（顯示上次成功值）是輔助資訊，emoji 原色太搶眼——去彩度壓灰 */
+.uv-stale { filter: grayscale(1) brightness(1.4); opacity: 0.7; }
+
+/* 卡頭 icon 加淡色 chip 底（同 icon 色 13% 透明度），視覺錨點更清楚 */
+.uv-head .provider-icon {
+  box-sizing: content-box;
+  padding: 3px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+}
 
 .uv-sec {
   font-size: 12px;

@@ -49,15 +49,17 @@
     });
   }
 
-  function barRow(label, remainPct, resetText) {
+  function barRow(label, remainPct, resetText, color) {
     const warn = remainPct !== null && remainPct < 20;
     if (remainPct === null) {
       return `<div class="uv-sec">${esc(label)}</div>
         <div class="uv-bar uv-bar-empty"></div>
         <div class="uv-meta"><span>—</span><span>No data</span></div>`;
     }
+    // 進度條用各家品牌色（warn 紅色由 class 蓋 inline，不另設）
+    const fill = warn ? "" : `;background:${esc(color || "#3d9bff")}`;
     return `<div class="uv-sec">${esc(label)}</div>
-      <div class="uv-bar"><div class="uv-fill${warn ? " uv-warn" : ""}" style="width:${remainPct}%"></div></div>
+      <div class="uv-bar"><div class="uv-fill${warn ? " uv-warn" : ""}" style="width:${remainPct}%${fill}"></div></div>
       <div class="uv-meta"><span>${remainPct}% left${warn ? " 🔥" : ""}</span><span>${resetText ? "Resets in " + esc(resetText) : "No data"}</span></div>`;
   }
 
@@ -80,13 +82,16 @@
     const label = (runner.label || name).replace(/^[^\w]*\s/, ""); // 去掉開頭 emoji
     const plan = (card.kind !== "none" && card.subtitle) ? `<span class="uv-plan">${esc(card.subtitle)}</span>` : "";
     const failed = runner.ok === false ? `<span class="uv-err" title="runner 回報失敗">⚠</span>` : "";
-    const stale = runner.stale ? `<span class="uv-err" title="本輪抓取失敗，顯示上次成功值">⏳</span>` : "";
+    const stale = runner.stale ? `<span class="uv-err uv-stale" title="本輪抓取失敗，顯示上次成功值">⏳</span>` : "";
 
+    // 條色與 icon 同源：PROVIDER_COLORS 優先（深色底可讀性已調過），退回 runner.color
+    const barColor =
+      (typeof PROVIDER_COLORS !== "undefined" && PROVIDER_COLORS[name]) || runner.color;
     let body;
     if (card.kind === "full" || card.kind === "simple") {
-      body = card.windows.map((w) => barRow(w.label, w.remainPct, w.resetText)).join("");
+      body = card.windows.map((w) => barRow(w.label, w.remainPct, w.resetText, barColor)).join("");
     } else {
-      // 無配額 %（codex/copilot/gemini 現況）：保留骨架列，對齊 OpenUsage 的 No data 樣式
+      // 無配額 %：保留骨架列，對齊 OpenUsage 的 No data 樣式
       body = barRow("Session", null, null) + barRow("Weekly", null, null);
     }
 

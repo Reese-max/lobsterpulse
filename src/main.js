@@ -2553,6 +2553,8 @@ function showTaskToast(provider, text) {
   if (now - (lpToastLast.get(key) || 0) < 5000) return;
   lpToastLast.set(key, now);
   const label = PROVIDER_LABEL?.[provider] || provider;
+  // --capsule-w 只被 brief 設在自己身上（sibling 繼承不到），toast 自帶一份
+  el.style.setProperty("--capsule-w", `${appConfig?.appearance?.capsule_width || DEFAULT_CAPSULE_W}px`);
   el.innerHTML = `${providerIconHtml(provider, 14)}<span class="lp-toast-label">${esc(label)}</span><span class="lp-toast-text">${esc(text)}</span>`;
   el.classList.remove("hidden");
   el.setAttribute("aria-hidden", "false");

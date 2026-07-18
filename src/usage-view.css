@@ -134,3 +134,22 @@
 
 /* 淺色主題最低限度適配：卡片維持深色（OpenUsage 樣式本體），僅外框透明度微調 */
 body.light .uv-card { background: rgba(30, 38, 48, 0.88); }
+
+/* 最近完成清單（uv-recent）——與 uv-card 同底，背景圖上仍可讀 */
+#uv-recent:not(:empty) {
+  background: rgba(28, 36, 44, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  padding: 8px 12px;
+  margin-top: 8px;
+}
+.uv-recent-head { margin-top: 0; }
+.uv-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 2px;
+  font-size: calc(12px * var(--scale, 1));
+}
+.uv-recent-name { font-weight: 500; }
+.uv-recent-time { margin-left: auto; color: var(--text-dim); font-size: calc(11px * var(--scale, 1)); }

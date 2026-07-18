@@ -78,7 +78,28 @@
     }, base);
   }
 
-  const api = { parseResetDuration, normalizeRunnerCard };
+  // 「最近完成」清單：hook 事件 → 完成紀錄列。
+  // 只收 Stop/SessionEnd、provider 限 allowedIds（本機 CLI，OpenAB bot 24/7 loop
+  // 會洗版所以不進來）、同 provider+session 去重留最新，時間新→舊取前 8 筆。
+  function recentCompletions(events, allowedIds, limit) {
+    const cap = typeof limit === "number" && limit > 0 ? limit : 8;
+    const allowed = new Set(allowedIds || []);
+    const bySession = new Map(); // provider|session_id -> {provider, ts}
+    for (const e of events || []) {
+      if (!e || (e.event_name !== "Stop" && e.event_name !== "SessionEnd")) continue;
+      if (!allowed.has(e.provider)) continue;
+      const ts = Date.parse(e.timestamp);
+      if (!Number.isFinite(ts)) continue;
+      const key = e.provider + "|" + (e.session_id || "");
+      const prev = bySession.get(key);
+      if (!prev || ts > prev.ts) bySession.set(key, { provider: e.provider, ts });
+    }
+    return Array.from(bySession.values())
+      .sort(function (a, b) { return b.ts - a.ts; })
+      .slice(0, cap);
+  }
+
+  const api = { parseResetDuration, normalizeRunnerCard, recentCompletions };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.QuotaCards = api;
 })(typeof window !== "undefined" ? window : globalThis);

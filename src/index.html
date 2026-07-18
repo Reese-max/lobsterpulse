@@ -52,9 +52,14 @@
       <div class="capsule-brief-meta" id="capsule-brief-meta"></div>
     </div>
 
+    <!-- 完成/等待即時 toast（task-completed / task-waiting 事件驅動，4.5s 自動收）
+         normal flow 元素：capsule 收合時 fitWindow 才量得到高度 -->
+    <div id="lp-toast" class="lp-toast hidden" aria-hidden="true"></div>
+
     <!-- Usage view（OpenUsage 風格額度面板，膠囊 hover 的主視圖）-->
     <div id="view-usage" class="hidden">
       <div id="usage-cards"></div>
+      <div id="uv-recent"></div>
       <div class="uv-footer">
         <span id="uv-next-update">Next update in 60s</span>
         <span class="uv-footer-btns">

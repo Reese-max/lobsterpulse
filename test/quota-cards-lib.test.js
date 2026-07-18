@@ -116,3 +116,35 @@ test("部分窗（只有 session alias）-> full 卡單窗", () => {
   assert.strictEqual(c.windows[0].label, "Session");
   assert.strictEqual(c.pct, 40);
 });
+
+test("recentCompletions 過濾/去重/排序/上限", () => {
+  const { recentCompletions } = require("../src/quota-cards-lib.js");
+  const ev = (name, provider, sid, iso) => ({ event_name: name, provider, session_id: sid, timestamp: iso });
+  const events = [
+    ev("Stop", "claude", "s1", "2026-07-19T10:00:00Z"),
+    ev("Stop", "claude", "s1", "2026-07-19T10:05:00Z"),   // 同 session 較新 → 取這筆
+    ev("SessionEnd", "codex", "s2", "2026-07-19T10:03:00Z"),
+    ev("UserPromptSubmit", "claude", "s3", "2026-07-19T10:09:00Z"), // 非完成事件 → 濾掉
+    ev("Stop", "irisx_bot", "s4", "2026-07-19T10:08:00Z"),          // bot 不在白名單 → 濾掉
+    ev("Stop", "copilot", "s5", "bad-timestamp"),                    // 壞時間 → 濾掉
+  ];
+  const rows = recentCompletions(events, ["claude", "codex", "copilot"]);
+  assert.deepStrictEqual(
+    rows.map((r) => [r.provider, r.ts]),
+    [
+      ["claude", Date.parse("2026-07-19T10:05:00Z")],
+      ["codex", Date.parse("2026-07-19T10:03:00Z")],
+    ]
+  );
+});
+
+test("recentCompletions 上限 8 筆與空輸入", () => {
+  const { recentCompletions } = require("../src/quota-cards-lib.js");
+  const many = Array.from({ length: 12 }, (_, i) => ({
+    event_name: "Stop", provider: "claude", session_id: "s" + i,
+    timestamp: new Date(Date.UTC(2026, 6, 19, 10, i)).toISOString(),
+  }));
+  assert.strictEqual(recentCompletions(many, ["claude"]).length, 8);
+  assert.deepStrictEqual(recentCompletions(null, ["claude"]), []);
+  assert.deepStrictEqual(recentCompletions(many, null), []);
+});

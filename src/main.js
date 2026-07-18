@@ -474,6 +474,8 @@ async function init() {
           windowMs: 5000,
         });
       }
+      showTaskToast(provider, "✅ 完成");
+      window.UsageView?.render?.(); // 「最近完成」清單即時插入
     });
     invoke("plugin:event|listen", { event: "task-completed", target: { kind: "Any" }, handler: soundCb }).catch(() => {});
 
@@ -488,6 +490,7 @@ async function init() {
           windowMs: 5000,
         });
       }
+      showTaskToast(provider, "⏸ 等待處理");
     });
     invoke("plugin:event|listen", { event: "task-waiting", target: { kind: "Any" }, handler: waitingCb }).catch(() => {});
   }, 2000);
@@ -2539,6 +2542,29 @@ function updateCapsuleBrief(s) {
 }
 
 // PUA R112: toggle Capsule Brief 顯示（hover 觸發）
+// ─── 完成/等待即時 toast（app 內小卡，Windows toast 之外的介面內提示）───
+let lpToastTimer = null;
+const lpToastLast = new Map(); // "provider|text" -> 上次顯示 ts（5s 去重防洗版）
+function showTaskToast(provider, text) {
+  const el = $("lp-toast");
+  if (!el) return;
+  const key = `${provider}|${text}`;
+  const now = Date.now();
+  if (now - (lpToastLast.get(key) || 0) < 5000) return;
+  lpToastLast.set(key, now);
+  const label = PROVIDER_LABEL?.[provider] || provider;
+  el.innerHTML = `${providerIconHtml(provider, 14)}<span class="lp-toast-label">${esc(label)}</span><span class="lp-toast-text">${esc(text)}</span>`;
+  el.classList.remove("hidden");
+  el.setAttribute("aria-hidden", "false");
+  fitWindow();
+  clearTimeout(lpToastTimer);
+  lpToastTimer = setTimeout(() => {
+    el.classList.add("hidden");
+    el.setAttribute("aria-hidden", "true");
+    fitWindow();
+  }, 4500);
+}
+
 function showCapsuleBrief(visible) {
   const el = $("capsule-brief");
   if (!el) return;

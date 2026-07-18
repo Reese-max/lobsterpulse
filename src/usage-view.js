@@ -133,20 +133,42 @@
     </div>`;
   }
 
+  // 「最近完成」清單：hook 事件過濾出本機 CLI 的 Stop/SessionEnd（記憶體 buffer
+  // 最近 50 筆，app 重啟即歸零）。OpenAB bot 24/7 loop 會洗版，不列入。
+  function renderRecent(events, clis) {
+    const root = document.getElementById("uv-recent");
+    if (!root) return;
+    const byId = new Map(clis.map((c) => [c.id, c.label]));
+    const rows = window.QuotaCards.recentCompletions(events, clis.map((c) => c.id));
+    if (rows.length === 0) { root.innerHTML = ""; return; }
+    const now = Date.now();
+    root.innerHTML =
+      `<div class="uv-sec uv-recent-head">最近完成</div>` +
+      rows.map((r) => {
+        const label = byId.get(r.provider) || r.provider;
+        const ago = formatRelativeTime(Math.max(0, Math.round((now - r.ts) / 1000)));
+        return `<div class="uv-recent-row">${providerIconHtml(r.provider, 13)}
+          <span class="uv-recent-name">${esc(label)}</span>
+          <span class="uv-recent-time">${esc(ago)}</span></div>`;
+      }).join("");
+  }
+
   async function render() {
     const root = document.getElementById("usage-cards");
     if (!root) return;
     if (renderInFlight) return;
     renderInFlight = true;
     try {
-      const [cliRes, liveRes, statsRes] = await Promise.allSettled([
+      const [cliRes, liveRes, statsRes, evRes] = await Promise.allSettled([
         invoke("detect_installed_clis"),
         invoke("get_live_quota_snapshot"),
         invoke("get_claude_daily_stats"),
+        invoke("get_recent_events"),
       ]);
       const clis = cliRes.status === "fulfilled" ? (cliRes.value || []) : [];
       const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
       const dailyStats = statsRes.status === "fulfilled" ? statsRes.value : null;
+      const events = evRes.status === "fulfilled" ? (evRes.value || []) : [];
 
       const runners = cliRunners(clis, liveSnap);
       if (runners.length === 0) {
@@ -155,6 +177,7 @@
         root.innerHTML = runners.map((r) => renderCard(r, dailyStats)).join("");
         drawSparks(runners.map((r) => r.name));
       }
+      renderRecent(events, clis);
       nextUpdateAt = Date.now() + REFRESH_MS;
       updateCountdown();
     } catch (e) {

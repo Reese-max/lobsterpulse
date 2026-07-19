@@ -2555,6 +2555,7 @@ function showTaskToast(provider, text) {
   const label = PROVIDER_LABEL?.[provider] || provider;
   // --capsule-w 只被 brief 設在自己身上（sibling 繼承不到），toast 自帶一份
   el.style.setProperty("--capsule-w", `${appConfig?.appearance?.capsule_width || DEFAULT_CAPSULE_W}px`);
+  el.dataset.provider = provider;
   el.innerHTML = `${providerIconHtml(provider, 14)}<span class="lp-toast-label">${esc(label)}</span><span class="lp-toast-text">${esc(text)}</span>`;
   el.classList.remove("hidden");
   el.setAttribute("aria-hidden", "false");
@@ -2566,6 +2567,18 @@ function showTaskToast(provider, text) {
     fitWindow();
   }, 4500);
 }
+
+// 點 toast → 跳 sessions 視窗過濾該 provider（與完成清單列同模式），並收掉 toast
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("#lp-toast");
+  if (!t || t.classList.contains("hidden") || !t.dataset.provider) return;
+  sessionFilter = t.dataset.provider;
+  if (lastState) renderSessions(lastState);
+  clearTimeout(lpToastTimer);
+  t.classList.add("hidden");
+  t.setAttribute("aria-hidden", "true");
+  showView("expanded");
+});
 
 function showCapsuleBrief(visible) {
   const el = $("capsule-brief");

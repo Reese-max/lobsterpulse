@@ -121,6 +121,7 @@ html, body {
   font-size: calc(12px * var(--scale));
   animation: lp-toast-in 0.18s ease;
 }
+.lp-toast { cursor: pointer; }
 .lp-toast-label { font-weight: 600; }
 .lp-toast-text { color: var(--text-dim); margin-left: auto; }
 @keyframes lp-toast-in {

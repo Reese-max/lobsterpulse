@@ -3696,18 +3696,31 @@ pub fn run() {
                         tokio::spawn(async move {
                             while let Some(event) = rx.recv().await {
                                 let mgr = h.state::<AppSessionManager>();
-                                let (transition, firings) = {
+                                let (transition, firings, completions_snap) = {
                                     let mut m = mgr.0.lock().unwrap();
                                     let t = m.handle_event(&event);
-                                    if matches!(t, session::SessionTransition::Completed) {
+                                    // 完成紀錄：lock 內只動記憶體，clone 小 deque 出來
+                                    // lock 外寫檔（避免 fs 慢時 hook 事件排隊）
+                                    let snap = if matches!(t, session::SessionTransition::Completed) {
                                         m.record_completion(&event.provider, &event.session_id);
-                                    }
+                                        Some(m.completions.clone())
+                                    } else {
+                                        None
+                                    };
                                     // R115: drain handle_event 內 evaluate_rules 累積的
                                     // RuleFiredEvent, 給前端 emit `rule-fired` Tauri event
                                     // 觸發 Toast / Sound / Log action。
                                     let f = std::mem::take(&mut m.rule_firings);
-                                    (t, f)
+                                    (t, f, snap)
                                 };
+                                if let Some(snap) = completions_snap {
+                                    if let Err(e) = session::save_completions_at(
+                                        &session::completions_path(),
+                                        &snap,
+                                    ) {
+                                        log::warn!("[session] completions persist failed: {e}");
+                                    }
+                                }
                                 let _ = h.emit("session-update", ());
                                 match transition {
                                     session::SessionTransition::Completed => {

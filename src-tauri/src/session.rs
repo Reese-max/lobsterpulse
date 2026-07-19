@@ -528,10 +528,9 @@ impl SessionManager {
         }
     }
 
-    /// 完成紀錄 append + 落地。呼叫點：lib.rs hook_server loop 的
-    /// SessionTransition::Completed。持久化失敗只 warn 不中斷（紀錄是
-    /// 錦上添花，不能反噬事件主路徑）。
-    // ponytail: 每筆完成同步整檔重寫（~100 筆 JSON，完成事件低頻）；量大再改 append
+    /// 完成紀錄 append（純記憶體）。呼叫點：lib.rs hook_server loop 的
+    /// SessionTransition::Completed。持久化由 caller 在釋放 Mutex 後做
+    /// （review b5d0ace：lock 內同步 fs::write 會讓後續 hook 事件排隊）。
     pub fn record_completion(&mut self, provider: &str, session_id: &str) {
         self.completions.push_back(RecentEvent {
             timestamp: Utc::now(),
@@ -543,9 +542,6 @@ impl SessionManager {
         });
         while self.completions.len() > MAX_COMPLETIONS {
             self.completions.pop_front();
-        }
-        if let Err(e) = save_completions_at(&completions_path(), &self.completions) {
-            log::warn!("[session] completions persist failed: {e}");
         }
     }
 
@@ -1026,13 +1022,17 @@ pub fn completions_path() -> std::path::PathBuf {
         .join("completions.json")
 }
 
-/// 完成紀錄整檔寫入（path 參數化供測試用 temp 路徑）。
+/// 完成紀錄整檔寫入（path 參數化供測試用 temp 路徑）。tmp+rename 原子換檔，
+/// 避免中斷寫入留半截 JSON 被 load 判壞而全清。
+// ponytail: 每筆完成整檔重寫（~100 筆 JSON，完成事件低頻）；量大再改 append
 pub fn save_completions_at(
     path: &std::path::Path,
     completions: &std::collections::VecDeque<RecentEvent>,
 ) -> Result<(), String> {
     let body = serde_json::to_string(completions).map_err(|e| e.to_string())?;
-    std::fs::write(path, body).map_err(|e| e.to_string())
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// 完成紀錄載入——app 啟動時呼叫。檔案不存在/壞 JSON 一律回空（重啟保留是
@@ -5311,23 +5311,19 @@ mod completions_tests {
     fn record_completion_caps_and_orders() {
         let mut m = SessionManager::new();
         for i in 0..105 {
-            // 直接操作 deque 驗證 cap 邏輯（record_completion 會寫真實家目錄檔，
-            // 這裡繞開 IO 只驗記憶體行為）
-            m.completions.push_back(RecentEvent {
-                timestamp: Utc::now(),
-                provider: "claude".into(),
-                session_id: format!("s{i}"),
-                event_name: "Stop".into(),
-                tool_name: None,
-                error: None,
-            });
-            while m.completions.len() > MAX_COMPLETIONS {
-                m.completions.pop_front();
-            }
+            m.record_completion("claude", &format!("s{i}"));
         }
         assert_eq!(m.completions.len(), MAX_COMPLETIONS);
-        assert_eq!(m.completions.back().unwrap().session_id, "s104", "尾端應是最新");
-        assert_eq!(m.completions.front().unwrap().session_id, "s5", "頭端最舊被擠掉 5 筆");
+        assert_eq!(
+            m.completions.back().unwrap().session_id,
+            "s104",
+            "尾端應是最新"
+        );
+        assert_eq!(
+            m.completions.front().unwrap().session_id,
+            "s5",
+            "頭端最舊被擠掉 5 筆"
+        );
     }
 
     #[test]

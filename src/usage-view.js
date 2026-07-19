@@ -148,11 +148,20 @@
       rows.map((r) => {
         const label = byId.get(r.provider) || r.provider;
         const ago = formatRelativeTime(Math.max(0, Math.round((now - r.ts) / 1000)));
-        return `<div class="uv-recent-row">${providerIconHtml(r.provider, 13)}
+        return `<div class="uv-recent-row" data-provider="${esc(r.provider)}" title="點擊查看 ${esc(label)} 的 sessions">${providerIconHtml(r.provider, 13)}
           <span class="uv-recent-name">${esc(label)}</span>
           <span class="uv-recent-time">${esc(ago)}</span></div>`;
       }).join("");
   }
+
+  // 點完成紀錄列 → 跳 sessions 視窗並過濾該 provider（同 bot card 的跳轉模式）
+  document.addEventListener("click", (e) => {
+    const row = e.target.closest(".uv-recent-row");
+    if (!row || !row.dataset.provider) return;
+    sessionFilter = row.dataset.provider;
+    if (typeof lastState !== "undefined" && lastState) renderSessions(lastState);
+    showView("expanded");
+  });
 
   async function render() {
     const root = document.getElementById("usage-cards");

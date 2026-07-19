@@ -336,7 +336,8 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
   border: 0.5px solid var(--border);
   border-top: none;
 }
-.session-list { padding: 8px 10px 6px; border-top: 0.5px solid var(--border); }
+/* max-height 由 fitWindow 按螢幕可視空間動態設（px），session 多時內捲，footer 不被擠出螢幕 */
+.session-list { padding: 8px 10px 6px; border-top: 0.5px solid var(--border); overflow-y: auto; scrollbar-width: thin; }
 .session-row {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: 10px; cursor: pointer;

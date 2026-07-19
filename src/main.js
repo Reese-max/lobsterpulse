@@ -129,8 +129,37 @@ const $ = (id) => document.getElementById(id);
 // ─── Window resize ───
 async function fitWindow() {
   await new Promise(r => requestAnimationFrame(r));
+  // 螢幕剩餘可視空間（CSS px；resize_window 走 LogicalSize 同單位）。
+  // 視窗頂在螢幕中段時內容常超出螢幕底——超出的部分（最近完成清單、footer）
+  // 看得到截圖卻點不到，2026-07-19 使用者回報「點不進去」的根因。
+  const availBelow = Math.floor(screen.availHeight - Math.max(window.screenY, 0)) - 8;
+  // usage 視圖：卡片區上限動態縮到「可視空間 - 其他固定區塊」，卡片內捲、
+  // 清單與 footer 永遠留在螢幕內（620 仍是原上限，只會更小不會更大）
+  const cards = document.getElementById("usage-cards");
+  if (cards && currentView === "usage" && availBelow > 200) {
+    const rec = document.getElementById("uv-recent");
+    const foot = document.querySelector("#view-usage .uv-footer");
+    const toast = document.getElementById("lp-toast");
+    const fixed =
+      document.getElementById("capsule").offsetHeight +
+      (rec ? rec.offsetHeight : 0) +
+      (foot ? foot.offsetHeight : 0) +
+      (toast && !toast.classList.contains("hidden") ? toast.offsetHeight : 0) +
+      24;
+    cards.style.maxHeight = Math.min(Math.max(availBelow - fixed, 180), 620) + "px";
+    await new Promise(r => requestAnimationFrame(r));
+  }
+  // expanded（sessions）視圖同款：session-list 內捲，footer 留在螢幕內
+  const slist = document.querySelector("#view-expanded .session-list");
+  if (slist && currentView === "expanded" && availBelow > 200) {
+    const others = Array.from(document.querySelectorAll(
+      "#capsule, #view-expanded .filter-bar, #view-expanded .quota-bar-wrap, #view-expanded .action-bar"
+    )).reduce((sum, el) => sum + (el && el.offsetHeight ? el.offsetHeight : 0), 0);
+    slist.style.maxHeight = Math.max(availBelow - others - 40, 160) + "px";
+    await new Promise(r => requestAnimationFrame(r));
+  }
   const h = Math.max(Math.ceil(document.getElementById("app").scrollHeight) + 2, 46);
-  await invoke("resize_window", { width: currentW(), height: h });
+  await invoke("resize_window", { width: currentW(), height: Math.min(h, Math.max(availBelow, 200)) });
 }
 
 // ─── View switching ───

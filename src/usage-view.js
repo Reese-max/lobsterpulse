@@ -148,8 +148,11 @@
       rows.map((r) => {
         const label = byId.get(r.provider) || r.provider;
         const ago = formatRelativeTime(Math.max(0, Math.round((now - r.ts) / 1000)));
-        return `<div class="uv-recent-row" data-provider="${esc(r.provider)}" title="點擊查看 ${esc(label)} 的 sessions">${providerIconHtml(r.provider, 13)}
+        // 專案名 = cwd 最後一段；同 provider 多筆時靠這個區分（不然七列全叫 Codex CLI 無從選）
+        const proj = r.cwd ? String(r.cwd).split(/[\\/]/).filter(Boolean).pop() : "";
+        return `<div class="uv-recent-row" data-provider="${esc(r.provider)}">${providerIconHtml(r.provider, 13)}
           <span class="uv-recent-name">${esc(label)}</span>
+          ${proj ? `<span class="uv-recent-proj">${esc(proj)}</span>` : ""}
           <span class="uv-recent-time">${esc(ago)}</span></div>`;
       }).join("");
   }

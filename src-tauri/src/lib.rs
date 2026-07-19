@@ -3702,7 +3702,11 @@ pub fn run() {
                                     // 完成紀錄：lock 內只動記憶體，clone 小 deque 出來
                                     // lock 外寫檔（避免 fs 慢時 hook 事件排隊）
                                     let snap = if matches!(t, session::SessionTransition::Completed) {
-                                        m.record_completion(&event.provider, &event.session_id);
+                                        m.record_completion(
+                                            &event.provider,
+                                            &event.session_id,
+                                            event.cwd.clone(),
+                                        );
                                         Some(m.completions.clone())
                                     } else {
                                         None

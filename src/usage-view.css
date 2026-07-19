@@ -148,12 +148,21 @@ body.light .uv-card { background: rgba(30, 38, 48, 0.88); }
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 4px 2px;
+  padding: 8px 6px;
   font-size: calc(12px * var(--scale, 1));
   cursor: pointer;
   border-radius: 6px;
 }
-.uv-recent-row:hover { background: rgba(255, 255, 255, 0.06); }
+.uv-recent-row:hover { background: rgba(255, 255, 255, 0.1); }
+.uv-recent-name { flex-shrink: 0; }
+.uv-recent-proj {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: calc(11px * var(--scale, 1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 /* 深色卡底為主題無關設計，文字比照 .uv-name/.uv-plan 寫死白色（light theme 下 --text 變黑會不可讀） */
 .uv-recent-name { font-weight: 500; color: rgba(255, 255, 255, 0.92); }
 .uv-recent-time { margin-left: auto; color: rgba(255, 255, 255, 0.45); font-size: calc(11px * var(--scale, 1)); }

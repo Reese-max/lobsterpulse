@@ -319,6 +319,9 @@ pub struct RecentEvent {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub error: Option<String>,
+    /// 完成紀錄用：session 的工作目錄（前端顯示專案名區分同 provider 的多筆）。
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -531,7 +534,10 @@ impl SessionManager {
     /// 完成紀錄 append（純記憶體）。呼叫點：lib.rs hook_server loop 的
     /// SessionTransition::Completed。持久化由 caller 在釋放 Mutex 後做
     /// （review b5d0ace：lock 內同步 fs::write 會讓後續 hook 事件排隊）。
-    pub fn record_completion(&mut self, provider: &str, session_id: &str) {
+    /// cwd：優先用事件帶的，事件沒帶（如 Stop 常不帶）退回 session map 查
+    /// （SessionEnd 路徑 session 已移除，此時只能靠事件自帶）。
+    pub fn record_completion(&mut self, provider: &str, session_id: &str, cwd: Option<String>) {
+        let cwd = cwd.or_else(|| self.sessions.get(session_id).and_then(|s| s.cwd.clone()));
         self.completions.push_back(RecentEvent {
             timestamp: Utc::now(),
             provider: provider.to_string(),
@@ -539,6 +545,7 @@ impl SessionManager {
             event_name: "Stop".to_string(),
             tool_name: None,
             error: None,
+            cwd,
         });
         while self.completions.len() > MAX_COMPLETIONS {
             self.completions.pop_front();
@@ -645,6 +652,7 @@ impl SessionManager {
             event_name: event.hook_event_name.clone(),
             tool_name: event.tool_name.clone(),
             error: event.error.clone(),
+            cwd: event.cwd.clone(),
         });
         while self.recent_events.len() > MAX_RECENT_EVENTS {
             self.recent_events.pop_front();
@@ -5311,7 +5319,7 @@ mod completions_tests {
     fn record_completion_caps_and_orders() {
         let mut m = SessionManager::new();
         for i in 0..105 {
-            m.record_completion("claude", &format!("s{i}"));
+            m.record_completion("claude", &format!("s{i}"), Some(format!("D:/proj{i}")));
         }
         assert_eq!(m.completions.len(), MAX_COMPLETIONS);
         assert_eq!(
@@ -5340,12 +5348,14 @@ mod completions_tests {
             event_name: "Stop".into(),
             tool_name: None,
             error: None,
+            cwd: Some("D:/專案/監控".into()),
         });
         save_completions_at(&path, &dq).expect("寫入應成功");
         let loaded = load_completions_at(&path);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].provider, "codex");
         assert_eq!(loaded[0].session_id, "abc");
+        assert_eq!(loaded[0].cwd.as_deref(), Some("D:/專案/監控"), "cwd 應 round-trip");
 
         // 壞 JSON → 回空不 panic
         std::fs::write(&path, "{not json").unwrap();

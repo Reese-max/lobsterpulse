@@ -92,7 +92,7 @@
       if (!Number.isFinite(ts)) continue;
       const key = e.provider + "|" + (e.session_id || "");
       const prev = bySession.get(key);
-      if (!prev || ts > prev.ts) bySession.set(key, { provider: e.provider, ts });
+      if (!prev || ts > prev.ts) bySession.set(key, { provider: e.provider, ts, cwd: e.cwd || null });
     }
     return Array.from(bySession.values())
       .sort(function (a, b) { return b.ts - a.ts; })

@@ -148,3 +148,14 @@ test("recentCompletions 上限 8 筆與空輸入", () => {
   assert.deepStrictEqual(recentCompletions(null, ["claude"]), []);
   assert.deepStrictEqual(recentCompletions(many, null), []);
 });
+
+test("recentCompletions 帶出 cwd（取最新一筆的）", () => {
+  const { recentCompletions } = require("../src/quota-cards-lib.js");
+  const rows = recentCompletions([
+    { event_name: "Stop", provider: "codex", session_id: "s1", timestamp: "2026-07-19T10:00:00Z", cwd: "D:/舊專案" },
+    { event_name: "Stop", provider: "codex", session_id: "s1", timestamp: "2026-07-19T10:05:00Z", cwd: "D:/Users/x/監控" },
+    { event_name: "Stop", provider: "claude", session_id: "s2", timestamp: "2026-07-19T10:01:00Z" }, // 無 cwd
+  ], ["codex", "claude"]);
+  assert.strictEqual(rows[0].cwd, "D:/Users/x/監控", "同 session 取最新那筆的 cwd");
+  assert.strictEqual(rows[1].cwd, null, "無 cwd 回 null");
+});

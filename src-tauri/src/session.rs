@@ -305,7 +305,12 @@ pub enum SessionTransition {
 /// 最近 N 筆 event log，給 tray menu「事件診斷」查看。
 const MAX_RECENT_EVENTS: usize = 50;
 
-#[derive(Debug, Clone, Serialize)]
+/// 完成紀錄獨立存放上限。跟 recent_events 分開的原因：hooks 裝齊後
+/// PreToolUse/PostToolUse 高頻事件幾分鐘就把 50 筆 diagnostics buffer 洗掉，
+/// 完成紀錄（低頻、使用者要回看）不能共用同一個 buffer。
+const MAX_COMPLETIONS: usize = 100;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentEvent {
     pub timestamp: DateTime<Utc>,
     pub provider: String,
@@ -481,6 +486,9 @@ pub struct SessionManager {
     pub sessions: HashMap<String, Session>,
     pub active_session_id: Option<String>,
     pub recent_events: std::collections::VecDeque<RecentEvent>,
+    /// 完成紀錄（SessionTransition::Completed 時 append），落地
+    /// ~/.lobsterpulse/completions.json 跨 app 重啟保留。
+    pub completions: std::collections::VecDeque<RecentEvent>,
     /// Per-provider 累計統計，不依賴 OpenAB snapshot 檔就能算出 quota
     pub provider_totals: HashMap<String, ProviderTotals>,
     /// R115 規則引擎：要評估的規則清單（從 `AppConfig.rules` 同步過來）。
@@ -510,12 +518,34 @@ impl SessionManager {
             sessions: HashMap::new(),
             active_session_id: None,
             recent_events: std::collections::VecDeque::with_capacity(MAX_RECENT_EVENTS + 1),
+            completions: std::collections::VecDeque::with_capacity(MAX_COMPLETIONS + 1),
             provider_totals: HashMap::new(),
             rules: crate::config::default_rules(),
             rules_enabled: true,
             rule_match_count: 0,
             rule_firings: Vec::new(),
             timeline_ring: TimelineRing::new(),
+        }
+    }
+
+    /// 完成紀錄 append + 落地。呼叫點：lib.rs hook_server loop 的
+    /// SessionTransition::Completed。持久化失敗只 warn 不中斷（紀錄是
+    /// 錦上添花，不能反噬事件主路徑）。
+    // ponytail: 每筆完成同步整檔重寫（~100 筆 JSON，完成事件低頻）；量大再改 append
+    pub fn record_completion(&mut self, provider: &str, session_id: &str) {
+        self.completions.push_back(RecentEvent {
+            timestamp: Utc::now(),
+            provider: provider.to_string(),
+            session_id: session_id.to_string(),
+            event_name: "Stop".to_string(),
+            tool_name: None,
+            error: None,
+        });
+        while self.completions.len() > MAX_COMPLETIONS {
+            self.completions.pop_front();
+        }
+        if let Err(e) = save_completions_at(&completions_path(), &self.completions) {
+            log::warn!("[session] completions persist failed: {e}");
         }
     }
 
@@ -984,6 +1014,41 @@ impl SessionManager {
             active_count,
             active_providers,
             provider_totals: self.provider_totals.clone(),
+        }
+    }
+}
+
+/// 完成紀錄落地路徑（~/.lobsterpulse/completions.json）。
+pub fn completions_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".lobsterpulse")
+        .join("completions.json")
+}
+
+/// 完成紀錄整檔寫入（path 參數化供測試用 temp 路徑）。
+pub fn save_completions_at(
+    path: &std::path::Path,
+    completions: &std::collections::VecDeque<RecentEvent>,
+) -> Result<(), String> {
+    let body = serde_json::to_string(completions).map_err(|e| e.to_string())?;
+    std::fs::write(path, body).map_err(|e| e.to_string())
+}
+
+/// 完成紀錄載入——app 啟動時呼叫。檔案不存在/壞 JSON 一律回空（重啟保留是
+/// 錦上添花，壞檔不能擋 app 啟動），超過上限截尾保留最新。
+pub fn load_completions_at(path: &std::path::Path) -> std::collections::VecDeque<RecentEvent> {
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return std::collections::VecDeque::new();
+    };
+    match serde_json::from_str::<Vec<RecentEvent>>(&body) {
+        Ok(v) => {
+            let skip = v.len().saturating_sub(MAX_COMPLETIONS);
+            v.into_iter().skip(skip).collect()
+        }
+        Err(e) => {
+            log::warn!("[session] completions.json parse failed（回空清單重建）: {e}");
+            std::collections::VecDeque::new()
         }
     }
 }
@@ -5235,5 +5300,62 @@ mod tests {
             !session.is_active(),
             "Idle 後 is_active() 必須 false,active_count 與 active_providers 才不會把死 session 算進去"
         );
+    }
+}
+
+#[cfg(test)]
+mod completions_tests {
+    use super::*;
+
+    #[test]
+    fn record_completion_caps_and_orders() {
+        let mut m = SessionManager::new();
+        for i in 0..105 {
+            // 直接操作 deque 驗證 cap 邏輯（record_completion 會寫真實家目錄檔，
+            // 這裡繞開 IO 只驗記憶體行為）
+            m.completions.push_back(RecentEvent {
+                timestamp: Utc::now(),
+                provider: "claude".into(),
+                session_id: format!("s{i}"),
+                event_name: "Stop".into(),
+                tool_name: None,
+                error: None,
+            });
+            while m.completions.len() > MAX_COMPLETIONS {
+                m.completions.pop_front();
+            }
+        }
+        assert_eq!(m.completions.len(), MAX_COMPLETIONS);
+        assert_eq!(m.completions.back().unwrap().session_id, "s104", "尾端應是最新");
+        assert_eq!(m.completions.front().unwrap().session_id, "s5", "頭端最舊被擠掉 5 筆");
+    }
+
+    #[test]
+    fn save_load_roundtrip_and_bad_file() {
+        let dir = std::env::temp_dir().join(format!("lp-completions-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("completions.json");
+
+        let mut dq = std::collections::VecDeque::new();
+        dq.push_back(RecentEvent {
+            timestamp: Utc::now(),
+            provider: "codex".into(),
+            session_id: "abc".into(),
+            event_name: "Stop".into(),
+            tool_name: None,
+            error: None,
+        });
+        save_completions_at(&path, &dq).expect("寫入應成功");
+        let loaded = load_completions_at(&path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].provider, "codex");
+        assert_eq!(loaded[0].session_id, "abc");
+
+        // 壞 JSON → 回空不 panic
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(load_completions_at(&path).is_empty());
+        // 檔案不存在 → 回空
+        assert!(load_completions_at(&dir.join("nope.json")).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -9,6 +9,7 @@
   let countdownTimer = null;
   let nextUpdateAt = 0;
   let renderInFlight = false;
+  let renderQueued = false; // 完成事件撞上 60s refresh in-flight 時補跑一次（不然「即時插入」被吞）
   const detailOpen = new Set(); // 卡片詳情展開狀態（session 內存活即可）
 
   function fmtTok(n) {
@@ -156,14 +157,14 @@
   async function render() {
     const root = document.getElementById("usage-cards");
     if (!root) return;
-    if (renderInFlight) return;
+    if (renderInFlight) { renderQueued = true; return; }
     renderInFlight = true;
     try {
       const [cliRes, liveRes, statsRes, evRes] = await Promise.allSettled([
         invoke("detect_installed_clis"),
         invoke("get_live_quota_snapshot"),
         invoke("get_claude_daily_stats"),
-        invoke("get_recent_events"),
+        invoke("get_recent_completions"),
       ]);
       const clis = cliRes.status === "fulfilled" ? (cliRes.value || []) : [];
       const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
@@ -185,6 +186,7 @@
     } finally {
       renderInFlight = false;
       if (typeof currentView !== "undefined" && currentView === "usage") fitWindow();
+      if (renderQueued) { renderQueued = false; render(); }
     }
   }
 

@@ -2229,6 +2229,20 @@ fn get_recent_events(manager: tauri::State<AppSessionManager>) -> Vec<session::R
         .collect()
 }
 
+/// 「最近完成」清單資料源——完成紀錄獨立於 recent_events（後者被高頻工具
+/// 事件洗版），跨 app 重啟保留（completions.json）。
+#[tauri::command]
+fn get_recent_completions(manager: tauri::State<AppSessionManager>) -> Vec<session::RecentEvent> {
+    manager
+        .0
+        .lock()
+        .unwrap()
+        .completions
+        .iter()
+        .cloned()
+        .collect()
+}
+
 /// Tray menu「重啟 OpenAB」觸發——先 kill 既有 openab.exe，再跑 config 裡的
 /// `openab_restart_command`（空字串則僅 kill，依賴使用者的 Scheduled Task 自動 respawn）。
 #[tauri::command]
@@ -3651,7 +3665,10 @@ pub fn run() {
             }
 
             // Session manager
-            app.manage(AppSessionManager(Mutex::new(SessionManager::new())));
+            let mut session_manager = SessionManager::new();
+            session_manager.completions =
+                session::load_completions_at(&session::completions_path());
+            app.manage(AppSessionManager(Mutex::new(session_manager)));
 
             // OGRE-R1 (T-OGRE11/T-OGRE12): OTel SDK init at startup。讀
             // OTEL_EXPORTER_OTLP_ENDPOINT env var（預設 localhost:4317 gRPC）。
@@ -3682,6 +3699,9 @@ pub fn run() {
                                 let (transition, firings) = {
                                     let mut m = mgr.0.lock().unwrap();
                                     let t = m.handle_event(&event);
+                                    if matches!(t, session::SessionTransition::Completed) {
+                                        m.record_completion(&event.provider, &event.session_id);
+                                    }
                                     // R115: drain handle_event 內 evaluate_rules 累積的
                                     // RuleFiredEvent, 給前端 emit `rule-fired` Tauri event
                                     // 觸發 Toast / Sound / Log action。
@@ -4162,6 +4182,7 @@ pub fn run() {
             is_cursor_inside,
             hide_window,
             get_recent_events,
+            get_recent_completions,
             restart_openab,
             send_telegram,
             send_discord_test,

@@ -136,34 +136,63 @@
 
   // 「最近完成」清單：hook 事件過濾出本機 CLI 的 Stop/SessionEnd（記憶體 buffer
   // 最近 50 筆，app 重啟即歸零）。OpenAB bot 24/7 loop 會洗版，不列入。
+  // 點列 = inline 展開該筆詳情（2026-07-19 使用者反饋：跳去 legacy sessions
+  // 視圖是「舊畫面」，改為不離開新面板）。
+  const recentData = { rows: [], byId: new Map() };
+  let recentOpenKey = null;
+
+  function recentDetailHtml(r) {
+    const st = (typeof lastState !== "undefined" && lastState) || null;
+    const sess = st && Array.isArray(st.sessions)
+      ? st.sessions.find((s) => s.id === r.session_id) : null;
+    const when = new Date(r.ts).toLocaleString("zh-TW", { hour12: false });
+    const rows = [
+      ["完成於", when],
+      r.cwd ? ["路徑", String(r.cwd)] : null,
+      sess && sess.duration_secs
+        ? ["時長", Math.max(1, Math.round(sess.duration_secs / 60)) + " 分鐘"] : null,
+    ].filter(Boolean)
+      .map(([k, v]) => `<div class="uv-krow"><span>${k}</span><span>${esc(v)}</span></div>`)
+      .join("");
+    const prompt = sess && sess.last_prompt
+      ? `<div class="uv-recent-prompt">${esc(sess.last_prompt)}</div>` : "";
+    return `<div class="uv-recent-detail">${rows}${prompt}</div>`;
+  }
+
   function renderRecent(events, clis) {
+    recentData.byId = new Map(clis.map((c) => [c.id, c.label]));
+    recentData.rows = window.QuotaCards.recentCompletions(events, clis.map((c) => c.id));
+    drawRecent();
+  }
+
+  function drawRecent() {
     const root = document.getElementById("uv-recent");
     if (!root) return;
-    const byId = new Map(clis.map((c) => [c.id, c.label]));
-    const rows = window.QuotaCards.recentCompletions(events, clis.map((c) => c.id));
-    if (rows.length === 0) { root.innerHTML = ""; return; }
+    if (recentData.rows.length === 0) { root.innerHTML = ""; return; }
     const now = Date.now();
     root.innerHTML =
       `<div class="uv-sec uv-recent-head">最近完成</div>` +
-      rows.map((r) => {
-        const label = byId.get(r.provider) || r.provider;
+      recentData.rows.map((r) => {
+        const key = r.provider + "|" + r.ts;
+        const open = recentOpenKey === key;
+        const label = recentData.byId.get(r.provider) || r.provider;
         const ago = formatRelativeTime(Math.max(0, Math.round((now - r.ts) / 1000)));
         // 專案名 = cwd 最後一段；同 provider 多筆時靠這個區分（不然七列全叫 Codex CLI 無從選）
         const proj = r.cwd ? String(r.cwd).split(/[\\/]/).filter(Boolean).pop() : "";
-        return `<div class="uv-recent-row" data-provider="${esc(r.provider)}">${providerIconHtml(r.provider, 13)}
+        return `<div class="uv-recent-row${open ? " open" : ""}" data-rkey="${esc(key)}">${providerIconHtml(r.provider, 13)}
           <span class="uv-recent-name">${esc(label)}</span>
           ${proj ? `<span class="uv-recent-proj">${esc(proj)}</span>` : ""}
-          <span class="uv-recent-time">${esc(ago)}</span></div>`;
+          <span class="uv-recent-time">${esc(ago)}</span></div>${open ? recentDetailHtml(r) : ""}`;
       }).join("");
+    fitWindow();
   }
 
-  // 點完成紀錄列 → 跳 sessions 視窗並過濾該 provider（同 bot card 的跳轉模式）
+  // 點完成紀錄列 → 就地展開/收合詳情（不跳視圖）
   document.addEventListener("click", (e) => {
     const row = e.target.closest(".uv-recent-row");
-    if (!row || !row.dataset.provider) return;
-    sessionFilter = row.dataset.provider;
-    if (typeof lastState !== "undefined" && lastState) renderSessions(lastState);
-    showView("expanded");
+    if (!row || !row.dataset.rkey) return;
+    recentOpenKey = recentOpenKey === row.dataset.rkey ? null : row.dataset.rkey;
+    drawRecent();
   });
 
   async function render() {

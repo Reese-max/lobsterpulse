@@ -2597,16 +2597,15 @@ function showTaskToast(provider, text) {
   }, 4500);
 }
 
-// 點 toast → 跳 sessions 視窗過濾該 provider（與完成清單列同模式），並收掉 toast
+// 點 toast → 收掉 toast、打開新版額度面板（最近完成清單就在裡面；
+// 2026-07-19 使用者反饋：跳 legacy sessions 視圖是「舊畫面」，不再跳那裡）
 document.addEventListener("click", (e) => {
   const t = e.target.closest("#lp-toast");
-  if (!t || t.classList.contains("hidden") || !t.dataset.provider) return;
-  sessionFilter = t.dataset.provider;
-  if (lastState) renderSessions(lastState);
+  if (!t || t.classList.contains("hidden")) return;
   clearTimeout(lpToastTimer);
   t.classList.add("hidden");
   t.setAttribute("aria-hidden", "true");
-  showView("expanded");
+  showView("usage");
 });
 
 function showCapsuleBrief(visible) {

@@ -45,6 +45,10 @@ pub struct HookEvent {
     /// 不來自 CLI payload——hook exe 不能重建所以 payload 動不了）。
     #[serde(default)]
     pub terminal_pids: Vec<u32>,
+    /// UserPromptSubmit 當下實抓的分頁標題（前景視窗屬於本 session 終端機
+    /// 鏈時才有值）。跳轉時優先用它選分頁，不靠猜專案名。
+    #[serde(default)]
+    pub tab_title: Option<String>,
 }
 
 impl RawHookEvent {
@@ -165,6 +169,7 @@ impl RawHookEvent {
             tokens_output,
             error,
             terminal_pids: Vec::new(),
+            tab_title: None,
         }
     }
 }

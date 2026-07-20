@@ -581,7 +581,7 @@ fn focus_terminal(
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
-        let (pids, cwd, comp_ts) = {
+        let (pids, cwd, tab_title, comp_ts) = {
             let m = manager.0.lock().unwrap();
             let sess = m.sessions.get(&session_id);
             let comp = m
@@ -603,9 +603,12 @@ fn focus_terminal(
             let cwd = sess
                 .and_then(|s| s.cwd.clone())
                 .or_else(|| comp.and_then(|e| e.cwd.clone()));
-            (pids, cwd, comp_ts)
+            let tab_title = sess
+                .and_then(|s| s.tab_title.clone())
+                .or_else(|| comp.and_then(|e| e.tab_title.clone()));
+            (pids, cwd, tab_title, comp_ts)
         };
-        focus_from_target(pids, cwd, comp_ts)
+        focus_from_target(pids, cwd, tab_title, comp_ts)
     }
     #[cfg(not(windows))]
     {
@@ -614,12 +617,14 @@ fn focus_terminal(
     }
 }
 
-/// focus_terminal / focus_provider_terminal 共用尾段：空鏈與重開機閘門 → 標題
-/// 啟發式（專案資料夾名；WT 單進程多視窗，光靠 PID 會選錯視窗）→ 聚焦。
+/// focus_terminal / focus_provider_terminal 共用尾段：空鏈與重開機閘門 →
+/// 分頁比對 hint 依序（UserPromptSubmit 實抓的分頁標題核心 → 專案資料夾名）
+/// → 聚焦（WT 單進程多視窗，光靠 PID 會選錯視窗）。
 #[cfg(windows)]
 fn focus_from_target(
     pids: Vec<u32>,
     cwd: Option<String>,
+    tab_title: Option<String>,
     comp_ts: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<(), String> {
     if pids.is_empty() {
@@ -629,11 +634,20 @@ fn focus_from_target(
     if comp_ts.is_some_and(|ts| ts < terminal::boot_time_utc()) {
         return Err("該紀錄在重開機之前，終端機已不存在".to_string());
     }
-    let hint = cwd
+    let mut hints: Vec<String> = Vec::new();
+    if let Some(t) = tab_title.as_deref() {
+        let core = terminal::title_core(t);
+        if !core.is_empty() {
+            hints.push(core);
+        }
+    }
+    if let Some(proj) = cwd
         .as_deref()
         .and_then(|c| c.split(['/', '\\']).filter(|s| !s.is_empty()).next_back())
-        .map(|s| s.to_string());
-    terminal::focus_window_for_pids(&pids, hint.as_deref())
+    {
+        hints.push(proj.to_string());
+    }
+    terminal::focus_window_for_pids(&pids, &hints)
 }
 
 /// 「等待處理」toast 點擊：不知道 session_id（事件 payload 只有 provider），
@@ -646,9 +660,9 @@ fn focus_provider_terminal(
     #[cfg(windows)]
     {
         let target = manager.0.lock().unwrap().provider_focus_target(&provider);
-        let (pids, cwd, comp_ts) =
+        let (pids, cwd, tab_title, comp_ts) =
             target.ok_or_else(|| format!("{provider} 沒有可跳轉的終端機紀錄"))?;
-        focus_from_target(pids, cwd, comp_ts)
+        focus_from_target(pids, cwd, tab_title, comp_ts)
     }
     #[cfg(not(windows))]
     {

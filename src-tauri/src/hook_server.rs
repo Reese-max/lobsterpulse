@@ -260,11 +260,30 @@ async fn handle_client(
                         // spawn_blocking：TCP table + 進程快照是同步 Win32 呼叫，
                         // 不佔 async worker（回應仍在反查後才送——socket 要留在 table 裡）
                         let (pp, lp) = (peer.port(), local.port());
-                        event.terminal_pids = tokio::task::spawn_blocking(move || {
-                            crate::terminal::peer_terminal_pids(pp, lp)
-                        })
+                        // UserPromptSubmit＝使用者剛在那個分頁按 Enter，前景視窗
+                        // （若屬於本 session 的終端機鏈）的標題就是該分頁真實標題
+                        let grab_title = event.hook_event_name == "UserPromptSubmit";
+                        // 500ms timeout：GetWindowTextW 對他進程視窗走同步
+                        // SendMessage，目標 UI 執行緒卡住時會無限期 block——
+                        // 逾時放棄（等同前景不在鏈上），不吊住 hook 的 HTTP 回應
+                        let (pids, title) = tokio::time::timeout(
+                            std::time::Duration::from_millis(500),
+                            tokio::task::spawn_blocking(move || {
+                                let pids = crate::terminal::peer_terminal_pids(pp, lp);
+                                let title = if grab_title && !pids.is_empty() {
+                                    crate::terminal::foreground_title_if_owned(&pids)
+                                } else {
+                                    None
+                                };
+                                (pids, title)
+                            }),
+                        )
                         .await
+                        .ok()
+                        .and_then(|r| r.ok())
                         .unwrap_or_default();
+                        event.terminal_pids = pids;
+                        event.tab_title = title;
                     }
                 }
                 if tx.send(event).is_err() {
@@ -544,6 +563,7 @@ mod tests {
             tokens_output: None,
             error: None,
             terminal_pids: Vec::new(),
+            tab_title: None,
         }
     }
 

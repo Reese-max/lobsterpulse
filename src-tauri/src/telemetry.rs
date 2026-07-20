@@ -363,6 +363,7 @@ mod tests {
             tokens_output: None,
             error: None,
             terminal_pids: Vec::new(),
+            tab_title: None,
         }
     }
 

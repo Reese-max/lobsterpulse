@@ -84,6 +84,40 @@ fn pid_of_loopback_peer(peer_port: u16, server_port: u16) -> Option<u32> {
     None
 }
 
+/// UserPromptSubmit 當下抓「使用者正在打字的分頁標題」：前景視窗若屬於
+/// 該 session 的終端機 PID 鏈，其標題就是該分頁的真實標題（作用中分頁）。
+/// 之後跳轉用這個標題選分頁——比「猜專案名有沒有出現在標題」確定得多。
+/// 前景不屬於鏈上（bot 程式化送 prompt、使用者已切走）回 None 不誤抓。
+pub fn foreground_title_if_owned(pids: &[u32]) -> Option<String> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
+    };
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if !pids.contains(&pid) {
+            return None;
+        }
+        let mut buf = [0u16; 256];
+        let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), 256);
+        if n <= 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buf[..n as usize]))
+    }
+}
+
+/// 去掉標題開頭的狀態符號（WT/Claude 的 ✳/⠐/⠂ 會隨狀態變）取穩定核心。
+pub fn title_core(s: &str) -> String {
+    s.trim_start_matches(|c: char| !c.is_alphanumeric())
+        .trim()
+        .to_string()
+}
+
 /// 系統開機時刻（UTC）。重開機前紀錄的 PID 必已被 OS 回收，
 /// focus 前用來擋「聚焦到 PID 重用後的無關視窗」。
 pub fn boot_time_utc() -> chrono::DateTime<chrono::Utc> {
@@ -163,7 +197,7 @@ fn walk_chain(map: &HashMap<u32, (u32, String)>, start: u32) -> Vec<u32> {
 /// 聚焦後若有 hint 再補一發 UIA 分頁切換（select_tab_async）處理 WT 多分頁。
 /// ponytail: 多個 WT 視窗且目標分頁藏在「沒被選中的那個視窗」時仍會選錯視窗，
 /// 要跨視窗掃分頁需同步 UIA 查詢再挑視窗，等真的踩到再說。
-pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(), String> {
+pub fn focus_window_for_pids(pids: &[u32], hints: &[String]) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
     unsafe extern "system" fn cb(
         hwnd: windows_sys::Win32::Foundation::HWND,
@@ -195,16 +229,16 @@ pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(
     let candidates: Vec<&(isize, u32, String)> =
         wins.iter().filter(|(_, p, _)| pid_set.contains(p)).collect();
 
-    let hint = title_hint.filter(|h| !h.is_empty());
-    // 1) 標題命中專案名的候選優先（大小寫不敏感）
-    if let Some(h) = hint {
+    let hints: Vec<&String> = hints.iter().filter(|h| !h.is_empty()).collect();
+    // 1) 標題命中 hint 的候選優先（hint 依序：實抓分頁標題核心 → 專案名；大小寫不敏感）
+    for h in &hints {
         let hl = h.to_lowercase();
         if let Some(&&(hwnd, _, _)) = candidates
             .iter()
             .find(|(_, _, t)| t.to_lowercase().contains(&hl))
         {
             if try_focus(hwnd) {
-                select_tab_async(&[hwnd], h);
+                select_tab_async(&[hwnd], &hints);
                 return Ok(());
             }
         }
@@ -220,8 +254,8 @@ pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(
             .collect();
         for &hwnd in &same_pid {
             if try_focus(hwnd) {
-                if let Some(h) = hint {
-                    select_tab_async(&same_pid, h);
+                if !hints.is_empty() {
+                    select_tab_async(&same_pid, &hints);
                 }
                 return Ok(());
             }
@@ -239,17 +273,19 @@ pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(
 /// 找不到就默默結束，失敗退化成「只聚焦視窗」。
 /// ponytail: spawn 無逾時——目標視窗卡死時 UIA 會卡住該 powershell 常駐；
 /// 手動點擊觸發、頻率極低，觀察到堆積再加 timeout/kill。
-fn select_tab_async(hwnds: &[isize], hint: &str) {
+fn select_tab_async(hwnds: &[isize], hints: &[&String]) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    if hwnds.is_empty() {
+    if hwnds.is_empty() || hints.is_empty() {
         return;
     }
-    // 純 ASCII inline script；hwnds/hint 走 env var 免跳脫（硬規則7）
+    // 純 ASCII inline script；hwnds/hints 走 env var 免跳脫（硬規則7）。
+    // hints 以 | 分隔依序嘗試（實抓分頁標題核心優先、專案名次之）。
     const SCRIPT: &str = "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; \
 Add-Type -Namespace LP -Name W -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int n); [DllImport(\"user32.dll\")] public static extern bool IsIconic(IntPtr h);'; \
-$hint=$env:LP_TAB_HINT.ToLower(); \
 $c=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::TabItem); \
+foreach($hint in $env:LP_TAB_HINT.ToLower().Split('|')){ \
+if(-not $hint){continue}; \
 foreach($hs in $env:LP_TAB_HWND.Split(',')){ \
 $h=[IntPtr][long]$hs; \
 try{$root=[System.Windows.Automation.AutomationElement]::FromHandle($h)}catch{continue}; \
@@ -258,16 +294,28 @@ if($t.Current.Name.ToLower().Contains($hint)){ \
 if([LP.W]::IsIconic($h)){[void][LP.W]::ShowWindow($h,9)}; \
 [void][LP.W]::SetForegroundWindow($h); \
 $t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); \
-exit } } }";
+exit } } } }";
     let joined = hwnds
         .iter()
         .map(|h| h.to_string())
         .collect::<Vec<_>>()
         .join(",");
+    // hint 內若含分隔符 | 會被切壞——換成空白（標題比對本來就是 contains，影響極小）
+    let hint_env = hints
+        .iter()
+        .map(|h| h.replace('|', " "))
+        .collect::<Vec<_>>()
+        .join("|");
+    // 前景鎖：SetForegroundWindow 只有前景進程叫得動。腳本跑在另一個
+    // powershell 進程裡，不授權的話它只能切分頁、視窗浮不上來（實測踩到）。
+    // ASFW_ANY = 任何進程；本行由「使用者剛點過的」LP 進程呼叫才有效。
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(u32::MAX);
+    }
     let _ = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
         .env("LP_TAB_HWND", joined)
-        .env("LP_TAB_HINT", hint)
+        .env("LP_TAB_HINT", hint_env)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
 }
@@ -316,6 +364,14 @@ mod tests {
         );
         assert!(!chain.contains(&50), "explorer 不得入鏈");
         assert!(!chain.contains(&100), "hook 自己不得入鏈");
+    }
+
+    #[test]
+    fn title_core_strips_status_glyphs() {
+        assert_eq!(super::title_core("✳ 監控系統配置"), "監控系統配置");
+        assert_eq!(super::title_core("⠐ autodev-ng 專案開發"), "autodev-ng 專案開發");
+        assert_eq!(super::title_core("PowerShell"), "PowerShell");
+        assert_eq!(super::title_core("✳ "), "");
     }
 
     #[test]

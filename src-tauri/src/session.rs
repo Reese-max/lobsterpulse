@@ -48,6 +48,8 @@ pub struct Session {
     pub token_samples: std::collections::VecDeque<TokenSample>,
     /// 終端機候選 PID 鏈（hook_server 反查填入；「切到終端機」用）。
     pub terminal_pids: Vec<u32>,
+    /// UserPromptSubmit 當下實抓的分頁標題（跳轉時優先用它選分頁）。
+    pub tab_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +83,7 @@ impl Session {
             tokens_output: 0,
             token_samples: std::collections::VecDeque::with_capacity(MAX_TOKEN_SAMPLES + 1),
             terminal_pids: Vec::new(),
+            tab_title: None,
         }
     }
 
@@ -329,6 +332,9 @@ pub struct RecentEvent {
     /// focus 失敗由前端退回開資料夾）。
     #[serde(default)]
     pub terminal_pids: Vec<u32>,
+    /// 完成紀錄用：UserPromptSubmit 當下實抓的分頁標題。
+    #[serde(default)]
+    pub tab_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -513,6 +519,10 @@ pub struct SessionManager {
     /// 給 caller (lib.rs hook_server) drain 後 emit Tauri event `rule-fired`
     /// (R116+ 接力, MVP 階段只累積不 emit)。
     pub rule_firings: Vec<RuleFiredEvent>,
+    /// SessionEnd 剛移除的 session 暫存一份：record_completion 在 lib.rs 是
+    /// handle_event「之後」才被呼叫，SessionEnd 路徑的 session 已不在 map，
+    /// cwd/terminal_pids/tab_title 全靠這份回撈（下一次 SessionEnd 覆蓋即可）。
+    pub last_removed_session: Option<Session>,
     /// R122 T-CPT8 落地：TimelineRing 24h × 13 provider 環形緩衝。
     /// `handle_event` 結尾串接 `record_event`,把每個事件落到的
     /// (provider, state, minute) 寫進 ring buffer cell,給未來 T-CPT9
@@ -534,6 +544,7 @@ impl SessionManager {
             rules_enabled: true,
             rule_match_count: 0,
             rule_firings: Vec::new(),
+            last_removed_session: None,
             timeline_ring: TimelineRing::new(),
         }
     }
@@ -550,17 +561,21 @@ impl SessionManager {
         cwd: Option<String>,
         terminal_pids: Vec<u32>,
     ) {
-        let cwd = cwd.or_else(|| self.sessions.get(session_id).and_then(|s| s.cwd.clone()));
-        // 事件自帶的 PID 鏈優先（SessionEnd 時 session 已被移除，只剩事件的）；
-        // 沒有再退回 session 存的（app 中途重啟後 Stop 前沒有低頻事件的罕見情況）。
+        // SessionEnd 路徑 session 已被移除——退回 last_removed_session 回撈
+        let sess_ref = self.sessions.get(session_id).or_else(|| {
+            self.last_removed_session
+                .as_ref()
+                .filter(|s| s.id == session_id)
+        });
+        let cwd = cwd.or_else(|| sess_ref.and_then(|s| s.cwd.clone()));
+        // 事件自帶的 PID 鏈優先；沒有再退回 session 存的
         let terminal_pids = if terminal_pids.is_empty() {
-            self.sessions
-                .get(session_id)
-                .map(|s| s.terminal_pids.clone())
-                .unwrap_or_default()
+            sess_ref.map(|s| s.terminal_pids.clone()).unwrap_or_default()
         } else {
             terminal_pids
         };
+        // 分頁標題只在 UserPromptSubmit 抓，一律從 session（或剛移除的）帶
+        let tab_title = sess_ref.and_then(|s| s.tab_title.clone());
         self.completions.push_back(RecentEvent {
             timestamp: Utc::now(),
             provider: provider.to_string(),
@@ -570,6 +585,7 @@ impl SessionManager {
             error: None,
             cwd,
             terminal_pids,
+            tab_title,
         });
         while self.completions.len() > MAX_COMPLETIONS {
             self.completions.pop_front();
@@ -578,11 +594,13 @@ impl SessionManager {
 
     /// 「切到終端機」按 provider 挑目標：等待回應的 session 最優先（使用者要
     /// 跳回去回話），其次最近活動的 session，最後退回最新完成紀錄。
-    /// 回 (pids, cwd, 完成紀錄時間戳)——時間戳僅完成紀錄路徑有值，供重開機閘門。
+    /// 回 (pids, cwd, 分頁標題, 完成紀錄時間戳)——時間戳僅完成紀錄路徑有值，
+    /// 供重開機閘門。
+    #[allow(clippy::type_complexity)]
     pub fn provider_focus_target(
         &self,
         provider: &str,
-    ) -> Option<(Vec<u32>, Option<String>, Option<DateTime<Utc>>)> {
+    ) -> Option<(Vec<u32>, Option<String>, Option<String>, Option<DateTime<Utc>>)> {
         let mut live: Vec<&Session> = self
             .sessions
             .values()
@@ -595,13 +613,20 @@ impl SessionManager {
             )
         });
         if let Some(s) = live.first() {
-            return Some((s.terminal_pids.clone(), s.cwd.clone(), None));
+            return Some((s.terminal_pids.clone(), s.cwd.clone(), s.tab_title.clone(), None));
         }
         self.completions
             .iter()
             .rev()
             .find(|e| e.provider == provider && !e.terminal_pids.is_empty())
-            .map(|e| (e.terminal_pids.clone(), e.cwd.clone(), Some(e.timestamp)))
+            .map(|e| {
+                (
+                    e.terminal_pids.clone(),
+                    e.cwd.clone(),
+                    e.tab_title.clone(),
+                    Some(e.timestamp),
+                )
+            })
     }
 
     /// R115 規則引擎: 同步 AppConfig 的 rules / rules_enabled 進 SessionManager。
@@ -706,6 +731,7 @@ impl SessionManager {
             error: event.error.clone(),
             cwd: event.cwd.clone(),
             terminal_pids: Vec::new(), // 診斷清單用不到，不佔空間
+            tab_title: None,
         });
         while self.recent_events.len() > MAX_RECENT_EVENTS {
             self.recent_events.pop_front();
@@ -715,6 +741,9 @@ impl SessionManager {
 
         if event.hook_event_name == "SessionEnd" {
             let removed = self.sessions.remove(&event.session_id);
+            if let Some(ref s) = removed {
+                self.last_removed_session = Some(s.clone());
+            }
             // K22 落地：SessionEnd 算「完成」一種（session 從 active map 移除
             // 那一刻 = 結束）。先把 age 算成 owned i64 再丟給 record helper,
             // 跟 Working→Idle 路徑吃同一個 owned-data 簽名。
@@ -777,6 +806,9 @@ impl SessionManager {
         // 低頻事件帶來的終端機 PID 鏈：覆寫（愈新愈準——終端機可能換了）
         if !event.terminal_pids.is_empty() {
             session.terminal_pids = event.terminal_pids.clone();
+        }
+        if event.tab_title.is_some() {
+            session.tab_title = event.tab_title.clone();
         }
 
         let prev = session.state;
@@ -1755,6 +1787,7 @@ mod tests {
             tokens_output: None,
             error: None,
             terminal_pids: Vec::new(),
+            tab_title: None,
         }
     }
 
@@ -5393,6 +5426,44 @@ mod completions_tests {
         );
     }
 
+    /// SessionEnd 完成路徑：handle_event 已把 session 移出 map，
+    /// record_completion 仍須靠 last_removed_session 撈到 tab_title/cwd/pids。
+    #[test]
+    fn session_end_completion_keeps_tab_title() {
+        let mut m = SessionManager::new();
+        let mut ev1 = crate::hook_event::HookEvent {
+            provider: "claude".into(),
+            session_id: "se1".into(),
+            hook_event_name: "UserPromptSubmit".into(),
+            cwd: Some("D:/proj/監控".into()),
+            tool_name: None,
+            notification_type: None,
+            prompt: None,
+            tool_call_id: None,
+            tool_status: None,
+            tokens_input: None,
+            tokens_output: None,
+            error: None,
+            terminal_pids: vec![7, 8],
+            tab_title: Some("✳ 監控系統配置".into()),
+        };
+        let _ = m.handle_event(&ev1);
+
+        ev1.hook_event_name = "SessionEnd".into();
+        ev1.terminal_pids = Vec::new(); // SessionEnd 不帶 pids/title
+        ev1.tab_title = None;
+        ev1.cwd = None;
+        let t = m.handle_event(&ev1);
+        assert!(matches!(t, SessionTransition::Completed), "SessionEnd 應算完成");
+        assert!(!m.sessions.contains_key("se1"), "session 已被移除");
+
+        m.record_completion("claude", "se1", None, Vec::new());
+        let rec = m.completions.back().expect("應有完成紀錄");
+        assert_eq!(rec.tab_title.as_deref(), Some("✳ 監控系統配置"), "tab_title 不得遺失");
+        assert_eq!(rec.terminal_pids, vec![7, 8], "pids 不得遺失");
+        assert_eq!(rec.cwd.as_deref(), Some("D:/proj/監控"), "cwd 不得遺失");
+    }
+
     #[test]
     fn provider_focus_target_prefers_waiting_then_recent_then_completion() {
         let mut m = SessionManager::new();
@@ -5406,7 +5477,7 @@ mod completions_tests {
         working.last_event_time = waiting.last_event_time + chrono::Duration::seconds(60);
         m.sessions.insert("w".into(), waiting);
         m.sessions.insert("k".into(), working);
-        let (pids, cwd, ts) = m.provider_focus_target("claude").expect("應有目標");
+        let (pids, cwd, _, ts) = m.provider_focus_target("claude").expect("應有目標");
         assert_eq!(pids, vec![1], "等待中優先");
         assert_eq!(cwd.as_deref(), Some("D:/a"));
         assert!(ts.is_none(), "活 session 不帶完成時間戳");
@@ -5414,7 +5485,7 @@ mod completions_tests {
         // 無活 session（或 pids 全空）→ 退回最新完成紀錄
         m.sessions.clear();
         m.record_completion("claude", "c1", Some("D:/c".into()), vec![9]);
-        let (pids2, _, ts2) = m.provider_focus_target("claude").expect("應退回完成紀錄");
+        let (pids2, _, _, ts2) = m.provider_focus_target("claude").expect("應退回完成紀錄");
         assert_eq!(pids2, vec![9]);
         assert!(ts2.is_some(), "完成紀錄路徑須帶時間戳供重開機閘門");
 
@@ -5437,6 +5508,7 @@ mod completions_tests {
             error: None,
             cwd: Some("D:/專案/監控".into()),
             terminal_pids: vec![123, 456],
+            tab_title: Some("✳ 監控系統配置".into()),
         });
         save_completions_at(&path, &dq).expect("寫入應成功");
         let loaded = load_completions_at(&path);
@@ -5445,6 +5517,7 @@ mod completions_tests {
         assert_eq!(loaded[0].session_id, "abc");
         assert_eq!(loaded[0].cwd.as_deref(), Some("D:/專案/監控"), "cwd 應 round-trip");
         assert_eq!(loaded[0].terminal_pids, vec![123, 456], "terminal_pids 應 round-trip");
+        assert_eq!(loaded[0].tab_title.as_deref(), Some("✳ 監控系統配置"), "tab_title 應 round-trip");
 
         // 壞 JSON → 回空不 panic
         std::fs::write(&path, "{not json").unwrap();

@@ -315,6 +315,8 @@ const MAX_RECENT_EVENTS: usize = 50;
 /// PreToolUse/PostToolUse 高頻事件幾分鐘就把 50 筆 diagnostics buffer 洗掉，
 /// 完成紀錄（低頻、使用者要回看）不能共用同一個 buffer。
 const MAX_COMPLETIONS: usize = 100;
+/// 終端機側寫上限（一台機器同時開的 CLI session 遠少於此）
+const MAX_TERMINAL_HINTS: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecentEvent {
@@ -335,6 +337,20 @@ pub struct RecentEvent {
     /// 完成紀錄用：UserPromptSubmit 當下實抓的分頁標題。
     #[serde(default)]
     pub tab_title: Option<String>,
+}
+
+/// 「切到終端機」用的 session 側寫，獨立於 sessions map 持久化。
+/// 為什麼要落地：pids/tab_title 只存在記憶體，app 重啟（或崩潰）後，
+/// 那些終端機明明還開著，卻要等該 session 下次有人送 prompt 才恢復。
+/// PID 跨 app 重啟仍有效，只有跨「開機」才失效（由 boot time 閘門擋掉）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalHint {
+    pub pids: Vec<u32>,
+    #[serde(default)]
+    pub tab_title: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub saved_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -523,6 +539,8 @@ pub struct SessionManager {
     /// handle_event「之後」才被呼叫，SessionEnd 路徑的 session 已不在 map，
     /// cwd/terminal_pids/tab_title 全靠這份回撈（下一次 SessionEnd 覆蓋即可）。
     pub last_removed_session: Option<Session>,
+    /// session_id → 終端機側寫（持久化到 ~/.lobsterpulse/session-terminals.json）
+    pub terminal_hints: HashMap<String, TerminalHint>,
     /// R122 T-CPT8 落地：TimelineRing 24h × 13 provider 環形緩衝。
     /// `handle_event` 結尾串接 `record_event`,把每個事件落到的
     /// (provider, state, minute) 寫進 ring buffer cell,給未來 T-CPT9
@@ -545,6 +563,7 @@ impl SessionManager {
             rule_match_count: 0,
             rule_firings: Vec::new(),
             last_removed_session: None,
+            terminal_hints: HashMap::new(),
             timeline_ring: TimelineRing::new(),
         }
     }
@@ -592,6 +611,31 @@ impl SessionManager {
         }
     }
 
+    /// 寫入/更新終端機側寫；超過上限丟最舊的一筆。
+    pub fn upsert_terminal_hint(
+        &mut self,
+        session_id: &str,
+        pids: Vec<u32>,
+        tab_title: Option<String>,
+        cwd: Option<String>,
+    ) {
+        self.terminal_hints.insert(
+            session_id.to_string(),
+            TerminalHint { pids, tab_title, cwd, saved_at: Utc::now() },
+        );
+        while self.terminal_hints.len() > MAX_TERMINAL_HINTS {
+            let Some(oldest) = self
+                .terminal_hints
+                .iter()
+                .min_by_key(|(_, v)| v.saved_at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            self.terminal_hints.remove(&oldest);
+        }
+    }
+
     /// 「切到終端機」按 provider 挑目標：等待回應的 session 最優先（使用者要
     /// 跳回去回話），其次最近活動的 session，最後退回最新完成紀錄。
     /// 回 (pids, cwd, 分頁標題, 完成紀錄時間戳)——時間戳僅完成紀錄路徑有值，
@@ -615,18 +659,44 @@ impl SessionManager {
         if let Some(s) = live.first() {
             return Some((s.terminal_pids.clone(), s.cwd.clone(), s.tab_title.clone(), None));
         }
-        self.completions
+        // 完成紀錄與側寫都可能有——取較新的那個。app 重啟後 sessions 是空的，
+        // 側寫是唯一還記得「現在還開著的終端機」的來源（focus_terminal 同款鏈）。
+        let comp = self
+            .completions
             .iter()
             .rev()
-            .find(|e| e.provider == provider && !e.terminal_pids.is_empty())
-            .map(|e| {
-                (
-                    e.terminal_pids.clone(),
-                    e.cwd.clone(),
-                    e.tab_title.clone(),
-                    Some(e.timestamp),
-                )
+            .find(|e| e.provider == provider && !e.terminal_pids.is_empty());
+        // 側寫沒存 provider，靠 session_id 對回完成紀錄/活 session 判斷歸屬；
+        // 對不到時只在「該 provider 沒有任何完成紀錄」的情況下才採用最新一筆。
+        let hint = self
+            .terminal_hints
+            .iter()
+            .filter(|(sid, h)| {
+                !h.pids.is_empty()
+                    && self
+                        .completions
+                        .iter()
+                        .any(|e| &&e.session_id == sid && e.provider == provider)
             })
+            .max_by_key(|(_, h)| h.saved_at);
+        match (comp, hint) {
+            (Some(c), Some((_, h))) if h.saved_at > c.timestamp => Some((
+                h.pids.clone(),
+                h.cwd.clone(),
+                h.tab_title.clone(),
+                None, // 側寫載入時已過 boot 閘門
+            )),
+            (Some(c), _) => Some((
+                c.terminal_pids.clone(),
+                c.cwd.clone(),
+                c.tab_title.clone(),
+                Some(c.timestamp),
+            )),
+            (None, Some((_, h))) => {
+                Some((h.pids.clone(), h.cwd.clone(), h.tab_title.clone(), None))
+            }
+            (None, None) => None,
+        }
     }
 
     /// R115 規則引擎: 同步 AppConfig 的 rules / rules_enabled 進 SessionManager。
@@ -744,6 +814,28 @@ impl SessionManager {
             if let Some(ref s) = removed {
                 self.last_removed_session = Some(s.clone());
             }
+            // SessionEnd 也帶 pids（hook_server 的低頻事件之一），但這條路徑
+            // early-return 不會走到下面的 upsert——這裡補寫，否則「session 已結束、
+            // 終端機還開著」這個本功能主打的情境反而拿到最舊的側寫。
+            let pids = if event.terminal_pids.is_empty() {
+                removed.as_ref().map(|s| s.terminal_pids.clone()).unwrap_or_default()
+            } else {
+                event.terminal_pids.clone()
+            };
+            if !pids.is_empty() {
+                self.upsert_terminal_hint(
+                    &event.session_id,
+                    pids,
+                    event
+                        .tab_title
+                        .clone()
+                        .or_else(|| removed.as_ref().and_then(|s| s.tab_title.clone())),
+                    event
+                        .cwd
+                        .clone()
+                        .or_else(|| removed.as_ref().and_then(|s| s.cwd.clone())),
+                );
+            }
             // K22 落地：SessionEnd 算「完成」一種（session 從 active map 移除
             // 那一刻 = 結束）。先把 age 算成 owned i64 再丟給 record helper,
             // 跟 Working→Idle 路徑吃同一個 owned-data 簽名。
@@ -810,6 +902,12 @@ impl SessionManager {
         if event.tab_title.is_some() {
             session.tab_title = event.tab_title.clone();
         }
+        let hint = (!session.terminal_pids.is_empty()).then(|| TerminalHint {
+            pids: session.terminal_pids.clone(),
+            tab_title: session.tab_title.clone(),
+            cwd: session.cwd.clone(),
+            saved_at: Utc::now(),
+        });
 
         let prev = session.state;
         session.handle_event(event);
@@ -843,6 +941,11 @@ impl SessionManager {
         } else {
             SessionTransition::None
         };
+
+        // session borrow 釋放後才寫（&mut self）
+        if let Some(h) = hint {
+            self.upsert_terminal_hint(&event.session_id, h.pids, h.tab_title, h.cwd);
+        }
 
         if let Some((provider, age)) = completed_data {
             self.record_completed_session_age(&provider, age);
@@ -1113,6 +1216,42 @@ impl SessionManager {
 }
 
 /// 完成紀錄落地路徑（~/.lobsterpulse/completions.json）。
+pub fn terminal_hints_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".lobsterpulse")
+        .join("session-terminals.json")
+}
+
+/// 終端機側寫整檔寫入（tmp+rename 原子換檔，同 completions 模式）。
+pub fn save_terminal_hints_at(
+    path: &std::path::Path,
+    hints: &HashMap<String, TerminalHint>,
+) -> Result<(), String> {
+    let body = serde_json::to_string(hints).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// 載入終端機側寫，並丟掉「本次開機之前」存的——PID 跨 app 重啟仍有效，
+/// 跨開機必被 OS 回收，留著會聚焦到無關視窗。壞檔/缺檔一律回空不擋啟動。
+pub fn load_terminal_hints_at(
+    path: &std::path::Path,
+    boot_time: DateTime<Utc>,
+) -> HashMap<String, TerminalHint> {
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    match serde_json::from_str::<HashMap<String, TerminalHint>>(&body) {
+        Ok(m) => m.into_iter().filter(|(_, v)| v.saved_at >= boot_time).collect(),
+        Err(e) => {
+            log::warn!("[session] session-terminals.json parse failed（回空重建）: {e}");
+            HashMap::new()
+        }
+    }
+}
+
 pub fn completions_path() -> std::path::PathBuf {
     dirs::home_dir()
         .unwrap_or_default()
@@ -5449,8 +5588,10 @@ mod completions_tests {
         };
         let _ = m.handle_event(&ev1);
 
+        // SessionEnd 事件本身不帶 title（只有 UserPromptSubmit 抓），
+        // 且此處刻意也不帶 pids/cwd，驗證全靠 last_removed_session 回撈
         ev1.hook_event_name = "SessionEnd".into();
-        ev1.terminal_pids = Vec::new(); // SessionEnd 不帶 pids/title
+        ev1.terminal_pids = Vec::new();
         ev1.tab_title = None;
         ev1.cwd = None;
         let t = m.handle_event(&ev1);
@@ -5462,6 +5603,61 @@ mod completions_tests {
         assert_eq!(rec.tab_title.as_deref(), Some("✳ 監控系統配置"), "tab_title 不得遺失");
         assert_eq!(rec.terminal_pids, vec![7, 8], "pids 不得遺失");
         assert_eq!(rec.cwd.as_deref(), Some("D:/proj/監控"), "cwd 不得遺失");
+        // SessionEnd 走 early-return，側寫仍須更新（本功能主打「session 結束、
+        // 終端機還開著」的情境；審查抓到原本會整段跳過）
+        let h = m.terminal_hints.get("se1").expect("SessionEnd 也要寫側寫");
+        assert_eq!(h.pids, vec![7, 8]);
+        assert_eq!(h.tab_title.as_deref(), Some("✳ 監控系統配置"));
+    }
+
+    /// 終端機側寫：事件寫入 → 存檔 → 載入（開機前的丟棄）→ 上限修剪
+    #[test]
+    fn terminal_hints_roundtrip_and_boot_filter() {
+        let mut m = SessionManager::new();
+        let mut ev = crate::hook_event::HookEvent {
+            provider: "claude".into(),
+            session_id: "h1".into(),
+            hook_event_name: "UserPromptSubmit".into(),
+            cwd: Some("D:/proj/監控".into()),
+            tool_name: None,
+            notification_type: None,
+            prompt: None,
+            tool_call_id: None,
+            tool_status: None,
+            tokens_input: None,
+            tokens_output: None,
+            error: None,
+            terminal_pids: vec![11, 22],
+            tab_title: Some("✳ 監控系統配置".into()),
+        };
+        let _ = m.handle_event(&ev);
+        let h = m.terminal_hints.get("h1").expect("事件應寫入側寫");
+        assert_eq!(h.pids, vec![11, 22]);
+        assert_eq!(h.tab_title.as_deref(), Some("✳ 監控系統配置"));
+
+        let dir = std::env::temp_dir().join(format!("lp-hints-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session-terminals.json");
+        save_terminal_hints_at(&path, &m.terminal_hints).expect("寫入應成功");
+
+        // 開機時間早於存檔 → 保留
+        let loaded = load_terminal_hints_at(&path, Utc::now() - chrono::Duration::hours(1));
+        assert_eq!(loaded.len(), 1, "開機後存的側寫應保留");
+        assert_eq!(loaded["h1"].cwd.as_deref(), Some("D:/proj/監控"));
+        // 開機時間晚於存檔（重開機過）→ 丟棄，PID 已被 OS 回收
+        let after_boot = load_terminal_hints_at(&path, Utc::now() + chrono::Duration::hours(1));
+        assert!(after_boot.is_empty(), "重開機前的側寫必須丟棄");
+        // 壞檔不擋啟動
+        std::fs::write(&path, "{bad").unwrap();
+        assert!(load_terminal_hints_at(&path, Utc::now() - chrono::Duration::hours(1)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // 上限修剪：塞爆後保留最新
+        for i in 0..(MAX_TERMINAL_HINTS + 10) {
+            ev.session_id = format!("s{i}");
+            let _ = m.handle_event(&ev);
+        }
+        assert_eq!(m.terminal_hints.len(), MAX_TERMINAL_HINTS, "側寫數量須設上限");
     }
 
     #[test]
@@ -5490,6 +5686,14 @@ mod completions_tests {
         assert!(ts2.is_some(), "完成紀錄路徑須帶時間戳供重開機閘門");
 
         assert!(m.provider_focus_target("codex").is_none(), "別的 provider 無目標");
+
+        // app 重啟情境：sessions 空、只剩側寫（比完成紀錄新）→ 應採用側寫
+        m.upsert_terminal_hint("c1", vec![77], Some("✳ 監控系統配置".into()), Some("D:/h".into()));
+        let (pids3, cwd3, tab3, ts3) = m.provider_focus_target("claude").expect("應有目標");
+        assert_eq!(pids3, vec![77], "側寫較新時優先");
+        assert_eq!(cwd3.as_deref(), Some("D:/h"));
+        assert_eq!(tab3.as_deref(), Some("✳ 監控系統配置"));
+        assert!(ts3.is_none(), "側寫路徑不套重開機閘門（載入時已濾）");
     }
 
     #[test]

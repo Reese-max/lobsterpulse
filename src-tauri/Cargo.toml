@@ -44,6 +44,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_SystemInformation",
+  # 前景鎖繞道：AttachThreadInput + GetCurrentThreadId（0.61 都在 System_Threading）
+  "Win32_System_Threading",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

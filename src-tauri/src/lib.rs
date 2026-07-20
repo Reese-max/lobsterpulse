@@ -589,10 +589,14 @@ fn focus_terminal(
                 .iter()
                 .rev()
                 .find(|e| e.session_id == session_id && !e.terminal_pids.is_empty());
+            // hint = 跨 app 重啟保留的側寫（app 重啟後 session map 是空的，
+            // 但終端機還開著）；載入時已用 boot time 濾過，故不需重開機閘門
+            let hint = m.terminal_hints.get(&session_id);
             let from_sess = sess
                 .map(|s| s.terminal_pids.clone())
-                .filter(|v| !v.is_empty());
-            // PID 來自完成紀錄（非活 session）時帶出紀錄時間，供重開機閘門用
+                .filter(|v| !v.is_empty())
+                .or_else(|| hint.map(|h| h.pids.clone()).filter(|v| !v.is_empty()));
+            // PID 來自完成紀錄（非活 session/側寫）時帶出紀錄時間，供重開機閘門用
             let (pids, comp_ts) = match from_sess {
                 Some(p) => (p, None),
                 None => (
@@ -602,9 +606,11 @@ fn focus_terminal(
             };
             let cwd = sess
                 .and_then(|s| s.cwd.clone())
+                .or_else(|| hint.and_then(|h| h.cwd.clone()))
                 .or_else(|| comp.and_then(|e| e.cwd.clone()));
             let tab_title = sess
                 .and_then(|s| s.tab_title.clone())
+                .or_else(|| hint.and_then(|h| h.tab_title.clone()))
                 .or_else(|| comp.and_then(|e| e.tab_title.clone()));
             (pids, cwd, tab_title, comp_ts)
         };
@@ -3823,6 +3829,15 @@ pub fn run() {
             let mut session_manager = SessionManager::new();
             session_manager.completions =
                 session::load_completions_at(&session::completions_path());
+            // 終端機側寫跨 app 重啟保留（終端機還開著，PID 仍有效）；
+            // 開機前存的一律丟棄——PID 已被 OS 回收
+            #[cfg(windows)]
+            {
+                session_manager.terminal_hints = session::load_terminal_hints_at(
+                    &session::terminal_hints_path(),
+                    terminal::boot_time_utc(),
+                );
+            }
             app.manage(AppSessionManager(Mutex::new(session_manager)));
 
             // 今日/昨日 token：直接掃 ~/.claude/projects JSONL（stats-cache 停更數月）。
@@ -3882,9 +3897,14 @@ pub fn run() {
                         tokio::spawn(async move {
                             while let Some(event) = rx.recv().await {
                                 let mgr = h.state::<AppSessionManager>();
-                                let (transition, firings, completions_snap) = {
+                                let (transition, firings, completions_snap, hints_snap) = {
                                     let mut m = mgr.0.lock().unwrap();
                                     let t = m.handle_event(&event);
+                                    // 終端機側寫：只有帶 pids/title 的低頻事件才會變動，
+                                    // 不對每個 PreToolUse/PostToolUse 寫檔
+                                    let hints = (!event.terminal_pids.is_empty()
+                                        || event.tab_title.is_some())
+                                        .then(|| m.terminal_hints.clone());
                                     // 完成紀錄：lock 內只動記憶體，clone 小 deque 出來
                                     // lock 外寫檔（避免 fs 慢時 hook 事件排隊）
                                     let snap = if matches!(t, session::SessionTransition::Completed) {
@@ -3902,7 +3922,7 @@ pub fn run() {
                                     // RuleFiredEvent, 給前端 emit `rule-fired` Tauri event
                                     // 觸發 Toast / Sound / Log action。
                                     let f = std::mem::take(&mut m.rule_firings);
-                                    (t, f, snap)
+                                    (t, f, snap, hints)
                                 };
                                 if let Some(snap) = completions_snap {
                                     if let Err(e) = session::save_completions_at(
@@ -3910,6 +3930,14 @@ pub fn run() {
                                         &snap,
                                     ) {
                                         log::warn!("[session] completions persist failed: {e}");
+                                    }
+                                }
+                                if let Some(snap) = hints_snap {
+                                    if let Err(e) = session::save_terminal_hints_at(
+                                        &session::terminal_hints_path(),
+                                        &snap,
+                                    ) {
+                                        log::warn!("[session] terminal hints persist failed: {e}");
                                     }
                                 }
                                 let _ = h.emit("session-update", ());

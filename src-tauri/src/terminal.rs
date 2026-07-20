@@ -320,16 +320,49 @@ exit } } } }";
         .spawn();
 }
 
+/// 聚焦單一視窗。Windows 前景鎖：非前景進程呼叫 SetForegroundWindow 會被拒
+/// （LP 剛啟動、或使用者是透過鍵盤/通知觸發時就會踩到）。標準解法是把自己的
+/// 輸入佇列暫時接到目前前景執行緒上，取得同等權限後再設定，最後務必 detach。
 fn try_focus(hwnd: isize) -> bool {
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
+        SetForegroundWindow, ShowWindow, SwitchToThisWindow, SW_RESTORE,
     };
     let hwnd = hwnd as windows_sys::Win32::Foundation::HWND;
+    // 成功與否一律以「前景視窗真的變成它」判定——SetForegroundWindow 的回傳值
+    // 在前景鎖下會騙人（實測回 0 卻已切、或回非 0 但沒切）。
+    let landed = |h: windows_sys::Win32::Foundation::HWND| unsafe { GetForegroundWindow() == h };
     unsafe {
         if IsIconic(hwnd) != 0 {
             ShowWindow(hwnd, SW_RESTORE);
         }
-        SetForegroundWindow(hwnd) != 0
+        SetForegroundWindow(hwnd);
+        if landed(hwnd) {
+            return true;
+        }
+        // 前景鎖：非前景進程被拒。把自己的輸入佇列接到目前前景執行緒上取得
+        // 同等權限，再做一整套抬升動作，最後務必 detach（不 detach 兩執行緒
+        // 的輸入佇列會黏住，游標/焦點行為會出怪事）。
+        let fg = GetForegroundWindow();
+        let fg_thread = if fg.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(fg, std::ptr::null_mut())
+        };
+        let cur = GetCurrentThreadId();
+        if fg_thread != 0 && fg_thread != cur {
+            AttachThreadInput(cur, fg_thread, 1);
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+            AttachThreadInput(cur, fg_thread, 0);
+            if landed(hwnd) {
+                return true;
+            }
+        }
+        // 最後手段：SwitchToThisWindow（Alt-Tab 用的同一條路，不受前景鎖限制）
+        SwitchToThisWindow(hwnd, 1);
+        landed(hwnd)
     }
 }
 

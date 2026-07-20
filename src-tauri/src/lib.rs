@@ -882,14 +882,14 @@ fn merge_last_known_good(
 /// Usage 面板：讀 ~/.claude/stats-cache.json 聚合 today/yesterday/30d token 統計。
 /// 檔案缺 / 壞 JSON → None（前端顯示 No data），不誤報 0。
 #[tauri::command]
-fn get_claude_daily_stats(live: tauri::State<AppLiveDaily>) -> Option<serde_json::Value> {
+fn get_claude_daily_stats() -> Option<serde_json::Value> {
     // stats-cache 會停更數月（實測 101 天）；今天/昨天改用直接掃 JSONL 的即時值，
     // 30d/cost 仍來自 stats-cache（掃 3GB 太貴），過期時前端會標示。
     // stats-cache 缺失/損毀時不整個回 None——即時值本來就是為了繞開它而做的。
     let mut v = dirs::home_dir()
         .and_then(|h| quota::anthropic::daily_stats(&h))
         .unwrap_or_else(|| serde_json::json!({}));
-    let snap = live.0.lock().unwrap().clone();
+    let snap = LIVE_DAILY.lock().unwrap().clone();
     if let Some(d) = snap {
         v["today_tokens"] = serde_json::json!(d.today);
         v["yesterday_tokens"] = serde_json::json!(d.yesterday);
@@ -914,7 +914,23 @@ pub struct LiveDaily {
     pub at: std::time::Instant,
 }
 
-pub struct AppLiveDaily(pub Mutex<Option<LiveDaily>>);
+/// 全域而非 Tauri State：膠囊模板是在 `run_local_usage_runners`（無 AppHandle）
+/// 裡算的，也要吃同一份即時值，不能有兩個真相來源。
+pub static LIVE_DAILY: Mutex<Option<LiveDaily>> = Mutex::new(None);
+
+/// 今日 token 的人類可讀寫法，與前端 `fmtTok` 同格式（1.1B / 12.3M / 456K）。
+pub fn fmt_tokens(v: u64) -> String {
+    let f = v as f64;
+    if f >= 1e9 {
+        format!("{:.1}B", f / 1e9)
+    } else if f >= 1e6 {
+        format!("{:.1}M", f / 1e6)
+    } else if f >= 1e3 {
+        format!("{:.1}K", f / 1e3)
+    } else {
+        v.to_string()
+    }
+}
 
 /// Usage 面板卡片清單：偵測本機實際安裝的 AI CLI（沒安裝的不顯示）。
 #[tauri::command]
@@ -1785,6 +1801,20 @@ fn render_handlebars(tpl: &str, json: &serde_json::Value) -> String {
 }
 
 #[cfg(test)]
+mod fmt_tokens_tests {
+    use super::fmt_tokens;
+
+    #[test]
+    fn matches_frontend_fmt_tok_thresholds() {
+        assert_eq!(fmt_tokens(0), "0");
+        assert_eq!(fmt_tokens(999), "999");
+        assert_eq!(fmt_tokens(1_000), "1.0K");
+        assert_eq!(fmt_tokens(1_234_567), "1.2M");
+        assert_eq!(fmt_tokens(1_070_000_000), "1.1B");
+    }
+}
+
+#[cfg(test)]
 mod render_handlebars_tests {
     use super::render_handlebars;
 
@@ -1984,8 +2014,18 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
             Ok(o) if o.status.success() => {
                 let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
                 // 解析 JSON 供 capsule 讀 raw 欄位；失敗則 null
-                let raw = serde_json::from_str::<serde_json::Value>(&stdout)
+                let mut raw = serde_json::from_str::<serde_json::Value>(&stdout)
                     .unwrap_or(serde_json::Value::Null);
+                // claude runner 的 today_tokens 來自停更數月的 ccusage 快取（實測顯示
+                // "N/A"）。面板已改吃即時 JSONL 掃描，膠囊也補同一份，否則同一個數字
+                // 兩處不一致。日期對不上（跨午夜、下輪掃描前）就不覆蓋，寧可維持 N/A。
+                if r.name == "claude" {
+                    if let (Some(o), Some(d)) = (raw.as_object_mut(), LIVE_DAILY.lock().unwrap().clone()) {
+                        if d.date == chrono::Local::now().format("%Y-%m-%d").to_string() {
+                            o.insert("today_tokens".into(), serde_json::json!(fmt_tokens(d.today)));
+                        }
+                    }
+                }
                 let text = if let Some(tpl) = &r.template {
                     if raw.is_object() {
                         render_handlebars(tpl, &raw)
@@ -3843,9 +3883,7 @@ pub fn run() {
             // 今日/昨日 token：直接掃 ~/.claude/projects JSONL（stats-cache 停更數月）。
             // 掃描約 1~3 秒且會讀上百 MB → 背景 spawn_blocking，每 5 分鐘一次，
             // UI 只讀快取值（沒算完前是 None，前端顯示 —）。
-            app.manage(AppLiveDaily(Mutex::new(None)));
             {
-                let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     loop {
                         if let Some(home) = dirs::home_dir() {
@@ -3854,8 +3892,7 @@ pub fn run() {
                             })
                             .await;
                             if let Ok((today, yesterday, date)) = r {
-                                let st = h.state::<AppLiveDaily>();
-                                *st.0.lock().unwrap() = Some(LiveDaily {
+                                *LIVE_DAILY.lock().unwrap() = Some(LiveDaily {
                                     today,
                                     yesterday,
                                     date: date.clone(),

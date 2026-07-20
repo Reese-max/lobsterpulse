@@ -197,3 +197,16 @@ body.light .uv-card { background: rgba(30, 38, 48, 0.88); }
 /* 深色卡底為主題無關設計，文字比照 .uv-name/.uv-plan 寫死白色（light theme 下 --text 變黑會不可讀） */
 .uv-recent-name { font-weight: 500; color: rgba(255, 255, 255, 0.92); }
 .uv-recent-time { margin-left: auto; color: rgba(255, 255, 255, 0.45); font-size: calc(11px * var(--scale, 1)); }
+/* 列上的「切到終端機」快捷鍵：平常低調，hover 列時亮起 */
+.uv-row-jump {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: calc(12px * var(--scale, 1));
+  cursor: pointer;
+}
+.uv-recent-row:hover .uv-row-jump { color: rgba(255, 255, 255, 0.8); }
+.uv-row-jump:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }

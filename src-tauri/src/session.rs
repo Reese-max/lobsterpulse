@@ -576,6 +576,34 @@ impl SessionManager {
         }
     }
 
+    /// 「切到終端機」按 provider 挑目標：等待回應的 session 最優先（使用者要
+    /// 跳回去回話），其次最近活動的 session，最後退回最新完成紀錄。
+    /// 回 (pids, cwd, 完成紀錄時間戳)——時間戳僅完成紀錄路徑有值，供重開機閘門。
+    pub fn provider_focus_target(
+        &self,
+        provider: &str,
+    ) -> Option<(Vec<u32>, Option<String>, Option<DateTime<Utc>>)> {
+        let mut live: Vec<&Session> = self
+            .sessions
+            .values()
+            .filter(|s| s.provider == provider && !s.terminal_pids.is_empty())
+            .collect();
+        live.sort_by_key(|s| {
+            (
+                s.state != SessionState::WaitingForUser,
+                std::cmp::Reverse(s.last_event_time),
+            )
+        });
+        if let Some(s) = live.first() {
+            return Some((s.terminal_pids.clone(), s.cwd.clone(), None));
+        }
+        self.completions
+            .iter()
+            .rev()
+            .find(|e| e.provider == provider && !e.terminal_pids.is_empty())
+            .map(|e| (e.terminal_pids.clone(), e.cwd.clone(), Some(e.timestamp)))
+    }
+
     /// R115 規則引擎: 同步 AppConfig 的 rules / rules_enabled 進 SessionManager。
     /// 給 lib.rs hook_server 在 AppConfig 載入後呼叫 (R116+ 接入點)。
     /// MVP 階段尚未串接, 預設值已由 new() 設好。
@@ -5363,6 +5391,34 @@ mod completions_tests {
             "s5",
             "頭端最舊被擠掉 5 筆"
         );
+    }
+
+    #[test]
+    fn provider_focus_target_prefers_waiting_then_recent_then_completion() {
+        let mut m = SessionManager::new();
+        // 等待中 session（較舊）應壓過較新的 Working session
+        let mut waiting = Session::new("w".into(), "claude".into(), Some("D:/a".into()));
+        waiting.state = SessionState::WaitingForUser;
+        waiting.terminal_pids = vec![1];
+        let mut working = Session::new("k".into(), "claude".into(), Some("D:/b".into()));
+        working.state = SessionState::Working;
+        working.terminal_pids = vec![2];
+        working.last_event_time = waiting.last_event_time + chrono::Duration::seconds(60);
+        m.sessions.insert("w".into(), waiting);
+        m.sessions.insert("k".into(), working);
+        let (pids, cwd, ts) = m.provider_focus_target("claude").expect("應有目標");
+        assert_eq!(pids, vec![1], "等待中優先");
+        assert_eq!(cwd.as_deref(), Some("D:/a"));
+        assert!(ts.is_none(), "活 session 不帶完成時間戳");
+
+        // 無活 session（或 pids 全空）→ 退回最新完成紀錄
+        m.sessions.clear();
+        m.record_completion("claude", "c1", Some("D:/c".into()), vec![9]);
+        let (pids2, _, ts2) = m.provider_focus_target("claude").expect("應退回完成紀錄");
+        assert_eq!(pids2, vec![9]);
+        assert!(ts2.is_some(), "完成紀錄路徑須帶時間戳供重開機閘門");
+
+        assert!(m.provider_focus_target("codex").is_none(), "別的 provider 無目標");
     }
 
     #[test]

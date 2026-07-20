@@ -519,7 +519,7 @@ async function init() {
           windowMs: 5000,
         });
       }
-      showTaskToast(provider, "⏸ 等待處理");
+      showTaskToast(provider, "⏸ 等待處理・點我跳過去", "wait");
     });
     invoke("plugin:event|listen", { event: "task-waiting", target: { kind: "Any" }, handler: waitingCb }).catch(() => {});
   }, 2000);
@@ -2598,14 +2598,22 @@ function showTaskToast(provider, text, kind) {
   }, 4500);
 }
 
-// 點 toast → 收掉 toast、打開新版額度面板，並直接展開該 provider 最新一筆
-// 完成紀錄詳情（2026-07-20 使用者反饋「不太方便」：原本還要自己找列再點一次）
+// 點 toast → 收掉 toast。完成 toast：開額度面板＋直接展開該 provider 最新
+// 完成紀錄詳情；等待 toast：直接切到該 session 的終端機（要跳回去回話），
+// 切不過去才退回開面板。
 document.addEventListener("click", (e) => {
   const t = e.target.closest("#lp-toast");
   if (!t || t.classList.contains("hidden")) return;
   clearTimeout(lpToastTimer);
   t.classList.add("hidden");
   t.setAttribute("aria-hidden", "true");
+  if (t.dataset.kind === "wait" && t.dataset.provider) {
+    invoke("focus_provider_terminal", { provider: t.dataset.provider }).catch((err) => {
+      console.warn("[main] focus_provider_terminal 失敗，退回開面板", err);
+      showView("usage");
+    });
+    return;
+  }
   showView("usage");
   if (t.dataset.kind === "done" && t.dataset.provider) window.UsageView?.openLatest?.(t.dataset.provider);
 });

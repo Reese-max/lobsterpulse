@@ -209,13 +209,18 @@
         return `<div class="uv-recent-row${open ? " open" : ""}" data-rkey="${esc(key)}">${providerIconHtml(r.provider, 13)}
           <span class="uv-recent-name">${esc(label)}</span>
           ${proj ? `<span class="uv-recent-proj">${esc(proj)}</span>` : ""}
-          <span class="uv-recent-time">${esc(ago)}</span></div>${open ? recentDetailHtml(r) : ""}`;
+          <span class="uv-recent-time">${esc(ago)}</span>
+          <button class="uv-row-jump" data-focus-term="${esc(r.session_id)}"${
+            r.cwd ? ` data-open-dir="${esc(String(r.cwd))}"` : ""
+          } title="切到終端機">⌨</button></div>${open ? recentDetailHtml(r) : ""}`;
       }).join("");
     fitWindow();
   }
 
-  // 點完成紀錄列 → 就地展開/收合詳情（不跳視圖）
+  // 點完成紀錄列 → 就地展開/收合詳情（不跳視圖）。
+  // 列上的 ⌨ 快捷鍵（data-focus-term）點擊不觸發展開，交給下方委派處理。
   document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-focus-term]")) return;
     const row = e.target.closest(".uv-recent-row");
     if (!row || !row.dataset.rkey) return;
     recentOpenKey = recentOpenKey === row.dataset.rkey ? null : row.dataset.rkey;

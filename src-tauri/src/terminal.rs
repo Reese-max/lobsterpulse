@@ -204,17 +204,24 @@ pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(
             .find(|(_, _, t)| t.to_lowercase().contains(&hl))
         {
             if try_focus(hwnd) {
-                select_tab_async(hwnd, h);
+                select_tab_async(&[hwnd], h);
                 return Ok(());
             }
         }
     }
-    // 2) 退回鏈序由遠到近（終端機宿主優先）
+    // 2) 退回鏈序由遠到近（終端機宿主優先）。同 PID 可能有多個視窗
+    //    （WT 單進程多視窗＋雜訊 console 視窗），先聚焦第一個聚得起來的求快，
+    //    再把該 PID 全部視窗交給 UIA 腳本——找到含目標分頁的視窗會改聚焦它。
     for &pid in pids.iter().rev() {
-        if let Some(&&(hwnd, _, _)) = candidates.iter().find(|(_, p, _)| *p == pid) {
+        let same_pid: Vec<isize> = candidates
+            .iter()
+            .filter(|(_, p, _)| *p == pid)
+            .map(|&&(h, _, _)| h)
+            .collect();
+        for &hwnd in &same_pid {
             if try_focus(hwnd) {
                 if let Some(h) = hint {
-                    select_tab_async(hwnd, h);
+                    select_tab_async(&same_pid, h);
                 }
                 return Ok(());
             }
@@ -225,26 +232,41 @@ pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(
 
 /// WT 多分頁：視窗聚焦後用 UI Automation 把標題含 hint 的分頁切成作用中
 /// （WT 視窗標題只反映作用中分頁，目標分頁在背景時光聚焦視窗不夠）。
+/// 可傳多個候選視窗（WT 單進程多視窗）：腳本逐一掃描，找到含目標分頁的
+/// 視窗就聚焦「那個視窗」並選中分頁——同 PID 選錯視窗時自我修正。
 /// 走 PowerShell 的 System.Windows.Automation——Rust 直接摸 COM/UIA 太重。
 /// fire-and-forget＋隱窗（踩雷§25 不能閃黑窗）；沒有 TabItem 的普通視窗
 /// 找不到就默默結束，失敗退化成「只聚焦視窗」。
 /// ponytail: spawn 無逾時——目標視窗卡死時 UIA 會卡住該 powershell 常駐；
 /// 手動點擊觸發、頻率極低，觀察到堆積再加 timeout/kill。
-fn select_tab_async(hwnd: isize, hint: &str) {
+fn select_tab_async(hwnds: &[isize], hint: &str) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    // 純 ASCII inline script；hwnd/hint 走 env var 免跳脫（硬規則7）
+    if hwnds.is_empty() {
+        return;
+    }
+    // 純 ASCII inline script；hwnds/hint 走 env var 免跳脫（硬規則7）
     const SCRIPT: &str = "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; \
-$h=[IntPtr][long]$env:LP_TAB_HWND; \
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($h); \
-$c=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::TabItem); \
-$tabs=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$c); \
+Add-Type -Namespace LP -Name W -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int n); [DllImport(\"user32.dll\")] public static extern bool IsIconic(IntPtr h);'; \
 $hint=$env:LP_TAB_HINT.ToLower(); \
-foreach($t in $tabs){ if($t.Current.Name.ToLower().Contains($hint)){ \
-$t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); break } }";
+$c=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::TabItem); \
+foreach($hs in $env:LP_TAB_HWND.Split(',')){ \
+$h=[IntPtr][long]$hs; \
+try{$root=[System.Windows.Automation.AutomationElement]::FromHandle($h)}catch{continue}; \
+foreach($t in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$c)){ \
+if($t.Current.Name.ToLower().Contains($hint)){ \
+if([LP.W]::IsIconic($h)){[void][LP.W]::ShowWindow($h,9)}; \
+[void][LP.W]::SetForegroundWindow($h); \
+$t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); \
+exit } } }";
+    let joined = hwnds
+        .iter()
+        .map(|h| h.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let _ = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
-        .env("LP_TAB_HWND", hwnd.to_string())
+        .env("LP_TAB_HWND", joined)
         .env("LP_TAB_HINT", hint)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();

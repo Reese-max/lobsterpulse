@@ -78,19 +78,25 @@
     // 當成今天的數字顯示 → 過期一律顯示 —，並標明停在哪天，不假裝有資料。
     const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD（本地時區）
     const fresh = window.QuotaCards.statsFreshness(stats.computed_date, today);
+    // 今天/昨天走後端直接掃 JSONL 的即時值（live_date 存在即代表算完了）；
+    // 30 天與累計花費仍來自可能停更的 stats-cache，過期就標 —。
+    const hasLive = stats.live_date === today;
     const cost30 = fmtCost(stats.total_cost_usd);
-    const tok = (v) => (fresh.stale ? "—" : fmtTok(v) + " tokens");
+    const liveTok = (v) => (hasLive ? fmtTok(v) + " tokens" : "—");
     const rows = [
-      ["Today", tok(stats.today_tokens)],
-      ["Yesterday", tok(stats.yesterday_tokens)],
+      ["Today", liveTok(stats.today_tokens)],
+      ["Yesterday", liveTok(stats.yesterday_tokens)],
       ["Last 30 Days", fresh.stale ? "—" : fmtTok(stats.tokens_30d) + " tokens" + (cost30 ? " · " + cost30 + " 累計" : "")],
     ].map(([k, v]) => `<div class="uv-krow"><span>${k}</span><span>${esc(v)}</span></div>`).join("");
-    const note = fresh.stale
-      ? `<div class="uv-note">⚠ stats-cache 停在 ${esc(stats.computed_date || "未知")}${
-          fresh.days !== null ? `（${fresh.days} 天未更新）` : ""
-        }——統計無法顯示`
-        + `</div>`
-      : `<div class="uv-note">stats-cache 統計日期：${esc(stats.computed_date)}</div>`;
+    const age = Number.isFinite(stats.live_age_secs)
+      ? `${formatRelativeTime(stats.live_age_secs)}掃描` : "即時掃描";
+    const note = !hasLive
+      ? `<div class="uv-note">今日統計計算中…（首次約需數秒）</div>`
+      : fresh.stale
+        ? `<div class="uv-note">今日/昨日：${esc(age)}；30 天統計來自 stats-cache（停在 ${esc(
+            stats.computed_date || "未知"
+          )}${fresh.days !== null ? `，${fresh.days} 天未更新` : ""}）</div>`
+        : `<div class="uv-note">今日/昨日：${esc(age)}；stats-cache 統計日期：${esc(stats.computed_date)}</div>`;
     return rows + note;
   }
 

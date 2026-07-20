@@ -876,9 +876,39 @@ fn merge_last_known_good(
 /// Usage 面板：讀 ~/.claude/stats-cache.json 聚合 today/yesterday/30d token 統計。
 /// 檔案缺 / 壞 JSON → None（前端顯示 No data），不誤報 0。
 #[tauri::command]
-fn get_claude_daily_stats() -> Option<serde_json::Value> {
-    dirs::home_dir().and_then(|h| quota::anthropic::daily_stats(&h))
+fn get_claude_daily_stats(live: tauri::State<AppLiveDaily>) -> Option<serde_json::Value> {
+    // stats-cache 會停更數月（實測 101 天）；今天/昨天改用直接掃 JSONL 的即時值，
+    // 30d/cost 仍來自 stats-cache（掃 3GB 太貴），過期時前端會標示。
+    // stats-cache 缺失/損毀時不整個回 None——即時值本來就是為了繞開它而做的。
+    let mut v = dirs::home_dir()
+        .and_then(|h| quota::anthropic::daily_stats(&h))
+        .unwrap_or_else(|| serde_json::json!({}));
+    let snap = live.0.lock().unwrap().clone();
+    if let Some(d) = snap {
+        v["today_tokens"] = serde_json::json!(d.today);
+        v["yesterday_tokens"] = serde_json::json!(d.yesterday);
+        // 日期用「掃描當下」的，不可用 now 重算：跨午夜後下一輪掃描完成前，
+        // 重算會把昨天算出的數字標成新一天的今天（審查抓到的每日必現 bug）。
+        v["live_date"] = serde_json::json!(d.date);
+        v["live_age_secs"] = serde_json::json!(d.at.elapsed().as_secs());
+    }
+    if v.as_object().is_some_and(|o| o.is_empty()) {
+        return None; // stats-cache 沒有、掃描也還沒完成 → 前端顯示 No data
+    }
+    Some(v)
 }
+
+/// 直接掃 JSONL 得到的每日 token 快照；背景任務每 5 分鐘更新。
+#[derive(Clone)]
+pub struct LiveDaily {
+    pub today: u64,
+    pub yesterday: u64,
+    /// 掃描當下所認定的本地日期（跨午夜判斷用，不可事後重算）
+    pub date: String,
+    pub at: std::time::Instant,
+}
+
+pub struct AppLiveDaily(pub Mutex<Option<LiveDaily>>);
 
 /// Usage 面板卡片清單：偵測本機實際安裝的 AI CLI（沒安裝的不顯示）。
 #[tauri::command]
@@ -3794,6 +3824,37 @@ pub fn run() {
             session_manager.completions =
                 session::load_completions_at(&session::completions_path());
             app.manage(AppSessionManager(Mutex::new(session_manager)));
+
+            // 今日/昨日 token：直接掃 ~/.claude/projects JSONL（stats-cache 停更數月）。
+            // 掃描約 1~3 秒且會讀上百 MB → 背景 spawn_blocking，每 5 分鐘一次，
+            // UI 只讀快取值（沒算完前是 None，前端顯示 —）。
+            app.manage(AppLiveDaily(Mutex::new(None)));
+            {
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        if let Some(home) = dirs::home_dir() {
+                            let r = tauri::async_runtime::spawn_blocking(move || {
+                                quota::claude_logs::scan_today_yesterday(&home)
+                            })
+                            .await;
+                            if let Ok((today, yesterday, date)) = r {
+                                let st = h.state::<AppLiveDaily>();
+                                *st.0.lock().unwrap() = Some(LiveDaily {
+                                    today,
+                                    yesterday,
+                                    date: date.clone(),
+                                    at: std::time::Instant::now(),
+                                });
+                                log::debug!(
+                                    "[claude_logs] {date} today={today} yesterday={yesterday}"
+                                );
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    }
+                });
+            }
 
             // OGRE-R1 (T-OGRE11/T-OGRE12): OTel SDK init at startup。讀
             // OTEL_EXPORTER_OTLP_ENDPOINT env var（預設 localhost:4317 gRPC）。

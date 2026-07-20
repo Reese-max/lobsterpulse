@@ -177,3 +177,14 @@ test("waitingSessions 空輸入安全", () => {
   assert.deepStrictEqual(waitingSessions(null, ["claude"]), []);
   assert.deepStrictEqual(waitingSessions([{ id: "a", provider: "claude", state: "waiting_for_user" }], null), []);
 });
+
+test("statsFreshness 判過期：停更數月/缺日期視為過期，昨天算新鮮", () => {
+  const { statsFreshness } = require("../src/quota-cards-lib.js");
+  assert.deepStrictEqual(statsFreshness("2026-07-20", "2026-07-20"), { stale: false, days: 0 });
+  assert.deepStrictEqual(statsFreshness("2026-07-19", "2026-07-20"), { stale: false, days: 1 });
+  assert.deepStrictEqual(statsFreshness("2026-07-18", "2026-07-20"), { stale: true, days: 2 });
+  assert.strictEqual(statsFreshness("2026-04-10", "2026-07-20").stale, true);
+  assert.strictEqual(statsFreshness("2026-04-10", "2026-07-20").days, 101);
+  assert.deepStrictEqual(statsFreshness(null, "2026-07-20"), { stale: true, days: null });
+  assert.deepStrictEqual(statsFreshness("壞掉", "2026-07-20"), { stale: true, days: null });
+});

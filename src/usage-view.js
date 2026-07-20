@@ -74,14 +74,23 @@
 
   function detailRows(stats) {
     if (!stats) return "";
+    // 快取停更時（stats-cache 由 Claude Code 自己寫，實測停過 3 個月）舊值會被
+    // 當成今天的數字顯示 → 過期一律顯示 —，並標明停在哪天，不假裝有資料。
+    const today = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD（本地時區）
+    const fresh = window.QuotaCards.statsFreshness(stats.computed_date, today);
     const cost30 = fmtCost(stats.total_cost_usd);
+    const tok = (v) => (fresh.stale ? "—" : fmtTok(v) + " tokens");
     const rows = [
-      ["Today", fmtTok(stats.today_tokens) + " tokens"],
-      ["Yesterday", fmtTok(stats.yesterday_tokens) + " tokens"],
-      ["Last 30 Days", fmtTok(stats.tokens_30d) + " tokens" + (cost30 ? " · " + cost30 + " 累計" : "")],
+      ["Today", tok(stats.today_tokens)],
+      ["Yesterday", tok(stats.yesterday_tokens)],
+      ["Last 30 Days", fresh.stale ? "—" : fmtTok(stats.tokens_30d) + " tokens" + (cost30 ? " · " + cost30 + " 累計" : "")],
     ].map(([k, v]) => `<div class="uv-krow"><span>${k}</span><span>${esc(v)}</span></div>`).join("");
-    const note = stats.computed_date
-      ? `<div class="uv-note">stats-cache 統計日期：${esc(stats.computed_date)}</div>` : "";
+    const note = fresh.stale
+      ? `<div class="uv-note">⚠ stats-cache 停在 ${esc(stats.computed_date || "未知")}${
+          fresh.days !== null ? `（${fresh.days} 天未更新）` : ""
+        }——統計無法顯示`
+        + `</div>`
+      : `<div class="uv-note">stats-cache 統計日期：${esc(stats.computed_date)}</div>`;
     return rows + note;
   }
 

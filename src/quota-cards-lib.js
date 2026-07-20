@@ -110,7 +110,20 @@
       .sort((a, b) => (b.last_event_secs_ago || 0) - (a.last_event_secs_ago || 0));
   }
 
-  const api = { parseResetDuration, normalizeRunnerCard, recentCompletions, waitingSessions };
+  // stats-cache 新鮮度：Claude Code 自己寫的快取會停更（實測停過 3 個月），
+  // 停更時舊值仍會被當成「今天」顯示 → 先判斷是否過期，過期就不給數字。
+  // 回 { stale, days }；日期字串壞掉/缺失一律視為過期。
+  function statsFreshness(computedDate, todayStr) {
+    const t = Date.parse(todayStr);
+    const c = computedDate ? Date.parse(computedDate) : NaN;
+    if (!Number.isFinite(t) || !Number.isFinite(c)) return { stale: true, days: null };
+    const days = Math.round((t - c) / 86400000);
+    return { stale: days > 1, days }; // 昨天算新鮮（跨日剛好還沒重算）
+  }
+
+  const api = {
+    parseResetDuration, normalizeRunnerCard, recentCompletions, waitingSessions, statsFreshness,
+  };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.QuotaCards = api;
 })(typeof window !== "undefined" ? window : globalThis);

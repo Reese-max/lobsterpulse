@@ -159,3 +159,21 @@ test("recentCompletions 帶出 cwd（取最新一筆的）", () => {
   assert.strictEqual(rows[0].cwd, "D:/Users/x/監控", "同 session 取最新那筆的 cwd");
   assert.strictEqual(rows[1].cwd, null, "無 cwd 回 null");
 });
+
+test("waitingSessions 只留等待中的本機 CLI、等最久在前", () => {
+  const { waitingSessions } = require("../src/quota-cards-lib.js");
+  const rows = waitingSessions([
+    { id: "a", provider: "claude", state: "waiting_for_user", last_event_secs_ago: 30 },
+    { id: "b", provider: "claude", state: "working", last_event_secs_ago: 5 },
+    { id: "c", provider: "codex", state: "waiting_for_user", last_event_secs_ago: 300 },
+    { id: "d", provider: "openx", state: "waiting_for_user", last_event_secs_ago: 999 }, // bot 不進來
+    null,
+  ], ["claude", "codex"]);
+  assert.deepStrictEqual(rows.map((r) => r.id), ["c", "a"], "等最久在前、非等待與 bot 排除");
+});
+
+test("waitingSessions 空輸入安全", () => {
+  const { waitingSessions } = require("../src/quota-cards-lib.js");
+  assert.deepStrictEqual(waitingSessions(null, ["claude"]), []);
+  assert.deepStrictEqual(waitingSessions([{ id: "a", provider: "claude", state: "waiting_for_user" }], null), []);
+});

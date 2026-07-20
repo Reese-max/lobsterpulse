@@ -143,6 +143,30 @@ body.light .uv-card { background: rgba(30, 38, 48, 0.88); }
   padding: 8px 12px;
   margin-top: 8px;
 }
+/* 等待回應區塊：同卡底，左緣琥珀色示急；點整列跳終端機 */
+#uv-waiting:not(:empty) {
+  background: rgba(28, 36, 44, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-left: 3px solid rgba(255, 196, 60, 0.65);
+  border-radius: 12px;
+  padding: 8px 12px;
+  margin-top: 8px;
+}
+.uv-wait-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 6px;
+  font-size: calc(12px * var(--scale, 1));
+  cursor: pointer;
+  border-radius: 6px;
+}
+.uv-wait-row:hover { background: rgba(255, 255, 255, 0.1); }
+.uv-wait-time {
+  margin-left: auto;
+  color: rgba(255, 196, 60, 0.85);
+  font-size: calc(11px * var(--scale, 1));
+}
 .uv-recent-head { margin-top: 0; }
 .uv-recent-row {
   display: flex;

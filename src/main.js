@@ -138,11 +138,13 @@ async function fitWindow() {
   const cards = document.getElementById("usage-cards");
   if (cards && currentView === "usage" && availBelow > 200) {
     const rec = document.getElementById("uv-recent");
+    const waiting = document.getElementById("uv-waiting");
     const foot = document.querySelector("#view-usage .uv-footer");
     const toast = document.getElementById("lp-toast");
     const fixed =
       document.getElementById("capsule").offsetHeight +
       (rec ? rec.offsetHeight : 0) +
+      (waiting ? waiting.offsetHeight : 0) +
       (foot ? foot.offsetHeight : 0) +
       (toast && !toast.classList.contains("hidden") ? toast.offsetHeight : 0) +
       24;
@@ -2417,6 +2419,9 @@ function renderStateUnavailable(error) {
     filterBar.classList.add("hidden");
     filterBar.innerHTML = "";
   }
+  // 資料來源斷線：等待回應區塊一併清空，不殘留可能已不存在的 session
+  const uvWaiting = $("uv-waiting");
+  if (uvWaiting) uvWaiting.innerHTML = "";
   for (const gridId of ["bot-grid", "local-grid"]) {
     const grid = $(gridId);
     if (grid) grid.innerHTML = `<div class="event-empty">（資料來源中斷）</div>`;
@@ -2453,6 +2458,7 @@ async function refreshState() {
       renderSessions(st);
       if (currentView === "dashboard") renderDashboard(st);
       if (currentView === "expanded" || currentView === "dashboard" || currentView === "events") fitWindow();
+      window.UsageView?.drawWaiting?.(); // 等待回應區塊跟著 session 狀態即時增減
       maybeSendTelegramLongTask(st.sessions || []);
     } else {
       // Only timers changed — update in place

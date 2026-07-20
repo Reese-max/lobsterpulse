@@ -175,6 +175,43 @@
     return `<div class="uv-recent-detail">${rows}${prompt}${actBtn}</div>`;
   }
 
+  // 「等待回應」常駐區塊：等待 toast 只出現 4.5 秒，錯過就沒入口——
+  // 這裡從 lastState 常駐列出等待中的 session，點列直接切到終端機。
+  // refreshState 的結構變化 hook 會呼叫 drawWaiting()，等待解除即消失。
+  let waitKey = null; // 已畫內容的 session id 序列；refreshState 每秒都可能觸發，無變化不重繪
+  function drawWaiting(force) {
+    const root = document.getElementById("uv-waiting");
+    if (!root) return;
+    // 非 usage 視圖不畫：區塊隱藏中，重繪＋fitWindow 的 resize IPC 純空轉；
+    // 進面板時 render() 會帶 force 補畫
+    if (typeof currentView === "undefined" || currentView !== "usage") return;
+    const st = (typeof lastState !== "undefined" && lastState) || null;
+    const rows = window.QuotaCards.waitingSessions(
+      (st && st.sessions) || [],
+      Array.from(recentData.byId.keys())
+    );
+    const key = rows.map((s) => s.id).join("|");
+    if (!force && key === waitKey) return;
+    waitKey = key;
+    if (rows.length === 0) {
+      if (root.innerHTML !== "") { root.innerHTML = ""; fitWindow(); }
+      return;
+    }
+    root.innerHTML =
+      `<div class="uv-sec uv-recent-head">⏸ 等待回應</div>` +
+      rows.map((s) => {
+        const label = recentData.byId.get(s.provider) || s.provider;
+        const ago = formatRelativeTime(Math.max(0, s.last_event_secs_ago || 0));
+        return `<div class="uv-wait-row" data-focus-term="${esc(s.id)}"${
+          s.cwd ? ` data-open-dir="${esc(String(s.cwd))}"` : ""
+        } title="切到終端機">${providerIconHtml(s.provider, 13)}
+          <span class="uv-recent-name">${esc(label)}</span>
+          ${s.project_name ? `<span class="uv-recent-proj">${esc(s.project_name)}</span>` : ""}
+          <span class="uv-wait-time">${esc(ago)}</span></div>`;
+      }).join("");
+    fitWindow();
+  }
+
   function renderRecent(events, clis) {
     recentData.byId = new Map(clis.map((c) => [c.id, c.label]));
     recentData.rows = window.QuotaCards.recentCompletions(events, clis.map((c) => c.id));
@@ -266,6 +303,7 @@
         drawSparks(runners.map((r) => r.name));
       }
       renderRecent(events, clis);
+      drawWaiting(true);
       nextUpdateAt = Date.now() + REFRESH_MS;
       updateCountdown();
     } catch (e) {
@@ -330,5 +368,5 @@
     fitWindow();
   });
 
-  window.UsageView = { start, stop, render, openLatest };
+  window.UsageView = { start, stop, render, openLatest, drawWaiting };
 })();

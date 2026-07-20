@@ -101,7 +101,16 @@
       .slice(0, cap);
   }
 
-  const api = { parseResetDuration, normalizeRunnerCard, recentCompletions };
+  // 「等待回應」清單：state=waiting_for_user 的本機 CLI session，等最久的排前面
+  // （starving 優先——愈久沒理它的 agent 愈該先處理）。
+  function waitingSessions(sessions, allowedIds) {
+    const allowed = new Set(allowedIds || []);
+    return (sessions || [])
+      .filter((s) => s && s.state === "waiting_for_user" && allowed.has(s.provider))
+      .sort((a, b) => (b.last_event_secs_ago || 0) - (a.last_event_secs_ago || 0));
+  }
+
+  const api = { parseResetDuration, normalizeRunnerCard, recentCompletions, waitingSessions };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.QuotaCards = api;
 })(typeof window !== "undefined" ? window : globalThis);

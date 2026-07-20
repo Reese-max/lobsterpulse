@@ -41,6 +41,10 @@ pub struct HookEvent {
     /// 失敗事件的錯誤文字（PostToolUseFailure 用）
     #[serde(default)]
     pub error: Option<String>,
+    /// 終端機候選 PID 鏈（server 端在 TCP 連線期間反查 hook 進程父鏈填入，
+    /// 不來自 CLI payload——hook exe 不能重建所以 payload 動不了）。
+    #[serde(default)]
+    pub terminal_pids: Vec<u32>,
 }
 
 impl RawHookEvent {
@@ -160,6 +164,7 @@ impl RawHookEvent {
             tokens_input,
             tokens_output,
             error,
+            terminal_pids: Vec::new(),
         }
     }
 }

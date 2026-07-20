@@ -248,7 +248,25 @@ async fn handle_client(
     let response = if let Some(body_start) = find_body_start(data) {
         let body = &data[body_start..];
         match process_body(body, &provider, &metrics) {
-            Ok(event) => {
+            Ok(mut event) => {
+                // 「切到終端機」：趁 TCP 連線還開著（hook 進程必活）反查其父鏈。
+                // 只做低頻事件（PreToolUse/PostToolUse 洗版量大，不做）。
+                #[cfg(windows)]
+                if matches!(
+                    event.hook_event_name.as_str(),
+                    "UserPromptSubmit" | "SessionStart" | "Stop" | "SessionEnd"
+                ) {
+                    if let (Ok(peer), Ok(local)) = (stream.peer_addr(), stream.local_addr()) {
+                        // spawn_blocking：TCP table + 進程快照是同步 Win32 呼叫，
+                        // 不佔 async worker（回應仍在反查後才送——socket 要留在 table 裡）
+                        let (pp, lp) = (peer.port(), local.port());
+                        event.terminal_pids = tokio::task::spawn_blocking(move || {
+                            crate::terminal::peer_terminal_pids(pp, lp)
+                        })
+                        .await
+                        .unwrap_or_default();
+                    }
+                }
                 if tx.send(event).is_err() {
                     warn!(
                         "[hook_server] tx.send failed (receiver dropped) for provider={}",
@@ -525,6 +543,7 @@ mod tests {
             tokens_input: None,
             tokens_output: None,
             error: None,
+            terminal_pids: Vec::new(),
         }
     }
 

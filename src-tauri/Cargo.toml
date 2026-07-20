@@ -36,7 +36,15 @@ opentelemetry-semantic-conventions = "0.31"
 
 [target.'cfg(windows)'.dependencies]
 # Antigravity token 在 Windows Credential Manager（go-keyring 寫入），CredReadW 直讀
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security_Credentials",
+  # 「切到終端機」：TCP peer PID 反查 / 進程快照父鏈 / 視窗聚焦
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_SystemInformation",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"

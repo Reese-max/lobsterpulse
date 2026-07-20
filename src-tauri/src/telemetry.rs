@@ -362,6 +362,7 @@ mod tests {
             tokens_input: None,
             tokens_output: None,
             error: None,
+            terminal_pids: Vec::new(),
         }
     }
 

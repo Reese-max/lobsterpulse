@@ -169,9 +169,10 @@
       .join("");
     const prompt = sess && sess.last_prompt
       ? `<div class="uv-recent-prompt">${esc(sess.last_prompt)}</div>` : "";
-    const openBtn = r.cwd
-      ? `<button class="uv-open-dir" data-open-dir="${esc(String(r.cwd))}">📂 開啟資料夾</button>` : "";
-    return `<div class="uv-recent-detail">${rows}${prompt}${openBtn}</div>`;
+    const actBtn = `<button class="uv-act-btn" data-focus-term="${esc(r.session_id)}"${
+      r.cwd ? ` data-open-dir="${esc(String(r.cwd))}"` : ""
+    }>⌨ 切到終端機</button>`;
+    return `<div class="uv-recent-detail">${rows}${prompt}${actBtn}</div>`;
   }
 
   function renderRecent(events, clis) {
@@ -221,12 +222,18 @@
     drawRecent();
   });
 
-  // 詳情裡的「開啟資料夾」→ Explorer 打開該筆完成任務的專案目錄
+  // 詳情裡的「切到終端機」→ 聚焦該 session 的終端機視窗；
+  // 失敗（終端機已關 / 舊紀錄無 PID）退回 Explorer 開專案資料夾
   document.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-open-dir]");
+    const btn = e.target.closest("[data-focus-term]");
     if (!btn) return;
-    invoke("open_folder", { path: btn.dataset.openDir })
-      .catch((err) => console.warn("[usage-view] open_folder 失敗", err));
+    invoke("focus_terminal", { sessionId: btn.dataset.focusTerm }).catch((err) => {
+      console.warn("[usage-view] focus_terminal 失敗，退回開資料夾", err);
+      if (btn.dataset.openDir) {
+        invoke("open_folder", { path: btn.dataset.openDir })
+          .catch((e2) => console.warn("[usage-view] open_folder 也失敗", e2));
+      }
+    });
   });
 
   async function render() {

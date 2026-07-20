@@ -46,6 +46,8 @@ pub struct Session {
     /// Token 時間序列：近 60 個 snapshot（每個 TokenUpdate 事件一個 point）。
     /// 給 bot card sparkline 用。
     pub token_samples: std::collections::VecDeque<TokenSample>,
+    /// 終端機候選 PID 鏈（hook_server 反查填入；「切到終端機」用）。
+    pub terminal_pids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,6 +80,7 @@ impl Session {
             tokens_input: 0,
             tokens_output: 0,
             token_samples: std::collections::VecDeque::with_capacity(MAX_TOKEN_SAMPLES + 1),
+            terminal_pids: Vec::new(),
         }
     }
 
@@ -322,6 +325,10 @@ pub struct RecentEvent {
     /// 完成紀錄用：session 的工作目錄（前端顯示專案名區分同 provider 的多筆）。
     #[serde(default)]
     pub cwd: Option<String>,
+    /// 完成紀錄用：終端機候選 PID 鏈（「切到終端機」；重開機後 PID 失效，
+    /// focus 失敗由前端退回開資料夾）。
+    #[serde(default)]
+    pub terminal_pids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -536,8 +543,24 @@ impl SessionManager {
     /// （review b5d0ace：lock 內同步 fs::write 會讓後續 hook 事件排隊）。
     /// cwd：優先用事件帶的，事件沒帶（如 Stop 常不帶）退回 session map 查
     /// （SessionEnd 路徑 session 已移除，此時只能靠事件自帶）。
-    pub fn record_completion(&mut self, provider: &str, session_id: &str, cwd: Option<String>) {
+    pub fn record_completion(
+        &mut self,
+        provider: &str,
+        session_id: &str,
+        cwd: Option<String>,
+        terminal_pids: Vec<u32>,
+    ) {
         let cwd = cwd.or_else(|| self.sessions.get(session_id).and_then(|s| s.cwd.clone()));
+        // 事件自帶的 PID 鏈優先（SessionEnd 時 session 已被移除，只剩事件的）；
+        // 沒有再退回 session 存的（app 中途重啟後 Stop 前沒有低頻事件的罕見情況）。
+        let terminal_pids = if terminal_pids.is_empty() {
+            self.sessions
+                .get(session_id)
+                .map(|s| s.terminal_pids.clone())
+                .unwrap_or_default()
+        } else {
+            terminal_pids
+        };
         self.completions.push_back(RecentEvent {
             timestamp: Utc::now(),
             provider: provider.to_string(),
@@ -546,6 +569,7 @@ impl SessionManager {
             tool_name: None,
             error: None,
             cwd,
+            terminal_pids,
         });
         while self.completions.len() > MAX_COMPLETIONS {
             self.completions.pop_front();
@@ -653,6 +677,7 @@ impl SessionManager {
             tool_name: event.tool_name.clone(),
             error: event.error.clone(),
             cwd: event.cwd.clone(),
+            terminal_pids: Vec::new(), // 診斷清單用不到，不佔空間
         });
         while self.recent_events.len() > MAX_RECENT_EVENTS {
             self.recent_events.pop_front();
@@ -720,6 +745,11 @@ impl SessionManager {
             .sessions
             .get_mut(&event.session_id)
             .expect("session should exist after insert");
+
+        // 低頻事件帶來的終端機 PID 鏈：覆寫（愈新愈準——終端機可能換了）
+        if !event.terminal_pids.is_empty() {
+            session.terminal_pids = event.terminal_pids.clone();
+        }
 
         let prev = session.state;
         session.handle_event(event);
@@ -1696,6 +1726,7 @@ mod tests {
             tokens_input: None,
             tokens_output: None,
             error: None,
+            terminal_pids: Vec::new(),
         }
     }
 
@@ -5319,7 +5350,7 @@ mod completions_tests {
     fn record_completion_caps_and_orders() {
         let mut m = SessionManager::new();
         for i in 0..105 {
-            m.record_completion("claude", &format!("s{i}"), Some(format!("D:/proj{i}")));
+            m.record_completion("claude", &format!("s{i}"), Some(format!("D:/proj{i}")), vec![]);
         }
         assert_eq!(m.completions.len(), MAX_COMPLETIONS);
         assert_eq!(
@@ -5349,6 +5380,7 @@ mod completions_tests {
             tool_name: None,
             error: None,
             cwd: Some("D:/專案/監控".into()),
+            terminal_pids: vec![123, 456],
         });
         save_completions_at(&path, &dq).expect("寫入應成功");
         let loaded = load_completions_at(&path);
@@ -5356,6 +5388,7 @@ mod completions_tests {
         assert_eq!(loaded[0].provider, "codex");
         assert_eq!(loaded[0].session_id, "abc");
         assert_eq!(loaded[0].cwd.as_deref(), Some("D:/專案/監控"), "cwd 應 round-trip");
+        assert_eq!(loaded[0].terminal_pids, vec![123, 456], "terminal_pids 應 round-trip");
 
         // 壞 JSON → 回空不 panic
         std::fs::write(&path, "{not json").unwrap();

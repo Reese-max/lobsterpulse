@@ -9,6 +9,8 @@ mod quota;
 mod quota_history;
 mod session;
 mod telemetry;
+#[cfg(windows)]
+mod terminal;
 mod timeline;
 
 use chrono::{DateTime, Utc};
@@ -567,6 +569,61 @@ fn open_app_config() -> Result<(), String> {
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 「最近完成」詳情的「切到終端機」：聚焦該 session 跑的終端機視窗。
+/// PID 鏈來源：活 session 的 terminal_pids 或完成紀錄裡存的快照。
+/// 找不到視窗（終端機已關 / 重開機 PID 失效）回 Err，前端退回開資料夾。
+#[tauri::command]
+fn focus_terminal(
+    manager: tauri::State<AppSessionManager>,
+    session_id: String,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let (pids, cwd, comp_ts) = {
+            let m = manager.0.lock().unwrap();
+            let sess = m.sessions.get(&session_id);
+            let comp = m
+                .completions
+                .iter()
+                .rev()
+                .find(|e| e.session_id == session_id && !e.terminal_pids.is_empty());
+            let from_sess = sess
+                .map(|s| s.terminal_pids.clone())
+                .filter(|v| !v.is_empty());
+            // PID 來自完成紀錄（非活 session）時帶出紀錄時間，供重開機閘門用
+            let (pids, comp_ts) = match from_sess {
+                Some(p) => (p, None),
+                None => (
+                    comp.map(|e| e.terminal_pids.clone()).unwrap_or_default(),
+                    comp.map(|e| e.timestamp),
+                ),
+            };
+            let cwd = sess
+                .and_then(|s| s.cwd.clone())
+                .or_else(|| comp.and_then(|e| e.cwd.clone()));
+            (pids, cwd, comp_ts)
+        };
+        if pids.is_empty() {
+            return Err("此紀錄沒有終端機資訊（app 更新前的舊紀錄）".to_string());
+        }
+        // 重開機前的紀錄：PID 已被 OS 回收，盲聚焦會切到無關視窗——直接判失效
+        if comp_ts.is_some_and(|ts| ts < terminal::boot_time_utc()) {
+            return Err("該紀錄在重開機之前，終端機已不存在".to_string());
+        }
+        // 標題啟發式用專案資料夾名（WT 單進程多視窗，光靠 PID 會選錯視窗）
+        let hint = cwd
+            .as_deref()
+            .and_then(|c| c.split(['/', '\\']).filter(|s| !s.is_empty()).next_back())
+            .map(|s| s.to_string());
+        terminal::focus_window_for_pids(&pids, hint.as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (manager, session_id);
+        Err("僅支援 Windows".to_string())
+    }
 }
 
 /// 「最近完成」詳情的「開啟資料夾」：Explorer 打開該筆完成任務的專案目錄。
@@ -3729,6 +3786,7 @@ pub fn run() {
                                             &event.provider,
                                             &event.session_id,
                                             event.cwd.clone(),
+                                            event.terminal_pids.clone(),
                                         );
                                         Some(m.completions.clone())
                                     } else {
@@ -4214,6 +4272,7 @@ pub fn run() {
             play_sound_file,
             open_sounds_folder,
             open_folder,
+            focus_terminal,
             open_app_config,
             open_url,
             get_server_port,

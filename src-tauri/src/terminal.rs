@@ -141,15 +141,18 @@ fn walk_chain(map: &HashMap<u32, (u32, String)>, start: u32) -> Vec<u32> {
         chain.push(cur);
         cur = *ppid;
     }
-    let console_kids: Vec<u32> = map
+    let mut out: Vec<u32> = map
         .iter()
         .filter(|(_, (ppid, name))| {
             chain.contains(ppid) && (name == "conhost.exe" || name == "openconsole.exe")
         })
         .map(|(&pid, _)| pid)
         .collect();
-    chain.extend(console_kids);
-    chain
+    // 順序（focus 端會反向迭代）：conhost 墊底、父鏈由近到遠接後 →
+    // 反向後「終端機宿主最優先、conhost 最後」。實測教訓：conhost 排前面時，
+    // 鏈上工具進程的雜項 console 視窗（快顯主機）會搶在 WT 之前被聚焦。
+    out.extend(chain);
+    out
 }
 
 /// 聚焦候選 PID 擁有的可見有標題視窗。
@@ -157,7 +160,9 @@ fn walk_chain(map: &HashMap<u32, (u32, String)>, start: u32) -> Vec<u32> {
 /// Windows Terminal 是單一進程管多個視窗——光靠 PID 會抓到同進程的別的
 /// 視窗。所以先用 `title_hint`（專案資料夾名；Claude 的分頁標題帶專案名）
 /// 在候選裡挑標題命中的；沒命中再退回鏈序由遠到近（終端機宿主優先）。
-/// ponytail: WT 多分頁只能聚焦到視窗層級，分頁層級要 UIA，等真的需要再說。
+/// 聚焦後若有 hint 再補一發 UIA 分頁切換（select_tab_async）處理 WT 多分頁。
+/// ponytail: 多個 WT 視窗且目標分頁藏在「沒被選中的那個視窗」時仍會選錯視窗，
+/// 要跨視窗掃分頁需同步 UIA 查詢再挑視窗，等真的踩到再說。
 pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(), String> {
     use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
     unsafe extern "system" fn cb(
@@ -190,14 +195,16 @@ pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(
     let candidates: Vec<&(isize, u32, String)> =
         wins.iter().filter(|(_, p, _)| pid_set.contains(p)).collect();
 
+    let hint = title_hint.filter(|h| !h.is_empty());
     // 1) 標題命中專案名的候選優先（大小寫不敏感）
-    if let Some(hint) = title_hint.filter(|h| !h.is_empty()) {
-        let hint = hint.to_lowercase();
+    if let Some(h) = hint {
+        let hl = h.to_lowercase();
         if let Some(&&(hwnd, _, _)) = candidates
             .iter()
-            .find(|(_, _, t)| t.to_lowercase().contains(&hint))
+            .find(|(_, _, t)| t.to_lowercase().contains(&hl))
         {
             if try_focus(hwnd) {
+                select_tab_async(hwnd, h);
                 return Ok(());
             }
         }
@@ -206,11 +213,41 @@ pub fn focus_window_for_pids(pids: &[u32], title_hint: Option<&str>) -> Result<(
     for &pid in pids.iter().rev() {
         if let Some(&&(hwnd, _, _)) = candidates.iter().find(|(_, p, _)| *p == pid) {
             if try_focus(hwnd) {
+                if let Some(h) = hint {
+                    select_tab_async(hwnd, h);
+                }
                 return Ok(());
             }
         }
     }
     Err("找不到可聚焦的終端機視窗（可能已關閉）".to_string())
+}
+
+/// WT 多分頁：視窗聚焦後用 UI Automation 把標題含 hint 的分頁切成作用中
+/// （WT 視窗標題只反映作用中分頁，目標分頁在背景時光聚焦視窗不夠）。
+/// 走 PowerShell 的 System.Windows.Automation——Rust 直接摸 COM/UIA 太重。
+/// fire-and-forget＋隱窗（踩雷§25 不能閃黑窗）；沒有 TabItem 的普通視窗
+/// 找不到就默默結束，失敗退化成「只聚焦視窗」。
+/// ponytail: spawn 無逾時——目標視窗卡死時 UIA 會卡住該 powershell 常駐；
+/// 手動點擊觸發、頻率極低，觀察到堆積再加 timeout/kill。
+fn select_tab_async(hwnd: isize, hint: &str) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // 純 ASCII inline script；hwnd/hint 走 env var 免跳脫（硬規則7）
+    const SCRIPT: &str = "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; \
+$h=[IntPtr][long]$env:LP_TAB_HWND; \
+$root=[System.Windows.Automation.AutomationElement]::FromHandle($h); \
+$c=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::TabItem); \
+$tabs=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$c); \
+$hint=$env:LP_TAB_HINT.ToLower(); \
+foreach($t in $tabs){ if($t.Current.Name.ToLower().Contains($hint)){ \
+$t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select(); break } }";
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+        .env("LP_TAB_HWND", hwnd.to_string())
+        .env("LP_TAB_HINT", hint)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
 }
 
 fn try_focus(hwnd: isize) -> bool {
@@ -250,10 +287,13 @@ mod tests {
             (95, 80, "conhost.exe"), // node 的 console 視窗宿主
         ]);
         let chain = walk_chain(&map, 100);
-        assert_eq!(&chain[..4], &[90, 80, 70, 60], "父鏈由近到遠、不含 hook 自己");
+        assert_eq!(
+            chain,
+            vec![95, 90, 80, 70, 60],
+            "conhost 墊底在前、父鏈由近到遠在後（focus 端反向迭代 → 宿主優先）"
+        );
         assert!(!chain.contains(&50), "explorer 不得入鏈");
         assert!(!chain.contains(&100), "hook 自己不得入鏈");
-        assert!(chain.contains(&95), "conhost 子進程附尾");
     }
 
     #[test]

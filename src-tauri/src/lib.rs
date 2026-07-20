@@ -569,6 +569,29 @@ fn open_app_config() -> Result<(), String> {
     Ok(())
 }
 
+/// 「最近完成」詳情的「開啟資料夾」：Explorer 打開該筆完成任務的專案目錄。
+/// path 來自 hook 事件的 cwd（可能已被刪除或是斜線路徑），先驗證 is_dir。
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    // hook 送來的 cwd 可能用正斜線；Windows explorer 吃到 / 會退回開「文件」
+    let path = if cfg!(target_os = "windows") { path.replace('/', "\\") } else { path };
+    if !std::path::Path::new(&path).is_dir() {
+        return Err(format!("不是資料夾或已不存在：{path}"));
+    }
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(opener)
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn open_sounds_folder() -> Result<(), String> {
     let dir = sounds_dir();
@@ -4190,6 +4213,7 @@ pub fn run() {
             list_sounds,
             play_sound_file,
             open_sounds_folder,
+            open_folder,
             open_app_config,
             open_url,
             get_server_port,

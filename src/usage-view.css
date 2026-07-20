@@ -175,6 +175,17 @@ body.light .uv-card { background: rgba(30, 38, 48, 0.88); }
 .uv-recent-detail .uv-krow span:last-child {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: right;
 }
+.uv-open-dir {
+  margin-top: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: calc(11px * var(--scale, 1));
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.uv-open-dir:hover { background: rgba(255, 255, 255, 0.16); color: rgba(255, 255, 255, 0.95); }
 .uv-recent-prompt {
   margin-top: 4px;
   color: rgba(255, 255, 255, 0.55);

@@ -503,7 +503,7 @@ async function init() {
           windowMs: 5000,
         });
       }
-      showTaskToast(provider, "✅ 完成");
+      showTaskToast(provider, "✅ 完成", "done");
       window.UsageView?.render?.(); // 「最近完成」清單即時插入
     });
     invoke("plugin:event|listen", { event: "task-completed", target: { kind: "Any" }, handler: soundCb }).catch(() => {});
@@ -2574,7 +2574,7 @@ function updateCapsuleBrief(s) {
 // ─── 完成/等待即時 toast（app 內小卡，Windows toast 之外的介面內提示）───
 let lpToastTimer = null;
 const lpToastLast = new Map(); // "provider|text" -> 上次顯示 ts（5s 去重防洗版）
-function showTaskToast(provider, text) {
+function showTaskToast(provider, text, kind) {
   const el = $("lp-toast");
   if (!el) return;
   const key = `${provider}|${text}`;
@@ -2585,6 +2585,7 @@ function showTaskToast(provider, text) {
   // --capsule-w 只被 brief 設在自己身上（sibling 繼承不到），toast 自帶一份
   el.style.setProperty("--capsule-w", `${appConfig?.appearance?.capsule_width || DEFAULT_CAPSULE_W}px`);
   el.dataset.provider = provider;
+  el.dataset.kind = kind || ""; // "done" 才會在點擊時展開完成詳情
   el.innerHTML = `${providerIconHtml(provider, 14)}<span class="lp-toast-label">${esc(label)}</span><span class="lp-toast-text">${esc(text)}</span>`;
   el.classList.remove("hidden");
   el.setAttribute("aria-hidden", "false");
@@ -2597,8 +2598,8 @@ function showTaskToast(provider, text) {
   }, 4500);
 }
 
-// 點 toast → 收掉 toast、打開新版額度面板（最近完成清單就在裡面；
-// 2026-07-19 使用者反饋：跳 legacy sessions 視圖是「舊畫面」，不再跳那裡）
+// 點 toast → 收掉 toast、打開新版額度面板，並直接展開該 provider 最新一筆
+// 完成紀錄詳情（2026-07-20 使用者反饋「不太方便」：原本還要自己找列再點一次）
 document.addEventListener("click", (e) => {
   const t = e.target.closest("#lp-toast");
   if (!t || t.classList.contains("hidden")) return;
@@ -2606,6 +2607,7 @@ document.addEventListener("click", (e) => {
   t.classList.add("hidden");
   t.setAttribute("aria-hidden", "true");
   showView("usage");
+  if (t.dataset.kind === "done" && t.dataset.provider) window.UsageView?.openLatest?.(t.dataset.provider);
 });
 
 function showCapsuleBrief(visible) {

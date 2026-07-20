@@ -140,6 +140,19 @@
   // 視圖是「舊畫面」，改為不離開新面板）。
   const recentData = { rows: [], byId: new Map() };
   let recentOpenKey = null;
+  // toast 點擊瞬間清單可能還沒 render 完，先記著要展開誰（5s 內有效，防過期誤展開）
+  let pendingOpen = null; // { provider, at }
+
+  // 展開該 provider 最新一筆完成紀錄（toast 點擊入口：一鍵直達詳情）
+  function openLatest(provider) {
+    const hit = recentData.rows.find((r) => r.provider === provider);
+    if (hit) {
+      recentOpenKey = hit.provider + "|" + hit.ts;
+      drawRecent();
+    } else {
+      pendingOpen = { provider, at: Date.now() };
+    }
+  }
 
   function recentDetailHtml(r) {
     const st = (typeof lastState !== "undefined" && lastState) || null;
@@ -156,12 +169,25 @@
       .join("");
     const prompt = sess && sess.last_prompt
       ? `<div class="uv-recent-prompt">${esc(sess.last_prompt)}</div>` : "";
-    return `<div class="uv-recent-detail">${rows}${prompt}</div>`;
+    const openBtn = r.cwd
+      ? `<button class="uv-open-dir" data-open-dir="${esc(String(r.cwd))}">📂 開啟資料夾</button>` : "";
+    return `<div class="uv-recent-detail">${rows}${prompt}${openBtn}</div>`;
   }
 
   function renderRecent(events, clis) {
     recentData.byId = new Map(clis.map((c) => [c.id, c.label]));
     recentData.rows = window.QuotaCards.recentCompletions(events, clis.map((c) => c.id));
+    if (pendingOpen) {
+      if (Date.now() - pendingOpen.at >= 5000) {
+        pendingOpen = null; // 逾時作廢，防過期誤展開
+      } else {
+        const hit = recentData.rows.find((r) => r.provider === pendingOpen.provider);
+        if (hit) {
+          recentOpenKey = hit.provider + "|" + hit.ts;
+          pendingOpen = null;
+        } // 沒命中先留著：5s 內下一次 render 再試（完成事件與清單寫入有 race）
+      }
+    }
     drawRecent();
   }
 
@@ -193,6 +219,14 @@
     if (!row || !row.dataset.rkey) return;
     recentOpenKey = recentOpenKey === row.dataset.rkey ? null : row.dataset.rkey;
     drawRecent();
+  });
+
+  // 詳情裡的「開啟資料夾」→ Explorer 打開該筆完成任務的專案目錄
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-open-dir]");
+    if (!btn) return;
+    invoke("open_folder", { path: btn.dataset.openDir })
+      .catch((err) => console.warn("[usage-view] open_folder 失敗", err));
   });
 
   async function render() {
@@ -284,5 +318,5 @@
     fitWindow();
   });
 
-  window.UsageView = { start, stop, render };
+  window.UsageView = { start, stop, render, openLatest };
 })();

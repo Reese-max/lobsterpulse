@@ -897,6 +897,10 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
         // 重算會把昨天算出的數字標成新一天的今天（審查抓到的每日必現 bug）。
         v["live_date"] = serde_json::json!(d.date);
         v["live_age_secs"] = serde_json::json!(d.at.elapsed().as_secs());
+        // 累積區間：從安裝日往後長，天數照實回報，前端不得標成「30 天」
+        v["range_tokens"] = serde_json::json!(d.range_tokens);
+        v["range_days"] = serde_json::json!(d.range_days);
+        v["range_since"] = serde_json::json!(d.range_since);
     }
     if v.as_object().is_some_and(|o| o.is_empty()) {
         return None; // stats-cache 沒有、掃描也還沒完成 → 前端顯示 No data
@@ -912,6 +916,10 @@ pub struct LiveDaily {
     /// 掃描當下所認定的本地日期（跨午夜判斷用，不可事後重算）
     pub date: String,
     pub at: std::time::Instant,
+    /// 累積檔裡的總量與天數——只能從安裝日往後長，不是完整 30 天
+    pub range_tokens: u64,
+    pub range_days: usize,
+    pub range_since: String,
 }
 
 /// 全域而非 Tauri State：膠囊模板是在 `run_local_usage_runners`（無 AppHandle）
@@ -2023,6 +2031,10 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
                     if let (Some(o), Some(d)) = (raw.as_object_mut(), LIVE_DAILY.lock().unwrap().clone()) {
                         if d.date == chrono::Local::now().format("%Y-%m-%d").to_string() {
                             o.insert("today_tokens".into(), serde_json::json!(fmt_tokens(d.today)));
+                            o.insert(
+                                "yesterday_tokens".into(),
+                                serde_json::json!(fmt_tokens(d.yesterday)),
+                            );
                         }
                     }
                 }
@@ -3887,19 +3899,39 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     loop {
                         if let Some(home) = dirs::home_dir() {
+                            // 掃描 + 累積都在 blocking 執行緒：兩者都碰磁碟
                             let r = tauri::async_runtime::spawn_blocking(move || {
-                                quota::claude_logs::scan_today_yesterday(&home)
+                                let (today, yesterday, date) =
+                                    quota::claude_logs::scan_today_yesterday(&home);
+                                let yest_date = (chrono::Local::now() - chrono::Duration::days(1))
+                                    .format("%Y-%m-%d")
+                                    .to_string();
+                                let map = quota::claude_logs::merge_daily(
+                                    &home.join(".lobsterpulse").join("daily-tokens.json"),
+                                    &[(date.clone(), today), (yest_date, yesterday)],
+                                    30,
+                                );
+                                (today, yesterday, date, map)
                             })
                             .await;
-                            if let Ok((today, yesterday, date)) = r {
+                            if let Ok((today, yesterday, date, map)) = r {
                                 *LIVE_DAILY.lock().unwrap() = Some(LiveDaily {
                                     today,
                                     yesterday,
                                     date: date.clone(),
                                     at: std::time::Instant::now(),
+                                    range_tokens: map.values().sum(),
+                                    range_days: map.len(),
+                                    range_since: map
+                                        .keys()
+                                        .next()
+                                        .cloned()
+                                        .unwrap_or_else(|| date.clone()),
                                 });
                                 log::debug!(
-                                    "[claude_logs] {date} today={today} yesterday={yesterday}"
+                                    "[claude_logs] {date} today={today} yesterday={yesterday} \
+                                     range_days={}",
+                                    map.len()
                                 );
                             }
                         }

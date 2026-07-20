@@ -83,15 +83,26 @@
     const hasLive = stats.live_date === today;
     const cost30 = fmtCost(stats.total_cost_usd);
     const liveTok = (v) => (hasLive ? fmtTok(v) + " tokens" : "—");
+    // 30 天無法即時算（實測掃 2.9GB 要 361 秒）→ 改用每輪掃描累積的每日快取。
+    // 天數只能從安裝日往後長，所以標題照實寫「近 N 天」，不假裝是 30 天。
+    const rDays = Number(stats.range_days);
+    const rangeLabel = Number.isFinite(rDays) && rDays > 0 ? `Last ${rDays} Day${rDays > 1 ? "s" : ""}` : "Last 30 Days";
+    const rangeVal = Number.isFinite(rDays) && rDays > 0
+      ? fmtTok(stats.range_tokens) + " tokens"
+      : fresh.stale ? "—" : fmtTok(stats.tokens_30d) + " tokens" + (cost30 ? " · " + cost30 + " 累計" : "");
     const rows = [
       ["Today", liveTok(stats.today_tokens)],
       ["Yesterday", liveTok(stats.yesterday_tokens)],
-      ["Last 30 Days", fresh.stale ? "—" : fmtTok(stats.tokens_30d) + " tokens" + (cost30 ? " · " + cost30 + " 累計" : "")],
+      [rangeLabel, rangeVal],
     ].map(([k, v]) => `<div class="uv-krow"><span>${k}</span><span>${esc(v)}</span></div>`).join("");
     const age = Number.isFinite(stats.live_age_secs)
       ? `${formatRelativeTime(stats.live_age_secs)}掃描` : "即時掃描";
     const note = !hasLive
       ? `<div class="uv-note">今日統計計算中…（首次約需數秒）</div>`
+      : Number.isFinite(rDays) && rDays > 0
+      ? `<div class="uv-note">今日/昨日：${esc(age)}；近 ${rDays} 天為 ${esc(
+          stats.range_since || "?"
+        )} 起逐日累積（30 天無法即時算：需掃 2.9GB）</div>`
       : fresh.stale
         ? `<div class="uv-note">今日/昨日：${esc(age)}；30 天統計來自 stats-cache（停在 ${esc(
             stats.computed_date || "未知"

@@ -123,26 +123,72 @@ fn scan_tail(path: &Path, stop_date: &str, acc: &mut std::collections::HashMap<S
 /// `Local::now()` 重算，會把「昨天算出來的今天」誤標成新一天的今天（審查抓到）。
 /// 呼叫端負責放到背景執行緒——實測掃描約 1~3 秒。
 pub fn scan_today_yesterday(home: &Path) -> (u64, u64, String) {
-    let now = Local::now();
-    let today = now.format("%Y-%m-%d").to_string();
-    let yesterday = (now - chrono::Duration::days(1))
+    let (acc, today) = scan_recent_days(home, 2);
+    let yesterday = (Local::now() - chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
-    // mtime cutoff 放寬到 2 天前：跨時區/時鐘偏移下仍抓得到昨天尾巴的檔
-    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86400);
+    (
+        acc.get(&today).copied().unwrap_or(0),
+        acc.get(&yesterday).copied().unwrap_or(0),
+        today,
+    )
+}
+
+/// 掃最近 `days` 天（含今天）的每日 token，回傳 (日期 → tokens, 掃描當下的今天)。
+/// `days` 越大讀得越多：2 天實讀約 340MB、30 天約 2.9GB（≈ 整個語料庫）。
+pub fn scan_recent_days(
+    home: &Path,
+    days: i64,
+) -> (std::collections::HashMap<String, u64>, String) {
+    let now = Local::now();
+    let today = now.format("%Y-%m-%d").to_string();
+    let stop_date = (now - chrono::Duration::days(days - 1))
+        .format("%Y-%m-%d")
+        .to_string();
+    // mtime cutoff 多放一天：跨時區/時鐘偏移下仍抓得到範圍尾巴的檔
+    let cutoff =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(days as u64 * 86400 + 86400);
 
     let mut files = Vec::new();
     recent_jsonl(&home.join(".claude").join("projects"), cutoff, 0, &mut files);
 
     let mut acc = std::collections::HashMap::new();
     for p in &files {
-        scan_tail(p, &yesterday, &mut acc);
+        scan_tail(p, &stop_date, &mut acc);
     }
-    (
-        acc.get(&today).copied().unwrap_or(0),
-        acc.get(&yesterday).copied().unwrap_or(0),
-        today,
-    )
+    (acc, today)
+}
+
+/// 每日 token 累積檔（date → tokens）。每輪掃描把今天/昨天寫進去，天數自然累積。
+///
+/// 為什麼不直接掃 30 天：實測 30 天＝整個語料庫 2.9GB／10679 檔／**361 秒**，
+/// 而 2 天只要 0.97 秒（`scan_30d_cost` ignored test 可複驗）。既然每輪都算出
+/// 今天/昨天了，存起來比重掃便宜四個數量級。代價：只能從安裝日往後累積，
+/// 前端要照實標「已記錄 N 天」，不可假裝是完整 30 天。
+pub fn merge_daily(
+    path: &Path,
+    days: &[(String, u64)],
+    keep_days: i64,
+) -> std::collections::BTreeMap<String, u64> {
+    let mut map: std::collections::BTreeMap<String, u64> = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    for (d, tok) in days {
+        // 覆蓋而非累加：同一天會被掃很多輪，每次都是該天的最新總量
+        map.insert(d.clone(), *tok);
+    }
+    let floor = (Local::now() - chrono::Duration::days(keep_days))
+        .format("%Y-%m-%d")
+        .to_string();
+    map.retain(|d, _| d.as_str() >= floor.as_str());
+    if let Ok(s) = serde_json::to_string(&map) {
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, s).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+    map
 }
 
 #[cfg(test)]
@@ -213,6 +259,52 @@ mod tests {
         assert!(!acc.contains_key("1970-01-01"));
         assert_eq!(acc.len(), 2, "cutoff 之前的行不得混入");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_daily_overwrites_today_and_prunes_old() {
+        let dir = std::env::temp_dir().join(format!("lp-daily-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daily.json");
+        let now = Local::now();
+        let day = |n: i64| (now - chrono::Duration::days(n)).format("%Y-%m-%d").to_string();
+
+        let m = merge_daily(&path, &[(day(0), 10), (day(1), 20)], 30);
+        assert_eq!(m.get(&day(0)), Some(&10));
+
+        // 同一天再掃一次是覆蓋，不是累加（否則每 5 分鐘就把今天翻倍）
+        let m = merge_daily(&path, &[(day(0), 55)], 30);
+        assert_eq!(m.get(&day(0)), Some(&55));
+        assert_eq!(m.get(&day(1)), Some(&20), "上一輪的昨天要留著");
+
+        // 超過保留天數的舊資料要清掉，檔案不會無限長大
+        let m = merge_daily(&path, &[(day(90), 999)], 30);
+        assert!(!m.contains_key(&day(90)));
+        assert_eq!(m.len(), 2);
+
+        // 落地後重讀應等值（跨重啟累積的前提）
+        let reread = merge_daily(&path, &[], 30);
+        assert_eq!(reread, m);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 量測用（非斷言）：30 天掃描實際要多久，決定背景週期。
+    /// `cargo test -p lobster-pulse --lib -- --ignored --nocapture scan_30d_cost`
+    #[test]
+    #[ignore]
+    fn scan_30d_cost() {
+        let home = dirs::home_dir().expect("home");
+        for days in [2i64, 30] {
+            let t = std::time::Instant::now();
+            let (acc, today) = scan_recent_days(&home, days);
+            let sum: u64 = acc.values().sum();
+            println!(
+                "days={days} elapsed={:?} dates={} sum={sum} today={}",
+                t.elapsed(),
+                acc.len(),
+                acc.get(&today).copied().unwrap_or(0)
+            );
+        }
     }
 
     /// subagent 事件非同步落盤會造成單行亂序——中間插一筆很舊的行，

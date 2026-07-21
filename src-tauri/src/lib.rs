@@ -3819,10 +3819,27 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            if cfg!(debug_assertions) {
+            // release 也要有 log：原本只在 debug 註冊，等於出貨版所有 log::warn!/
+            // error!（包含那些註解寫著「operator 看 log 就知道」的診斷）全進黑洞，
+            // 半夜出事只剩「檔案 mtime 有沒有在長」這種間接證據。
+            // 檔案落在 %LOCALAPPDATA%\com.lobsterpulse.desktop\logs\，單檔上限
+            // 5MB、只留最新一份——這是監控 app，log 不該自己長成磁碟問題。
+            {
+                use tauri_plugin_log::{Target, TargetKind};
+                // 用 targets() 覆蓋預設清單，不是 target() 疊加——後者會連預設的
+                // 「以 app 名稱命名的 log 檔」一起留著，變成兩個檔（其一永遠 0 bytes）。
+                let mut targets = vec![Target::new(TargetKind::LogDir {
+                    file_name: Some("lobster-pulse".into()),
+                })];
+                if cfg!(debug_assertions) {
+                    targets.push(Target::new(TargetKind::Stdout));
+                }
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)
+                        .max_file_size(5 * 1024 * 1024)
+                        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                        .targets(targets)
                         .build(),
                 )?;
             }
@@ -3903,9 +3920,8 @@ pub fn run() {
                             let r = tauri::async_runtime::spawn_blocking(move || {
                                 let (today, yesterday, date) =
                                     quota::claude_logs::scan_today_yesterday(&home);
-                                let yest_date = (chrono::Local::now() - chrono::Duration::days(1))
-                                    .format("%Y-%m-%d")
-                                    .to_string();
+                                // 昨天由 date 反推，不可重新 Local::now()——見 prev_day 註解
+                                let yest_date = quota::claude_logs::prev_day(&date);
                                 let map = quota::claude_logs::merge_daily(
                                     &home.join(".lobsterpulse").join("daily-tokens.json"),
                                     &[(date.clone(), today), (yest_date, yesterday)],

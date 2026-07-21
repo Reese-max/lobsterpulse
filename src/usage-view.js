@@ -100,9 +100,9 @@
     const note = !hasLive
       ? `<div class="uv-note">今日統計計算中…（首次約需數秒）</div>`
       : Number.isFinite(rDays) && rDays > 0
-      ? `<div class="uv-note">今日/昨日：${esc(age)}；近 ${rDays} 天為 ${esc(
+      ? `<div class="uv-note">今日/昨日：${esc(age)}；共記錄 ${rDays} 天，最早 ${esc(
           stats.range_since || "?"
-        )} 起逐日累積（30 天無法即時算：需掃 2.9GB）</div>`
+        )}（app 關閉期間會有空缺；30 天無法即時算：需掃 2.9GB）</div>`
       : fresh.stale
         ? `<div class="uv-note">今日/昨日：${esc(age)}；30 天統計來自 stats-cache（停在 ${esc(
             stats.computed_date || "未知"

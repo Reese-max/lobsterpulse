@@ -124,14 +124,21 @@ fn scan_tail(path: &Path, stop_date: &str, acc: &mut std::collections::HashMap<S
 /// 呼叫端負責放到背景執行緒——實測掃描約 1~3 秒。
 pub fn scan_today_yesterday(home: &Path) -> (u64, u64, String) {
     let (acc, today) = scan_recent_days(home, 2);
-    let yesterday = (Local::now() - chrono::Duration::days(1))
-        .format("%Y-%m-%d")
-        .to_string();
+    let yesterday = prev_day(&today);
     (
         acc.get(&today).copied().unwrap_or(0),
         acc.get(&yesterday).copied().unwrap_or(0),
         today,
     )
+}
+
+/// 由日期字串反推前一天。**不可**改用 `Local::now() - 1day`：掃描要 1~3 秒，
+/// 跨午夜時「掃描開始的今天」與「掃描結束後重算的昨天」會變成同一天，
+/// 後寫的昨天值會蓋掉剛算好的今天值（審查抓到的午夜競態）。
+pub fn prev_day(date: &str) -> String {
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|d| (d - chrono::Duration::days(1)).format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|_| date.to_string())
 }
 
 /// 掃最近 `days` 天（含今天）的每日 token，回傳 (日期 → tokens, 掃描當下的今天)。
@@ -170,10 +177,25 @@ pub fn merge_daily(
     days: &[(String, u64)],
     keep_days: i64,
 ) -> std::collections::BTreeMap<String, u64> {
-    let mut map: std::collections::BTreeMap<String, u64> = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
+    // 壞 JSON 不可靜默當成空 map——後面會把空 map 寫回去，等於無聲清空累積歷史。
+    // 先留痕（log + 改名保留原檔），再從空的重來，資料至少查得到。
+    let mut map: std::collections::BTreeMap<String, u64> = match std::fs::read_to_string(path) {
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(m) => m,
+            Err(e) => {
+                let bad = path.with_extension("json.bad");
+                log::warn!(
+                    "[claude_logs] {} 解析失敗（{e}），保留為 {}，累積重新開始。開頭: {:.80}",
+                    path.display(),
+                    bad.display(),
+                    s
+                );
+                let _ = std::fs::rename(path, &bad);
+                Default::default()
+            }
+        },
+        Err(_) => Default::default(), // 檔案不存在＝第一次跑，正常
+    };
     for (d, tok) in days {
         // 覆蓋而非累加：同一天會被掃很多輪，每次都是該天的最新總量
         map.insert(d.clone(), *tok);
@@ -182,11 +204,20 @@ pub fn merge_daily(
         .format("%Y-%m-%d")
         .to_string();
     map.retain(|d, _| d.as_str() >= floor.as_str());
-    if let Ok(s) = serde_json::to_string(&map) {
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, s).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
+    // 寫入失敗要出聲：目錄不在／被防毒鎖住時，功能會「看起來活著但永遠不落地」
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match serde_json::to_string(&map) {
+        Ok(s) => {
+            let tmp = path.with_extension("json.tmp");
+            if let Err(e) = std::fs::write(&tmp, s) {
+                log::warn!("[claude_logs] 寫入 {} 失敗: {e}", tmp.display());
+            } else if let Err(e) = std::fs::rename(&tmp, path) {
+                log::warn!("[claude_logs] rename 到 {} 失敗: {e}", path.display());
+            }
         }
+        Err(e) => log::warn!("[claude_logs] 序列化每日累積失敗: {e}"),
     }
     map
 }
@@ -258,6 +289,45 @@ mod tests {
         assert_eq!(acc.get(&yest).copied().unwrap_or(0), 20);
         assert!(!acc.contains_key("1970-01-01"));
         assert_eq!(acc.len(), 2, "cutoff 之前的行不得混入");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 午夜競態：掃描期間跨日時，若昨天用 `Local::now()` 重算會等於 date 本身，
+    /// merge_daily 後寫的昨天值就會蓋掉剛算好的今天值。
+    #[test]
+    fn prev_day_is_derived_from_date_not_clock() {
+        assert_eq!(prev_day("2026-07-21"), "2026-07-20");
+        assert_eq!(prev_day("2026-01-01"), "2025-12-31", "跨年");
+        assert_eq!(prev_day("2024-03-01"), "2024-02-29", "閏年");
+        assert_ne!(prev_day("2026-07-21"), "2026-07-21", "絕不可等於自己");
+        assert_eq!(prev_day("壞資料"), "壞資料", "壞輸入不 panic");
+    }
+
+    #[test]
+    fn merge_daily_keeps_bad_file_instead_of_silently_wiping() {
+        let dir = std::env::temp_dir().join(format!("lp-daily-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("daily.json");
+        std::fs::write(&path, "{壞掉的 JSON").unwrap();
+
+        let now = Local::now().format("%Y-%m-%d").to_string();
+        let m = merge_daily(&path, &[(now.clone(), 7)], 30);
+        assert_eq!(m.get(&now), Some(&7), "壞檔不該擋住新資料");
+        assert!(
+            path.with_extension("json.bad").exists(),
+            "壞檔要保留成 .bad，不可無聲蒸發"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_daily_creates_missing_parent_dir() {
+        let dir = std::env::temp_dir().join(format!("lp-daily-mkdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("daily.json");
+        let now = Local::now().format("%Y-%m-%d").to_string();
+        merge_daily(&path, &[(now, 3)], 30);
+        assert!(path.exists(), "父目錄不存在時要自己建，不能靜默不落地");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

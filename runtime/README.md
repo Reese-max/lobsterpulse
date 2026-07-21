@@ -36,3 +36,15 @@ node runtime/sync-from-local.mjs --check  # 只檢查漂移，有差異 exit 1
 Copilot CLI 的 hook 是設定檔驅動、事件名用 camelCase（`sessionStart` / `userPromptSubmitted`
 / `agentStop` / `sessionEnd`），與 Claude 的 PascalCase 互為別名。
 Claude 與 Gemini 的 hook 混在各自的大 `settings.json` 內（含其他設定與憑證），不在此備份。
+
+## 部署時要開維護模式
+
+watchdog 會在 app 停掉超過 3 分鐘時把舊版拉回來，正好卡在 `cargo build` 中間，
+鎖住 exe 讓建置失敗（實測 `os error 5`）。部署前後：
+
+```bash
+touch ~/.lobsterpulse/watchdog-pause     # 停 app、建置、啟動…
+rm ~/.lobsterpulse/watchdog-pause        # 完成後解除
+```
+
+忘了刪也沒關係——超過 30 分鐘 watchdog 會自動失效並刪掉它，不會永久啞掉。

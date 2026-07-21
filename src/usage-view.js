@@ -149,9 +149,19 @@
 
     const stats = name === "claude" ? dailyStats : null;
     const open = detailOpen.has(name);
-    const detail = stats
+    // 非 Claude 的 CLI 沒有可逐筆加總的 log，後端改用「累計計數器的當日差值」，
+    // 值已放在 raw.today_tokens。它是下界（app 沒開的期間不計）→ 註明清楚。
+    // 用 != null 而非直接判真值：0 是真實用量，不是缺值
+    const todayOnly = !stats && runner.raw && runner.raw.today_tokens != null;
+    const detailBody = stats
+      ? detailRows(stats)
+      : todayOnly
+      ? `<div class="uv-krow"><span>Today</span><span>${esc(String(runner.raw.today_tokens))} tokens</span></div>
+         <div class="uv-note">app 記錄到的用量（未開啟期間不計入）</div>`
+      : "";
+    const detail = detailBody
       ? `<button class="uv-chevron" data-uv-toggle="${esc(name)}" title="展開統計">${open ? "︿" : "﹀"}</button>
-         <div class="uv-detail${open ? "" : " hidden"}">${detailRows(stats)}</div>`
+         <div class="uv-detail${open ? "" : " hidden"}">${detailBody}</div>`
       : "";
 
     return `<div class="uv-card" data-provider="${esc(name)}">

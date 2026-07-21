@@ -7,20 +7,20 @@
     "theme": "light",
     "sound_enabled": false,
     "provider_sounds": {
+      "gitx": "gitx.mp3",
+      "giminix": "giminix.mp3",
+      "codex": "codex.mp3",
       "irisx_bot": "irisx_bot.mp3",
       "cicx": "cicx.mp3",
-      "openx": "openx.mp3",
-      "codex": "codex.mp3",
-      "giminix": "giminix.mp3",
-      "gitx": "gitx.mp3"
+      "openx": "openx.mp3"
     },
     "provider_waiting_sounds": {
-      "codex": "codex-waiting.mp3",
-      "gitx": "gitx-waiting.mp3",
       "openx": "openx-waiting.mp3",
       "cicx": "cicx-waiting.mp3",
-      "irisx_bot": "irisx_bot-waiting.mp3",
-      "giminix": "giminix-waiting.mp3"
+      "giminix": "giminix-waiting.mp3",
+      "codex": "codex-waiting.mp3",
+      "gitx": "gitx-waiting.mp3",
+      "irisx_bot": "irisx_bot-waiting.mp3"
     },
     "sound_name": "",
     "openab_restart_command": "",
@@ -98,35 +98,20 @@
       "name": "🤖 GITX · OpenAB Copilot",
       "settings_path": null
     },
-    "gemini": {
+    "irisx_bot": {
       "enabled": true,
-      "name": "💻 Gemini CLI（本機）",
-      "settings_path": "~/.gemini/settings.json"
-    },
-    "codex_bot": {
-      "enabled": true,
-      "name": "🤖 CODEX · OpenAB Codex",
+      "name": "🤖 IRISX · OpenAB Hermes",
       "settings_path": null
     },
-    "openx": {
+    "grokx": {
       "enabled": true,
-      "name": "🤖 OPENX · OpenAB OpenCode",
+      "name": "🤖 GROKX · OpenAB Grok",
       "settings_path": null
     },
-    "copilot": {
+    "codex": {
       "enabled": true,
-      "name": "💻 Copilot CLI（本機）",
-      "settings_path": "~/.copilot/config.json"
-    },
-    "lpbot": {
-      "enabled": true,
-      "name": "🤖 LPBOT · OpenAB Claude（quota 監控）",
-      "settings_path": null
-    },
-    "cicx": {
-      "enabled": true,
-      "name": "🤖 CICX · OpenAB Claude",
-      "settings_path": null
+      "name": "💻 Codex CLI（本機）",
+      "settings_path": "~/.codex/hooks.json"
     },
     "mimo": {
       "enabled": false,
@@ -138,24 +123,39 @@
       "name": "💻 Claude Code（本機）",
       "settings_path": "~/.claude/settings.json"
     },
-    "grokx": {
+    "cicx": {
       "enabled": true,
-      "name": "🤖 GROKX · OpenAB Grok",
+      "name": "🤖 CICX · OpenAB Claude",
       "settings_path": null
     },
-    "irisx_bot": {
+    "codex_bot": {
       "enabled": true,
-      "name": "🤖 IRISX · OpenAB Hermes",
+      "name": "🤖 CODEX · OpenAB Codex",
       "settings_path": null
     },
-    "codex": {
+    "copilot": {
       "enabled": true,
-      "name": "💻 Codex CLI（本機）",
-      "settings_path": "~/.codex/hooks.json"
+      "name": "💻 Copilot CLI（本機）",
+      "settings_path": "~/.copilot/config.json"
     },
     "giminix": {
       "enabled": true,
       "name": "🤖 GIMINIX · OpenAB Antigravity",
+      "settings_path": null
+    },
+    "openx": {
+      "enabled": true,
+      "name": "🤖 OPENX · OpenAB OpenCode",
+      "settings_path": null
+    },
+    "gemini": {
+      "enabled": true,
+      "name": "💻 Gemini CLI（本機）",
+      "settings_path": "~/.gemini/settings.json"
+    },
+    "lpbot": {
+      "enabled": true,
+      "name": "🤖 LPBOT · OpenAB Claude（quota 監控）",
       "settings_path": null
     }
   },

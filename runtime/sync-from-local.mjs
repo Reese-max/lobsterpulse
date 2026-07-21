@@ -29,9 +29,13 @@ const SECRET_KEY_RE = /(token|secret|webhook|password|api_?key)/i;
 const checkOnly = process.argv.includes("--check");
 const drift = [];
 
+// 行尾正規化後再比：repo 檔案經 git checkout 會變成 CRLF，本機檔是 LF，
+// 直接比字串會永遠判定漂移（踩雷 §21）。內容一樣就是一樣。
+const lf = (s) => s.replace(/\r\n/g, "\n");
+
 function put(dst, content, label) {
   const old = fs.existsSync(dst) ? fs.readFileSync(dst, "utf8") : null;
-  if (old === content) return;
+  if (old !== null && lf(old) === lf(content)) return;
   drift.push(label);
   if (!checkOnly) fs.writeFileSync(dst, content);
 }

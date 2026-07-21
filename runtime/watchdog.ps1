@@ -14,6 +14,7 @@ param(
   [int]$IntervalSec = 60,
   [int]$FailuresBeforeRestart = 3,
   [int]$StaleMinutes = 15,
+  [int]$PauseMaxMinutes = 30,
   [string]$Exe = "D:\Users\Administrator\Desktop\監控\src-tauri\target\release\lobster-pulse.exe"
 )
 
@@ -57,10 +58,32 @@ function Test-DataFresh {
   return ((Get-Date) - (Get-Item $f).LastWriteTime).TotalMinutes -lt $StaleMinutes
 }
 
+# 維護模式：部署時 app 會被停掉幾分鐘去重建，watchdog 會在那個空檔把舊版拉
+# 回來、鎖住 exe 讓 cargo build 失敗（實測 os error 5）。放這個檔就暫停檢查。
+# 超過 PauseMaxMinutes 自動失效——忘了刪不會讓 watchdog 永久啞掉。
+function Test-Paused {
+  $f = Join-Path $env:USERPROFILE ".lobsterpulse\watchdog-pause"
+  if (-not (Test-Path $f)) { return $false }
+  if (((Get-Date) - (Get-Item $f).LastWriteTime).TotalMinutes -gt $PauseMaxMinutes) {
+    Write-Log "維護模式檔已超過 ${PauseMaxMinutes} 分鐘，自動失效並刪除"
+    Remove-Item $f -Force -ErrorAction SilentlyContinue
+    return $false
+  }
+  return $true
+}
+
 Write-Log "watchdog 啟動（每 ${IntervalSec}s 檢查，連續 ${FailuresBeforeRestart} 次失敗才重啟）"
 $fails = 0
 $staleLogged = $false
+$pauseLogged = $false
 while ($true) {
+  if (Test-Paused) {
+    if (-not $pauseLogged) { Write-Log "維護模式：暫停檢查"; $pauseLogged = $true }
+    $fails = 0
+    Start-Sleep -Seconds $IntervalSec
+    continue
+  }
+  if ($pauseLogged) { Write-Log "維護模式結束，恢復檢查"; $pauseLogged = $false }
   if (Test-Healthy) {
     if ($fails -gt 0) { Write-Log "恢復正常（先前連續失敗 $fails 次）" }
     $fails = 0

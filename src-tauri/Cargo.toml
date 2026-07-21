@@ -33,6 +33,7 @@ opentelemetry = { version = "0.31", default-features = false, features = ["trace
 opentelemetry_sdk = { version = "0.31", features = ["trace"] }
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["grpc-tonic", "trace"] }
 opentelemetry-semantic-conventions = "0.31"
+tauri-plugin-clipboard-manager = "2.3.2"
 
 [target.'cfg(windows)'.dependencies]
 # Antigravity token 在 Windows Credential Manager（go-keyring 寫入），CredReadW 直讀

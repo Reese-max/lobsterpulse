@@ -1393,3 +1393,17 @@ body.has-bg #view-events-log {
 }
 .rule-item-del:hover { color: #ff6b6b; border-color: #ff6b6b; }
 .rule-empty { color: var(--text-dim); font-size: 11px; font-style: italic; padding: 4px 0; }
+
+/* 🔑 金鑰一鍵複製 */
+.apikey-list { display: flex; flex-direction: column; gap: 6px; }
+.apikey-row {
+  display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.03);
+}
+.apikey-name { font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+.apikey-mask {
+  font-size: 12px; font-family: ui-monospace, Consolas, monospace; opacity: 0.7;
+  max-width: 260px; overflow-wrap: anywhere; text-align: right;
+}
+.apikey-eye { cursor: pointer; user-select: none; }
+.apikey-copy { font-size: 11px; padding: 2px 8px; width: auto; }

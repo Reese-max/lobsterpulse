@@ -1,3 +1,4 @@
+mod api_keys;
 mod auto_rules;
 mod config;
 mod discord;
@@ -906,6 +907,41 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
         return None; // stats-cache 沒有、掃描也還沒完成 → 前端顯示 No data
     }
     Some(v)
+}
+
+/// 可複製的 API key 清單（只有名稱與遮罩，值永遠不進前端）。
+#[tauri::command]
+fn list_api_keys() -> Vec<api_keys::ApiKeyEntry> {
+    api_keys::collect(std::env::vars())
+}
+
+/// 把指定金鑰寫進剪貼簿——值由後端直接寫入，不經過 webview。
+/// 30 秒後若剪貼簿內容仍是這把 key 就清掉；被別的內容取代則不動
+/// （不可蓋掉使用者中途複製的東西）。
+#[tauri::command]
+fn copy_api_key(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let value = api_keys::value_of(&name)?;
+    app.clipboard()
+        .write_text(value.clone())
+        .map_err(|e| format!("寫入剪貼簿失敗: {e}"))?;
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        if app2.clipboard().read_text().ok().as_deref() == Some(value.as_str()) {
+            let _ = app2.clipboard().write_text(String::new());
+            log::info!("[api_keys] 已自動清除剪貼簿");
+        }
+    });
+    // 只記名稱，永遠不記值
+    log::info!("[api_keys] 已複製 {name}（30 秒後自動清除）");
+    Ok(())
+}
+
+/// 按住顯示用：這是唯一會把值送進 webview 的路徑，使用者主動觸發才會呼叫。
+#[tauri::command]
+fn reveal_api_key(name: String) -> Result<String, String> {
+    api_keys::value_of(&name)
 }
 
 /// 面板用：各 provider 今日已記錄的用量（provider → tokens）。
@@ -3811,6 +3847,8 @@ pub fn run() {
         ));
         // Windows toast / macOS banner / Linux libnotify
         builder = builder.plugin(tauri_plugin_notification::init());
+        // 一鍵複製 API key：值由後端直接寫剪貼簿，不經 webview
+        builder = builder.plugin(tauri_plugin_clipboard_manager::init());
         // 全域快捷鍵 Ctrl+Shift+L / D / E — 由前端 listen shortcut 事件
         builder = builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -4537,6 +4575,9 @@ pub fn run() {
             get_quota_history,
             get_claude_daily_stats,
             get_provider_daily,
+            list_api_keys,
+            copy_api_key,
+            reveal_api_key,
             detect_installed_clis,
             remove_all_sessions,
             timeline_snapshot_24h,
@@ -12727,7 +12768,7 @@ mod r127_daemon_exclusion_gitignore_tests {
 // 架構理由: Tauri 5 plugin 啟動失敗檢測 (single_instance / autostart /
 // notification / global_shortcut / log) — 跨既有 mod 邊界 (render_prom /
 // auto_rules / timeline / session / hook_server / event / config 都跟
-// plugin 註冊契約無關), 需獨立 mod 護衛「5 個 plugin 都透過
+// plugin 註冊契約無關), 需獨立 mod 護衛「6 個 plugin 都透過
 // `builder.plugin(...)` 註冊進 run()」 invariant。對齊 R127 .gitignore
 // 護衛模式: 讀 source file (lib.rs) 確認契約 token 出現。
 //
@@ -12738,7 +12779,7 @@ mod r127_daemon_exclusion_gitignore_tests {
 mod r131_plugin_registry_tests {
     use std::path::PathBuf;
 
-    /// 5 個 plugin 都必須在 `pub fn run()` 內透過 `builder.plugin(...)` 註冊
+    /// 6 個 plugin 都必須在 `pub fn run()` 內透過 `builder.plugin(...)` 註冊
     /// (CLAUDE.md Plugin 清單 + L3240-3303 落地); 任一漏註冊 → Tauri 啟動 panic,
     /// 等於 R0 級別阻斷。護衛契約: source 內必須有對應 `tauri_plugin_XXX::init` /
     /// `::Builder::...` token, 漏一個即 fail 並列名單。
@@ -12752,7 +12793,7 @@ mod r131_plugin_registry_tests {
         let src = std::fs::read_to_string(&lib_rs_path)
             .unwrap_or_else(|e| panic!("read {} failed: {e}", lib_rs_path.display()));
 
-        // 5 個 plugin 註冊 token, 任一漏註冊 → fail
+        // 6 個 plugin 註冊 token, 任一漏註冊 → fail
         let required: &[(&str, &str)] = &[
             (
                 "tauri_plugin_single_instance::init",
@@ -12767,6 +12808,10 @@ mod r131_plugin_registry_tests {
             (
                 "tauri_plugin_log::Builder::default",
                 "log plugin (dev mode conditional)",
+            ),
+            (
+                "tauri_plugin_clipboard_manager::init",
+                "clipboard plugin（一鍵複製 API key）",
             ),
         ];
         let mut missing: Vec<&str> = Vec::new();

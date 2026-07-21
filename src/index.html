@@ -191,6 +191,7 @@
           <button class="settings-tab" data-tab="runners">📦 Runners</button>
           <button class="settings-tab" data-tab="automation">🔔 自動化</button>
           <button class="settings-tab" data-tab="rules">⚡ Rules</button>
+          <button class="settings-tab" data-tab="keys">🔑 金鑰</button>
         </div>
         <button id="btn-close-settings" class="icon-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -432,6 +433,12 @@
         </div>
 
         <!-- ⚡ Rules Tab —— R115 規則引擎 UI：toggle / 新增 / 刪除 TriggerRule -->
+        <div class="settings-tab-panel" data-panel="keys">
+          <div class="setting-sub-label" style="margin-bottom:10px">
+            讀自環境變數，本程式不儲存任何金鑰。複製由後端直接寫入剪貼簿，<b>30 秒後自動清除</b>。
+          </div>
+          <div id="apikey-list" class="apikey-list"></div>
+        </div>
         <div class="settings-tab-panel" data-panel="rules">
           <div class="setting-group">
             <div>

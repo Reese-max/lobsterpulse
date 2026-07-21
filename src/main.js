@@ -706,9 +706,81 @@ async function init() {
       document.querySelectorAll(".settings-tab-panel").forEach(p =>
         p.classList.toggle("active", p.dataset.panel === tabId)
       );
+      if (tabId === "keys") renderApiKeys();
       fitWindow();
     });
   });
+
+  // ── 🔑 金鑰一鍵複製 ────────────────────────────────────────
+  // 值永遠不主動進畫面：清單只有名稱與遮罩，複製是後端直接寫剪貼簿。
+  // 唯一會把值送進 webview 的是「按住顯示」，且放開就消失。
+  async function renderApiKeys() {
+    const box = document.getElementById("apikey-list");
+    if (!box) return;
+    let keys = [];
+    try {
+      keys = (await invoke("list_api_keys")) || [];
+    } catch (e) {
+      box.innerHTML = `<div class="setting-sub-label">讀取失敗：${esc(String(e))}</div>`;
+      return;
+    }
+    if (keys.length === 0) {
+      box.innerHTML = `<div class="setting-sub-label">找不到 AI 服務的環境變數金鑰</div>`;
+      return;
+    }
+    box.innerHTML = keys
+      .map(
+        (k) => `<div class="apikey-row">
+          <span class="apikey-name">${esc(k.name)}</span>
+          <span class="apikey-mask" data-mask="${esc(k.masked)}">${esc(k.masked)}</span>
+          <button class="icon-btn apikey-eye" data-reveal="${esc(k.name)}" title="按住顯示">👁</button>
+          <button class="icon-btn apikey-copy" data-copy="${esc(k.name)}" title="複製（30 秒後自動清除）">複製</button>
+        </div>`
+      )
+      .join("");
+  }
+
+  document.getElementById("apikey-list")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-copy]");
+    if (!btn) return;
+    const old = btn.textContent;
+    try {
+      await invoke("copy_api_key", { name: btn.dataset.copy });
+      btn.textContent = "已複製";
+    } catch (err) {
+      btn.textContent = "失敗";
+      console.warn("[api-keys] 複製失敗", err);
+    }
+    setTimeout(() => { btn.textContent = old; }, 2000);
+  });
+
+  // 按住顯示：pointerdown 取值、放開／離開即還原遮罩
+  {
+    const box = document.getElementById("apikey-list");
+    let shownEl = null;
+    const hide = () => {
+      if (!shownEl) return;
+      shownEl.textContent = shownEl.dataset.mask;
+      shownEl = null;
+    };
+    box?.addEventListener("pointerdown", async (e) => {
+      const eye = e.target.closest("[data-reveal]");
+      if (!eye) return;
+      e.preventDefault();
+      const cell = eye.parentElement.querySelector(".apikey-mask");
+      try {
+        const v = await invoke("reveal_api_key", { name: eye.dataset.reveal });
+        if (cell) { cell.textContent = v; shownEl = cell; }
+      } catch (err) {
+        console.warn("[api-keys] 顯示失敗", err);
+      }
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((ev) =>
+      box?.addEventListener(ev, hide)
+    );
+    // 視窗失焦（Alt-Tab / 螢幕分享切走）也要收起來
+    window.addEventListener("blur", hide);
+  }
 
   // ── R115 規則引擎 UI ───────────────────────────────────────
   // 載入現有規則, render list, 綁定 toggle / 新增 / 刪除按鈕

@@ -2027,6 +2027,20 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
                 // claude runner 的 today_tokens 來自停更數月的 ccusage 快取（實測顯示
                 // "N/A"）。面板已改吃即時 JSONL 掃描，膠囊也補同一份，否則同一個數字
                 // 兩處不一致。日期對不上（跨午夜、下輪掃描前）就不覆蓋，寧可維持 N/A。
+                // 其他 CLI 沒有 JSONL 可逐筆加總，只有生涯累計數 → 用當日差值。
+                // 記錄到的是下界（app 沒開的期間不算），呼叫端文案要照實說。
+                if let Some(total) = raw.get("total_tokens_raw").and_then(|v| v.as_u64()) {
+                    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                    let used = quota::provider_daily::record_cumulative(
+                        &dir.join("provider-daily.json"),
+                        &today,
+                        &r.name,
+                        total,
+                    );
+                    if let Some(o) = raw.as_object_mut() {
+                        o.insert("today_tokens".into(), serde_json::json!(fmt_tokens(used)));
+                    }
+                }
                 if r.name == "claude" {
                     if let (Some(o), Some(d)) = (raw.as_object_mut(), LIVE_DAILY.lock().unwrap().clone()) {
                         if d.date == chrono::Local::now().format("%Y-%m-%d").to_string() {

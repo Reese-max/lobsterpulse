@@ -8,19 +8,19 @@
     "sound_enabled": false,
     "provider_sounds": {
       "irisx_bot": "irisx_bot.mp3",
-      "giminix": "giminix.mp3",
       "cicx": "cicx.mp3",
       "openx": "openx.mp3",
-      "gitx": "gitx.mp3",
-      "codex": "codex.mp3"
+      "codex": "codex.mp3",
+      "giminix": "giminix.mp3",
+      "gitx": "gitx.mp3"
     },
     "provider_waiting_sounds": {
-      "gitx": "gitx-waiting.mp3",
-      "irisx_bot": "irisx_bot-waiting.mp3",
-      "giminix": "giminix-waiting.mp3",
       "codex": "codex-waiting.mp3",
+      "gitx": "gitx-waiting.mp3",
+      "openx": "openx-waiting.mp3",
       "cicx": "cicx-waiting.mp3",
-      "openx": "openx-waiting.mp3"
+      "irisx_bot": "irisx_bot-waiting.mp3",
+      "giminix": "giminix-waiting.mp3"
     },
     "sound_name": "",
     "openab_restart_command": "",
@@ -56,7 +56,7 @@
         "cwd": null,
         "env": {},
         "timeout_secs": 30,
-        "template": "{{ line1 }}\n{{ line2 }}"
+        "template": "{{ line1 }}\n🤖 {{ current_model }} · 今日 {{ today_tokens }}"
       }
     ],
     "capsule_width": 300,
@@ -93,39 +93,9 @@
     }
   },
   "providers": {
-    "codex": {
-      "enabled": true,
-      "name": "💻 Codex CLI（本機）",
-      "settings_path": "~/.codex/hooks.json"
-    },
     "gitx": {
       "enabled": true,
       "name": "🤖 GITX · OpenAB Copilot",
-      "settings_path": null
-    },
-    "giminix": {
-      "enabled": true,
-      "name": "🤖 GIMINIX · OpenAB Antigravity",
-      "settings_path": null
-    },
-    "irisx_bot": {
-      "enabled": true,
-      "name": "🤖 IRISX · OpenAB Hermes",
-      "settings_path": null
-    },
-    "claude": {
-      "enabled": true,
-      "name": "💻 Claude Code（本機）",
-      "settings_path": "~/.claude/settings.json"
-    },
-    "openx": {
-      "enabled": true,
-      "name": "🤖 OPENX · OpenAB OpenCode",
-      "settings_path": null
-    },
-    "grokx": {
-      "enabled": true,
-      "name": "🤖 GROKX · OpenAB Grok",
       "settings_path": null
     },
     "gemini": {
@@ -138,9 +108,9 @@
       "name": "🤖 CODEX · OpenAB Codex",
       "settings_path": null
     },
-    "cicx": {
+    "openx": {
       "enabled": true,
-      "name": "🤖 CICX · OpenAB Claude",
+      "name": "🤖 OPENX · OpenAB OpenCode",
       "settings_path": null
     },
     "copilot": {
@@ -153,9 +123,39 @@
       "name": "🤖 LPBOT · OpenAB Claude（quota 監控）",
       "settings_path": null
     },
+    "cicx": {
+      "enabled": true,
+      "name": "🤖 CICX · OpenAB Claude",
+      "settings_path": null
+    },
     "mimo": {
       "enabled": false,
       "name": "🤖 MIMO · OpenAB MIMO",
+      "settings_path": null
+    },
+    "claude": {
+      "enabled": true,
+      "name": "💻 Claude Code（本機）",
+      "settings_path": "~/.claude/settings.json"
+    },
+    "grokx": {
+      "enabled": true,
+      "name": "🤖 GROKX · OpenAB Grok",
+      "settings_path": null
+    },
+    "irisx_bot": {
+      "enabled": true,
+      "name": "🤖 IRISX · OpenAB Hermes",
+      "settings_path": null
+    },
+    "codex": {
+      "enabled": true,
+      "name": "💻 Codex CLI（本機）",
+      "settings_path": "~/.codex/hooks.json"
+    },
+    "giminix": {
+      "enabled": true,
+      "name": "🤖 GIMINIX · OpenAB Antigravity",
       "settings_path": null
     }
   },

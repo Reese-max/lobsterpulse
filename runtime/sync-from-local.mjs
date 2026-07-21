@@ -40,7 +40,8 @@ function put(dst, content, label) {
 fs.mkdirSync(DST_SCRIPTS, { recursive: true });
 const keep = new Set();
 for (const f of fs.readdirSync(SRC_SCRIPTS)) {
-  if (!/\.(js|cmd)$/.test(f) || f.includes(".bak-")) continue;
+  // 排除備份檔：命名有 .bak-YYYYMMDD 也有 .bak2-YYYYMMDD，比對 ".bak" 就好
+  if (!/\.(js|cmd)$/.test(f) || f.includes(".bak")) continue;
   keep.add(f);
   put(path.join(DST_SCRIPTS, f), fs.readFileSync(path.join(SRC_SCRIPTS, f), "utf8"), `scripts/${f}`);
 }

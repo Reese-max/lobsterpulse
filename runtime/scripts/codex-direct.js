@@ -72,7 +72,7 @@ function fmtCD(s) { if(s<=0)return'resetting...'; const h=Math.floor(s/3600),m=M
         wk_remaining: 'N/A', wk_used: 0, wk_reset: 'N/A',
         rate_allowed: false, plan: 'unknown',
         current_model: currentModel, effort,
-        total_tokens: fmt(totalTokens), thread_count: threadCount,
+        total_tokens: fmt(totalTokens), total_tokens_raw: totalTokens, thread_count: threadCount,
         http_code: httpCode,
         token_expires_in_secs: tokenExpiresIn,
         note, ts: new Date().toISOString()
@@ -114,7 +114,7 @@ function fmtCD(s) { if(s<=0)return'resetting...'; const h=Math.floor(s/3600),m=M
       rate_allowed: rl.allowed,
       plan: ({plus:'Plus',pro:'Pro',prolite:'Pro Lite',business:'Business',team:'Team',enterprise:'Enterprise'})[usage.plan_type]||usage.plan_type||'unknown',
       current_model: currentModel, effort,
-      total_tokens: fmt(totalTokens), thread_count: threadCount,
+      total_tokens: fmt(totalTokens), total_tokens_raw: totalTokens, thread_count: threadCount,
       ...(dropped.length ? { note: `API 回傳同類別視窗多於一個，未顯示：${dropped.join(', ')}` } : {}),
       ts: new Date().toISOString()
     }));

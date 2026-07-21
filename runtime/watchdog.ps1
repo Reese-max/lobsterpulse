@@ -13,6 +13,7 @@
 param(
   [int]$IntervalSec = 60,
   [int]$FailuresBeforeRestart = 3,
+  [int]$StaleMinutes = 15,
   [string]$Exe = "D:\Users\Administrator\Desktop\監控\src-tauri\target\release\lobster-pulse.exe"
 )
 
@@ -48,12 +49,30 @@ if (-not $mutex.WaitOne(0)) {
   exit 0
 }
 
+# healthz 200 不代表在做事（踩雷 §8：健康 ≠ 活著）。額度快照該每分鐘更新，
+# 停超過 StaleMinutes 就是 runner 那條鏈死了——進程還在，重啟救不了，先出聲。
+function Test-DataFresh {
+  $f = Join-Path $env:USERPROFILE ".lobsterpulse\usage-local.json"
+  if (-not (Test-Path $f)) { return $false }
+  return ((Get-Date) - (Get-Item $f).LastWriteTime).TotalMinutes -lt $StaleMinutes
+}
+
 Write-Log "watchdog 啟動（每 ${IntervalSec}s 檢查，連續 ${FailuresBeforeRestart} 次失敗才重啟）"
 $fails = 0
+$staleLogged = $false
 while ($true) {
   if (Test-Healthy) {
     if ($fails -gt 0) { Write-Log "恢復正常（先前連續失敗 $fails 次）" }
     $fails = 0
+    if (-not (Test-DataFresh)) {
+      if (-not $staleLogged) {
+        Write-Log "警告：healthz 正常但 usage-local.json 已超過 ${StaleMinutes} 分鐘沒更新——runner 鏈可能已死"
+        $staleLogged = $true
+      }
+    } elseif ($staleLogged) {
+      Write-Log "額度快照恢復更新"
+      $staleLogged = $false
+    }
   } else {
     $fails++
     Write-Log "healthz 失敗（第 $fails 次）"

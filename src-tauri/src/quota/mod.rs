@@ -7,6 +7,7 @@
 pub mod anthropic;
 pub mod antigravity;
 pub mod claude_logs;
+pub mod provider_daily;
 pub mod codex;
 pub mod copilot;
 pub mod devin;

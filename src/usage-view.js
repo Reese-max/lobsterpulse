@@ -111,7 +111,7 @@
     return rows + note;
   }
 
-  function renderCard(runner, dailyStats) {
+  function renderCard(runner, dailyStats, providerDaily) {
     const card = window.QuotaCards.normalizeRunnerCard(runner);
     const name = runner.name || "";
     const label = (runner.label || name).replace(/^[^\w]*\s/, ""); // 去掉開頭 emoji
@@ -149,10 +149,13 @@
 
     const stats = name === "claude" ? dailyStats : null;
     const open = detailOpen.has(name);
-    // 非 Claude 的 CLI 沒有可逐筆加總的 log，後端改用「累計計數器的當日差值」，
-    // 值已放在 raw.today_tokens。它是下界（app 沒開的期間不計）→ 註明清楚。
-    // 用 != null 而非直接判真值：0 是真實用量，不是缺值
-    const todayOnly = !stats && runner.raw && runner.raw.today_tokens != null;
+    // 非 Claude 的 CLI 沒有可逐筆加總的 log，後端改用「累計計數器的當日差值」。
+    // 面板卡片來自 live API 快照那條路，raw 裡不會有這個值，得從 get_provider_daily
+    // 撈（膠囊是另一條路，raw 有值——一開始只做了膠囊那條，面板整個看不到）。
+    // 用 != null 而非直接判真值：0 是真實用量，不是缺值。
+    const pdRaw = providerDaily && providerDaily[name];
+    const todayTok = pdRaw != null ? fmtTok(pdRaw) : runner.raw && runner.raw.today_tokens;
+    const todayOnly = !stats && todayTok != null;
     // 進度條顯示「剩餘」（快沒了數字變小，餘光掃一眼最直覺），但展開後要能直接
     // 看到「用掉多少」——不然同一張卡片裡 token 是已用量、配額是剩餘量，方向不
     // 一致，得自己在腦中減。
@@ -166,7 +169,7 @@
     const detailBody = winRows + (stats
       ? detailRows(stats)
       : todayOnly
-      ? `<div class="uv-krow"><span>Today</span><span>${esc(String(runner.raw.today_tokens))} tokens</span></div>
+      ? `<div class="uv-krow"><span>Today</span><span>${esc(String(todayTok))} tokens</span></div>
          <div class="uv-note">app 記錄到的用量（未開啟期間不計入）</div>`
       : "");
     const detail = detailBody
@@ -330,11 +333,12 @@
     if (renderInFlight) { renderQueued = true; return; }
     renderInFlight = true;
     try {
-      const [cliRes, liveRes, statsRes, evRes] = await Promise.allSettled([
+      const [cliRes, liveRes, statsRes, evRes, pdRes] = await Promise.allSettled([
         invoke("detect_installed_clis"),
         invoke("get_live_quota_snapshot"),
         invoke("get_claude_daily_stats"),
         invoke("get_recent_completions"),
+        invoke("get_provider_daily"),
       ]);
       const clis = cliRes.status === "fulfilled" ? (cliRes.value || []) : [];
       const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
@@ -345,7 +349,8 @@
       if (runners.length === 0) {
         root.innerHTML = `<div class="uv-empty">未偵測到本機安裝的 AI CLI</div>`;
       } else {
-        root.innerHTML = runners.map((r) => renderCard(r, dailyStats)).join("");
+        const providerDaily = pdRes.status === "fulfilled" ? (pdRes.value || {}) : {};
+        root.innerHTML = runners.map((r) => renderCard(r, dailyStats, providerDaily)).join("");
         drawSparks(runners.map((r) => r.name));
       }
       renderRecent(events, clis);

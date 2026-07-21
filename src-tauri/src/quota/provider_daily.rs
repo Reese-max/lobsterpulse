@@ -64,6 +64,23 @@ pub fn record_cumulative(path: &Path, date: &str, provider: &str, value: u64) ->
     used
 }
 
+/// 讀出某日各 provider 已記錄的用量（last - first）。檔案不存在／壞掉 → 空。
+/// 給面板用：面板的卡片來自 live API 快照那條路，跟寫入這個檔的 runner 不同源，
+/// 只能從這裡撈（一開始漏掉這點，導致膠囊看得到、面板看不到）。
+pub fn usage_on(path: &Path, date: &str) -> BTreeMap<String, u64> {
+    let Ok(s) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    let map: Daily = serde_json::from_str(&s).unwrap_or_default();
+    map.get(date)
+        .map(|day| {
+            day.iter()
+                .map(|(p, (first, last))| (p.clone(), last.saturating_sub(*first)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,6 +104,21 @@ mod tests {
         // 不同 provider 各自獨立
         assert_eq!(record_cumulative(&p, "2026-07-22", "gemini", 50), 0);
         assert_eq!(record_cumulative(&p, "2026-07-22", "codex", 2100), 200);
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn usage_on_reads_back_what_record_wrote() {
+        let p = tmp_path("readback");
+        let _ = std::fs::remove_file(&p);
+        assert!(usage_on(&p, "2026-07-21").is_empty(), "檔案不存在 → 空，不是 panic");
+        record_cumulative(&p, "2026-07-21", "codex", 1000);
+        record_cumulative(&p, "2026-07-21", "codex", 1750);
+        record_cumulative(&p, "2026-07-21", "gemini", 5);
+        let day = usage_on(&p, "2026-07-21");
+        assert_eq!(day.get("codex"), Some(&750));
+        assert_eq!(day.get("gemini"), Some(&0));
+        assert!(usage_on(&p, "2026-07-20").is_empty(), "沒資料的日子 → 空");
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
     }
 

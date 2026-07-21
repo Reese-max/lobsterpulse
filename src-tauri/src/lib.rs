@@ -908,6 +908,19 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
     Some(v)
 }
 
+/// 面板用：各 provider 今日已記錄的用量（provider → tokens）。
+/// 面板卡片來自 live API 快照，跟寫入 provider-daily.json 的 runner 不同源，
+/// 所以不能靠 raw 夾帶，得單獨撈一份。
+#[tauri::command]
+fn get_provider_daily() -> serde_json::Value {
+    let Some(home) = dirs::home_dir() else {
+        return serde_json::json!({});
+    };
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let path = home.join(".lobsterpulse").join("provider-daily.json");
+    serde_json::json!(quota::provider_daily::usage_on(&path, &today))
+}
+
 /// 直接掃 JSONL 得到的每日 token 快照；背景任務每 5 分鐘更新。
 #[derive(Clone)]
 pub struct LiveDaily {
@@ -4523,6 +4536,7 @@ pub fn run() {
             test_usage_runner,
             get_quota_history,
             get_claude_daily_stats,
+            get_provider_daily,
             detect_installed_clis,
             remove_all_sessions,
             timeline_snapshot_24h,

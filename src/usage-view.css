@@ -142,6 +142,11 @@ body.light .uv-card { background: rgba(30, 38, 48, 0.88); }
   border-radius: 12px;
   padding: 8px 12px;
   margin-top: 8px;
+  /* 清單長度不受控時會把 footer（含齒輪）擠出畫面外——實測視窗在螢幕中段時
+     它獨占 303px，只壓縮卡片區救不回來。上限由 fitWindow 動態設，這裡只保證
+     超出時是內捲而不是把版面撐爆。 */
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 /* 等待回應區塊：同卡底，左緣琥珀色示急；點整列跳終端機 */
 #uv-waiting:not(:empty) {

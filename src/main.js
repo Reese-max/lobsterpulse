@@ -141,15 +141,32 @@ async function fitWindow() {
     const waiting = document.getElementById("uv-waiting");
     const foot = document.querySelector("#view-usage .uv-footer");
     const toast = document.getElementById("lp-toast");
+    // 卡片區與「最近完成」清單**兩個都要**可壓縮。原本只壓卡片區，清單長起來
+    // （實測 303px）就把 footer 連同齒輪推出畫面外，使用者回報「點不到齒輪」。
+    // 真正固定的只有膠囊、等待區、footer、toast。
     const fixed =
       document.getElementById("capsule").offsetHeight +
-      (rec ? rec.offsetHeight : 0) +
       (waiting ? waiting.offsetHeight : 0) +
       (foot ? foot.offsetHeight : 0) +
       (toast && !toast.classList.contains("hidden") ? toast.offsetHeight : 0) +
       24;
-    cards.style.maxHeight = Math.min(Math.max(availBelow - fixed, 180), 620) + "px";
+    // 可分配給「卡片 + 清單」的空間；下限訂得夠低，確保 footer 一定留在畫面內
+    const flexible = Math.max(availBelow - fixed, 180);
+    if (rec) rec.style.maxHeight = ""; // 先解除舊上限再量自然高度
     await new Promise(r => requestAnimationFrame(r));
+    const recWant = rec ? rec.offsetHeight : 0;
+    // 卡片優先（那是主角），但清單至少留 80px，兩者都內捲
+    const cardsMax = Math.min(Math.max(flexible - Math.min(recWant, 160), 100), 620);
+    cards.style.maxHeight = cardsMax + "px";
+    if (rec) rec.style.maxHeight = Math.max(flexible - cardsMax, 80) + "px";
+    await new Promise(r => requestAnimationFrame(r));
+    // 上面的 24 是留白的估計值，實際 margin/gap 會多出十幾 px——不修正的話
+    // footer 仍會被切掉半個齒輪。量真實溢出量再從卡片區扣回去（一次就夠）。
+    const overflow = document.getElementById("app").scrollHeight - availBelow;
+    if (overflow > 0) {
+      cards.style.maxHeight = Math.max(cardsMax - overflow, 100) + "px";
+      await new Promise(r => requestAnimationFrame(r));
+    }
   }
   // expanded（sessions）視圖同款：session-list 內捲，footer 留在螢幕內
   const slist = document.querySelector("#view-expanded .session-list");

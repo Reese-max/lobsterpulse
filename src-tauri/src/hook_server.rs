@@ -218,15 +218,42 @@ async fn handle_client(
     tx: Arc<mpsc::UnboundedSender<HookEvent>>,
     metrics: MetricsArc,
 ) {
-    let mut buf = vec![0u8; 65536];
-    let n = match tokio::time::timeout(std::time::Duration::from_secs(2), stream.read(&mut buf))
+    // 一次 read() 不保證拿到整個請求：hook 雖然 headers+body 一次 write，但超過
+    // 一個 TCP segment（~1.4KB）就會被拆，先到的那半截 JSON parse 必失敗，事件
+    // 靜默丟失。實測 log 打開後立刻看到 4 筆「JSON parse failed」都是這個。
+    // 依 Content-Length 補讀到齊；沒有該 header 時維持舊行為（讀到什麼算什麼）。
+    const MAX_REQUEST: usize = 1 << 20; // 1MB 上限，防惡意/失控 body 吃爆記憶體
+    let mut data: Vec<u8> = Vec::with_capacity(8192);
+    let mut chunk = vec![0u8; 65536];
+    loop {
+        let n = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            stream.read(&mut chunk),
+        )
         .await
-    {
-        Ok(Ok(n)) if n > 0 => n,
-        _ => return,
-    };
-
-    let data = &buf[..n];
+        {
+            Ok(Ok(n)) if n > 0 => n,
+            // 第一輪就沒讀到東西＝連線廢了；已有資料則用手上的往下走
+            _ => break,
+        };
+        data.extend_from_slice(&chunk[..n]);
+        if data.len() >= MAX_REQUEST {
+            warn!("[hook_server] request 超過 {MAX_REQUEST} bytes，截斷處理");
+            break;
+        }
+        match find_body_start(&data) {
+            // 有 Content-Length 就讀到齊為止，否則手上這些就是全部
+            Some(bs) => match content_length(&data[..bs]) {
+                Some(cl) if data.len() - bs < cl => continue,
+                _ => break,
+            },
+            None => continue, // headers 都還沒收完
+        }
+    }
+    if data.is_empty() {
+        return;
+    }
+    let data = &data[..];
 
     // R63: `/healthz` early-dispatch — operator probe 流量不該污染 K15/K16 counter,
     // 也不該走 `parse_provider` fallback (會 parse 成 "claude" 或 "unknown" + 無 body → 400, log
@@ -589,6 +616,56 @@ mod tests {
         assert_eq!(event.provider, "claude");
         assert_eq!(event.hook_event_name, "Stop");
         assert_eq!(event.session_id, "abc");
+    }
+
+    #[test]
+    fn content_length_is_case_insensitive_and_tolerates_junk() {
+        let h = b"POST /hook/claude HTTP/1.0\r\ncontent-length: 123\r\n\r\n";
+        assert_eq!(super::content_length(h), Some(123));
+        let h = b"POST / HTTP/1.0\r\nContent-Length:  7  \r\n\r\n";
+        assert_eq!(super::content_length(h), Some(7));
+        assert_eq!(super::content_length(b"POST / HTTP/1.0\r\n\r\n"), None);
+        assert_eq!(
+            super::content_length(b"POST / HTTP/1.0\r\nContent-Length: abc\r\n\r\n"),
+            None
+        );
+    }
+
+    /// 真實故障重現：hook 的 headers+body 被 TCP 拆成兩段送達時，舊版單次
+    /// read() 只拿到前半截 → JSON parse failed → 事件靜默丟失。
+    #[tokio::test]
+    async fn handle_client_reassembles_body_split_across_tcp_segments() {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            super::handle_client(stream, std::sync::Arc::new(tx), super::new_metrics()).await;
+        });
+
+        let body = format!(
+            r#"{{"hook_event_name":"Stop","session_id":"split-1","cwd":"{}"}}"#,
+            "C:\\\\padding".repeat(60) // 撐大到必然跨 segment
+        );
+        let head = format!(
+            "POST /hook/claude HTTP/1.0\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut c = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let first = format!("{head}{}", &body[..20]);
+        c.write_all(first.as_bytes()).await.unwrap();
+        c.flush().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await; // 逼出第二次 read
+        c.write_all(body[20..].as_bytes()).await.unwrap();
+        c.flush().await.unwrap();
+
+        let got = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+            .await
+            .expect("不該逾時：補讀後應成功 parse")
+            .expect("channel 應收到事件");
+        assert_eq!(got.session_id, "split-1");
+        let _ = server.await;
     }
 
     #[test]
@@ -1433,6 +1510,17 @@ mod tests {
             (fixture.field_check)(&event);
         }
     }
+}
+
+/// 從 header 區塊抽 `Content-Length`（header 名大小寫不敏感）。找不到／不是數字 → None。
+fn content_length(headers: &[u8]) -> Option<usize> {
+    let text = String::from_utf8_lossy(headers);
+    text.split("\r\n")
+        .find_map(|line| {
+            let (k, v) = line.split_once(':')?;
+            k.trim().eq_ignore_ascii_case("content-length").then_some(v)
+        })
+        .and_then(|v| v.trim().parse().ok())
 }
 
 fn find_body_start(data: &[u8]) -> Option<usize> {

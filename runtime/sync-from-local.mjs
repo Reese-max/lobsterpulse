@@ -51,7 +51,19 @@ for (const f of fs.readdirSync(DST_SCRIPTS)) {
   if (!checkOnly) fs.rmSync(path.join(DST_SCRIPTS, f));
 }
 
-// 2) config 範本（去敏感化）
+// 2) Copilot hook 設定（獨立小檔、全是我們自己的內容，可原樣備份；
+//    Claude/Gemini 的 hook 混在各自的大 settings.json 裡且含其他設定，不動）
+const COPILOT_HOOKS = path.join(HOME, ".copilot", "hooks", "lobster.json");
+if (fs.existsSync(COPILOT_HOOKS)) {
+  fs.mkdirSync(path.join(REPO, "hooks"), { recursive: true });
+  put(
+    path.join(REPO, "hooks", "copilot-lobster.json"),
+    fs.readFileSync(COPILOT_HOOKS, "utf8"),
+    "hooks/copilot-lobster.json"
+  );
+}
+
+// 3) config 範本（去敏感化）
 function sanitize(node, key = "") {
   if (Array.isArray(node)) return node.map((v) => sanitize(v));
   if (node && typeof node === "object") {

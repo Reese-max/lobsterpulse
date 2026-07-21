@@ -29,3 +29,10 @@ node runtime/sync-from-local.mjs --check  # 只檢查漂移，有差異 exit 1
 
 實檔含 Discord bot token。同步腳本會把符合 `token|secret|webhook|password|api_key`
 的字串值清成空字串，並在輸出仍偵測到金鑰樣式時直接中止（exit 2），寧可不同步也不外洩。
+
+## Copilot hooks
+
+`runtime/hooks/copilot-lobster.json` → `~/.copilot/hooks/lobster.json`（目錄需自建）。
+Copilot CLI 的 hook 是設定檔驅動、事件名用 camelCase（`sessionStart` / `userPromptSubmitted`
+/ `agentStop` / `sessionEnd`），與 Claude 的 PascalCase 互為別名。
+Claude 與 Gemini 的 hook 混在各自的大 `settings.json` 內（含其他設定與憑證），不在此備份。

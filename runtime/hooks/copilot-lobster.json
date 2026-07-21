@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "comment": "LobsterPulse session hooks. Copilot CLI supports both camelCase names and Claude-style aliases; camelCase is canonical.",
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "powershell": "& \"D:\\Users\\Administrator\\Desktop\\監控\\src-tauri\\target\\release\\lobster-pulse-hook.exe\" copilot",
+        "timeoutSec": 10
+      }
+    ],
+    "userPromptSubmitted": [
+      {
+        "type": "command",
+        "powershell": "& \"D:\\Users\\Administrator\\Desktop\\監控\\src-tauri\\target\\release\\lobster-pulse-hook.exe\" copilot",
+        "timeoutSec": 10
+      }
+    ],
+    "agentStop": [
+      {
+        "type": "command",
+        "powershell": "& \"D:\\Users\\Administrator\\Desktop\\監控\\src-tauri\\target\\release\\lobster-pulse-hook.exe\" copilot",
+        "timeoutSec": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "powershell": "& \"D:\\Users\\Administrator\\Desktop\\監控\\src-tauri\\target\\release\\lobster-pulse-hook.exe\" copilot",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

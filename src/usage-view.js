@@ -153,12 +153,22 @@
     // 值已放在 raw.today_tokens。它是下界（app 沒開的期間不計）→ 註明清楚。
     // 用 != null 而非直接判真值：0 是真實用量，不是缺值
     const todayOnly = !stats && runner.raw && runner.raw.today_tokens != null;
-    const detailBody = stats
+    // 進度條顯示「剩餘」（快沒了數字變小，餘光掃一眼最直覺），但展開後要能直接
+    // 看到「用掉多少」——不然同一張卡片裡 token 是已用量、配額是剩餘量，方向不
+    // 一致，得自己在腦中減。
+    const winRows = ((card.kind === "full" || card.kind === "simple") && card.windows ? card.windows : [])
+      .filter((w) => Number.isFinite(w.remainPct))
+      .map((w) => {
+        const used = Math.max(0, Math.min(100, 100 - Math.round(w.remainPct)));
+        return `<div class="uv-krow"><span>${esc(w.label)}</span><span>已用 ${used}% · 剩 ${Math.round(w.remainPct)}%</span></div>`;
+      })
+      .join("");
+    const detailBody = winRows + (stats
       ? detailRows(stats)
       : todayOnly
       ? `<div class="uv-krow"><span>Today</span><span>${esc(String(runner.raw.today_tokens))} tokens</span></div>
          <div class="uv-note">app 記錄到的用量（未開啟期間不計入）</div>`
-      : "";
+      : "");
     const detail = detailBody
       ? `<button class="uv-chevron" data-uv-toggle="${esc(name)}" title="展開統計">${open ? "︿" : "﹀"}</button>
          <div class="uv-detail${open ? "" : " hidden"}">${detailBody}</div>`

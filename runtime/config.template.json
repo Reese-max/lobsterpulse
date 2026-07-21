@@ -1,121 +1,100 @@
 {
-  "setup_done": true,
   "appearance": {
     "accent_color": "teal",
-    "text_size": "small",
-    "pin_expanded": true,
-    "theme": "light",
-    "sound_enabled": false,
-    "provider_sounds": {
-      "gitx": "gitx.mp3",
-      "giminix": "giminix.mp3",
-      "codex": "codex.mp3",
-      "irisx_bot": "irisx_bot.mp3",
-      "cicx": "cicx.mp3",
-      "openx": "openx.mp3"
-    },
-    "provider_waiting_sounds": {
-      "openx": "openx-waiting.mp3",
-      "cicx": "cicx-waiting.mp3",
-      "giminix": "giminix-waiting.mp3",
-      "codex": "codex-waiting.mp3",
-      "gitx": "gitx-waiting.mp3",
-      "irisx_bot": "irisx_bot-waiting.mp3"
-    },
-    "sound_name": "",
-    "openab_restart_command": "",
-    "system_notifications": true,
-    "idle_threshold_secs": 30,
-    "stale_threshold_secs": 600,
-    "remove_threshold_secs": 1800,
-    "telegram_bot_token": "",
-    "telegram_chat_id": "",
-    "telegram_notify_threshold_secs": 600,
-    "usage_runners": [
-      {
-        "name": "claude",
-        "label": "Claude",
-        "color": "#d97757",
-        "command": "node",
-        "args": [
-          "C:\\Users\\Administrator\\.lobsterpulse\\scripts\\get-claude-full.js"
-        ],
-        "cwd": null,
-        "env": {},
-        "timeout_secs": 15,
-        "template": "⏱ 5h **{{ session_5h_remaining }}%** · 7d **{{ week_7d_remaining }}%**\n🔥 今日 {{ today_tokens }} · 昨日 {{ yesterday_tokens }}"
-      },
-      {
-        "name": "codex",
-        "label": "Codex",
-        "color": "#10a37f",
-        "command": "node",
-        "args": [
-          "C:\\Users\\Administrator\\.lobsterpulse\\scripts\\get-codex-full.js"
-        ],
-        "cwd": null,
-        "env": {},
-        "timeout_secs": 30,
-        "template": "{{ line1 }}\n🤖 {{ current_model }} · 今日 {{ today_tokens }}"
-      }
-    ],
-    "capsule_width": 300,
-    "expanded_width": 300,
     "accent_custom_hex": "#d97757",
-    "font_family": "\"Noto Sans TC\", \"Inter\", sans-serif",
-    "bg_opacity": 100,
-    "background_type": "none",
-    "background_path": "",
+    "auto_actions": {
+      "confirm_timeout_secs": 600,
+      "daily_summary_enabled": false,
+      "daily_summary_hour": 9,
+      "dedup_window_secs": 86400,
+      "failure_count_threshold": 20,
+      "failure_window_secs": 1800,
+      "hook_failure_burst_enabled": false,
+      "master_enabled": true,
+      "quota_low_enabled": false,
+      "quota_low_threshold_pct": 20,
+      "session_idle_enabled": false,
+      "session_idle_trigger_secs": 1800,
+      "token_spike_enabled": false,
+      "token_spike_min_consumption_pct": 10,
+      "token_spike_multiplier": 3,
+      "weekly_summary_enabled": false
+    },
     "background_blur": 0,
     "background_image_opacity": 80,
+    "background_path": "",
+    "background_type": "none",
+    "bg_opacity": 100,
+    "capsule_width": 300,
     "discord": {
       "bot_token": "",
       "channel_id": "1494779722314285179",
       "enabled": false
     },
-    "auto_actions": {
-      "quota_low_enabled": false,
-      "quota_low_threshold_pct": 20,
-      "session_idle_enabled": false,
-      "session_idle_trigger_secs": 1800,
-      "confirm_timeout_secs": 600,
-      "hook_failure_burst_enabled": false,
-      "failure_window_secs": 1800,
-      "failure_count_threshold": 20,
-      "dedup_window_secs": 86400,
-      "daily_summary_enabled": false,
-      "daily_summary_hour": 9,
-      "master_enabled": true,
-      "weekly_summary_enabled": false,
-      "token_spike_enabled": false,
-      "token_spike_multiplier": 3,
-      "token_spike_min_consumption_pct": 10
-    }
+    "expanded_width": 300,
+    "font_family": "\"Noto Sans TC\", \"Inter\", sans-serif",
+    "idle_threshold_secs": 30,
+    "openab_restart_command": "",
+    "pin_expanded": true,
+    "provider_sounds": {
+      "cicx": "cicx.mp3",
+      "codex": "codex.mp3",
+      "giminix": "giminix.mp3",
+      "gitx": "gitx.mp3",
+      "irisx_bot": "irisx_bot.mp3",
+      "openx": "openx.mp3"
+    },
+    "provider_waiting_sounds": {
+      "cicx": "cicx-waiting.mp3",
+      "codex": "codex-waiting.mp3",
+      "giminix": "giminix-waiting.mp3",
+      "gitx": "gitx-waiting.mp3",
+      "irisx_bot": "irisx_bot-waiting.mp3",
+      "openx": "openx-waiting.mp3"
+    },
+    "remove_threshold_secs": 1800,
+    "sound_enabled": false,
+    "sound_name": "",
+    "stale_threshold_secs": 600,
+    "system_notifications": true,
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_notify_threshold_secs": 600,
+    "text_size": "small",
+    "theme": "light",
+    "usage_runners": [
+      {
+        "args": [
+          "C:\\Users\\Administrator\\.lobsterpulse\\scripts\\get-claude-full.js"
+        ],
+        "color": "#d97757",
+        "command": "node",
+        "cwd": null,
+        "env": {},
+        "label": "Claude",
+        "name": "claude",
+        "template": "⏱ 5h **{{ session_5h_remaining }}%** · 7d **{{ week_7d_remaining }}%**\n🔥 今日 {{ today_tokens }} · 昨日 {{ yesterday_tokens }}",
+        "timeout_secs": 15
+      },
+      {
+        "args": [
+          "C:\\Users\\Administrator\\.lobsterpulse\\scripts\\get-codex-full.js"
+        ],
+        "color": "#10a37f",
+        "command": "node",
+        "cwd": null,
+        "env": {},
+        "label": "Codex",
+        "name": "codex",
+        "template": "{{ line1 }}\n🤖 {{ current_model }} · 今日 {{ today_tokens }}",
+        "timeout_secs": 30
+      }
+    ]
   },
   "providers": {
-    "gitx": {
+    "cicx": {
       "enabled": true,
-      "name": "🤖 GITX · OpenAB Copilot",
-      "settings_path": null
-    },
-    "irisx_bot": {
-      "enabled": true,
-      "name": "🤖 IRISX · OpenAB Hermes",
-      "settings_path": null
-    },
-    "grokx": {
-      "enabled": true,
-      "name": "🤖 GROKX · OpenAB Grok",
-      "settings_path": null
-    },
-    "codex": {
-      "enabled": true,
-      "name": "💻 Codex CLI（本機）",
-      "settings_path": "~/.codex/hooks.json"
-    },
-    "mimo": {
-      "enabled": false,
-      "name": "🤖 MIMO · OpenAB MIMO",
+      "name": "🤖 CICX · OpenAB Claude",
       "settings_path": null
     },
     "claude": {
@@ -123,10 +102,10 @@
       "name": "💻 Claude Code（本機）",
       "settings_path": "~/.claude/settings.json"
     },
-    "cicx": {
+    "codex": {
       "enabled": true,
-      "name": "🤖 CICX · OpenAB Claude",
-      "settings_path": null
+      "name": "💻 Codex CLI（本機）",
+      "settings_path": "~/.codex/hooks.json"
     },
     "codex_bot": {
       "enabled": true,
@@ -138,84 +117,105 @@
       "name": "💻 Copilot CLI（本機）",
       "settings_path": "~/.copilot/config.json"
     },
+    "gemini": {
+      "enabled": true,
+      "name": "💻 Gemini CLI（本機）",
+      "settings_path": "~/.gemini/settings.json"
+    },
     "giminix": {
       "enabled": true,
       "name": "🤖 GIMINIX · OpenAB Antigravity",
+      "settings_path": null
+    },
+    "gitx": {
+      "enabled": true,
+      "name": "🤖 GITX · OpenAB Copilot",
+      "settings_path": null
+    },
+    "grokx": {
+      "enabled": true,
+      "name": "🤖 GROKX · OpenAB Grok",
+      "settings_path": null
+    },
+    "irisx_bot": {
+      "enabled": true,
+      "name": "🤖 IRISX · OpenAB Hermes",
+      "settings_path": null
+    },
+    "lpbot": {
+      "enabled": true,
+      "name": "🤖 LPBOT · OpenAB Claude（quota 監控）",
+      "settings_path": null
+    },
+    "mimo": {
+      "enabled": false,
+      "name": "🤖 MIMO · OpenAB MIMO",
       "settings_path": null
     },
     "openx": {
       "enabled": true,
       "name": "🤖 OPENX · OpenAB OpenCode",
       "settings_path": null
-    },
-    "gemini": {
-      "enabled": true,
-      "name": "💻 Gemini CLI（本機）",
-      "settings_path": "~/.gemini/settings.json"
-    },
-    "lpbot": {
-      "enabled": true,
-      "name": "🤖 LPBOT · OpenAB Claude（quota 監控）",
-      "settings_path": null
     }
   },
   "rules": [
     {
-      "id": "r115-default-claude-completed",
-      "enabled": true,
       "description": "Claude Stop → 提醒我回來看",
-      "when": {
-        "provider": "claude",
-        "event": "Stop",
-        "state_to": "Completed"
-      },
+      "enabled": true,
+      "id": "r115-default-claude-completed",
       "then": [
         {
+          "body": "{project_name}",
           "kind": "toast",
-          "title": "✅ Claude 完成",
-          "body": "{project_name}"
+          "title": "✅ Claude 完成"
         },
         {
-          "kind": "sound",
           "clip": "claude.mp3",
+          "kind": "sound",
           "volume": 1
         }
-      ]
+      ],
+      "when": {
+        "event": "Stop",
+        "provider": "claude",
+        "state_to": "Completed"
+      }
     },
     {
-      "id": "r115-default-waiting-toast",
-      "enabled": true,
       "description": "任何 provider 進入 WaitingForUser → toast",
-      "when": {
-        "provider": null,
-        "event": null,
-        "state_to": "StartedWaiting"
-      },
+      "enabled": true,
+      "id": "r115-default-waiting-toast",
       "then": [
         {
+          "body": "{project_name}",
           "kind": "toast",
-          "title": "⏳ {provider} 在等你回",
-          "body": "{project_name}"
+          "title": "⏳ {provider} 在等你回"
         }
-      ]
+      ],
+      "when": {
+        "event": null,
+        "provider": null,
+        "state_to": "StartedWaiting"
+      }
     },
     {
-      "id": "r115-default-failure-log",
-      "enabled": true,
       "description": "任何 provider PostToolUseFailure → 寫 log",
-      "when": {
-        "provider": null,
-        "event": "PostToolUseFailure",
-        "state_to": null
-      },
+      "enabled": true,
+      "id": "r115-default-failure-log",
       "then": [
         {
-          "kind": "log",
           "file": "~/.lobsterpulse/audit.jsonl",
-          "format": "jsonl"
+          "format": "jsonl",
+          "kind": "log"
         }
-      ]
+      ],
+      "when": {
+        "event": "PostToolUseFailure",
+        "provider": null,
+        "state_to": null
+      }
     }
   ],
-  "rules_enabled": true
+  "rules_enabled": true,
+  "setup_done": true
 }

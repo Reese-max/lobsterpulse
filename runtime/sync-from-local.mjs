@@ -69,10 +69,17 @@ if (fs.existsSync(COPILOT_HOOKS)) {
 }
 
 // 3) config 範本（去敏感化）
+// 物件鍵排序輸出：config 由 Rust HashMap 序列化，每次啟動鍵順序都不同，
+// 不正規化的話每重啟一次就被判定一次漂移（純噪音，會讓人開始忽略這個守門）。
+// 陣列不動——usage_runners 的順序就是卡片顯示順序，有意義。
 function sanitize(node, key = "") {
   if (Array.isArray(node)) return node.map((v) => sanitize(v));
   if (node && typeof node === "object") {
-    return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, sanitize(v, k)]));
+    return Object.fromEntries(
+      Object.entries(node)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([k, v]) => [k, sanitize(v, k)])
+    );
   }
   if (typeof node === "string" && SECRET_KEY_RE.test(key)) return "";
   return node;

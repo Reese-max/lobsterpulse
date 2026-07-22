@@ -1149,15 +1149,29 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 
 /* ─── Setup view ─── */
 .provider-list { display: flex; flex-direction: column; gap: 8px; }
+/* 卡片化：對齊 OpenUsage 用量卡的幾何（12px 圓角＋淡邊框），但用主題 token
+   而非寫死深色，淺色主題下才不會變一塊突兀的黑卡。 */
 .provider-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border-radius: 10px; cursor: pointer;
+  padding: 10px 12px; border-radius: 12px; cursor: pointer;
   background: var(--hover);
+  border: 1px solid var(--border);
   overflow: visible;
+  transition: background .15s ease, border-color .15s ease;
 }
-.provider-item:hover { background: var(--btn-bg); }
+.provider-item:hover { background: var(--btn-bg); border-color: var(--btn-bg-hover); }
+/* 監控中的助手：左緣 accent 感 + 輕微底色，一眼分辨開了哪些 */
+.provider-item:has(.provider-check:checked) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--hover));
+}
 .provider-item.disabled { opacity: 0.5; cursor: not-allowed; }
 .provider-item.disabled:hover { background: var(--hover); }
+/* 卡頭 icon 加同色淡 chip 底，視覺錨點更清楚（比照 uv-head .provider-icon） */
+.provider-item .provider-icon {
+  box-sizing: content-box; padding: 3px; border-radius: 6px;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+}
 .provider-item input[type="checkbox"] {
   appearance: none;
   -webkit-appearance: none;
@@ -1181,12 +1195,20 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
   border-width: 0 1px 1px 0;
   transform: rotate(45deg);
 }
-.provider-name { font-size: 13px; font-weight: 500; flex: 1; }
-.provider-found { font-size: 10px; color: var(--found-color); font-weight: 500; }
-.provider-pending { font-size: 10px; color: var(--text-muted); font-style: italic; }
+.provider-name { font-size: 13px; font-weight: 600; flex: 1; }
+/* 狀態做成藥丸 chip，取代舊的裸文字 */
+.provider-found {
+  font-size: 10px; font-weight: 600; color: var(--found-color);
+  background: color-mix(in srgb, var(--found-color) 16%, transparent);
+  padding: 2px 8px; border-radius: 999px;
+}
+.provider-pending {
+  font-size: 10px; font-weight: 500; color: var(--text-muted); font-style: normal;
+  background: var(--btn-bg); padding: 2px 8px; border-radius: 999px;
+}
 .provider-open {
   background: none; border: none; cursor: pointer;
-  padding: 4px; border-radius: 4px; color: var(--icon-color);
+  padding: 5px; border-radius: 8px; color: var(--icon-color);
   display: flex; align-items: center; justify-content: center;
 }
 .provider-open:hover { color: var(--text); background: var(--btn-bg); }
@@ -1395,15 +1417,30 @@ body.has-bg #view-events-log {
 .rule-empty { color: var(--text-dim); font-size: 11px; font-style: italic; padding: 4px 0; }
 
 /* 🔑 金鑰一鍵複製 */
-.apikey-list { display: flex; flex-direction: column; gap: 6px; }
+.apikey-list { display: flex; flex-direction: column; gap: 8px; }
+/* 卡片化，與助手分頁同一套視覺語言 */
 .apikey-row {
-  display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 8px;
-  padding: 6px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.03);
+  display: grid; grid-template-columns: 1fr auto auto auto; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--hover); border: 1px solid var(--border);
+  transition: background .15s ease, border-color .15s ease;
 }
-.apikey-name { font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+.apikey-row:hover { background: var(--btn-bg); border-color: var(--btn-bg-hover); }
+.apikey-name {
+  font-size: 12px; font-weight: 600; font-family: ui-monospace, Consolas, monospace;
+  letter-spacing: .2px; overflow-wrap: anywhere;
+}
 .apikey-mask {
-  font-size: 12px; font-family: ui-monospace, Consolas, monospace; opacity: 0.7;
-  max-width: 260px; overflow-wrap: anywhere; text-align: right;
+  font-size: 12px; font-family: ui-monospace, Consolas, monospace; color: var(--text-dim);
+  max-width: 200px; overflow-wrap: anywhere; text-align: right;
 }
-.apikey-eye { cursor: pointer; user-select: none; }
-.apikey-copy { font-size: 11px; padding: 2px 8px; width: auto; }
+.apikey-eye {
+  cursor: pointer; user-select: none;
+  padding: 4px 8px; border-radius: 8px; background: transparent; border: 1px solid transparent;
+}
+.apikey-eye:hover { background: var(--btn-bg); }
+.apikey-copy {
+  font-size: 11px; font-weight: 600; padding: 5px 12px; width: auto;
+  border-radius: 8px; background: var(--btn-bg); border: 1px solid var(--border); color: var(--text);
+}
+.apikey-copy:hover { background: var(--btn-bg-hover); border-color: var(--btn-bg-hover); }

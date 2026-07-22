@@ -5,8 +5,10 @@
 # 比較安靜。這台機器上其他常駐服務都有 watchdog，只有它沒有。
 #
 # 判活用 healthz 200，不看 PID：進程活著但 wedge 住的情況照樣要救（踩雷 §5 §18）。
-# 連續失敗才動作，避免重啟／短暫卡頓時誤殺。重啟只做 Start-Process：app 有
-# single-instance plugin，真的還活著時多啟的那份會自己退出，不必先殺再起。
+# 連續失敗才動作，避免重啟／短暫卡頓時誤殺。重啟前會先清場（Clear-BeforeRestart）：
+# 舊實例 wedge 掛掉時，它的 socket 常卡在首選 port 不放，新實例只好漂到 19281，
+# 還會疊出第二個窗（實測踩過，死 socket 見踩雷 §22）。既然到這步已判定不健康，
+# 先殺光本專案實例＋等原 port 釋放再起，保證單一實例落回 19280。
 #
 # 由 lobsterpulse-watchdog.vbs 隱藏啟動（見 runtime/README.md）。
 
@@ -15,6 +17,7 @@ param(
   [int]$FailuresBeforeRestart = 3,
   [int]$StaleMinutes = 15,
   [int]$PauseMaxMinutes = 30,
+  [int]$BasePort = 19280,  # app 依序試 19280..19289（hook_server.rs:172），這是首選 port
   [string]$Exe = "D:\Users\Administrator\Desktop\監控\src-tauri\target\release\lobster-pulse.exe"
 )
 
@@ -72,6 +75,37 @@ function Test-Paused {
   return $true
 }
 
+# 重啟前清場：殺光本專案 exe 的所有實例（已判定不健康，安全），並等首選 port 的
+# 死 socket 釋放。雙鍵匹配（名稱 + 完整路徑）避免誤傷別人的進程（硬規則 §6）。
+function Clear-BeforeRestart {
+  Get-Process lobster-pulse -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -eq $Exe } |
+    ForEach-Object {
+      Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+      Write-Log "  清場：殺舊實例 PID=$($_.Id)"
+    }
+  # 等 $BasePort 上的 listener 釋放（最多 ~10s）
+  for ($i = 0; $i -lt 20; $i++) {
+    $c = Get-NetTCPConnection -LocalPort $BasePort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $c) { return }  # 已釋放，收工
+    $ownerPid = $c.OwningProcess
+    if ($ownerPid -and $ownerPid -ne 0) {
+      $p = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+      if ($p -and $p.Path -eq $Exe) {
+        Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+        Write-Log "  清場：port $BasePort 仍被本專案 PID=$ownerPid 佔用，補殺"
+      } elseif ($p) {
+        # 不是本專案的進程搶了 19280——不動它，讓 app 自己往 19281 退
+        Write-Log "  port $BasePort 被非本專案 PID=$ownerPid ($($p.ProcessName)) 佔用，不干預"
+        return
+      }
+      # $p 為空 = owner 已死、socket 殘留（死 socket）→ 續等它自然釋放
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  Write-Log "  警告：port $BasePort 逾時未釋放，仍嘗試啟動（app 可能暫時漂到 19281）"
+}
+
 Write-Log "watchdog 啟動（每 ${IntervalSec}s 檢查，連續 ${FailuresBeforeRestart} 次失敗才重啟）"
 $fails = 0
 $staleLogged = $false
@@ -101,6 +135,7 @@ while ($true) {
     Write-Log "healthz 失敗（第 $fails 次）"
     if ($fails -ge $FailuresBeforeRestart) {
       if (Test-Path $Exe) {
+        Clear-BeforeRestart
         Write-Log "重啟 $Exe"
         Start-Process $Exe
       } else {

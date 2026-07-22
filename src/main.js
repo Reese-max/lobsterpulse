@@ -2278,8 +2278,11 @@ async function renderProviders() {
   const list = $("provider-list");
 
   // Fixed order instead of HashMap random order
+  // 只列有 settings_path 的「真・本機 CLI」：本分頁用途是設定本機 CLI 的 hook
+  // （勾選＝install/remove_provider_hooks）。OpenAB bot 是 settings_path:None、
+  // 由 OpenAB 推事件、沒有本機 hook 可設，不屬於這個「設定 CLI」清單。
   const entries = PROVIDER_ORDER
-    .filter(id => appConfig.providers[id])
+    .filter(id => appConfig.providers[id] && appConfig.providers[id].settings_path)
     .map(id => [id, appConfig.providers[id]]);
 
   list.innerHTML = entries.map(([id, p]) => {

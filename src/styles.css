@@ -1018,9 +1018,10 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
   --btn-bg: rgba(255, 255, 255, 0.09);
   --btn-bg-hover: rgba(255, 255, 255, 0.15);
   --icon-color: rgba(255, 255, 255, 0.6);
-  background: rgba(24, 31, 38, 0.92);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  /* 全不透明＋無 blur：半透明表面會讓 Windows 文字退化成灰階抗鋸齒，
+     小字 CJK 發糊（使用者實測反映）。玻璃感留給膠囊/用量卡，設定是
+     表單作業面，可讀性優先。 */
+  background: rgb(24, 31, 38);
   border-radius: 0 0 var(--radius) var(--radius);
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-top: none;

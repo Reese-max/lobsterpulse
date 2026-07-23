@@ -26,6 +26,9 @@ pub struct AppearanceConfig {
     pub accent_color: String,
     #[serde(default = "default_text_size")]
     pub text_size: String,
+    /// Ctrl+滾輪連續縮放（0.7~1.6）。None = 沿用 text_size 檔位。
+    #[serde(default)]
+    pub text_scale: Option<f64>,
     #[serde(default)]
     pub pin_expanded: bool,
     #[serde(default = "default_theme")]
@@ -286,6 +289,7 @@ impl Default for AppearanceConfig {
         Self {
             accent_color: default_accent(),
             text_size: default_text_size(),
+            text_scale: None,
             theme: default_theme(),
             pin_expanded: false,
             sound_enabled: false,

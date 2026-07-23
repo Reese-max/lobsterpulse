@@ -411,10 +411,32 @@ async function init() {
     }
   }
 
-  // Drag
-  $("capsule").addEventListener("mousedown", (e) => {
-    if (e.buttons === 1) invoke("plugin:window|start_dragging", { label: "main" }).catch(() => {});
+  // Drag：面板任何空白處都能拖，不再只限膠囊——只綁膠囊時面板一展開就
+  // 抓不到窗，移動很費勁（使用者實測反映）。互動元素與可點列不搶拖曳；
+  // scrollbar 上的 mousedown（target=捲動容器本身且點位超出 clientWidth）也放行給捲動。
+  const NO_DRAG = "button,input,select,textarea,label,a,[contenteditable],.custom-dropdown,.uv-recent-row,.uv-wait-row,.session-row,.uv-chevron";
+  $("app").addEventListener("mousedown", (e) => {
+    if (e.buttons !== 1) return;
+    if (e.target.closest(NO_DRAG)) return;
+    const t = e.target;
+    if (t.clientWidth && t.scrollHeight > t.clientHeight && e.offsetX > t.clientWidth) return;
+    invoke("plugin:window|start_dragging", { label: "main" }).catch(() => {});
   });
+
+  // Ctrl+滾輪連續縮放（0.7~1.6，5% 步進），即存 config；S/M/L 按鈕仍是快速檔位
+  let scaleSaveTimer = null;
+  window.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    const cur = appConfig.appearance.text_scale ?? SCALES[appConfig.appearance.text_size] ?? 1;
+    const next = Math.round(Math.min(1.6, Math.max(0.7, cur + (e.deltaY < 0 ? 0.05 : -0.05))) * 100) / 100;
+    if (next === cur) return;
+    appConfig.appearance.text_scale = next;
+    applyTextSize(appConfig.appearance.text_size);
+    fitWindow();
+    clearTimeout(scaleSaveTimer);
+    scaleSaveTimer = setTimeout(saveConfig, 400);
+  }, { passive: false });
 
   // Hover expand（主視圖改為 OpenUsage 風格 usage 面板；session 列表經 footer 按鈕可達）
   $("capsule").addEventListener("mouseenter", () => {
@@ -629,6 +651,7 @@ async function init() {
 
   document.querySelectorAll(".size-btn").forEach(b => b.addEventListener("click", () => {
     appConfig.appearance.text_size = b.dataset.size;
+    appConfig.appearance.text_scale = null; // 回到檔位，清掉滾輪自訂值
     applyTextSize(b.dataset.size);
     fitWindow();
     saveConfig();
@@ -2925,8 +2948,11 @@ function applyAccentColor(n) {
   document.querySelectorAll(".color-dot").forEach(d => d.classList.toggle("active", d.dataset.color === n && !customHex));
 }
 function applyTextSize(s) {
-  document.documentElement.style.setProperty("--scale", SCALES[s] || 1);
-  document.querySelectorAll(".size-btn").forEach(b => b.classList.toggle("active", b.dataset.size === s));
+  // text_scale（Ctrl+滾輪連續值）優先；null 時沿用 S/M/L 檔位
+  const sc = appConfig?.appearance?.text_scale ?? SCALES[s] ?? 1;
+  document.documentElement.style.setProperty("--scale", sc);
+  document.querySelectorAll(".size-btn").forEach(b =>
+    b.classList.toggle("active", Math.abs((SCALES[b.dataset.size] ?? 1) - sc) < 0.001));
 }
 
 function applyTheme(t) {

@@ -255,17 +255,27 @@ async function initRulesUI() {
     }
   });
 
-  // 載入 provider dropdown
+  // 載入 provider dropdown：只列有本機設定檔的真 CLI（與助手清單一致，隱藏 OpenAB bot），
+  // 顯示人類可讀名而非內部 id。
   const provSel = $("new-rule-provider");
   const knownProviders = (appConfig.providers && typeof appConfig.providers === "object")
-    ? Object.keys(appConfig.providers)
-    : PROVIDER_ORDER;
+    ? Object.keys(appConfig.providers).filter(p => appConfig.providers[p] && appConfig.providers[p].settings_path)
+    : LOCAL_PROVIDERS;
   for (const p of knownProviders) {
     const opt = document.createElement("option");
     opt.value = p;
-    opt.textContent = p;
+    opt.textContent = (appConfig.providers[p] && appConfig.providers[p].name) || p;
     provSel.appendChild(opt);
   }
+
+  // 事件/狀態的內部值 → 人類可讀（對齊 index.html 的下拉選項）
+  const EVENT_LABELS = {
+    SessionStart: "開始", UserPromptSubmit: "送出提問", PreToolUse: "工具執行前",
+    PostToolUse: "工具執行後", PostToolUseFailure: "工具失敗", Notification: "通知",
+    Stop: "停止回應", SessionEnd: "結束",
+  };
+  const STATE_LABELS = { Completed: "已完成", StartedWaiting: "開始等待", None: "無狀態" };
+  const provName = (id) => (appConfig.providers[id] && appConfig.providers[id].name) || id;
 
   async function refresh() {
     let rules = [];
@@ -283,24 +293,25 @@ async function initRulesUI() {
     }
     listEl.innerHTML = "";
     for (const r of rules) {
-      const whenDesc = [
-        r.when?.provider ? `provider=${r.when.provider}` : "provider=*",
-        r.when?.event ? `event=${r.when.event}` : "event=*",
-        r.when?.state_to ? `→${r.when.state_to}` : "→*",
-      ].join(" · ");
+      const whenParts = [
+        r.when?.provider ? provName(r.when.provider) : "任何助手",
+        r.when?.event ? (EVENT_LABELS[r.when.event] || r.when.event) : "任何事件",
+      ];
+      if (r.when?.state_to) whenParts.push("→ " + (STATE_LABELS[r.when.state_to] || r.when.state_to));
+      const whenDesc = whenParts.join(" · ");
       const actionsDesc = (r.then || []).map(a => {
-        if (a.Toast) return "Toast";
-        if (a.Sound) return `Sound(${a.Sound.clip})`;
-        if (a.Log) return `Log(${a.Log.file})`;
+        if (a.Toast) return "跳通知";
+        if (a.Sound) return "播音效";
+        if (a.Log) return "寫記錄";
         return "?";
-      }).join("+");
+      }).join("、");
       const row = document.createElement("div");
       row.className = "rule-item";
       row.innerHTML = `
         <label class="toggle"><input type="checkbox" ${r.enabled ? "checked" : ""} data-id="${r.id}" class="rule-toggle"/><span class="toggle-slider"></span></label>
         <div style="flex:1">
           <div class="rule-item-desc">${escapeHtml(r.description || r.id)}</div>
-          <div class="rule-item-when">when: ${escapeHtml(whenDesc)} → ${escapeHtml(actionsDesc)}</div>
+          <div class="rule-item-when">${escapeHtml(whenDesc)} → ${escapeHtml(actionsDesc)}</div>
         </div>
         <button class="rule-item-del" data-id="${r.id}" title="刪除此規則">🗑</button>
       `;
@@ -2369,7 +2380,7 @@ async function renderProviderSounds(kind = "completion") {
   });
 
   container.innerHTML = PROVIDER_ORDER
-    .filter(pid => appConfig.providers[pid])
+    .filter(pid => appConfig.providers[pid] && appConfig.providers[pid].settings_path)
     .map(pid => {
       const p = appConfig.providers[pid];
       const stored = appConfig.appearance[configKey][pid];

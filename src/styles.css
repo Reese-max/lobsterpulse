@@ -1048,10 +1048,12 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
   width: 34px; height: 34px; padding: 0;
   display: flex; align-items: center; justify-content: center;
   background: none; border: none; cursor: pointer;
-  border-radius: 9px; color: var(--text-dim);
+  /* 未選中用 secondary（74% 白）非 dim：黑底 rail 上細線 icon 60% 白會糊成一團 */
+  border-radius: 9px; color: var(--text-secondary);
   transition: color .12s ease, background .12s ease;
 }
-.settings-tab svg { width: 19px; height: 19px; }
+/* 20px + stroke 2（CSS 蓋過 SVG 屬性的 1.8）：非整數縮放下細線被抗鋸齒吃掉銳度 */
+.settings-tab svg { width: 20px; height: 20px; stroke-width: 2; }
 .settings-tab:hover { color: var(--text-secondary); background: var(--hover); }
 .settings-tab.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
 /* hover 從右側浮出中文標籤 */

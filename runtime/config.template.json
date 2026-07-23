@@ -41,25 +41,32 @@
       "codex": "codex.mp3",
       "giminix": "giminix.mp3",
       "gitx": "gitx.mp3",
+      "grokx": "grokx.mp3",
       "irisx_bot": "irisx_bot.mp3",
+      "lpbot": "lpbot.mp3",
+      "mimo": "mimo.mp3",
       "openx": "openx.mp3"
     },
     "provider_waiting_sounds": {
       "cicx": "cicx-waiting.mp3",
-      "codex": "codex-waiting.mp3",
+      "codex": "__none__",
       "giminix": "giminix-waiting.mp3",
       "gitx": "gitx-waiting.mp3",
+      "grokx": "grokx-waiting.mp3",
       "irisx_bot": "irisx_bot-waiting.mp3",
+      "lpbot": "lpbot-waiting.mp3",
+      "mimo": "mimo-waiting.mp3",
       "openx": "openx-waiting.mp3"
     },
     "remove_threshold_secs": 1800,
-    "sound_enabled": false,
+    "sound_enabled": true,
     "sound_name": "",
     "stale_threshold_secs": 600,
     "system_notifications": true,
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "telegram_notify_threshold_secs": 600,
+    "text_scale": null,
     "text_size": "small",
     "theme": "light",
     "usage_runners": [
@@ -216,6 +223,6 @@
       }
     }
   ],
-  "rules_enabled": true,
+  "rules_enabled": false,
   "setup_done": true
 }

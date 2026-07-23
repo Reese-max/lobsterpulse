@@ -17,6 +17,12 @@ use std::time::Duration;
 const DEFAULT_PORT: u16 = 19280;
 const TIMEOUT: Duration = Duration::from_secs(2);
 const LOG_PREFIX: &str = "[lobster-pulse-hook]";
+/// 超過此門檻就瘦身：codex 會把整段 transcript 塞進事件 JSON（實測 >1MB），
+/// server 端 1MB 上限截斷後 parse 必失敗、事件靜默丟失（log 2026-07-23 兩例）。
+/// 正常事件遠小於 200KB。
+const SLIM_THRESHOLD: usize = 200 * 1024;
+/// 瘦身時單一字串欄位保留的最大字元數（prompt 只拿來當分頁標題，2000 綽綽有餘）。
+const MAX_FIELD_CHARS: usize = 2000;
 
 fn main() {
     let provider = std::env::args()
@@ -33,6 +39,23 @@ fn main() {
             "{LOG_PREFIX} stdin read failed: {e} — proceeding with empty body \
              (parent CLI captured this; check pipe/EOF)"
         );
+    }
+
+    if body.len() > SLIM_THRESHOLD {
+        match slim_body(&body) {
+            Some(slim) => {
+                eprintln!(
+                    "{LOG_PREFIX} body {} bytes > {SLIM_THRESHOLD} — 瘦身為 {} bytes（只留 server 用得到的欄位）",
+                    body.len(),
+                    slim.len()
+                );
+                body = slim;
+            }
+            None => eprintln!(
+                "{LOG_PREFIX} body {} bytes 超過門檻但非合法 JSON object — 原樣轉發（server 端可能截斷）",
+                body.len()
+            ),
+        }
     }
 
     let port = read_port().unwrap_or_else(|| {
@@ -59,6 +82,33 @@ fn main() {
             }
         }
     }
+}
+
+/// 超大 payload 瘦身：只保留 server 端 HookEvent 會反序列化的欄位（snake/camel
+/// 兩種拼法都留，server 有 alias），字串欄位截斷到 MAX_FIELD_CHARS。
+/// 回 None = body 不是 JSON object（無從瘦身），caller 原樣轉發。
+fn slim_body(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let obj = v.as_object()?;
+    const KEEP: &[&str] = &[
+        "provider", "session_id", "sessionId", "hook_event_name", "hookEventName",
+        "cwd", "tool_name", "toolName", "notification_type", "notificationType",
+        "prompt", "tool_call_id", "toolCallId", "tool_status", "toolStatus",
+        "tokens_input", "tokensInput", "tokens_output", "tokensOutput", "error",
+    ];
+    let mut out = serde_json::Map::new();
+    for &k in KEEP {
+        if let Some(val) = obj.get(k) {
+            let trimmed = match val {
+                serde_json::Value::String(s) if s.chars().count() > MAX_FIELD_CHARS => {
+                    serde_json::Value::String(s.chars().take(MAX_FIELD_CHARS).collect())
+                }
+                other => other.clone(),
+            };
+            out.insert(k.to_string(), trimmed);
+        }
+    }
+    serde_json::to_string(&serde_json::Value::Object(out)).ok()
 }
 
 /// Pure fn: 給定 port file path，讀 + parse u16。
@@ -209,6 +259,29 @@ mod read_port_at_tests {
         let mut p = std::env::temp_dir();
         p.push(format!("lp-hook-port-{tag}-{nonce}-{}", std::process::id()));
         p
+    }
+
+    #[test]
+    fn slim_body_keeps_whitelist_and_truncates_huge_fields() {
+        let huge = "x".repeat(500_000);
+        let body = format!(
+            r#"{{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt":"{p}","transcript":"{huge}","turn_id":"t1"}}"#,
+            p = "p".repeat(5000),
+        );
+        assert!(body.len() > SLIM_THRESHOLD, "測試前提：body 要超過門檻");
+        let slim = slim_body(&body).expect("合法 JSON object 應可瘦身");
+        assert!(slim.len() < SLIM_THRESHOLD, "瘦身後應遠小於門檻，實際 {}", slim.len());
+        let v: serde_json::Value = serde_json::from_str(&slim).unwrap();
+        assert_eq!(v["hook_event_name"], "UserPromptSubmit");
+        assert_eq!(v["session_id"], "s1");
+        assert_eq!(v["prompt"].as_str().unwrap().chars().count(), MAX_FIELD_CHARS, "長字串應截斷");
+        assert!(v.get("transcript").is_none(), "非白名單欄位應被丟棄");
+    }
+
+    #[test]
+    fn slim_body_non_json_returns_none() {
+        assert_eq!(slim_body("not json at all"), None);
+        assert_eq!(slim_body("[1,2,3]"), None, "非 object 也回 None");
     }
 
     #[test]

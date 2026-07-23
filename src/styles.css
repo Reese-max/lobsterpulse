@@ -1065,6 +1065,13 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 .settings-tab:hover::after { opacity: 1; }
+/* 未使用功能顯示層隱藏（2026-07-23 實測 config：Discord 自動化從未設定、
+   Telegram 無 token、OpenAB 重啟指令空值、規則引擎僅預設種入規則且已停用）。
+   DOM 與 JS 綁定保留（拔 DOM 會讓無 null 防護的 init 炸掉），要復用時刪此區塊即可。 */
+.settings-tab[data-tab="automation"],
+.settings-tab[data-tab="rules"],
+.setting-group-col:has(#tg-token),
+.setting-group-col:has(#openab-restart-cmd) { display: none; }
 .settings-tab-panel { display: none; }
 .settings-tab-panel.active {
   display: flex; flex-direction: column; gap: 14px;

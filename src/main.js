@@ -414,7 +414,7 @@ async function init() {
   // Drag：面板任何空白處都能拖，不再只限膠囊——只綁膠囊時面板一展開就
   // 抓不到窗，移動很費勁（使用者實測反映）。互動元素與可點列不搶拖曳；
   // scrollbar 上的 mousedown（target=捲動容器本身且點位超出 clientWidth）也放行給捲動。
-  const NO_DRAG = "button,input,select,textarea,label,a,[contenteditable],.custom-dropdown,.uv-recent-row,.uv-wait-row,.session-row,.uv-chevron";
+  const NO_DRAG = "button,input,select,textarea,label,a,[contenteditable],.custom-dropdown,.uv-recent-row,.uv-wait-row,.session-row,.uv-chevron,#capsule-quota";
   $("app").addEventListener("mousedown", (e) => {
     if (e.buttons !== 1) return;
     if (e.target.closest(NO_DRAG)) return;
@@ -425,6 +425,7 @@ async function init() {
 
   // Ctrl+滾輪連續縮放（0.7~1.6，5% 步進），即存 config；S/M/L 按鈕仍是快速檔位
   let scaleSaveTimer = null;
+  let scaleFitTimer = null;
   window.addEventListener("wheel", (e) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
@@ -433,7 +434,10 @@ async function init() {
     if (next === cur) return;
     appConfig.appearance.text_scale = next;
     applyTextSize(appConfig.appearance.text_size);
-    fitWindow();
+    // fitWindow 是 async（內部串多個 rAF 才 resize_window），快速滾動時重疊呼叫
+    // 會競態閃爍——尾隨 debounce 讓最後一次滾動決定最終尺寸
+    clearTimeout(scaleFitTimer);
+    scaleFitTimer = setTimeout(fitWindow, 90);
     clearTimeout(scaleSaveTimer);
     scaleSaveTimer = setTimeout(saveConfig, 400);
   }, { passive: false });

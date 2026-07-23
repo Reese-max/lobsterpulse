@@ -16,6 +16,7 @@
         "resizable": false,
         "decorations": false,
         "transparent": true,
+        "zoomHotkeysEnabled": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": true,

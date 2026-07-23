@@ -1521,3 +1521,29 @@ mod r115_rule_engine_config_tests {
         assert!(w_any.matches("mimo", "PostToolUseFailure", "None"));
     }
 }
+
+#[cfg(test)]
+mod text_scale_roundtrip_tests {
+    use super::*;
+
+    /// text_scale（Ctrl+滾輪連續縮放）None/Some 序列化 round-trip：
+    /// 前端傳數字 → Some、S/M/L 點擊寫 null → None，缺欄位（舊 config）→ None。
+    #[test]
+    fn text_scale_none_and_some_roundtrip() {
+        let mut c = AppConfig::default();
+        assert!(c.appearance.text_scale.is_none(), "預設應為 None");
+        c.appearance.text_scale = Some(1.25);
+        let s = serde_json::to_string(&c).unwrap();
+        let back: AppConfig = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.appearance.text_scale, Some(1.25));
+        // JSON null → None（前端 S/M/L 點擊會寫 null）
+        let mut v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        v["appearance"]["text_scale"] = serde_json::Value::Null;
+        let back2: AppConfig = serde_json::from_str(&v.to_string()).unwrap();
+        assert!(back2.appearance.text_scale.is_none());
+        // 缺欄位（升級前的舊 config）→ None
+        v["appearance"].as_object_mut().unwrap().remove("text_scale");
+        let back3: AppConfig = serde_json::from_str(&v.to_string()).unwrap();
+        assert!(back3.appearance.text_scale.is_none());
+    }
+}

@@ -1065,7 +1065,7 @@ async function init() {
     const list = $("runner-list");
     const runners = appConfig.appearance.usage_runners || [];
     list.innerHTML = runners.length === 0
-      ? `<div class="threshold-label">（尚無 runner，點「➕ 新增」加一個）</div>`
+      ? `<div class="threshold-label">（尚無查詢，點「➕ 新增」加一個）</div>`
       : runners.map((r, i) => `
         <div class="provider-row">
           <div class="provider-meta">
@@ -1083,7 +1083,7 @@ async function init() {
     list.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => openRunnerEdit(parseInt(b.dataset.edit,10))));
     list.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
       const i = parseInt(b.dataset.del, 10);
-      if (!confirm(`刪除 runner "${appConfig.appearance.usage_runners[i]?.name}"?`)) return;
+      if (!confirm(`刪除查詢「${appConfig.appearance.usage_runners[i]?.name}」?`)) return;
       appConfig.appearance.usage_runners.splice(i, 1);
       saveConfig(); renderRunners();
     }));

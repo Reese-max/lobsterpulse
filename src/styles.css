@@ -1234,6 +1234,12 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 
 /* Settings provider row */
 .provider-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+/* 執行器清單列：meta 區要可收縮（flex 子元素預設 min-width:auto，長指令路徑
+   會拒絕收縮而溢出），路徑用 anywhere 斷行；色點原本沒樣式是隱形的 */
+.provider-meta { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.provider-meta > div { min-width: 0; }
+.provider-meta .setting-sub-label { overflow-wrap: anywhere; }
+.provider-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .provider-name-sm { font-size: 12px; flex: 1; }
 .provider-status-sm { font-size: 10px; color: var(--text-dim); }
 

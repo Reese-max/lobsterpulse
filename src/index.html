@@ -232,11 +232,11 @@
             <label class="toggle"><input type="checkbox" id="toggle-pin" /><span class="toggle-slider"></span></label>
           </div>
           <div class="setting-group">
-            <div><div class="setting-main-label">開機自動啟動</div><div class="setting-sub-label">登入 Windows 後背景啟動（Task Scheduler）</div></div>
+            <div><div class="setting-main-label">開機自動啟動</div><div class="setting-sub-label">登入 Windows 後自動在背景啟動</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-autostart" /><span class="toggle-slider"></span></label>
           </div>
           <div class="setting-group">
-            <div><div class="setting-main-label">系統通知</div><div class="setting-sub-label">規則告警用 Windows 系統通知顯示</div></div>
+            <div><div class="setting-main-label">系統通知</div><div class="setting-sub-label">任務完成或等待你處理時跳 Windows 通知</div></div>
             <div style="display:flex;gap:6px;align-items:center">
               <button id="btn-test-toast" class="mini-btn" title="現在彈一個測試 toast">🧪 測試</button>
               <label class="toggle"><input type="checkbox" id="toggle-notify" /><span class="toggle-slider"></span></label>
@@ -284,6 +284,7 @@
           </div>
           <div class="setting-group-col">
             <label class="setting-label">尺寸</label>
+            <div class="setting-sub-label" style="margin-top:-6px">也可在視窗上按住 Ctrl＋滾輪連續縮放</div>
             <div class="size-picker">
               <button class="size-btn" data-size="small">S</button>
               <button class="size-btn active" data-size="medium">M</button>
@@ -337,7 +338,7 @@
             <div class="threshold-row">
               <div style="flex:1"><button id="btn-open-help" class="mini-btn">📚 功能手冊 + 網頁配置教學</button></div>
             </div>
-            <span class="threshold-label">額度監控完整功能、網頁設定教學、自動規則、Discord 指令</span>
+            <span class="threshold-label">完整功能說明與網頁設定教學</span>
           </div>
         </div>
 

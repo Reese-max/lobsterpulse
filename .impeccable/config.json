@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/index.html"
+        ],
+        "createdAt": "2026-07-23T02:43:38.668Z",
+        "reason": "bg-fullscreen/bg-image 為背景圖功能的運行時容器,src 由 JS 填入,平時 display:none,不會以破圖示人(使用者確認)"
+      },
+      {
+        "rule": "monotonous-spacing",
+        "value": "*",
+        "files": [
+          "src/index.html"
+        ],
+        "createdAt": "2026-07-23T02:43:38.908Z",
+        "reason": "300px 儀表型工具 UI 的密集均勻節奏為刻意選擇(使用者確認)"
+      }
+    ]
+  }
+}

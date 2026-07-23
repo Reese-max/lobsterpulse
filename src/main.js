@@ -2229,7 +2229,7 @@ async function refreshQuotas() {
         `<span class="quota-badge" title="session 次數">${t.session_count} 場</span>`,
         ...(t.failure_count > 0 ? [`<span class="quota-badge err" title="失敗次數">${t.failure_count} ❌</span>`] : []),
       ].join("");
-      const nameShort = appConfig.providers[pid]?.name || pid;
+      const nameShort = cleanProviderName(appConfig.providers[pid]?.name || pid);
       return `<div class="quota-row">
       ${providerIconHtml(pid, 14)}
       <span class="quota-row-bot">${esc(nameShort)}</span>
@@ -2316,7 +2316,7 @@ async function renderProviders() {
       ${providerIconHtml(id, 18)}
       <span class="provider-name">${esc(cleanProviderName(p.name))}</span>
       ${statusText ? `<span class="${statusClass}">${statusText}</span>` : ""}
-      ${!isOpenAbBot ? `<button class="provider-open" data-provider="${id}" title="開啟 ${esc(p.name)} 設定檔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
+      ${!isOpenAbBot ? `<button class="provider-open" data-provider="${id}" title="開啟 ${esc(cleanProviderName(p.name))} 設定檔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
     </div>`;
   }).join("");
 

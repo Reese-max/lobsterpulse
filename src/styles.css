@@ -242,7 +242,6 @@ body.has-bg #app { position: relative; z-index: 1; }
 body.has-bg .capsule,
 body.has-bg #view-expanded,
 body.has-bg #view-dashboard,
-body.has-bg #view-settings,
 body.has-bg #view-events-log,
 body.has-bg .bot-card,
 body.has-bg .quota-bar,
@@ -250,7 +249,6 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 [data-theme="light"] body.has-bg .capsule,
 [data-theme="light"] body.has-bg #view-expanded,
 [data-theme="light"] body.has-bg #view-dashboard,
-[data-theme="light"] body.has-bg #view-settings,
 [data-theme="light"] body.has-bg .bot-card,
 [data-theme="light"] body.has-bg .quota-bar { background-color: rgba(255,255,255,0.72) !important; }
 
@@ -293,7 +291,6 @@ body.has-bg #app { position: relative; z-index: 1; }
 body.has-bg .capsule,
 body.has-bg #view-expanded,
 body.has-bg #view-dashboard,
-body.has-bg #view-settings,
 body.has-bg #view-events-log,
 body.has-bg .bot-card,
 body.has-bg .quota-bar,
@@ -301,7 +298,6 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 [data-theme="light"] body.has-bg .capsule,
 [data-theme="light"] body.has-bg #view-expanded,
 [data-theme="light"] body.has-bg #view-dashboard,
-[data-theme="light"] body.has-bg #view-settings,
 [data-theme="light"] body.has-bg .bot-card,
 [data-theme="light"] body.has-bg .quota-bar { background-color: rgba(255,255,255,0.72) !important; }
 .capsule-quota.warn { color: rgb(255,153,51); }
@@ -1007,25 +1003,43 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 }
 .btn-secondary:hover { background: var(--btn-bg-hover); }
 
-/* ─── Settings ─── */
+/* ─── Settings：深色玻璃（主題無關）───
+   與用量面板（uv-card）同一視覺語言：深色半透明、白字、細白邊。
+   做法：在 #view-settings 作用域內重定義整套 token，所有子元件
+   （輸入框/開關/卡片/下拉/藥丸）自動吃深色值，淺色主題也一致。 */
 #view-settings {
-  background: var(--bg);
+  --bg: rgb(24, 31, 38);
+  --text: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.74);
+  --text-dim: rgba(255, 255, 255, 0.62);
+  --text-muted: rgba(255, 255, 255, 0.4);
+  --border: rgba(255, 255, 255, 0.09);
+  --hover: rgba(255, 255, 255, 0.05);
+  --btn-bg: rgba(255, 255, 255, 0.09);
+  --btn-bg-hover: rgba(255, 255, 255, 0.15);
+  --icon-color: rgba(255, 255, 255, 0.6);
+  background: rgba(24, 31, 38, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-radius: 0 0 var(--radius) var(--radius);
-  border: 0.5px solid var(--border);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-top: none;
+  color: var(--text);
 }
 .settings-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 12px;
+  padding: 10px 14px 8px;
   border-bottom: 0.5px solid var(--border);
   gap: 8px;
 }
-.settings-title { font-size: 13px; font-weight: 700; color: var(--text); letter-spacing: .3px; }
+.settings-title { font-size: 12px; font-weight: 700; color: var(--text-secondary); letter-spacing: .8px; }
 .settings-main { display: flex; align-items: stretch; }
-/* 左側圖示直排導航：7 分頁在 300px 窄視窗放不下橫排 tab（需 ~410px），改直排 icon rail */
+/* 左側圖示直排導航：7 分頁在 300px 窄視窗放不下橫排 tab（需 ~410px），改直排 icon rail。
+   rail 比內容區暗一階（第二層中性面），儀表感。 */
 .settings-rail {
   display: flex; flex-direction: column; gap: 3px;
-  padding: 8px 6px; flex-shrink: 0;
+  padding: 10px 6px; flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.18);
   border-right: 0.5px solid var(--border);
 }
 .settings-tab {
@@ -1052,8 +1066,26 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 }
 .settings-tab:hover::after { opacity: 1; }
 .settings-tab-panel { display: none; }
-.settings-tab-panel.active { display: flex; flex-direction: column; gap: 14px; }
-.settings-body { flex: 1; min-width: 0; padding: 14px 16px; display: flex; flex-direction: column; gap: 18px; }
+.settings-tab-panel.active {
+  display: flex; flex-direction: column; gap: 14px;
+  /* 切分頁時輕微上浮進場（150ms 內，狀態回饋非裝飾） */
+  animation: settings-panel-in 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes settings-panel-in {
+  from { opacity: 0; transform: translateY(3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-tab-panel.active { animation: none; }
+}
+.settings-body { flex: 1; min-width: 0; padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+/* 輸入框 focus 環：accent 光暈，精密儀表的「選中」回饋 */
+#view-settings .text-input:focus,
+#view-settings textarea:focus,
+#view-settings select:focus,
+#view-settings input[type="number"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
 .setting-group { display: flex; align-items: center; justify-content: space-between; }
 .setting-group-col { display: flex; flex-direction: column; gap: 10px; }
 .setting-label { font-size: 11px; font-weight: 500; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
@@ -1182,8 +1214,8 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 .provider-item:hover { background: var(--btn-bg); border-color: var(--btn-bg-hover); }
 /* 監控中的助手：左緣 accent 感 + 輕微底色，一眼分辨開了哪些 */
 .provider-item:has(.provider-check:checked) {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  background: color-mix(in srgb, var(--accent) 8%, var(--hover));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--hover));
 }
 /* 卡頭 icon 加同色淡 chip 底，視覺錨點更清楚（比照 uv-head .provider-icon） */
 .provider-item .provider-icon {
@@ -1257,7 +1289,6 @@ body.has-bg .capsule {
 }
 body.has-bg #view-expanded,
 body.has-bg #view-dashboard,
-body.has-bg #view-settings,
 body.has-bg #view-events-log {
   background: rgba(28, 28, 34, 0.7) !important;
   backdrop-filter: blur(8px);
@@ -1265,7 +1296,6 @@ body.has-bg #view-events-log {
 [data-theme="light"] body.has-bg .capsule,
 [data-theme="light"] body.has-bg #view-expanded,
 [data-theme="light"] body.has-bg #view-dashboard,
-[data-theme="light"] body.has-bg #view-settings,
 [data-theme="light"] body.has-bg #view-events-log {
   background: rgba(255, 255, 255, 0.7) !important;
 }
@@ -1364,8 +1394,7 @@ body.has-bg #view-events-log {
 
 /* panel / view expanded 毛玻璃底 */
 [data-theme="light"] #view-expanded,
-[data-theme="light"] #view-dashboard,
-[data-theme="light"] #view-settings {
+[data-theme="light"] #view-dashboard {
   background: rgba(255,253,248,0.68) !important;
   backdrop-filter: var(--glass);
   -webkit-backdrop-filter: var(--glass);

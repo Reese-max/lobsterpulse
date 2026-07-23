@@ -55,6 +55,9 @@ const PROVIDER_COLORS = {
 };
 
 const APP_NAME = "額度監控";
+// 設定 UI 顯示用：助手/音效/規則清單現在只含本機 CLI，「💻」與「（本機）」
+// 是冗餘噪音（還讓 300px 下名字難看地換行），顯示時修掉；config 內名稱不動。
+const cleanProviderName = (n) => String(n || "").replace(/^💻\s*/, "").replace(/（本機）$/, "").trim();
 const OPENAB_BOTS = ["cicx", "gitx", "giminix", "codex_bot", "openx", "irisx_bot", "grokx", "lpbot", "mimo"];
 const LOCAL_PROVIDERS = ["claude", "codex", "copilot", "gemini"];
 // OpenAB bot 優先顯示，本機 CLI 接在後面。codex_bot=OpenAB CODEX，codex=本機 CLI（獨立 id）。
@@ -264,7 +267,7 @@ async function initRulesUI() {
   for (const p of knownProviders) {
     const opt = document.createElement("option");
     opt.value = p;
-    opt.textContent = (appConfig.providers[p] && appConfig.providers[p].name) || p;
+    opt.textContent = cleanProviderName((appConfig.providers[p] && appConfig.providers[p].name) || p);
     provSel.appendChild(opt);
   }
 
@@ -275,7 +278,7 @@ async function initRulesUI() {
     Stop: "停止回應", SessionEnd: "結束",
   };
   const STATE_LABELS = { Completed: "已完成", StartedWaiting: "開始等待", None: "無狀態" };
-  const provName = (id) => (appConfig.providers[id] && appConfig.providers[id].name) || id;
+  const provName = (id) => cleanProviderName((appConfig.providers[id] && appConfig.providers[id].name) || id);
 
   async function refresh() {
     let rules = [];
@@ -2311,7 +2314,7 @@ async function renderProviders() {
     return `<div class="provider-item">
       <input type="checkbox" class="provider-check" data-provider="${id}" ${checked}>
       ${providerIconHtml(id, 18)}
-      <span class="provider-name">${esc(p.name)}</span>
+      <span class="provider-name">${esc(cleanProviderName(p.name))}</span>
       ${statusText ? `<span class="${statusClass}">${statusText}</span>` : ""}
       ${!isOpenAbBot ? `<button class="provider-open" data-provider="${id}" title="開啟 ${esc(p.name)} 設定檔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
     </div>`;
@@ -2389,7 +2392,7 @@ async function renderProviderSounds(kind = "completion") {
       const display = isNone || !stored ? "(不播放)" : stored;
       return `<div class="provider-sound-row">
         ${providerIconHtml(pid, 16)}
-        <span class="provider-sound-name">${esc(p.name)}</span>
+        <span class="provider-sound-name">${esc(cleanProviderName(p.name))}</span>
         <div class="custom-dropdown sound-dd" data-provider="${pid}">
           <div class="dropdown-selected">${esc(display)}</div>
           <div class="dropdown-options hidden">

@@ -14,7 +14,7 @@
 [data-theme="light"] #view-expanded{
   background: #faf9f5 !important;
 }
-[data-theme="light"] #view-settings,
+/* #view-settings 已改為主題無關深色玻璃（styles.css），不再吃淺色皮膚 */
 [data-theme="light"] #view-dashboard,
 [data-theme="light"] #view-events-log{
   background: #faf9f5 !important;
@@ -157,25 +157,9 @@
   text-align: left;
 }
 
-/* ============================================================= */
-/* 11. Settings hero — #view-settings 頂條                        */
-/* ============================================================= */
-[data-theme="light"] #view-settings .settings-header{
-  padding-bottom: 10px;
-  border-bottom: 1px solid rgba(26,26,23,0.06);
-  margin-bottom: 10px;
-}
-[data-theme="light"] #view-settings::before{
-  content: "⚙  設定";
-  display: block;
-  font-family: "Source Serif 4", Georgia, serif;
-  font-style: italic;
-  font-weight: 500;
-  font-size: 15px;
-  color: #1a1a17;
-  padding: 4px 0 8px;
-  letter-spacing: -0.01em;
-}
+/* 11.（已移除）Settings hero 淺色頂條＋::before 偽元素標題——
+   設定畫面改為深色玻璃後由 .settings-header/.settings-title 取代。
+   ::before 生成的第二個「⚙ 設定」正是先前雙標題 bug 的來源。 */
 
 /* =============================================================
    3. Cap chip — capsule-quota 套 coral accent-soft badge
@@ -314,32 +298,8 @@
   margin-top: 6px;
 }
 
-/* =============================================================
-   8. Settings view — glass hero + eyebrow labels
-   ============================================================= */
-[data-theme="light"] #view-settings{
-  background: rgba(255,253,248,0.88);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  backdrop-filter: blur(20px) saturate(180%);
-  border-radius: 22px;
-  padding: 12px;
-  box-shadow:
-    0 16px 40px rgba(26,26,23,0.1),
-    inset 0 1px 0 rgba(255,255,255,0.6);
-}
-[data-theme="light"] .settings-tab{
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: #6b6862;
-  padding: 6px 10px;
-  border-radius: 10px;
-  transition: background .15s ease, color .15s ease;
-}
-[data-theme="light"] .settings-tab.active{
-  background: var(--accent-soft-2);
-  color: var(--accent-ink);
-}
+/* 8.（已移除）Settings 淺色 glass hero＋tab 皮膚——設定畫面改為主題無關
+   深色玻璃（styles.css #view-settings scoped tokens），淺色皮膚退役。 */
 
 /* =============================================================
    8.5 Settings body — 強制可捲動（tab 內容太長時不卡死）

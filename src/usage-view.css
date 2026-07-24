@@ -131,6 +131,14 @@
   padding: 2px 2px 0;
 }
 .uv-footer-btns { display: flex; gap: 2px; }
+/* footer 齒輪：白 icon＋深色 chip 底（與 uv-card 同語言）——footer 底色跟主題走，
+   純白 icon 在淺色玻璃上會隱形，深色 chip 讓它疊任何背景都清楚 */
+.uv-footer .icon-btn {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(28, 36, 44, 0.72);
+  border-radius: 8px;
+}
+.uv-footer .icon-btn:hover { color: #fff; background: rgba(28, 36, 44, 0.92); }
 
 /* 淺色主題最低限度適配：卡片維持深色（OpenUsage 樣式本體），僅外框透明度微調 */
 body.light .uv-card { background: rgba(30, 38, 48, 0.88); }

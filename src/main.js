@@ -450,8 +450,8 @@ async function init() {
   });
 
   // PUA R112 Capsule Brief: 膠囊本體 hover 時 toggle brief 面板
-  // - 與 showView("expanded") 解耦：expanded 由上面 mouseenter 觸發, brief 這裡
-  //   獨立控制, 這樣 brief 也能在 expanded view 之外的時機用
+  // - 與主面板切換解耦：usage 面板由上面 mouseenter 觸發, brief 這裡
+  //   獨立控制, 這樣 brief 也能在面板之外的時機用
   // - 300ms debounce: 避免快速 hover 進出時 brief 閃爍
   let briefHoverTimer = null;
   $("capsule").addEventListener("mouseenter", () => {
@@ -666,7 +666,9 @@ async function init() {
   });
 
   // Usage 面板 footer 按鈕
-  $("btn-usage-sessions")?.addEventListener("click", () => showView("expanded"));
+  // 舊主視圖（expanded session 清單）入口已全數移除（使用者要求刪除舊版面）：
+  // footer 📋 按鈕已拆、膠囊徽章與 dashboard 卡片跳轉改導向 usage 面板。
+  // view-expanded 的 DOM/渲染碼保留 dormant——拆掉會踩無 null 防護的 init。
   $("btn-usage-settings")?.addEventListener("click", () => $("btn-settings").click());
 
   $("btn-hide").addEventListener("click", () => {
@@ -1891,7 +1893,7 @@ function renderDashboardGrid(gridId, dashboardBots, sessions) {
       const pid = card.dataset.pid;
       sessionFilter = pid;
       if (lastState) renderSessions(lastState);
-      showView("expanded");
+      showView("usage");
     });
   });
 
@@ -2798,7 +2800,7 @@ function bindCapsuleInteractions() {
     e.stopPropagation();
     const prov = cq.dataset.provider;
     if (!prov) return;
-    showView("expanded");
+    showView("usage");
     // 等 fitWindow 完成再 scroll
     setTimeout(() => {
       const row = document.querySelector(`.quota-card[data-provider="${cssEsc(prov)}"]`)

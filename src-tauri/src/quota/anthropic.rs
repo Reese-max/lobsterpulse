@@ -264,14 +264,22 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             let h5_reset_str = h5r.map(fmt_countdown).unwrap_or_else(|| "N/A".to_string());
             let d7_reset_str = d7r.map(fmt_countdown).unwrap_or_else(|| "N/A".to_string());
 
-            // R124 前這裡硬編 fmt_tokens(0)；改讀 dailyModelTokens 實值
-            let today_tokens = fmt_tokens(
+            // stats-cache 已停更數月（實測凍結在 2026-05-24），dailyModelTokens
+            // 對今天永遠是 0——優先吃 LIVE_DAILY（即時 JSONL 掃描，與膠囊同源），
+            // 日期吻合才用；掃描未完成（剛啟動）或跨日空窗則退回 stats-cache 值。
+            let live_today = crate::LIVE_DAILY
+                .lock()
+                .unwrap()
+                .as_ref()
+                .filter(|d| d.date == today)
+                .map(|d| d.today);
+            let today_tokens = fmt_tokens(live_today.unwrap_or_else(|| {
                 stats
                     .daily_model_tokens
                     .as_deref()
                     .map(|dmt| sum_tokens_for(dmt, |d| d == today))
-                    .unwrap_or(0),
-            );
+                    .unwrap_or(0)
+            }));
             let today_msgs = today_activity.and_then(|a| a.message_count).unwrap_or(0);
             let total_sessions = stats.total_sessions.unwrap_or(0);
             let total_messages = stats.total_messages.unwrap_or(0);

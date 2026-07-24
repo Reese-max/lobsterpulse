@@ -142,6 +142,9 @@ fn aggregate_daily_stats(
         .as_ref()
         .map(|m| m.values().filter_map(|e| e.cost_usd).sum::<f64>());
     serde_json::json!({
+        // 這兩個值來自已凍結的 stats-cache（今日恆 0）——消費端
+        // get_claude_daily_stats（lib.rs）靠 LIVE_DAILY 覆寫兜底才正確。
+        // 拆掉那層覆寫前，這裡必須先改吃 LIVE_DAILY（同 fetch() 的做法）。
         "today_tokens": sum_tokens_for(dmt, |d| d == today),
         "yesterday_tokens": sum_tokens_for(dmt, |d| d == yesterday),
         "tokens_30d": sum_tokens_for(dmt, |d| d >= cutoff_30d),

@@ -3,11 +3,16 @@
 //! R82 開工，R85 落地，R89 經 Tauri command 接入 (`quota::anthropic::fetch`)。
 
 use super::RunnerQuota;
-use reqwest::header::{AUTHORIZATION, HeaderValue};
+use reqwest::header::{HeaderValue, AUTHORIZATION};
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 const ANTHROPIC_API: &str = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_OAUTH_TOKEN_API: &str = "https://platform.claude.com/v1/oauth/token";
+const CLAUDE_CODE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_OAUTH_REFRESH_LEEWAY_MS: u64 = 10 * 60 * 1000;
+static CLAUDE_OAUTH_REFRESH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 struct ClaudeCredentials {
@@ -19,8 +24,30 @@ struct ClaudeCredentials {
 struct ClaudeOAuth {
     #[serde(rename = "accessToken")]
     access_token: Option<String>,
+    #[serde(rename = "refreshToken")]
+    refresh_token: Option<String>,
+    #[serde(rename = "expiresAt")]
+    expires_at_ms: Option<u64>,
     #[serde(rename = "subscriptionType")]
     subscription_type: Option<String>,
+}
+
+#[derive(Debug)]
+struct ClaudeAuthCredentials {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_at_ms: Option<u64>,
+    tier: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthRefresh {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    expires_in: u64,
+    #[serde(default)]
+    refresh_token_expires_in: Option<u64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -99,16 +126,275 @@ fn claude_oauth_authorization_value(token: &str) -> Result<HeaderValue, String> 
         .map_err(|e| format!("build authorization header: {e}"))
 }
 
-/// 讀 ~/.claude/.credentials.json 取 OAuth token
-fn read_credentials(home: &Path) -> Result<(String, String), String> {
-    let path = home.join(".claude").join(".credentials.json");
-    let data = std::fs::read_to_string(&path).map_err(|e| format!("read credentials: {e}"))?;
+fn oauth_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn oauth_refresh_due(expires_at_ms: Option<u64>, now_ms: u64) -> bool {
+    expires_at_ms
+        .is_some_and(|expires| expires <= now_ms.saturating_add(CLAUDE_OAUTH_REFRESH_LEEWAY_MS))
+}
+
+fn credentials_path(home: &Path) -> PathBuf {
+    home.join(".claude").join(".credentials.json")
+}
+
+fn parse_credentials(data: &str) -> Result<ClaudeAuthCredentials, String> {
     let creds: ClaudeCredentials =
         serde_json::from_str(&data).map_err(|e| format!("parse credentials: {e}"))?;
     let oauth = creds.claude_ai_oauth.ok_or("missing claudeAiOauth")?;
-    let token = oauth.access_token.ok_or("missing accessToken")?;
-    let tier = oauth.subscription_type.unwrap_or_else(|| "pro".to_string());
-    Ok((token, tier))
+    Ok(ClaudeAuthCredentials {
+        access_token: oauth.access_token.ok_or("missing accessToken")?,
+        refresh_token: oauth.refresh_token,
+        expires_at_ms: oauth.expires_at_ms,
+        tier: oauth.subscription_type.unwrap_or_else(|| "pro".to_string()),
+    })
+}
+
+/// 讀 ~/.claude/.credentials.json 取 OAuth token。
+fn read_credentials(home: &Path) -> Result<ClaudeAuthCredentials, String> {
+    let path = credentials_path(home);
+    let data = std::fs::read_to_string(&path).map_err(|e| format!("read credentials: {e}"))?;
+    parse_credentials(&data)
+}
+
+fn oauth_expiry_ms(now_ms: u64, expires_in_secs: u64) -> Result<u64, String> {
+    now_ms
+        .checked_add(
+            expires_in_secs
+                .checked_mul(1000)
+                .ok_or("OAuth expiry overflow")?,
+        )
+        .ok_or("OAuth expiry overflow".to_string())
+}
+
+fn apply_oauth_refresh(
+    credentials: &mut serde_json::Value,
+    refreshed: &OAuthRefresh,
+    now_ms: u64,
+) -> Result<(), String> {
+    let oauth = credentials
+        .get_mut("claudeAiOauth")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or("missing claudeAiOauth")?;
+    oauth.insert(
+        "accessToken".into(),
+        serde_json::Value::String(refreshed.access_token.clone()),
+    );
+    if let Some(refresh_token) = &refreshed.refresh_token {
+        oauth.insert(
+            "refreshToken".into(),
+            serde_json::Value::String(refresh_token.clone()),
+        );
+    }
+    oauth.insert(
+        "expiresAt".into(),
+        serde_json::Value::from(oauth_expiry_ms(now_ms, refreshed.expires_in)?),
+    );
+    if let Some(expires_in) = refreshed.refresh_token_expires_in {
+        oauth.insert(
+            "refreshTokenExpiresAt".into(),
+            serde_json::Value::from(oauth_expiry_ms(now_ms, expires_in)?),
+        );
+    }
+    Ok(())
+}
+
+fn credentials_backup_path(path: &Path) -> PathBuf {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("credentials.json");
+    let day = chrono::Local::now().format("%Y%m%d");
+    path.with_file_name(format!("{filename}.bak-{day}"))
+}
+
+fn backup_credentials_once(path: &Path) -> Result<(), String> {
+    let backup = credentials_backup_path(path);
+    if !backup.exists() {
+        std::fs::copy(path, &backup).map_err(|e| format!("backup credentials: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_credentials_file(path: &Path, replacement: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    let wide = |p: &Path| {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let path_wide = wide(path);
+    let replacement_wide = wide(replacement);
+    if unsafe {
+        ReplaceFileW(
+            path_wide.as_ptr(),
+            replacement_wide.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_credentials_file(path: &Path, replacement: &Path) -> std::io::Result<()> {
+    std::fs::rename(replacement, path)
+}
+
+fn write_credentials_atomically(path: &Path, data: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+
+    let parent = path.parent().ok_or("credentials path has no parent")?;
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("credentials.json");
+    let tmp = parent.join(format!(
+        ".{filename}.oauth-refresh-{}-{}",
+        std::process::id(),
+        oauth_now_ms()
+    ));
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("write refreshed credentials: {e}"));
+    }
+
+    let mut last_err = None;
+    for attempt in 0..3 {
+        match replace_credentials_file(path, &tmp) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(30 * (attempt + 1)));
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&tmp);
+    Err(format!(
+        "atomically replace credentials: {}",
+        last_err.unwrap_or_else(|| std::io::Error::other("replace failed"))
+    ))
+}
+
+fn persist_oauth_refresh(
+    path: &Path,
+    requested_refresh_token: &str,
+    refreshed: &OAuthRefresh,
+    now_ms: u64,
+) -> Result<ClaudeAuthCredentials, String> {
+    let data = std::fs::read_to_string(path).map_err(|e| format!("read credentials: {e}"))?;
+    let current = parse_credentials(&data)?;
+    if current.refresh_token.as_deref() != Some(requested_refresh_token) {
+        return Err(
+            "credentials changed while renewing; leaving Claude Code auth untouched".into(),
+        );
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_str(&data).map_err(|e| format!("parse credentials: {e}"))?;
+    apply_oauth_refresh(&mut value, refreshed, now_ms)?;
+    let updated =
+        serde_json::to_vec_pretty(&value).map_err(|e| format!("serialize credentials: {e}"))?;
+    backup_credentials_once(path)?;
+    write_credentials_atomically(path, &updated)?;
+    parse_credentials(
+        std::str::from_utf8(&updated).map_err(|e| format!("read refreshed credentials: {e}"))?,
+    )
+}
+
+async fn refresh_access_token(
+    client: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<OAuthRefresh, String> {
+    let response = client
+        .post(ANTHROPIC_OAUTH_TOKEN_API)
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": CLAUDE_CODE_OAUTH_CLIENT_ID,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("OAuth refresh API error: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("OAuth refresh HTTP {}", response.status()));
+    }
+    let refreshed: OAuthRefresh = response
+        .json()
+        .await
+        .map_err(|e| format!("parse OAuth refresh response: {e}"))?;
+    if refreshed.access_token.is_empty() {
+        return Err("OAuth refresh response missing access token".into());
+    }
+    Ok(refreshed)
+}
+
+async fn refresh_credentials_if_due(
+    home: &Path,
+    client: &reqwest::Client,
+    credentials: ClaudeAuthCredentials,
+) -> Result<ClaudeAuthCredentials, String> {
+    if !oauth_refresh_due(credentials.expires_at_ms, oauth_now_ms()) {
+        return Ok(credentials);
+    }
+
+    let _guard = CLAUDE_OAUTH_REFRESH_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let latest = read_credentials(home)?;
+    if !oauth_refresh_due(latest.expires_at_ms, oauth_now_ms()) {
+        return Ok(latest);
+    }
+    let refresh_token = latest
+        .refresh_token
+        .as_deref()
+        .ok_or("Claude OAuth access token expires soon and has no refresh token")?;
+    let refreshed = refresh_access_token(client, refresh_token).await?;
+    persist_oauth_refresh(
+        &credentials_path(home),
+        refresh_token,
+        &refreshed,
+        oauth_now_ms(),
+    )
+}
+
+/// 背景 local runner 的 Claude 腳本只會讀 access token；在 spawn 前由這裡
+/// 共用同一套安全續約與原子寫入流程，避免 UI live fetch 成為續約的隱性前提。
+pub(crate) async fn ensure_fresh_credentials(home: &Path) -> Result<(), String> {
+    let credentials = read_credentials(home)?;
+    if !oauth_refresh_due(credentials.expires_at_ms, oauth_now_ms()) {
+        return Ok(());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("build OAuth client: {e}"))?;
+    refresh_credentials_if_due(home, &client, credentials)
+        .await
+        .map(|_| ())
 }
 
 /// 讀 ~/.claude/stats-cache.json 取本地統計
@@ -175,8 +461,24 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     let color = "#d97757".to_string();
     let name = "claude".to_string();
 
-    let (token, tier) = match read_credentials(home) {
-        Ok(v) => v,
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+    let credentials = match read_credentials(home) {
+        Ok(credentials) => match refresh_credentials_if_due(home, &client, credentials).await {
+            Ok(credentials) => credentials,
+            Err(e) => {
+                return RunnerQuota {
+                    name,
+                    label,
+                    color,
+                    ok: false,
+                    text: format!("⚠ {e}"),
+                    raw: None,
+                };
+            }
+        },
         Err(e) => {
             return RunnerQuota {
                 name,
@@ -188,6 +490,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             };
         }
     };
+    let token = credentials.access_token;
+    let tier = credentials.tier;
 
     let stats = read_stats(home);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -199,11 +503,6 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         .and_then(|v| v.iter().find(|d| d.date == today));
 
     // 打 API 取 rate limit headers
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_default();
-
     let body = serde_json::json!({
         "model": "claude-haiku-4-5-20251001",
         "max_tokens": 1,
@@ -431,5 +730,100 @@ mod tests {
         assert_eq!(v["tokens_30d"], 0);
         assert!(v["total_cost_usd"].is_null());
         assert!(v["computed_date"].is_null());
+    }
+
+    #[test]
+    fn oauth_refresh_is_due_ten_minutes_before_expiry() {
+        let now_ms = 1_000_000;
+        assert!(!oauth_refresh_due(
+            Some(now_ms + 10 * 60 * 1000 + 1),
+            now_ms
+        ));
+        assert!(oauth_refresh_due(Some(now_ms + 10 * 60 * 1000), now_ms));
+        assert!(oauth_refresh_due(Some(now_ms - 1), now_ms));
+        assert!(!oauth_refresh_due(None, now_ms));
+    }
+
+    #[test]
+    fn oauth_refresh_contract_matches_claude_code() {
+        assert_eq!(
+            ANTHROPIC_OAUTH_TOKEN_API,
+            "https://platform.claude.com/v1/oauth/token"
+        );
+        assert_eq!(
+            CLAUDE_CODE_OAUTH_CLIENT_ID,
+            "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+        );
+    }
+
+    #[test]
+    fn apply_oauth_refresh_rotates_tokens_without_dropping_credentials_fields() {
+        let mut credentials = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "old-access",
+                "refreshToken": "old-refresh",
+                "expiresAt": 1,
+                "refreshTokenExpiresAt": 2,
+                "subscriptionType": "max",
+                "scopes": ["user:inference"]
+            },
+            "otherProvider": {"enabled": true}
+        });
+        let refreshed = OAuthRefresh {
+            access_token: "new-access".into(),
+            refresh_token: Some("new-refresh".into()),
+            expires_in: 3600,
+            refresh_token_expires_in: Some(7200),
+        };
+
+        apply_oauth_refresh(&mut credentials, &refreshed, 1_000).expect("refresh applies");
+
+        assert_eq!(credentials["claudeAiOauth"]["accessToken"], "new-access");
+        assert_eq!(credentials["claudeAiOauth"]["refreshToken"], "new-refresh");
+        assert_eq!(credentials["claudeAiOauth"]["expiresAt"], 3_601_000);
+        assert_eq!(
+            credentials["claudeAiOauth"]["refreshTokenExpiresAt"],
+            7_201_000
+        );
+        assert_eq!(credentials["claudeAiOauth"]["subscriptionType"], "max");
+        assert_eq!(credentials["otherProvider"]["enabled"], true);
+    }
+
+    #[test]
+    fn persist_oauth_refresh_replaces_credentials_and_keeps_daily_backup() {
+        let dir = std::env::temp_dir().join(format!(
+            "lobsterpulse-anthropic-refresh-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join(".credentials.json");
+        std::fs::write(
+            &path,
+            r#"{"claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh","expiresAt":1,"subscriptionType":"max","scopes":["user:inference"]},"otherProvider":{"enabled":true}}"#,
+        )
+        .expect("write credentials");
+        let refreshed = OAuthRefresh {
+            access_token: "new-access".into(),
+            refresh_token: Some("new-refresh".into()),
+            expires_in: 3600,
+            refresh_token_expires_in: None,
+        };
+
+        let updated =
+            persist_oauth_refresh(&path, "old-refresh", &refreshed, 1_000).expect("persist");
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read updated"))
+                .expect("parse updated");
+        let backup: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(credentials_backup_path(&path)).expect("read backup"),
+        )
+        .expect("parse backup");
+
+        assert_eq!(updated.access_token, "new-access");
+        assert_eq!(on_disk["claudeAiOauth"]["refreshToken"], "new-refresh");
+        assert_eq!(on_disk["otherProvider"]["enabled"], true);
+        assert_eq!(backup["claudeAiOauth"]["accessToken"], "old-access");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

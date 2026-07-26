@@ -2041,6 +2041,16 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
     let Some(home) = dirs::home_dir() else {
         return;
     };
+    if runners.iter().any(|runner| runner.name == "claude") {
+        let refresh_result = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("create Claude OAuth runtime: {e}"))
+            .and_then(|runtime| {
+                runtime.block_on(quota::anthropic::ensure_fresh_credentials(&home))
+            });
+        if let Err(e) = refresh_result {
+            log::warn!("Claude OAuth refresh before local runner failed: {e}");
+        }
+    }
     let dir = home.join(".lobsterpulse");
     if let Err(e) = std::fs::create_dir_all(&dir) {
         // R57: 從 `let _ =` 沉默吞改成 log warn。OpenAB runner 啟動前創

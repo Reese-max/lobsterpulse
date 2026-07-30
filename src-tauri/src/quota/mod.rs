@@ -9,6 +9,7 @@ pub mod antigravity;
 pub mod claude_logs;
 pub mod provider_daily;
 pub mod codex;
+pub mod codex_rollout;
 pub mod copilot;
 pub mod devin;
 pub mod grok;

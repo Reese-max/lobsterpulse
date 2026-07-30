@@ -133,7 +133,7 @@
     return `上次成功 ${success}；最近錯誤：${error}；連續失敗 ${failures} 次`;
   }
 
-  function renderCard(runner, dailyStats, providerDaily, healthEntry) {
+  function renderCard(runner, dailyStats, providerDaily, codexRollout, healthEntry) {
     const card = window.QuotaCards.normalizeRunnerCard(runner);
     const name = runner.name || "";
     const label = (runner.label || name).replace(/^[^\w]*\s/, ""); // 去掉開頭 emoji
@@ -179,14 +179,17 @@
       : "";
 
     const stats = name === "claude" ? dailyStats : null;
+    const rolloutToday = new Date().toLocaleDateString("sv-SE");
+    const codexModels = name === "codex" && codexRollout && codexRollout.date === rolloutToday
+      ? window.QuotaCards.normalizeCodexModelUsage(codexRollout.models)
+      : [];
     const open = detailOpen.has(name);
-    // 非 Claude 的 CLI 沒有可逐筆加總的 log，後端改用「累計計數器的當日差值」。
-    // 面板卡片來自 live API 快照那條路，raw 裡不會有這個值，得從 get_provider_daily
-    // 撈（膠囊是另一條路，raw 有值——一開始只做了膠囊那條，面板整個看不到）。
+    // 非 Claude 的 CLI 原本只能看「累計計數器的當日差值」；Codex 現在優先顯示
+    // rollout 逐模型實際用量。rollout 暫時無資料時才退回舊的 app 記錄下界。
     // 用 != null 而非直接判真值：0 是真實用量，不是缺值。
     const pdRaw = providerDaily && providerDaily[name];
     const todayTok = pdRaw != null ? fmtTok(pdRaw) : runner.raw && runner.raw.today_tokens;
-    const todayOnly = !stats && todayTok != null;
+    const todayOnly = !stats && codexModels.length === 0 && todayTok != null;
     // 進度條顯示「剩餘」（快沒了數字變小，餘光掃一眼最直覺），但展開後要能直接
     // 看到「用掉多少」——不然同一張卡片裡 token 是已用量、配額是剩餘量，方向不
     // 一致，得自己在腦中減。
@@ -197,7 +200,19 @@
         return `<div class="uv-krow"><span>${esc(w.label)}</span><span>已用 ${used}% · 剩 ${Math.round(w.remainPct)}%</span></div>`;
       })
       .join("");
-    const detailBody = winRows + (stats
+    const modelRows = codexModels
+      .map((model) => {
+        const cost = fmtCost(model.estimated_cost_usd);
+        const estimate = cost
+          ? ` · <span data-cost-basis="estimated" title="LiteLLM 價目估算" aria-label="LiteLLM 價目估算">~${esc(cost)}</span>`
+          : "";
+        return `<div class="uv-krow"><span>${esc(model.name)}</span><span>· ${esc(fmtTok(model.total_tokens))} tok${estimate}</span></div>`;
+      })
+      .join("");
+    const modelNote = modelRows
+      ? `<div class="uv-note">今日本機 rollout 用量；~ 金額為 LiteLLM 價目估算</div>`
+      : "";
+    const detailBody = winRows + modelRows + modelNote + (stats
       ? detailRows(stats)
       : todayOnly
       ? `<div class="uv-krow"><span>Today</span><span>${esc(String(todayTok))} tokens</span></div>
@@ -364,13 +379,14 @@
     if (renderInFlight) { renderQueued = true; return; }
     renderInFlight = true;
     try {
-      const [cliRes, liveRes, healthRes, statsRes, evRes, pdRes] = await Promise.allSettled([
+      const [cliRes, liveRes, healthRes, statsRes, evRes, pdRes, codexRes] = await Promise.allSettled([
         invoke("detect_installed_clis"),
         invoke("get_live_quota_snapshot"),
         invoke("get_runner_health"),
         invoke("get_claude_daily_stats"),
         invoke("get_recent_completions"),
         invoke("get_provider_daily"),
+        invoke("get_codex_rollout_daily"),
       ]);
       const clis = cliRes.status === "fulfilled" ? (cliRes.value || []) : [];
       const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
@@ -386,8 +402,9 @@
         root.innerHTML = `<div class="uv-empty">未偵測到本機安裝的 AI CLI</div>`;
       } else {
         const providerDaily = pdRes.status === "fulfilled" ? (pdRes.value || {}) : {};
+        const codexRollout = codexRes.status === "fulfilled" ? codexRes.value : null;
         root.innerHTML = runners
-          .map((r) => renderCard(r, dailyStats, providerDaily, healthRunners[`live:${r.name}`]))
+          .map((r) => renderCard(r, dailyStats, providerDaily, codexRollout, healthRunners[`live:${r.name}`]))
           .join("");
         drawSparks(runners.map((r) => r.name));
       }

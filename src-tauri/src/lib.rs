@@ -978,6 +978,19 @@ fn get_provider_daily() -> serde_json::Value {
     serde_json::json!(quota::provider_daily::usage_on(&path, &today))
 }
 
+/// 面板用：從本機 Codex rollout 計算今日逐模型 token 與估算成本。
+/// 掃描放入 blocking worker，避免大量 JSONL 讀取卡住 Tauri command 執行緒。
+#[tauri::command]
+async fn get_codex_rollout_daily() -> quota::codex_rollout::CodexRolloutDaily {
+    let Some(home) = dirs::home_dir() else {
+        return quota::codex_rollout::empty_today();
+    };
+
+    tauri::async_runtime::spawn_blocking(move || quota::codex_rollout::collect_today(&home))
+        .await
+        .unwrap_or_else(|_| quota::codex_rollout::empty_today())
+}
+
 /// 直接掃 JSONL 得到的每日 token 快照；背景任務每 5 分鐘更新。
 #[derive(Clone)]
 pub struct LiveDaily {
@@ -4719,6 +4732,7 @@ pub fn run() {
             get_quota_history,
             get_claude_daily_stats,
             get_provider_daily,
+            get_codex_rollout_daily,
             list_api_keys,
             copy_api_key,
             reveal_api_key,

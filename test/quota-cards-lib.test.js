@@ -1,6 +1,10 @@
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { parseResetDuration, normalizeRunnerCard } = require("../src/quota-cards-lib.js");
+const {
+  parseResetDuration,
+  normalizeRunnerCard,
+  normalizeCodexModelUsage,
+} = require("../src/quota-cards-lib.js");
 
 test("parseResetDuration 基本格式與天數轉換", () => {
   assert.strictEqual(parseResetDuration("3h19m"), "3h 19m");
@@ -53,6 +57,28 @@ test("basis 透傳到主卡，models 子卡繼承", () => {
   assert.strictEqual(c.basis, "provider_api");
   assert.strictEqual(c.models.length, 1);
   assert.strictEqual(c.models[0].basis, "provider_api");
+});
+
+test("codex rollout 逐模型用量保留無價模型並依 token 排序", () => {
+  const rows = normalizeCodexModelUsage([
+    { name: " gpt-5.4 ", total_tokens: 10, estimated_cost_usd: 0.01 },
+    { name: "gpt-5.6-sol", total_tokens: 1000 },
+    { name: "", total_tokens: 9999, estimated_cost_usd: 99 },
+    { name: "broken", total_tokens: NaN },
+  ]);
+
+  assert.deepStrictEqual(rows, [
+    {
+      name: "gpt-5.6-sol",
+      total_tokens: 1000,
+      estimated_cost_usd: null,
+    },
+    {
+      name: "gpt-5.4",
+      total_tokens: 10,
+      estimated_cost_usd: 0.01,
+    },
+  ]);
 });
 
 test("單一 remaining_pct -> simple 卡", () => {

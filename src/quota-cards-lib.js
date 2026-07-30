@@ -99,6 +99,30 @@
     }, base));
   }
 
+  // Codex rollout command 的純資料正規化：後端已按模型彙總，前端只做
+  // 不可信 IPC shape 防線與穩定排序。查不到價格時保留 token、成本回 null。
+  function normalizeCodexModelUsage(rows) {
+    return (Array.isArray(rows) ? rows : [])
+      .filter(function (row) {
+        return row && typeof row.name === "string" && row.name.trim() &&
+          typeof row.total_tokens === "number" && Number.isFinite(row.total_tokens) &&
+          row.total_tokens >= 0;
+      })
+      .map(function (row) {
+        const cost = typeof row.estimated_cost_usd === "number" &&
+          Number.isFinite(row.estimated_cost_usd) && row.estimated_cost_usd >= 0
+          ? row.estimated_cost_usd : null;
+        return {
+          name: row.name.trim(),
+          total_tokens: row.total_tokens,
+          estimated_cost_usd: cost,
+        };
+      })
+      .sort(function (left, right) {
+        return right.total_tokens - left.total_tokens || left.name.localeCompare(right.name);
+      });
+  }
+
   // 「最近完成」清單：hook 事件 → 完成紀錄列。
   // 只收 Stop/SessionEnd、provider 限 allowedIds（本機 CLI，OpenAB bot 24/7 loop
   // 會洗版所以不進來）、同 provider+session 去重留最新，時間新→舊取前 8 筆。
@@ -143,7 +167,8 @@
   }
 
   const api = {
-    parseResetDuration, normalizeRunnerCard, recentCompletions, waitingSessions, statsFreshness,
+    parseResetDuration, normalizeRunnerCard, normalizeCodexModelUsage,
+    recentCompletions, waitingSessions, statsFreshness,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.QuotaCards = api;

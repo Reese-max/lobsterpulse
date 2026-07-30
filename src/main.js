@@ -1640,7 +1640,21 @@ function isQuotaSnapshotStale(snap) {
 }
 
 function selectQuotaSnapshot(snapshots = {}) {
+  const local = snapshots.__local__;
+  const live = snapshots.__live__;
+  const localRunners = local?.runners || [];
+  const localNames = new Set(localRunners.map(r => r?.name).filter(Boolean));
+  const liveOnlyRunners = (live?.runners || []).filter(r => r?.name && !localNames.has(r.name));
+  const localWithLiveOnly = localRunners.length > 0 && liveOnlyRunners.length > 0
+    ? {
+        ...local,
+        runners: [...localRunners, ...liveOnlyRunners],
+        source: "local+live",
+        updated_at: Math.max(Number(local.updated_at) || 0, Number(live.updated_at) || 0),
+      }
+    : null;
   const candidates = [
+    { snap: localWithLiveOnly, title: "💻 本機額度", source: "local+live" },
     { snap: snapshots.__local__, title: "💻 本機額度", source: "local" },
     { snap: snapshots.__live__, title: "💻 本機額度 (live)", source: "live" },
     { snap: snapshots.cicx, title: "☁️ OpenAB 額度", source: "cicx" },

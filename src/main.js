@@ -1644,11 +1644,18 @@ function selectQuotaSnapshot(snapshots = {}) {
   const live = snapshots.__live__;
   const localRunners = local?.runners || [];
   const localNames = new Set(localRunners.map(r => r?.name).filter(Boolean));
+  const liveByName = new Map((live?.runners || []).filter(r => r?.name).map(r => [r.name, r]));
   const liveOnlyRunners = (live?.runners || []).filter(r => r?.name && !localNames.has(r.name));
-  const localWithLiveOnly = localRunners.length > 0 && liveOnlyRunners.length > 0
+  // 同名 runner 以 local 為主，但逐模型額度（raw.models）只有 live API 有 → 嫁接過來。
+  const mergedLocalRunners = localRunners.map(r => {
+    const liveModels = liveByName.get(r?.name)?.raw?.models;
+    if (!Array.isArray(liveModels) || !liveModels.length || r?.raw?.models) return r;
+    return { ...r, raw: { ...r.raw, models: liveModels } };
+  });
+  const localWithLiveOnly = localRunners.length > 0 && (liveOnlyRunners.length > 0 || mergedLocalRunners.some((r, i) => r !== localRunners[i]))
     ? {
         ...local,
-        runners: [...localRunners, ...liveOnlyRunners],
+        runners: [...mergedLocalRunners, ...liveOnlyRunners],
         source: "local+live",
         updated_at: Math.max(Number(local.updated_at) || 0, Number(live.updated_at) || 0),
       }

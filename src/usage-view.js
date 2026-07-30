@@ -111,7 +111,22 @@
     return rows + note;
   }
 
-  function renderCard(runner, dailyStats, providerDaily) {
+  function runnerHealthTitle(entry, fallback) {
+    if (!entry) return fallback;
+    const successTs = Number(entry.last_success_ts);
+    const success = Number.isFinite(successTs) && successTs > 0
+      ? formatRelativeTime(Math.max(0, Math.floor(Date.now() / 1000 - successTs)))
+      : "未知";
+    const error = typeof entry.last_error === "string" && entry.last_error
+      ? entry.last_error
+      : "無";
+    const failures = Number.isFinite(entry.consecutive_failures)
+      ? entry.consecutive_failures
+      : "未知";
+    return `上次成功 ${success}；最近錯誤：${error}；連續失敗 ${failures} 次`;
+  }
+
+  function renderCard(runner, dailyStats, providerDaily, healthEntry) {
     const card = window.QuotaCards.normalizeRunnerCard(runner);
     const name = runner.name || "";
     const label = (runner.label || name).replace(/^[^\w]*\s/, ""); // 去掉開頭 emoji
@@ -119,8 +134,12 @@
     const subtitle = (card.kind !== "none" && card.subtitle) || (runner.raw && runner.raw.plan) || "";
     const plan = subtitle ? `<span class="uv-plan">${esc(subtitle)}</span>` : "";
     const basis = renderQuotaBasis(card.basis, "uv-basis");
-    const failed = runner.ok === false ? `<span class="uv-err" title="runner 回報失敗">⚠</span>` : "";
-    const stale = runner.stale ? `<span class="uv-err uv-stale" title="本輪抓取失敗，顯示上次成功值">⏳</span>` : "";
+    const failed = runner.ok === false
+      ? `<span class="uv-err" title="${esc(runnerHealthTitle(healthEntry, "runner 回報失敗"))}">⚠</span>`
+      : "";
+    const stale = runner.stale
+      ? `<span class="uv-err uv-stale" title="${esc(runnerHealthTitle(healthEntry, "本輪抓取失敗，顯示上次成功值"))}">⏳</span>`
+      : "";
 
     // 條色與 icon 同源：PROVIDER_COLORS 優先（深色底可讀性已調過），退回 runner.color
     const barColor =
@@ -338,15 +357,20 @@
     if (renderInFlight) { renderQueued = true; return; }
     renderInFlight = true;
     try {
-      const [cliRes, liveRes, statsRes, evRes, pdRes] = await Promise.allSettled([
+      const [cliRes, liveRes, healthRes, statsRes, evRes, pdRes] = await Promise.allSettled([
         invoke("detect_installed_clis"),
         invoke("get_live_quota_snapshot"),
+        invoke("get_runner_health"),
         invoke("get_claude_daily_stats"),
         invoke("get_recent_completions"),
         invoke("get_provider_daily"),
       ]);
       const clis = cliRes.status === "fulfilled" ? (cliRes.value || []) : [];
       const liveSnap = liveRes.status === "fulfilled" ? liveRes.value : null;
+      const healthRunners =
+        healthRes.status === "fulfilled" && healthRes.value && healthRes.value.degraded !== true
+          ? (healthRes.value.runners || {})
+          : {};
       const dailyStats = statsRes.status === "fulfilled" ? statsRes.value : null;
       const events = evRes.status === "fulfilled" ? (evRes.value || []) : [];
 
@@ -355,7 +379,9 @@
         root.innerHTML = `<div class="uv-empty">未偵測到本機安裝的 AI CLI</div>`;
       } else {
         const providerDaily = pdRes.status === "fulfilled" ? (pdRes.value || {}) : {};
-        root.innerHTML = runners.map((r) => renderCard(r, dailyStats, providerDaily)).join("");
+        root.innerHTML = runners
+          .map((r) => renderCard(r, dailyStats, providerDaily, healthRunners[`live:${r.name}`]))
+          .join("");
         drawSparks(runners.map((r) => r.name));
       }
       renderRecent(events, clis);

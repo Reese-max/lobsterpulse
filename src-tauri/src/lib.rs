@@ -8,6 +8,7 @@ mod hooks_configurator;
 mod openab_bridge;
 mod quota;
 mod quota_history;
+mod runner_health;
 mod session;
 mod telemetry;
 #[cfg(windows)]
@@ -809,6 +810,17 @@ fn read_usage_snapshots() -> std::collections::HashMap<String, Option<serde_json
     read_usage_snapshots_with_home(&dirs::home_dir())
 }
 
+#[tauri::command]
+fn get_runner_health() -> runner_health::RunnerHealthState {
+    let Some(home) = dirs::home_dir() else {
+        return runner_health::RunnerHealthState {
+            degraded: true,
+            runners: std::collections::BTreeMap::new(),
+        };
+    };
+    runner_health::read_at(&home.join(".lobsterpulse").join("runner-health.json"))
+}
+
 /// R89 接入：R82 開工留下的 quota/ 模組 (`anthropic` / `codex`) 對外暴露點。
 /// 聚合兩個本機 CLI runner 的 live API fetch 結果回前端，補 K0 Quota 即時性
 /// 第二層來源（OpenAB snapshot 是「別人寫的」,這條是「自己即時抓的」）。
@@ -1006,8 +1018,8 @@ fn detect_installed_clis() -> Vec<quota::InstalledCli> {
     )
 }
 
-/// 對齊 R33 `read_usage_snapshots_with_home` 模式：純 async fn + home 注入，
-/// Tauri command 殼只負責撈 `dirs::home_dir()` 傳入，testable。
+/// 對齊 R33 `read_usage_snapshots_with_home` 模式：home 可注入、可測。
+/// fetch 結果同時更新注入 home 下的 runner health；活動資料與健康狀態分開。
 pub(crate) async fn collect_live_quota_snapshot_with_home(
     home: Option<&std::path::Path>,
 ) -> quota::LiveQuotaSnapshot {
@@ -1054,8 +1066,27 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
         retry_net(quota::minimax::fetch),
         retry_net(quota::openrouter::fetch),
     );
+    let runners = vec![claude, codex, copilot, grok, devin, agy, minimax, openrouter];
+    let health_results = runners
+        .iter()
+        .map(|runner| {
+            (
+                format!("live:{}", runner.name),
+                runner.ok,
+                runner.text.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    if let Err(e) = runner_health::record_results_at(
+        &home.join(".lobsterpulse").join("runner-health.json"),
+        &health_results,
+        updated_at,
+    ) {
+        log::warn!("[runner_health] live quota health write failed: {e}");
+    }
+
     quota::LiveQuotaSnapshot {
-        runners: vec![claude, codex, copilot, grok, devin, agy, minimax, openrouter],
+        runners,
         source: "live_api".to_string(),
         updated_at,
     }
@@ -1896,8 +1927,52 @@ mod render_handlebars_tests {
     }
 }
 
-/// 以臨時檔 + rename 原子替換目標檔，避免讀取端拿到半寫內容。
-/// Windows 若 rename 被暫時鎖住會短暫重試。
+#[cfg(windows)]
+fn replace_file_atomically(
+    path: &std::path::Path,
+    replacement: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    if !path.exists() {
+        return std::fs::rename(replacement, path);
+    }
+
+    let wide = |p: &std::path::Path| {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let path_wide = wide(path);
+    let replacement_wide = wide(replacement);
+    if unsafe {
+        ReplaceFileW(
+            path_wide.as_ptr(),
+            replacement_wide.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(
+    path: &std::path::Path,
+    replacement: &std::path::Path,
+) -> std::io::Result<()> {
+    std::fs::rename(replacement, path)
+}
+
+/// 以臨時檔 + 平台原子替換避免讀取端拿到半寫內容。
+/// Windows 若目標檔暫時被鎖住會短暫重試。
 fn write_file_atomic_with_retry(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
@@ -1932,7 +2007,7 @@ fn write_file_atomic_with_retry(path: &std::path::Path, data: &[u8]) -> std::io:
             return Err(err);
         }
 
-        match std::fs::rename(&tmp_path, path) {
+        match replace_file_atomically(path, &tmp_path) {
             Ok(()) => return Ok(()),
             Err(err) => {
                 let _ = std::fs::remove_file(&tmp_path);
@@ -2016,7 +2091,8 @@ fn run_command_with_timeout(
     })
 }
 
-/// 跑 config.appearance.usage_runners 一輪，收集結果寫到 ~/.lobsterpulse/usage-local.json。
+/// 跑 config.appearance.usage_runners 一輪：成功資料寫 usage-local.json，
+/// 每輪成敗另寫 runner-health.json，失敗不混進活動資料。
 fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
@@ -2065,6 +2141,7 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
     }
 
     let mut results = Vec::new();
+    let mut health_results = Vec::new();
     for r in runners {
         let mut cmd = Command::new(&r.command);
         cmd.args(&r.args);
@@ -2147,13 +2224,36 @@ fn run_local_usage_runners(runners: &[crate::config::UsageRunnerConfig]) {
                 "text": format!("spawn failed: {e}"),
             }),
         };
-        results.push(result);
+        let ok = result
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let health_text = result
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        health_results.push((format!("local:{}", r.name), ok, health_text));
+        if ok {
+            results.push(result);
+        }
+    }
+
+    let updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Err(e) = runner_health::record_results_at(
+        &dir.join("runner-health.json"),
+        &health_results,
+        updated_at,
+    ) {
+        log::warn!("[runner_health] local runner health write failed: {e}");
     }
 
     let snapshot = serde_json::json!({
         "source": "local",
-        "updated_at": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        "updated_at": updated_at,
         "runners": results,
     });
     let path = dir.join("usage-local.json");
@@ -4603,6 +4703,7 @@ pub fn run() {
             rebuild_and_relaunch,
             test_toast,
             get_live_quota_snapshot,
+            get_runner_health,
             list_rules,
             toggle_rule,
             add_rule,

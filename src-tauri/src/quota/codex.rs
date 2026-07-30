@@ -291,7 +291,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             format!("⚠ token rejected ({status_code})\nmodel {model}")
         };
         let raw = serde_json::json!({
-            "ok": api_ok, "plan": plan, "model": model,
+            "ok": api_ok, "basis": "provider_api",
+            "plan": plan, "model": model,
             "token_expires_in": token_exp, "account_id": account,
             "status_code": status_code, "ts": chrono::Utc::now().to_rfc3339(),
         });
@@ -328,7 +329,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             ok: false,
             text: format!("⚠ usage API {status_code}（token 可能過期，跑一次 codex 可刷新）"),
             raw: Some(serde_json::json!({
-                "ok": false, "plan": plan, "model": model,
+                "ok": false, "basis": "provider_api",
+                "plan": plan, "model": model,
                 "status_code": status_code, "ts": chrono::Utc::now().to_rfc3339(),
             })),
         };
@@ -371,6 +373,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 
     let raw = serde_json::json!({
         "ok": true,
+        "basis": "provider_api",
         "session_5h_remaining": session.as_ref().map(|s| s.0),
         "session_5h_reset": session.as_ref().map(|s| s.1.clone()),
         "week_7d_remaining": weekly.as_ref().map(|w| w.0),

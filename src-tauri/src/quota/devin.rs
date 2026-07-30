@@ -132,7 +132,8 @@ pub async fn fetch(appdata: &Path) -> RunnerQuota {
                 ok: false,
                 text: format!("⚠ GetUserStatus {code}"),
                 raw: Some(serde_json::json!({
-                    "ok": false, "status_code": code, "ts": chrono::Utc::now().to_rfc3339(),
+                    "ok": false, "basis": "provider_api",
+                    "status_code": code, "ts": chrono::Utc::now().to_rfc3339(),
                 })),
             };
         }
@@ -157,6 +158,7 @@ pub async fn fetch(appdata: &Path) -> RunnerQuota {
 
     let raw = serde_json::json!({
         "ok": true,
+        "basis": "provider_api",
         "h5_remaining": daily.as_ref().map(|d| d.0),
         "h5_reset": daily.as_ref().and_then(|d| d.1.clone()),
         "session_label": "Daily",

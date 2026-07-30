@@ -25,6 +25,7 @@ const todayTokens=today.totalTokens||0;
 const todayCost=today.totalCost||0;
 const merged={
   ...base,
+  basis:'provider_api',
   today_tokens:todayTokens>0?fmt(todayTokens):'N/A',
   today_cost:todayCost>0?'$'+todayCost.toFixed(2):'N/A',
   today_date:today.date||'N/A',

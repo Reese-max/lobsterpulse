@@ -591,6 +591,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 
             let raw = serde_json::json!({
                 "ok": true,
+                "basis": "provider_api",
                 "rate_headers_found": h5u.is_some(),
                 // 視窗名寫實際長度：不給的話面板會顯示泛稱的 Session/Weekly，
                 // 跟膠囊的 5h/7d 對不起來（面板走 live API 這條，跟膠囊不同源）

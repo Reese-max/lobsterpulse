@@ -54,5 +54,5 @@ if (rateAvailable) {
   }
 }
 
-const merged = { ...base, line1, line2 };
+const merged = { ...base, basis: 'provider_api', line1, line2 };
 console.log(JSON.stringify(merged));

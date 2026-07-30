@@ -118,6 +118,7 @@
     // per-key 明細卡（如 openrouter）沒有標準 % 欄位，副標直接取 raw.plan
     const subtitle = (card.kind !== "none" && card.subtitle) || (runner.raw && runner.raw.plan) || "";
     const plan = subtitle ? `<span class="uv-plan">${esc(subtitle)}</span>` : "";
+    const basis = renderQuotaBasis(card.basis, "uv-basis");
     const failed = runner.ok === false ? `<span class="uv-err" title="runner 回報失敗">⚠</span>` : "";
     const stale = runner.stale ? `<span class="uv-err uv-stale" title="本輪抓取失敗，顯示上次成功值">⏳</span>` : "";
 
@@ -182,7 +183,7 @@
       : "";
 
     return `<div class="uv-card" data-provider="${esc(name)}">
-      <div class="uv-head">${providerIconHtml(name, 16)}<span class="uv-name">${esc(label)}</span>${failed}${stale}${plan}</div>
+      <div class="uv-head">${providerIconHtml(name, 16)}<span class="uv-name">${esc(label)}</span>${basis}${failed}${stale}${plan}</div>
       ${body}${trend}${detail}
     </div>`;
   }

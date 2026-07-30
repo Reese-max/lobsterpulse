@@ -257,7 +257,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             ok: false,
             text: format!("⚠ QuotaSummary 失敗（{last_code}）"),
             raw: Some(serde_json::json!({
-                "ok": false, "status_code": last_code, "ts": chrono::Utc::now().to_rfc3339(),
+                "ok": false, "basis": "provider_api",
+                "status_code": last_code, "ts": chrono::Utc::now().to_rfc3339(),
             })),
         };
     }
@@ -286,6 +287,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 
     let raw = serde_json::json!({
         "ok": true,
+        "basis": "provider_api",
         "h5_remaining": session.as_ref().map(|s| s.0),
         "h5_reset": session.as_ref().and_then(|s| s.1.clone()),
         "wk_remaining": weekly.as_ref().map(|w| w.0),

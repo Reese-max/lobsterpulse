@@ -128,6 +128,7 @@ pub async fn fetch() -> RunnerQuota {
 
     let raw = serde_json::json!({
         "ok": true,
+        "basis": "provider_api",
         "plan": plan,
         "accounts": rows.iter().map(|(l, left, total)| serde_json::json!({
             "key": l, "left_usd": left, "total_usd": total,

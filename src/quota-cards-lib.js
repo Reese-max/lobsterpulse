@@ -24,12 +24,12 @@
       // 降級路徑：ok:false 但有 raw 且有合法 % -> 簡化卡（帶 failed: true）；否則 none。
       const raw = r.raw;
       if (!raw) return { kind: "none", name: r.name || "" };
-      const base = { name: r.name, label: r.label || r.name, color: r.color || "" };
+      const base = { name: r.name, label: r.label || r.name, color: r.color || "", basis: raw.basis };
       const singles = [
         _pct(raw.session_5h_remaining), _pct(raw.week_7d_remaining),
         _pct(raw.h5_remaining), _pct(raw.wk_remaining), _pct(raw.remaining_pct),
       ].filter(function (v) { return v !== null; });
-      if (singles.length === 0) return { kind: "none", name: r.name || "" };
+      if (singles.length === 0) return { kind: "none", name: r.name || "", basis: raw.basis };
       const pct = Math.round(Math.min.apply(null, singles));
       return Object.assign({
         kind: "simple", subtitle: "",
@@ -39,14 +39,14 @@
     }
     if (!r.raw) return { kind: "none", name: r.name || "" };
     const raw = r.raw;
-    const base = { name: r.name, label: r.label || r.name, color: r.color || "" };
+    const base = { name: r.name, label: r.label || r.name, color: r.color || "", basis: raw.basis };
     // raw.models[]：逐模型獨立額度（如 Codex Spark、agy Opus/Flash），遞迴正規化成子卡。
     const models = Array.isArray(raw.models)
       ? raw.models.map(function (model) {
           if (!model || typeof model !== "object") return null;
           const card = normalizeRunnerCard(Object.assign({}, r, {
             label: model.name || r.label || r.name,
-            raw: model,
+            raw: Object.assign({ basis: raw.basis }, model),
           }));
           return card.kind === "none" ? null : card;
         }).filter(Boolean)
@@ -84,7 +84,7 @@
       return withModels(Object.assign({ kind: "full", subtitle, windows, pct, failed: false }, base));
     }
     const singles = [sessA, weekA, sessB, weekB, _pct(raw.remaining_pct)].filter(function (v) { return v !== null; });
-    if (singles.length === 0 && models.length === 0) return { kind: "none", name: r.name };
+    if (singles.length === 0 && models.length === 0) return { kind: "none", name: r.name, basis: raw.basis };
     if (singles.length === 0) {
       // 只有 models[] 有資料（如 agy 頂層無彙總窗）：以全部模型窗當卡片窗。
       const modelWindows = models.flatMap(function (card) { return card.windows; });

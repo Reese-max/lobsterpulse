@@ -41,6 +41,20 @@ test("codex 形狀 -> full 卡（plan 副標）", () => {
   assert.strictEqual(c.pct, 36);
 });
 
+test("basis 透傳到主卡，models 子卡繼承", () => {
+  const c = normalizeRunnerCard({
+    name: "codex", label: "Codex CLI", ok: true,
+    raw: {
+      basis: "provider_api",
+      h5_remaining: 75,
+      models: [{ name: "Spark", h5_remaining: 60 }],
+    },
+  });
+  assert.strictEqual(c.basis, "provider_api");
+  assert.strictEqual(c.models.length, 1);
+  assert.strictEqual(c.models[0].basis, "provider_api");
+});
+
 test("單一 remaining_pct -> simple 卡", () => {
   const c = normalizeRunnerCard({ name: "cicx", label: "🤖 CICX", ok: true,
                                   raw: { remaining_pct: 55 } });

@@ -423,7 +423,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
                     ok: false,
                     text: format!("⚠ billing API 401，Grok token refresh failed: {e}"),
                     raw: Some(serde_json::json!({
-                        "ok": false, "status_code": 401, "ts": Utc::now().to_rfc3339(),
+                        "ok": false, "basis": "provider_api",
+                        "status_code": 401, "ts": Utc::now().to_rfc3339(),
                     })),
                 };
             }
@@ -440,7 +441,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
                 ok: false,
                 text: format!("⚠ billing API {code}（token 可能過期，跑一次 grok 可刷新）"),
                 raw: Some(serde_json::json!({
-                    "ok": false, "status_code": code, "ts": chrono::Utc::now().to_rfc3339(),
+                    "ok": false, "basis": "provider_api",
+                    "status_code": code, "ts": chrono::Utc::now().to_rfc3339(),
                 })),
             };
         }
@@ -486,6 +488,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 
     let raw = serde_json::json!({
         "ok": true,
+        "basis": "provider_api",
         "wk_remaining": weekly_pct,
         "wk_reset": weekly_reset,
         "plan": tier,

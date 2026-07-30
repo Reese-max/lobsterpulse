@@ -1730,9 +1730,21 @@ function renderQcWindow(w) {
     </div>`;
 }
 
+function renderQuotaBasis(basis, className) {
+  const meta = {
+    provider_api: ["API", "provider_api：數字直接來自 provider 官方 API 回應"],
+    client_scrape: ["本機", "client_scrape：數字來自本機 CLI 檔案、log 或 SQLite"],
+    estimated: ["估", "estimated：數字經換算或估計"],
+  }[basis];
+  return Array.isArray(meta)
+    ? `<span class="${className}" title="${meta[1]}">${meta[0]}</span>`
+    : "";
+}
+
 function renderQuotaCard(card, { stale = false } = {}) {
   const collapsed = qcCollapsed(card.name);
   const sub = card.subtitle ? `<span class="qc-subtitle">${esc(card.subtitle)}</span>` : "";
+  const basis = renderQuotaBasis(card.basis, "qc-basis");
   const staleCls = stale ? " stale" : "";
   const titleText = (card.failed ? "⚠ " : "") + esc(card.label);
   const staleBadge = stale ? `<span class="qc-stale-badge">舊</span>` : "";
@@ -1743,7 +1755,7 @@ function renderQuotaCard(card, { stale = false } = {}) {
   if (collapsed) {
     return `<div class="quota-card qc-collapsed${staleCls}" data-provider="${esc(card.name)}"${rootTitleAttr}>
       <div class="qc-header" data-qc-toggle="${esc(card.name)}">
-        <span class="qc-title">${titleText}</span>${staleBadge}${sub}
+        <span class="qc-title">${titleText}</span>${basis}${staleBadge}${sub}
         <span class="qc-summary">${card.pct}%</span>
         <span class="qc-chevron">▸</span>
       </div>
@@ -1761,7 +1773,7 @@ function renderQuotaCard(card, { stale = false } = {}) {
     : card.windows;
   return `<div class="quota-card${staleCls}" data-provider="${esc(card.name)}"${rootTitleAttr}>
     <div class="qc-header" data-qc-toggle="${esc(card.name)}">
-      <span class="qc-title">${titleText}</span>${staleBadge}${sub}
+      <span class="qc-title">${titleText}</span>${basis}${staleBadge}${sub}
       <span class="qc-chevron">▾</span>
     </div>
     ${windows.map(renderQcWindow).join("")}

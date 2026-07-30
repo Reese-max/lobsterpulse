@@ -236,7 +236,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             ok: false,
             text: format!("⚠ token rejected ({status_code})\ntoken {preview}"),
             raw: Some(serde_json::json!({
-                "ok": false, "status_code": status_code,
+                "ok": false, "basis": "provider_api",
+                "status_code": status_code,
                 "ts": chrono::Utc::now().to_rfc3339(),
             })),
         };
@@ -254,6 +255,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     // 月配額借 h5/wk 兩個 slot + 自訂 label 顯示；reset 是同一個月重置日
     let raw = serde_json::json!({
         "ok": true,
+        "basis": "provider_api",
         "status_code": status_code,
         "h5_remaining": buckets.first().map(|(_, p)| *p),
         "h5_reset": buckets.first().map(|_| reset.clone()),

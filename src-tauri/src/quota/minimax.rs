@@ -185,6 +185,7 @@ pub async fn fetch() -> RunnerQuota {
 
     let raw = serde_json::json!({
         "ok": true,
+        "basis": "provider_api",
         "session_5h_remaining": s_pct,
         "session_5h_reset": s_reset,
         "week_7d_remaining": w_pct,

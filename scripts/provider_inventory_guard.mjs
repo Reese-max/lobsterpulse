@@ -126,12 +126,9 @@ if (!/const\s+selectedQuota\s*=\s*selectQuotaSnapshot\(snapshots\)/.test(mainJs)
   fail("global quota row must use selectQuotaSnapshot instead of an inline stale provider fallback list");
 }
 
-if (!/const\s+selectedQuota\s*=\s*selectQuotaSnapshot\(window\.__lastQuotaSnapshots\s*\|\|\s*\{\}\)/.test(mainJs)) {
-  fail("capsule quota must use the same selectQuotaSnapshot helper as expanded quota");
-}
-
-if (!/if\s*\(!snap\s*\|\|\s*isQuotaSnapshotStale\(snap\)\)\s*\{[\s\S]*?delete\s+el\.dataset\.provider;[\s\S]*?return;/m.test(mainJs)) {
-  fail("capsule quota must hide stale or missing snapshots instead of showing stale percentages");
+// 2026-07-17 定案：capsule 極簡，不放任何額度資訊；badge 必須無條件隱藏並清空 provider 狀態。
+if (!/function\s+updateCapsuleQuota\s*\(\)\s*\{[\s\S]*?badge\.classList\.add\("hidden"\);[\s\S]*?delete\s+badge\.dataset\.provider;/m.test(mainJs)) {
+  fail("capsule quota badge must stay unconditionally hidden (2026-07-17 capsule-minimal decision)");
 }
 
 if (!/function\s+renderStateUnavailable\s*\(/.test(mainJs)) {

@@ -1717,7 +1717,7 @@ function renderQcWindow(w) {
   const reset = w.resetText ? `Resets in ${w.resetText}` : "—";
   return `
     <div class="qc-window${warn ? " qc-warn" : ""}">
-      <div class="qc-window-label">${w.label}${warn ? " 🔥" : ""}</div>
+      <div class="qc-window-label">${esc(w.label)}${warn ? " 🔥" : ""}</div>
       <div class="qc-bar"><div class="qc-bar-fill" style="width:${w.remainPct}%"></div></div>
       <div class="qc-window-meta"><span>${w.remainPct}% left</span><span>${reset}</span></div>
     </div>`;
@@ -1748,12 +1748,16 @@ function renderQuotaCard(card, { stale = false } = {}) {
         <canvas class="qc-spark" data-qc-spark="${esc(card.name)}" width="240" height="28"></canvas>
       </div>`
     : "";
+  // 有 models[]（逐模型額度）時，窗列改為「模型名 · 窗名」逐模型展開。
+  const windows = card.models && card.models.length
+    ? card.models.flatMap((model) => model.windows.map((w) => ({ ...w, label: `${model.label} · ${w.label}` })))
+    : card.windows;
   return `<div class="quota-card${staleCls}" data-provider="${esc(card.name)}"${rootTitleAttr}>
     <div class="qc-header" data-qc-toggle="${esc(card.name)}">
       <span class="qc-title">${titleText}</span>${staleBadge}${sub}
       <span class="qc-chevron">▾</span>
     </div>
-    ${card.windows.map(renderQcWindow).join("")}
+    ${windows.map(renderQcWindow).join("")}
     ${spark}
   </div>`;
 }

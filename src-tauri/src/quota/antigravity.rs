@@ -112,28 +112,43 @@ fn write_cached_token(home: &Path, token: &str, expiry_epoch: u64) {
     let _ = std::fs::write(path, v.to_string());
 }
 
-/// 從 QuotaSummary 的 groups[].buckets[] 抽指定 bucketId 的 (remaining_pct, reset_text)。
+/// 從單一 QuotaSummary group 的 buckets[] 抽指定 bucketId 的 (remaining_pct, reset_text)。
 /// 只認 exact bucketId；缺 remainingFraction → None，不腦補 0/100。
-fn find_bucket(body: &serde_json::Value, bucket_id: &str) -> Option<(i64, Option<String>)> {
-    for group in body.get("groups")?.as_array()? {
-        let Some(buckets) = group.get("buckets").and_then(|b| b.as_array()) else {
+fn find_bucket(group: &serde_json::Value, bucket_id: &str) -> Option<(i64, Option<String>)> {
+    for b in group.get("buckets")?.as_array()? {
+        if b.get("bucketId").and_then(|v| v.as_str()) != Some(bucket_id) {
             continue;
-        };
-        for b in buckets {
-            if b.get("bucketId").and_then(|v| v.as_str()) != Some(bucket_id) {
-                continue;
-            }
-            let frac = b.get("remainingFraction").and_then(|v| v.as_f64())?;
-            let pct = (frac * 100.0).round().clamp(0.0, 100.0) as i64;
-            let reset = b
-                .get("resetTime")
-                .and_then(|v| v.as_str())
-                .and_then(iso_to_epoch)
-                .map(fmt_countdown);
-            return Some((pct, reset));
         }
+        let frac = b.get("remainingFraction").and_then(|v| v.as_f64())?;
+        let pct = (frac * 100.0).round().clamp(0.0, 100.0) as i64;
+        let reset = b
+            .get("resetTime")
+            .and_then(|v| v.as_str())
+            .and_then(iso_to_epoch)
+            .map(fmt_countdown);
+        return Some((pct, reset));
     }
     None
+}
+
+/// 逐 group 收集模型額度：每個 group（如 Opus 4.7、Flash）帶自己的 displayName 與 buckets。
+fn collect_models(body: &serde_json::Value) -> Vec<serde_json::Value> {
+    body.get("groups")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .map(|group| {
+            let session = find_bucket(group, "gemini-5h").or_else(|| find_bucket(group, "3p-5h"));
+            let weekly = find_bucket(group, "gemini-weekly").or_else(|| find_bucket(group, "3p-weekly"));
+            serde_json::json!({
+                "name": group.get("displayName").and_then(|v| v.as_str()).unwrap_or("Antigravity"),
+                "h5_remaining": session.as_ref().map(|s| s.0),
+                "h5_reset": session.as_ref().and_then(|s| s.1.clone()),
+                "wk_remaining": weekly.as_ref().map(|w| w.0),
+                "wk_reset": weekly.as_ref().and_then(|w| w.1.clone()),
+            })
+        })
+        .collect()
 }
 
 pub async fn fetch(home: &Path) -> RunnerQuota {
@@ -247,10 +262,16 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         };
     }
 
-    let session = find_bucket(&body, "gemini-5h");
-    let weekly = find_bucket(&body, "gemini-weekly");
-    let claude_5h = find_bucket(&body, "3p-5h");
-    let claude_weekly = find_bucket(&body, "3p-weekly");
+    let find_first = |bucket_id: &str| {
+        body.get("groups")
+            .and_then(|v| v.as_array())
+            .and_then(|groups| groups.iter().find_map(|group| find_bucket(group, bucket_id)))
+    };
+    let session = find_first("gemini-5h");
+    let weekly = find_first("gemini-weekly");
+    let claude_5h = find_first("3p-5h");
+    let claude_weekly = find_first("3p-weekly");
+    let models = collect_models(&body);
 
     let fmt = |w: &Option<(i64, Option<String>)>| {
         w.as_ref().map(|(p, _)| format!("{p}%")).unwrap_or_else(|| "--".to_string())
@@ -269,6 +290,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         "h5_reset": session.as_ref().and_then(|s| s.1.clone()),
         "wk_remaining": weekly.as_ref().map(|w| w.0),
         "wk_reset": weekly.as_ref().and_then(|w| w.1.clone()),
+        "models": models,
         "plan": "Antigravity",
         "claude_5h_remaining": claude_5h.as_ref().map(|c| c.0),
         "claude_weekly_remaining": claude_weekly.as_ref().map(|c| c.0),
@@ -311,14 +333,35 @@ mod tests {
 
     #[test]
     fn find_bucket_exact_id_only() {
-        let body = serde_json::json!({ "groups": [ { "buckets": [
+        let group = serde_json::json!({ "buckets": [
             { "bucketId": "gemini-5h", "remainingFraction": 0.87, "resetTime": "2099-01-01T00:00:00Z" },
             { "bucketId": "gemini-weekly", "remainingFraction": 0.5 },
             { "bucketId": "3p-5h" }
-        ]}]});
-        assert_eq!(find_bucket(&body, "gemini-5h").map(|b| b.0), Some(87));
-        assert_eq!(find_bucket(&body, "gemini-weekly").map(|b| b.0), Some(50));
-        assert!(find_bucket(&body, "3p-5h").is_none(), "缺 remainingFraction 不腦補");
-        assert!(find_bucket(&body, "nonexistent").is_none());
+        ]});
+        assert_eq!(find_bucket(&group, "gemini-5h").map(|b| b.0), Some(87));
+        assert_eq!(find_bucket(&group, "gemini-weekly").map(|b| b.0), Some(50));
+        assert!(find_bucket(&group, "3p-5h").is_none(), "缺 remainingFraction 不腦補");
+        assert!(find_bucket(&group, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn collect_models_keeps_duplicate_bucket_ids_in_each_group() {
+        let body = serde_json::json!({ "groups": [
+            { "displayName": "Opus 4.7", "buckets": [
+                { "bucketId": "3p-5h", "remainingFraction": 0.8 },
+                { "bucketId": "3p-weekly", "remainingFraction": 0.6 }
+            ]},
+            { "displayName": "Flash", "buckets": [
+                { "bucketId": "3p-5h", "remainingFraction": 0.3 },
+                { "bucketId": "3p-weekly", "remainingFraction": 0.1 }
+            ]}
+        ]});
+
+        let models = collect_models(&body);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0]["name"], "Opus 4.7");
+        assert_eq!(models[0]["h5_remaining"], 80);
+        assert_eq!(models[1]["name"], "Flash");
+        assert_eq!(models[1]["wk_remaining"], 10);
     }
 }

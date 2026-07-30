@@ -125,6 +125,10 @@
     const barColor =
       (typeof PROVIDER_COLORS !== "undefined" && PROVIDER_COLORS[name]) || runner.color;
     const accounts = runner.raw && Array.isArray(runner.raw.accounts) ? runner.raw.accounts : null;
+    // 有 models[]（逐模型額度）時，窗列改為「模型名 · 窗名」逐模型展開。
+    const quotaWindows = card.models && card.models.length
+      ? card.models.flatMap((model) => model.windows.map((w) => ({ ...w, label: `${model.label} · ${w.label}` })))
+      : card.windows || [];
     let body;
     if (accounts && accounts.length > 0) {
       // per-key 明細（openrouter 多帳號）：一把 key 一條 bar，右側顯示 $剩餘/$總額
@@ -135,8 +139,8 @@
           return barRow(`Key ${a.key}`, pct, null, barColor, `${fmtUsd(a.left_usd)} / ${fmtUsd(a.total_usd)}`);
         })
         .join("");
-    } else if (card.kind === "full" || card.kind === "simple") {
-      body = card.windows.map((w) => barRow(w.label, w.remainPct, w.resetText, barColor)).join("");
+    } else if (quotaWindows.length > 0) {
+      body = quotaWindows.map((w) => barRow(w.label, w.remainPct, w.resetText, barColor)).join("");
     } else {
       // 無配額 %：保留骨架列，對齊 OpenUsage 的 No data 樣式
       body = barRow("Session", null, null) + barRow("Weekly", null, null);
@@ -159,7 +163,7 @@
     // 進度條顯示「剩餘」（快沒了數字變小，餘光掃一眼最直覺），但展開後要能直接
     // 看到「用掉多少」——不然同一張卡片裡 token 是已用量、配額是剩餘量，方向不
     // 一致，得自己在腦中減。
-    const winRows = ((card.kind === "full" || card.kind === "simple") && card.windows ? card.windows : [])
+    const winRows = quotaWindows
       .filter((w) => Number.isFinite(w.remainPct))
       .map((w) => {
         const used = Math.max(0, Math.min(100, 100 - Math.round(w.remainPct)));

@@ -206,6 +206,39 @@ fn classify_windows(
     (session, weekly)
 }
 
+/// 逐模型收集額度：主 rate_limit＝目前模型，additional_rate_limits[] 各自獨立（如 Spark）。
+fn collect_models(body: &serde_json::Value, model: &str, now: u64) -> Vec<serde_json::Value> {
+    let mut models = Vec::new();
+    let mut push = |name: &str, rate_limit: &serde_json::Value| {
+        let (session, weekly) = classify_windows(rate_limit, now);
+        if session.is_none() && weekly.is_none() {
+            return;
+        }
+        models.push(serde_json::json!({
+            "name": name,
+            "h5_remaining": session.as_ref().map(|s| s.0),
+            "h5_reset": session.as_ref().map(|s| s.1.clone()),
+            "wk_remaining": weekly.as_ref().map(|w| w.0),
+            "wk_reset": weekly.as_ref().map(|w| w.1.clone()),
+        }));
+    };
+
+    if let Some(rate_limit) = body.get("rate_limit") {
+        push(model, rate_limit);
+    }
+    if let Some(additional) = body.get("additional_rate_limits").and_then(|v| v.as_array()) {
+        for limit in additional {
+            if let (Some(name), Some(rate_limit)) = (
+                limit.get("limit_name").and_then(|v| v.as_str()),
+                limit.get("rate_limit"),
+            ) {
+                push(name, rate_limit);
+            }
+        }
+    }
+    models
+}
+
 /// 呼叫 ChatGPT wham/usage 拿訂閱額度；API-key-only 用戶 fallback 舊探活路徑
 pub async fn fetch(home: &Path) -> RunnerQuota {
     let label = "💻 Codex CLI（本機）".to_string();
@@ -320,6 +353,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         .as_secs();
     let empty = serde_json::json!({});
     let (session, weekly) = classify_windows(body.get("rate_limit").unwrap_or(&empty), now);
+    let models = collect_models(&body, &model, now);
     // plan_type 以 API 回應為準（比 id_token claim 新），首字大寫顯示
     let tier = body
         .get("plan_type")
@@ -341,6 +375,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         "session_5h_reset": session.as_ref().map(|s| s.1.clone()),
         "week_7d_remaining": weekly.as_ref().map(|w| w.0),
         "week_7d_reset": weekly.as_ref().map(|w| w.1.clone()),
+        "models": models,
         "tier": tier,
         "plan": tier,
         "model": model,
@@ -484,6 +519,31 @@ mod tests {
     fn classify_windows_empty_rate_limit() {
         let (session, weekly) = classify_windows(&serde_json::json!({}), 0);
         assert!(session.is_none() && weekly.is_none());
+    }
+
+    #[test]
+    fn collect_models_includes_additional_rate_limits() {
+        let window = |seconds: u64, used: f64| serde_json::json!({
+            "limit_window_seconds": seconds,
+            "used_percent": used,
+            "reset_after_seconds": 60,
+        });
+        let body = serde_json::json!({
+            "rate_limit": { "primary_window": window(18_000, 25.0) },
+            "additional_rate_limits": [{
+                "limit_name": "gpt-5.3-codex-spark",
+                "rate_limit": {
+                    "primary_window": window(18_000, 40.0),
+                    "secondary_window": window(604_800, 10.0),
+                }
+            }]
+        });
+
+        let models = collect_models(&body, "gpt-5.4", 1_000);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[1]["name"], "gpt-5.3-codex-spark");
+        assert_eq!(models[1]["h5_remaining"], 60);
+        assert_eq!(models[1]["wk_remaining"], 90);
     }
 
     #[test]

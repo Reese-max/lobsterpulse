@@ -40,6 +40,21 @@
     if (!r.raw) return { kind: "none", name: r.name || "" };
     const raw = r.raw;
     const base = { name: r.name, label: r.label || r.name, color: r.color || "" };
+    // raw.models[]：逐模型獨立額度（如 Codex Spark、agy Opus/Flash），遞迴正規化成子卡。
+    const models = Array.isArray(raw.models)
+      ? raw.models.map(function (model) {
+          if (!model || typeof model !== "object") return null;
+          const card = normalizeRunnerCard(Object.assign({}, r, {
+            label: model.name || r.label || r.name,
+            raw: model,
+          }));
+          return card.kind === "none" ? null : card;
+        }).filter(Boolean)
+      : [];
+    const withModels = function (card) {
+      if (models.length) card.models = models;
+      return card;
+    };
     const sessA = _pct(raw.session_5h_remaining);
     const weekA = _pct(raw.week_7d_remaining);
     const sessB = _pct(raw.h5_remaining);
@@ -66,16 +81,22 @@
     }
     if (windows) {
       const pct = Math.round(Math.min.apply(null, windows.map(function (w) { return w.remainPct; })));
-      return Object.assign({ kind: "full", subtitle, windows, pct, failed: false }, base);
+      return withModels(Object.assign({ kind: "full", subtitle, windows, pct, failed: false }, base));
     }
     const singles = [sessA, weekA, sessB, weekB, _pct(raw.remaining_pct)].filter(function (v) { return v !== null; });
-    if (singles.length === 0) return { kind: "none", name: r.name };
+    if (singles.length === 0 && models.length === 0) return { kind: "none", name: r.name };
+    if (singles.length === 0) {
+      // 只有 models[] 有資料（如 agy 頂層無彙總窗）：以全部模型窗當卡片窗。
+      const modelWindows = models.flatMap(function (card) { return card.windows; });
+      const pct = Math.round(Math.min.apply(null, modelWindows.map(function (w) { return w.remainPct; })));
+      return Object.assign({ kind: "full", subtitle: raw.tier || raw.plan || "", windows: modelWindows, models, pct, failed: false }, base);
+    }
     const pct = Math.round(Math.min.apply(null, singles));
-    return Object.assign({
+    return withModels(Object.assign({
       kind: "simple", subtitle: "",
       windows: [{ key: "quota", label: "Quota", remainPct: pct, resetText: null }],
       pct, failed: false,
-    }, base);
+    }, base));
   }
 
   // 「最近完成」清單：hook 事件 → 完成紀錄列。

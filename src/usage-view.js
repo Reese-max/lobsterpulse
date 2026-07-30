@@ -82,7 +82,14 @@
     // 30 天與累計花費仍來自可能停更的 stats-cache，過期就標 —。
     const hasLive = stats.live_date === today;
     const cost30 = fmtCost(stats.total_cost_usd);
-    const liveTok = (v) => (hasLive ? fmtTok(v) + " tokens" : "—");
+    const liveTok = (v, cost) => {
+      if (!hasLive) return "—";
+      const tokens = esc(fmtTok(v) + " tokens");
+      const estimate = fmtCost(cost);
+      return estimate
+        ? `${tokens} · <span data-cost-basis="estimated" title="LiteLLM 價目估算" aria-label="LiteLLM 價目估算">~${esc(estimate)}</span>`
+        : tokens;
+    };
     // 30 天無法即時算（實測掃 2.9GB 要 361 秒）→ 改用每輪掃描累積的每日快取。
     // 天數只能從安裝日往後長，所以標題照實寫「近 N 天」，不假裝是 30 天。
     const rDays = Number(stats.range_days);
@@ -91,10 +98,10 @@
       ? fmtTok(stats.range_tokens) + " tokens"
       : fresh.stale ? "—" : fmtTok(stats.tokens_30d) + " tokens" + (cost30 ? " · " + cost30 + " 累計" : "");
     const rows = [
-      ["Today", liveTok(stats.today_tokens)],
-      ["Yesterday", liveTok(stats.yesterday_tokens)],
-      [rangeLabel, rangeVal],
-    ].map(([k, v]) => `<div class="uv-krow"><span>${k}</span><span>${esc(v)}</span></div>`).join("");
+      ["Today", liveTok(stats.today_tokens, stats.today_cost_estimate_usd)],
+      ["Yesterday", liveTok(stats.yesterday_tokens, stats.yesterday_cost_estimate_usd)],
+      [rangeLabel, esc(rangeVal)],
+    ].map(([k, v]) => `<div class="uv-krow"><span>${esc(k)}</span><span>${v}</span></div>`).join("");
     const age = Number.isFinite(stats.live_age_secs)
       ? `${formatRelativeTime(stats.live_age_secs)}掃描` : "即時掃描";
     const note = !hasLive

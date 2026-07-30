@@ -13,12 +13,12 @@
 //! 日期歸屬用**本地時區**：JSONL 時間戳是 UTC，UTC+8 每天有 8 小時會跨日，
 //! 直接比字串會把凌晨的用量算到前一天。
 
+use crate::pricing::{PricingCatalog, TokenUsage};
 use chrono::{DateTime, Local, Utc};
 use std::path::{Path, PathBuf};
 
-/// 單行事件抽出的 (本地日期, tokens)。行不含 usage / 壞 JSON / 無時間戳 → None。
-/// 抽成純函式方便測試：這是整個掃描唯一的語意判斷點。
-pub fn parse_usage_line(line: &[u8]) -> Option<(String, u64)> {
+/// 單行事件抽出的日期、模型與可靠分離的 token。
+fn parse_priced_usage_line(line: &[u8]) -> Option<(String, String, TokenUsage)> {
     if !contains_usage(line) {
         return None;
     }
@@ -26,16 +26,54 @@ pub fn parse_usage_line(line: &[u8]) -> Option<(String, u64)> {
     let ts = v.get("timestamp")?.as_str()?;
     let when: DateTime<Utc> = ts.parse::<DateTime<Utc>>().ok()?;
     let date = when.with_timezone(&Local).format("%Y-%m-%d").to_string();
-    let u = v.get("message")?.get("usage")?;
+    let message = v.get("message")?;
+    let model = message
+        .get("model")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let u = message.get("usage")?;
     let f = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    let total = f("input_tokens")
-        + f("output_tokens")
-        + f("cache_creation_input_tokens")
-        + f("cache_read_input_tokens");
-    if total == 0 {
+
+    let cache_total = f("cache_creation_input_tokens");
+    let cache = u.get("cache_creation");
+    let cache_5m = cache
+        .and_then(|x| x.get("ephemeral_5m_input_tokens"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cache_1h = cache
+        .and_then(|x| x.get("ephemeral_1h_input_tokens"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cache_split = cache_5m.saturating_add(cache_1h);
+
+    // 舊 JSONL 可能只有 cache creation 總量。無法判斷 5m／1h 時保留 token，
+    // 但成本標成不可估，不能偷偷全套較便宜的 5m 價。
+    let (cache_write_5m, cache_write_1h, cache_write_unknown) = if cache_total == 0 {
+        (cache_5m, cache_1h, 0)
+    } else if cache_total == cache_split {
+        (cache_5m, cache_1h, 0)
+    } else {
+        (0, 0, cache_total)
+    };
+
+    let usage = TokenUsage {
+        input: f("input_tokens"),
+        output: f("output_tokens"),
+        cache_write_5m,
+        cache_write_1h,
+        cache_write_unknown,
+        cache_read: f("cache_read_input_tokens"),
+    };
+    if usage.total() == 0 {
         return None;
     }
-    Some((date, total))
+    Some((date, model, usage))
+}
+
+/// 相容既有 token 統計 API；成本掃描使用上面的完整資料。
+pub fn parse_usage_line(line: &[u8]) -> Option<(String, u64)> {
+    parse_priced_usage_line(line).map(|(date, _, usage)| (date, usage.total()))
 }
 
 /// 便宜的前置過濾：memchr 級別的 byte 搜尋，避免對每行都跑 serde。
@@ -69,9 +107,26 @@ fn recent_jsonl(dir: &Path, cutoff: std::time::SystemTime, depth: u32, out: &mut
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct DailyUsage {
+    tokens: u64,
+    cost_usd: f64,
+    unpriced_tokens: u64,
+}
+
+impl DailyUsage {
+    fn estimated_cost_usd(self) -> Option<f64> {
+        (self.unpriced_tokens == 0).then_some(self.cost_usd)
+    }
+}
+
 /// 從檔尾往回掃，累加 `>= stop_date` 的行；讀到更早的日期即停（append-only 假設）。
-/// 回傳 (日期 → tokens) 增量，寫進 acc。
-fn scan_tail(path: &Path, stop_date: &str, acc: &mut std::collections::HashMap<String, u64>) {
+fn scan_tail(
+    path: &Path,
+    stop_date: &str,
+    acc: &mut std::collections::HashMap<String, DailyUsage>,
+    catalog: &PricingCatalog,
+) {
     use std::io::{Read, Seek, SeekFrom};
     const CHUNK: u64 = 1 << 20;
     let Ok(mut f) = std::fs::File::open(path) else {
@@ -101,7 +156,7 @@ fn scan_tail(path: &Path, stop_date: &str, acc: &mut std::collections::HashMap<S
         let mut in_range = false;
         let mut saw_line = false; // 本區塊有無任何 usage 行（全是雜訊時不可判定越過 cutoff）
         for line in parts.iter().rev() {
-            let Some((date, tokens)) = parse_usage_line(line) else {
+            let Some((date, model, usage)) = parse_priced_usage_line(line) else {
                 continue;
             };
             saw_line = true;
@@ -109,7 +164,16 @@ fn scan_tail(path: &Path, stop_date: &str, acc: &mut std::collections::HashMap<S
                 continue;
             }
             in_range = true;
-            *acc.entry(date).or_insert(0) += tokens;
+
+            let tokens = usage.total();
+            let estimated = catalog.estimate_usd(&model, usage);
+            let day = acc.entry(date).or_default();
+            day.tokens = day.tokens.saturating_add(tokens);
+            if let Some(cost) = estimated {
+                day.cost_usd += cost;
+            } else {
+                day.unpriced_tokens = day.unpriced_tokens.saturating_add(tokens);
+            }
         }
         if saw_line && !in_range {
             return; // 整個區塊都比 cutoff 舊，本檔剩下的只會更舊
@@ -118,17 +182,21 @@ fn scan_tail(path: &Path, stop_date: &str, acc: &mut std::collections::HashMap<S
     }
 }
 
-/// 掃出「今天／昨天」token 總量（本地時區）＋掃描當下所認定的今天日期。
-/// 日期必須跟著資料一起回傳：跨午夜後、下一輪掃描完成前，若呼叫端自己用
-/// `Local::now()` 重算，會把「昨天算出來的今天」誤標成新一天的今天（審查抓到）。
-/// 呼叫端負責放到背景執行緒——實測掃描約 1~3 秒。
-pub fn scan_today_yesterday(home: &Path) -> (u64, u64, String) {
-    let (acc, today) = scan_recent_days(home, 2);
+/// 掃出「今天／昨天」token、成本估算與掃描當下所認定的今天日期。
+/// 任一天包含未知模型、缺價或無法分辨 cache tier 時，該天成本為 None。
+pub fn scan_today_yesterday(
+    home: &Path,
+) -> (u64, u64, String, Option<f64>, Option<f64>) {
+    let (acc, today) = scan_recent_usage(home, 2);
     let yesterday = prev_day(&today);
+    let today_usage = acc.get(&today).copied().unwrap_or_default();
+    let yesterday_usage = acc.get(&yesterday).copied().unwrap_or_default();
     (
-        acc.get(&today).copied().unwrap_or(0),
-        acc.get(&yesterday).copied().unwrap_or(0),
+        today_usage.tokens,
+        yesterday_usage.tokens,
         today,
+        today_usage.estimated_cost_usd(),
+        yesterday_usage.estimated_cost_usd(),
     )
 }
 
@@ -141,12 +209,10 @@ pub fn prev_day(date: &str) -> String {
         .unwrap_or_else(|_| date.to_string())
 }
 
-/// 掃最近 `days` 天（含今天）的每日 token，回傳 (日期 → tokens, 掃描當下的今天)。
-/// `days` 越大讀得越多：2 天實讀約 340MB、30 天約 2.9GB（≈ 整個語料庫）。
-pub fn scan_recent_days(
+fn scan_recent_usage(
     home: &Path,
     days: i64,
-) -> (std::collections::HashMap<String, u64>, String) {
+) -> (std::collections::HashMap<String, DailyUsage>, String) {
     let now = Local::now();
     let today = now.format("%Y-%m-%d").to_string();
     let stop_date = (now - chrono::Duration::days(days - 1))
@@ -159,11 +225,26 @@ pub fn scan_recent_days(
     let mut files = Vec::new();
     recent_jsonl(&home.join(".claude").join("projects"), cutoff, 0, &mut files);
 
+    let catalog = PricingCatalog::load(home);
     let mut acc = std::collections::HashMap::new();
     for p in &files {
-        scan_tail(p, &stop_date, &mut acc);
+        scan_tail(p, &stop_date, &mut acc, &catalog);
     }
     (acc, today)
+}
+
+/// 保留既有測試／量測 API，只投影出每日 token。
+pub fn scan_recent_days(
+    home: &Path,
+    days: i64,
+) -> (std::collections::HashMap<String, u64>, String) {
+    let (acc, today) = scan_recent_usage(home, days);
+    (
+        acc.into_iter()
+            .map(|(date, usage)| (date, usage.tokens))
+            .collect(),
+        today,
+    )
 }
 
 /// 每日 token 累積檔（date → tokens）。每輪掃描把今天/昨天寫進去，天數自然累積。
@@ -231,11 +312,23 @@ mod tests {
         // 2026-07-20T00:30:00Z 在 UTC+8 是 2026-07-20 08:30（同日）；
         // 2026-07-19T17:00:00Z 在 UTC+8 是 2026-07-20 01:00（跨到隔天）——
         // 直接比 UTC 字串會算錯日，這條護住時區換算。
-        let line = br#"{"timestamp":"2026-07-19T17:00:00Z","message":{"usage":
+        let line = br#"{"timestamp":"2026-07-19T17:00:00Z","message":{
+            "model":"claude-sonnet-4-20250514","usage":
             {"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":3,
-             "cache_read_input_tokens":4}}}"#;
+             "cache_read_input_tokens":4,"cache_creation":
+             {"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":2}}}}"#;
         let (date, tokens) = parse_usage_line(line).expect("應解析成功");
         assert_eq!(tokens, 10, "四種 token 都要加總");
+
+        let (_, model, usage) = parse_priced_usage_line(line).expect("應解析成本欄位");
+        assert_eq!(model, "claude-sonnet-4-20250514");
+        assert_eq!(usage.input, 1);
+        assert_eq!(usage.output, 2);
+        assert_eq!(usage.cache_write_5m, 1);
+        assert_eq!(usage.cache_write_1h, 2);
+        assert_eq!(usage.cache_read, 4);
+        assert_eq!(usage.cache_write_unknown, 0);
+
         let expect = DateTime::parse_from_rfc3339("2026-07-19T17:00:00Z")
             .unwrap()
             .with_timezone(&Local)
@@ -284,9 +377,14 @@ mod tests {
         let today = now.format("%Y-%m-%d").to_string();
         let yest = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
         let mut acc = std::collections::HashMap::new();
-        scan_tail(&path, &yest, &mut acc);
-        assert_eq!(acc.get(&today).copied().unwrap_or(0), 70, "今天兩筆相加");
-        assert_eq!(acc.get(&yest).copied().unwrap_or(0), 20);
+        let catalog = PricingCatalog::load(&dir);
+        scan_tail(&path, &yest, &mut acc, &catalog);
+        assert_eq!(
+            acc.get(&today).map(|d| d.tokens).unwrap_or(0),
+            70,
+            "今天兩筆相加"
+        );
+        assert_eq!(acc.get(&yest).map(|d| d.tokens).unwrap_or(0), 20);
         assert!(!acc.contains_key("1970-01-01"));
         assert_eq!(acc.len(), 2, "cutoff 之前的行不得混入");
         let _ = std::fs::remove_dir_all(&dir);
@@ -403,9 +501,10 @@ mod tests {
         let today = now.format("%Y-%m-%d").to_string();
         let yest = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
         let mut acc = std::collections::HashMap::new();
-        scan_tail(&path, &yest, &mut acc);
+        let catalog = PricingCatalog::load(&dir);
+        scan_tail(&path, &yest, &mut acc, &catalog);
         assert_eq!(
-            acc.get(&today).copied().unwrap_or(0),
+            acc.get(&today).map(|d| d.tokens).unwrap_or(0),
             15,
             "亂序舊行之前的合法行不得被截斷漏算"
         );

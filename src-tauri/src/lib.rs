@@ -6,6 +6,7 @@ mod hook_event;
 mod hook_server;
 mod hooks_configurator;
 mod openab_bridge;
+mod pricing;
 mod quota;
 mod quota_history;
 mod runner_health;
@@ -859,7 +860,13 @@ async fn get_live_quota_snapshot() -> quota::LiveQuotaSnapshot {
     if let Some(snap) = cached_live_snapshot() {
         return snap;
     }
-    let mut snap = collect_live_quota_snapshot_with_home(dirs::home_dir().as_deref()).await;
+    let home = dirs::home_dir();
+    // 沿用 live quota 的 TTL miss；價目下載與各 provider quota fetch 並行，
+    // 不新增排程，也不把兩段網路等待串起來。
+    let (_, mut snap) = tokio::join!(
+        pricing::refresh_if_needed(home.as_deref()),
+        collect_live_quota_snapshot_with_home(home.as_deref()),
+    );
     if let Ok(mut g) = LIVE_QUOTA_CACHE.lock() {
         if let Some((_, prev)) = g.as_ref() {
             merge_last_known_good(&mut snap, prev);
@@ -914,6 +921,8 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
         v["range_tokens"] = serde_json::json!(d.range_tokens);
         v["range_days"] = serde_json::json!(d.range_days);
         v["range_since"] = serde_json::json!(d.range_since);
+        v["today_cost_estimate_usd"] = serde_json::json!(d.today_cost_usd);
+        v["yesterday_cost_estimate_usd"] = serde_json::json!(d.yesterday_cost_usd);
     }
     if v.as_object().is_some_and(|o| o.is_empty()) {
         return None; // stats-cache 沒有、掃描也還沒完成 → 前端顯示 No data
@@ -974,6 +983,9 @@ fn get_provider_daily() -> serde_json::Value {
 pub struct LiveDaily {
     pub today: u64,
     pub yesterday: u64,
+    /// 僅在當天所有 usage 行都有模型價與完整 cache tier 時才有值。
+    pub today_cost_usd: Option<f64>,
+    pub yesterday_cost_usd: Option<f64>,
     /// 掃描當下所認定的本地日期（跨午夜判斷用，不可事後重算）
     pub date: String,
     pub at: std::time::Instant,
@@ -4093,8 +4105,13 @@ pub fn run() {
                         if let Some(home) = dirs::home_dir() {
                             // 掃描 + 累積都在 blocking 執行緒：兩者都碰磁碟
                             let r = tauri::async_runtime::spawn_blocking(move || {
-                                let (today, yesterday, date) =
-                                    quota::claude_logs::scan_today_yesterday(&home);
+                                let (
+                                    today,
+                                    yesterday,
+                                    date,
+                                    today_cost_usd,
+                                    yesterday_cost_usd,
+                                ) = quota::claude_logs::scan_today_yesterday(&home);
                                 // 昨天由 date 反推，不可重新 Local::now()——見 prev_day 註解
                                 let yest_date = quota::claude_logs::prev_day(&date);
                                 let map = quota::claude_logs::merge_daily(
@@ -4102,13 +4119,30 @@ pub fn run() {
                                     &[(date.clone(), today), (yest_date, yesterday)],
                                     30,
                                 );
-                                (today, yesterday, date, map)
+                                (
+                                    today,
+                                    yesterday,
+                                    date,
+                                    today_cost_usd,
+                                    yesterday_cost_usd,
+                                    map,
+                                )
                             })
                             .await;
-                            if let Ok((today, yesterday, date, map)) = r {
+                            if let Ok((
+                                today,
+                                yesterday,
+                                date,
+                                today_cost_usd,
+                                yesterday_cost_usd,
+                                map,
+                            )) = r
+                            {
                                 *LIVE_DAILY.lock().unwrap() = Some(LiveDaily {
                                     today,
                                     yesterday,
+                                    today_cost_usd,
+                                    yesterday_cost_usd,
                                     date: date.clone(),
                                     at: std::time::Instant::now(),
                                     range_tokens: map.values().sum(),

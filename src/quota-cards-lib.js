@@ -166,9 +166,53 @@
     return { stale: days > 1, days }; // 昨天算新鮮（跨日剛好還沒重算）
   }
 
+  // 官方額度／金鑰頁連結。2026-07-31 以 curl 逐一驗過：無一回 404
+  // （claude/chatgpt/groq/grok 回 403 是 bot 防護擋 curl，網址結構仍有效）。
+  // 把握度低的一律指到穩定上層頁，寧可多點一下也不要給死連結。
+  const PROVIDER_LINKS = {
+    claude:     { usage: "https://claude.ai/settings/usage" },
+    codex:      { usage: "https://chatgpt.com/codex/settings/usage" },
+    copilot:    { usage: "https://github.com/settings/copilot", keys: "https://github.com/settings/copilot" },
+    openrouter: { usage: "https://openrouter.ai/activity", keys: "https://openrouter.ai/settings/keys" },
+    minimax:    { usage: "https://platform.minimax.io/user-center/basic-information", keys: "https://platform.minimax.io/user-center/basic-information/interface-key" },
+    devin:      { usage: "https://app.devin.ai/settings/usage" },
+    agy:        { usage: "https://antigravity.google/" },
+    grok:       { usage: "https://grok.com/" },
+    gemini:     { usage: "https://aistudio.google.com/usage" },
+    groq:       { keys: "https://console.groq.com/keys" },
+    glm:        { keys: "https://open.bigmodel.cn/usercenter/apikeys" },
+    zai:        { keys: "https://z.ai/manage-apikey/apikey-list" },
+    openai:     { usage: "https://platform.openai.com/usage", keys: "https://platform.openai.com/api-keys" },
+  };
+
+  // runner name → 額度頁 URL（沒有就 null，呼叫端不畫連結）
+  function providerUsageUrl(name) {
+    return (PROVIDER_LINKS[name] && PROVIDER_LINKS[name].usage) || null;
+  }
+
+  // 金鑰環境變數名 → 該家的金鑰管理頁。用前綴比對，
+  // OPENROUTER_API_KEY_A / MINIMAX_DIRECT_KEY 這種變體都收得到。
+  function keyManageUrl(envName) {
+    if (typeof envName !== "string") return null;
+    const n = envName.toUpperCase();
+    const prefixes = [
+      ["OPENROUTER", "openrouter"], ["MINIMAX", "minimax"], ["GROQ", "groq"],
+      ["GLM", "glm"], ["ZAI", "zai"], ["OPENAI", "openai"], ["ANTHROPIC", "claude"],
+      ["CLAUDE", "claude"], ["GEMINI", "gemini"], ["GOOGLE_AI", "gemini"],
+    ];
+    for (const [prefix, id] of prefixes) {
+      if (n.startsWith(prefix)) {
+        const link = PROVIDER_LINKS[id];
+        return (link && (link.keys || link.usage)) || null;
+      }
+    }
+    return null;
+  }
+
   const api = {
     parseResetDuration, normalizeRunnerCard, normalizeCodexModelUsage,
     recentCompletions, waitingSessions, statsFreshness,
+    PROVIDER_LINKS, providerUsageUrl, keyManageUrl,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.QuotaCards = api;

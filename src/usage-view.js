@@ -141,6 +141,11 @@
     const subtitle = (card.kind !== "none" && card.subtitle) || (runner.raw && runner.raw.plan) || "";
     const plan = subtitle ? `<span class="uv-plan">${esc(subtitle)}</span>` : "";
     const basis = renderQuotaBasis(card.basis, "uv-basis");
+    // 官方額度頁連結：面板數字只是快照，要看細帳／改方案還是得去官網
+    const usageUrl = window.QuotaCards.providerUsageUrl(name);
+    const link = usageUrl
+      ? `<button class="uv-link" data-open-url="${esc(usageUrl)}" title="開啟官方額度頁：${esc(usageUrl)}">↗</button>`
+      : "";
     const failed = runner.ok === false
       ? `<span class="uv-err" title="${esc(runnerHealthTitle(healthEntry, "runner 回報失敗"))}">⚠</span>`
       : "";
@@ -224,7 +229,7 @@
       : "";
 
     return `<div class="uv-card" data-provider="${esc(name)}">
-      <div class="uv-head">${providerIconHtml(name, 16)}<span class="uv-name">${esc(label)}</span>${basis}${failed}${stale}${plan}</div>
+      <div class="uv-head">${providerIconHtml(name, 16)}<span class="uv-name">${esc(label)}</span>${basis}${failed}${stale}${plan}${link}</div>
       ${body}${trend}${detail}
     </div>`;
   }
@@ -351,7 +356,19 @@
 
   // 點完成紀錄列 → 就地展開/收合詳情（不跳視圖）。
   // 列上的 ⌨ 快捷鍵（data-focus-term）點擊不觸發展開，交給下方委派處理。
+  // 官方額度頁連結（額度卡標題的 ↗）。stopPropagation：卡片本身有展開/收合行為
   document.addEventListener("click", (e) => {
+    const link = e.target.closest("[data-open-url]");
+    if (!link) return;
+    e.stopPropagation();
+    e.preventDefault();
+    invoke("open_url", { url: link.dataset.openUrl }).catch((err) =>
+      console.warn("[usage-view] 開啟連結失敗", err)
+    );
+  });
+
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-open-url]")) return;
     if (e.target.closest("[data-focus-term]")) return;
     const row = e.target.closest(".uv-recent-row");
     if (!row || !row.dataset.rkey) return;

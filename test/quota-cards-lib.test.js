@@ -228,3 +228,17 @@ test("statsFreshness 判過期：停更數月/缺日期視為過期，昨天算�
   assert.deepStrictEqual(statsFreshness(null, "2026-07-20"), { stale: true, days: null });
   assert.deepStrictEqual(statsFreshness("壞掉", "2026-07-20"), { stale: true, days: null });
 });
+
+test("providerUsageUrl / keyManageUrl 對應正確且未知的回 null", () => {
+  const { providerUsageUrl, keyManageUrl } = require("../src/quota-cards-lib.js");
+  assert.strictEqual(providerUsageUrl("openrouter"), "https://openrouter.ai/activity");
+  assert.strictEqual(providerUsageUrl("claude"), "https://claude.ai/settings/usage");
+  assert.strictEqual(providerUsageUrl("不存在的家"), null);
+  // 金鑰名的變體都要對到同一家（A~E 後綴、DIRECT 變體）
+  assert.strictEqual(keyManageUrl("OPENROUTER_API_KEY_A"), "https://openrouter.ai/settings/keys");
+  assert.strictEqual(keyManageUrl("OPENROUTER_API_KEY"), "https://openrouter.ai/settings/keys");
+  assert.ok(keyManageUrl("MINIMAX_DIRECT_KEY").startsWith("https://platform.minimax.io/"));
+  assert.strictEqual(keyManageUrl("GROQ_API_KEY_3"), "https://console.groq.com/keys");
+  assert.strictEqual(keyManageUrl("KAGGLE_API_TOKEN"), null, "沒對照的不要亂給連結");
+  assert.strictEqual(keyManageUrl(undefined), null);
+});

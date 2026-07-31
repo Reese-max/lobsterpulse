@@ -1508,6 +1508,12 @@ body.has-bg #view-events-log {
   background: var(--bg); color: var(--text);
 }
 .apikey-tag { font-size: 10px; border-radius: 6px; padding: 1px 5px; white-space: nowrap; }
+.apikey-link {
+  font-size: 11px; line-height: 1; cursor: pointer; padding: 2px 5px;
+  border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: var(--text-dim);
+}
+.apikey-link:hover { color: var(--accent); border-color: var(--border); background: var(--btn-bg); }
 /* 重複＝要注意（同一把金鑰兩個名字）；使用中＝資訊性 */
 .apikey-dup { color: #e5a23d; background: rgba(229, 162, 61, 0.12); }
 .apikey-used { color: var(--text-dim); background: var(--hover); }

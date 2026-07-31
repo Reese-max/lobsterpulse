@@ -45,6 +45,13 @@
   line-height: 14px;
 }
 .uv-plan { font-size: 11px; color: rgba(255, 255, 255, 0.45); margin-left: 2px; }
+/* 官方額度頁連結：靠右、平時極淡，hover 才亮（裝飾要付租金——它只在你想點時存在） */
+.uv-link {
+  margin-left: auto; font-size: 11px; line-height: 1; cursor: pointer;
+  padding: 2px 5px; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: rgba(255, 255, 255, 0.35);
+}
+.uv-link:hover { color: rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.08); }
 .uv-err { font-size: 11px; }
 /* stale（顯示上次成功值）是輔助資訊，emoji 原色太搶眼——去彩度壓灰 */
 .uv-stale { filter: grayscale(1) brightness(1.4); opacity: 0.7; }

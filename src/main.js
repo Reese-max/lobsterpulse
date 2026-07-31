@@ -801,10 +801,15 @@ async function init() {
         const alias = k.alias
           ? `<span class="apikey-alias" data-alias-edit="${esc(k.name)}" title="點擊修改備註">${esc(k.alias)}</span>`
           : `<button class="apikey-alias apikey-alias-empty" data-alias-edit="${esc(k.name)}" title="替這把金鑰加註記，例如帳號或用途">+ 備註</button>`;
+        // 官方金鑰管理頁：要對照「這把在網站上叫什麼、還剩多少」得點進去看
+        const manageUrl = window.QuotaCards.keyManageUrl(k.name);
+        const link = manageUrl
+          ? `<button class="apikey-link" data-open-url="${esc(manageUrl)}" title="開啟官方金鑰頁：${esc(manageUrl)}">↗</button>`
+          : "";
         return `<div class="apikey-row">
           <div class="apikey-ident">
             <span class="apikey-name">${esc(k.name)}</span>
-            ${alias}${dup}${used}
+            ${alias}${dup}${used}${link}
           </div>
           <span class="apikey-mask" data-mask="${esc(k.masked)}">${esc(k.masked)}</span>
           <button class="icon-btn apikey-eye" data-reveal="${esc(k.name)}" title="按住顯示">👁</button>
@@ -814,9 +819,20 @@ async function init() {
       .join("");
   }
 
+  // 金鑰列的官方頁連結（↗）
+  document.getElementById("apikey-list")?.addEventListener("click", (e) => {
+    const link = e.target.closest("[data-open-url]");
+    if (!link) return;
+    e.stopPropagation();
+    invoke("open_url", { url: link.dataset.openUrl }).catch((err) =>
+      console.warn("[api-keys] 開啟連結失敗", err)
+    );
+  });
+
   // 備註編輯：就地換成 input，Enter 存、Esc 或失焦取消。
   // 不用 prompt()——webview 的原生對話框會卡住整個視窗。
   document.getElementById("apikey-list")?.addEventListener("click", (e) => {
+    if (e.target.closest("[data-open-url]")) return;
     const target = e.target.closest("[data-alias-edit]");
     if (!target || target.tagName === "INPUT") return;
     const name = target.dataset.aliasEdit;

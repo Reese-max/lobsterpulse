@@ -541,8 +541,15 @@ fn play_sound_file(name: String) {
     });
 }
 
+/// 用系統瀏覽器開連結。只放行 https://——Windows 的 explorer 會把任意字串
+/// 當路徑開（本機檔案、UNC 分享），前端傳什麼都可能，不可讓這裡變成
+/// 「開任意路徑」的通道。對齊 api_keys::value_of 的白名單原則。
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        log::warn!("[open_url] 拒絕非 https 連結");
+        return Err("只允許 https:// 連結".into());
+    }
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(target_os = "windows") {
@@ -12973,6 +12980,24 @@ mod r131_plugin_registry_tests {
     /// (CLAUDE.md Plugin 清單 + L3240-3303 落地); 任一漏註冊 → Tauri 啟動 panic,
     /// 等於 R0 級別阻斷。護衛契約: source 內必須有對應 `tauri_plugin_XXX::init` /
     /// `::Builder::...` token, 漏一個即 fail 並列名單。
+    #[test]
+    fn open_url_rejects_non_https_schemes() {
+        // explorer 會把這些當本機路徑／協定開，前端可傳任意字串 → 必須擋在後端
+        for bad in [
+            "file:///C:/Windows/System32",
+            r"\\attacker\share\payload.exe",
+            "C:\\Users\\Administrator",
+            "http://insecure.example.com",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert!(
+                crate::open_url(bad.to_string()).is_err(),
+                "非 https 必須被拒：{bad}"
+            );
+        }
+    }
+
     #[test]
     fn r131_run_function_registers_all_5_tauri_plugins() {
         // 從 src-tauri/ 內讀 src/lib.rs

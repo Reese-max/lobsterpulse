@@ -1,0 +1,27 @@
+# 行尾規範。加這個檔的理由：Windows 開發機上每次 commit 都跳
+# "LF will be replaced by CRLF"，且 Edit 類工具會把整檔 LF 轉成 CRLF
+# ——.sh 一旦變 CRLF，bash 會報 bad interpreter（踩雷 §21）。
+
+# 預設：repo 內一律存 LF，checkout 時交給平台。
+# 加這行不會動到現有 index（實測 211 個文字檔已全是 i/lf）。
+* text=auto
+
+# Unix 腳本強制 LF——CRLF 會直接炸 shebang，這是硬需求不是偏好
+*.sh text eol=lf
+*.mjs text eol=lf
+
+# Windows 批次檔強制 CRLF（cmd.exe 對 LF 的處理不可靠）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二進位：不做行尾轉換也不做 diff（清單對齊 git 目前實際偵測到的類型）
+*.png binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.mp3 binary
+*.mp4 binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

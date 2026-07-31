@@ -152,11 +152,13 @@ impl TimelineRing {
     }
 
     /// 護衛測試用:provider 數 = `KNOWN_PROVIDERS.len()` (對齊 R114 SSoT)。
+    #[cfg(test)]
     pub fn provider_count(&self) -> usize {
         self.provider_index.len()
     }
 
     /// 護衛測試用:current_minute 計數。
+    #[cfg(test)]
     pub fn current_minute(&self) -> u32 {
         self.current_minute
     }

@@ -72,6 +72,8 @@ fn parse_priced_usage_line(line: &[u8]) -> Option<(String, String, TokenUsage)> 
 }
 
 /// 相容既有 token 統計 API；成本掃描使用上面的完整資料。
+/// 生產路徑已全面改走 parse_priced_usage_line，這裡只剩測試對照用 → 不編進 release。
+#[cfg(test)]
 pub fn parse_usage_line(line: &[u8]) -> Option<(String, u64)> {
     parse_priced_usage_line(line).map(|(date, _, usage)| (date, usage.total()))
 }
@@ -233,7 +235,8 @@ fn scan_recent_usage(
     (acc, today)
 }
 
-/// 保留既有測試／量測 API，只投影出每日 token。
+/// 保留既有測試／量測 API，只投影出每日 token（不編進 release）。
+#[cfg(test)]
 pub fn scan_recent_days(
     home: &Path,
     days: i64,

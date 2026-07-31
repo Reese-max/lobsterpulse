@@ -1493,6 +1493,24 @@ body.has-bg #view-events-log {
   font-size: 12px; font-weight: 600; font-family: ui-monospace, Consolas, monospace;
   letter-spacing: .2px; overflow-wrap: anywhere;
 }
+/* 辨識欄：名稱＋備註＋標籤同一格，窄視窗自動換行 */
+.apikey-ident { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.apikey-alias {
+  font-size: 11px; color: var(--text); background: var(--btn-bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px;
+  cursor: pointer; max-width: 100%; overflow-wrap: anywhere;
+}
+.apikey-alias-empty { color: var(--text-dim); background: transparent; border-style: dashed; }
+.apikey-alias:hover { border-color: var(--accent); }
+.apikey-alias-input {
+  font-size: 11px; font-family: inherit; width: 130px; padding: 1px 6px;
+  border-radius: 6px; border: 1px solid var(--accent);
+  background: var(--bg); color: var(--text);
+}
+.apikey-tag { font-size: 10px; border-radius: 6px; padding: 1px 5px; white-space: nowrap; }
+/* 重複＝要注意（同一把金鑰兩個名字）；使用中＝資訊性 */
+.apikey-dup { color: #e5a23d; background: rgba(229, 162, 61, 0.12); }
+.apikey-used { color: var(--text-dim); background: var(--hover); }
 .apikey-mask {
   font-size: 12px; font-family: ui-monospace, Consolas, monospace; color: var(--text-dim);
   max-width: 200px; overflow-wrap: anywhere; text-align: right;

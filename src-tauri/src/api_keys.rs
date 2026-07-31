@@ -40,6 +40,30 @@ pub struct ApiKeyEntry {
     pub name: String,
     /// 遮罩後的樣子，供辨識用（例如 OpenRouter 五把要分辨是哪一把）
     pub masked: String,
+    /// 使用者自訂備註（存 config.api_key_aliases）。名稱如 OPENROUTER_API_KEY_A
+    /// 只有字母沒有意義，帳號歸屬只有使用者知道 → 讓他自己標。
+    #[serde(default)]
+    pub alias: Option<String>,
+    /// 值相同的金鑰共用同一組號（None = 沒有重複）。只給組號不給值——
+    /// 實測本機有兩組隱形重複（GLM=ZAI、MINIMAX 兩把），畫面上看不出來。
+    #[serde(default)]
+    pub dup_group: Option<usize>,
+    /// LP 哪張額度卡實際會用這把（None = 只是放著供複製）
+    #[serde(default)]
+    pub used_by: Option<&'static str>,
+}
+
+/// 這把金鑰是否被 LP 自己的 quota fetcher 讀取。對照來源是 fetcher 實作：
+/// openrouter.rs 收 `OPENROUTER_API_KEY*`、minimax.rs 讀 `MINIMAX_API_KEY`。
+/// 其餘 CLI 走 OAuth／本機憑證檔，不吃環境變數。
+pub fn used_by(name: &str) -> Option<&'static str> {
+    if name.starts_with("OPENROUTER_API_KEY") {
+        return Some("OpenRouter 額度卡");
+    }
+    if name == "MINIMAX_API_KEY" {
+        return Some("MiniMax 額度卡");
+    }
+    None
 }
 
 /// 名稱是否為「AI 服務的金鑰」。大小寫敏感（環境變數慣例全大寫）。
@@ -63,17 +87,38 @@ pub fn mask(value: &str) -> String {
 }
 
 /// 從一組 (名稱, 值) 篩出可複製的金鑰，依名稱排序。空值視為未設定。
+/// 同時標出「值相同」的重複組——分組只在函式內看值，回傳結構仍不含原值。
 pub fn collect<I: IntoIterator<Item = (String, String)>>(vars: I) -> Vec<ApiKeyEntry> {
-    let mut out: Vec<ApiKeyEntry> = vars
+    let mut kept: Vec<(String, String)> = vars
         .into_iter()
         .filter(|(k, v)| is_ai_key_name(k) && !v.trim().is_empty())
-        .map(|(k, v)| ApiKeyEntry {
-            masked: mask(&v),
-            name: k,
-        })
         .collect();
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
+    kept.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // 值 → 出現次數，只有 >1 的才配組號（組號按首次出現順序，從 1 起）
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (_, v) in &kept {
+        *seen.entry(v.trim()).or_insert(0) += 1;
+    }
+    let mut group_of: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut next_group = 1usize;
+    for (_, v) in &kept {
+        let val = v.trim();
+        if seen.get(val).copied().unwrap_or(0) > 1 && !group_of.contains_key(val) {
+            group_of.insert(val, next_group);
+            next_group += 1;
+        }
+    }
+
+    kept.iter()
+        .map(|(k, v)| ApiKeyEntry {
+            masked: mask(v),
+            dup_group: group_of.get(v.trim()).copied(),
+            used_by: used_by(k),
+            alias: None,
+            name: k.clone(),
+        })
+        .collect()
 }
 
 /// 取值前一律再驗一次名稱：前端傳什麼字串都可能，不可讓它變成「讀任意環境
@@ -107,6 +152,41 @@ mod tests {
         // 非金鑰形狀的一律不收，別把整個環境變數表倒出來
         assert!(!is_ai_key_name("PATH"));
         assert!(!is_ai_key_name("OPENAI_BASE_URL"));
+    }
+
+    #[test]
+    fn duplicate_values_share_a_group_and_uniques_get_none() {
+        // 實測本機情境：GLM 與 ZAI 是同一把、MINIMAX 兩個名字也是同一把，
+        // 畫面上末四碼相同但使用者無從得知 → 必須標出來。
+        let same = "sk-samesecret-9999".to_string();
+        let vars = vec![
+            ("GLM_API_KEY".to_string(), same.clone()),
+            ("ZAI_API_KEY".to_string(), same.clone()),
+            ("MINIMAX_API_KEY".to_string(), "sk-cp-minimax-1111".to_string()),
+            ("MINIMAX_DIRECT_KEY".to_string(), "sk-cp-minimax-1111".to_string()),
+            ("GROQ_API_KEY".to_string(), "gsk-unique-2222".to_string()),
+        ];
+        let got = collect(vars);
+        let by = |n: &str| got.iter().find(|e| e.name == n).expect("entry").clone();
+        assert_eq!(by("GLM_API_KEY").dup_group, by("ZAI_API_KEY").dup_group);
+        assert!(by("GLM_API_KEY").dup_group.is_some());
+        assert_eq!(
+            by("MINIMAX_API_KEY").dup_group,
+            by("MINIMAX_DIRECT_KEY").dup_group
+        );
+        // 兩組重複必須是不同組號，不可混為一談
+        assert_ne!(by("GLM_API_KEY").dup_group, by("MINIMAX_API_KEY").dup_group);
+        assert_eq!(by("GROQ_API_KEY").dup_group, None, "沒重複的不給組號");
+    }
+
+    #[test]
+    fn used_by_marks_only_keys_lp_actually_reads() {
+        assert_eq!(used_by("OPENROUTER_API_KEY_A"), Some("OpenRouter 額度卡"));
+        assert_eq!(used_by("OPENROUTER_API_KEY"), Some("OpenRouter 額度卡"));
+        assert_eq!(used_by("MINIMAX_API_KEY"), Some("MiniMax 額度卡"));
+        // MINIMAX_DIRECT_KEY 名字很像但 fetcher 沒讀它，不可謊報「正在使用」
+        assert_eq!(used_by("MINIMAX_DIRECT_KEY"), None);
+        assert_eq!(used_by("GROQ_API_KEY"), None);
     }
 
     #[test]

@@ -931,9 +931,39 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
 }
 
 /// 可複製的 API key 清單（只有名稱與遮罩，值永遠不進前端）。
+/// 另附辨識資訊：使用者自訂備註、重複組號、LP 哪張卡在用。
 #[tauri::command]
 fn list_api_keys() -> Vec<api_keys::ApiKeyEntry> {
-    api_keys::collect(std::env::vars())
+    let aliases = config::load_config().api_key_aliases;
+    let mut out = api_keys::collect(std::env::vars());
+    for entry in &mut out {
+        entry.alias = aliases
+            .get(&entry.name)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+    }
+    out
+}
+
+/// 設定／清除金鑰備註。空字串＝清除。只寫名稱對名稱，不碰金鑰值。
+#[tauri::command]
+fn set_api_key_alias(name: String, alias: String) -> Result<(), String> {
+    // 沿用 value_of 的白名單：不可讓前端用任意字串在 config 裡塞鍵值
+    if !api_keys::is_ai_key_name(&name) {
+        return Err("不是可備註的 API key 名稱".into());
+    }
+    let mut cfg = config::load_config();
+    let alias = alias.trim();
+    if alias.is_empty() {
+        cfg.api_key_aliases.remove(&name);
+    } else {
+        // 上限 60 字：備註是掃讀用的短標籤，不是備忘錄
+        let alias: String = alias.chars().take(60).collect();
+        cfg.api_key_aliases.insert(name.clone(), alias);
+    }
+    config::save_config(&cfg)?;
+    log::info!("[api_keys] 已更新 {name} 的備註");
+    Ok(())
 }
 
 /// 把指定金鑰寫進剪貼簿——值由後端直接寫入，不經過 webview。
@@ -4734,6 +4764,7 @@ pub fn run() {
             get_provider_daily,
             get_codex_rollout_daily,
             list_api_keys,
+            set_api_key_alias,
             copy_api_key,
             reveal_api_key,
             detect_installed_clis,

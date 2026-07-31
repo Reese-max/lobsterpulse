@@ -788,17 +788,65 @@ async function init() {
       box.innerHTML = `<div class="setting-sub-label">找不到 AI 服務的環境變數金鑰</div>`;
       return;
     }
+    // 辨識三件套：使用者備註（可編輯）、重複組標記、LP 是否在用。
+    // 名稱如 OPENROUTER_API_KEY_A 光看字母認不出是哪個帳號，靠這三個補。
     box.innerHTML = keys
-      .map(
-        (k) => `<div class="apikey-row">
-          <span class="apikey-name">${esc(k.name)}</span>
+      .map((k) => {
+        const dup = k.dup_group
+          ? `<span class="apikey-tag apikey-dup" title="與同組其他金鑰的值完全相同">⧉ 同 ${k.dup_group}</span>`
+          : "";
+        const used = k.used_by
+          ? `<span class="apikey-tag apikey-used" title="${esc(k.used_by)}正在使用這把">● 使用中</span>`
+          : "";
+        const alias = k.alias
+          ? `<span class="apikey-alias" data-alias-edit="${esc(k.name)}" title="點擊修改備註">${esc(k.alias)}</span>`
+          : `<button class="apikey-alias apikey-alias-empty" data-alias-edit="${esc(k.name)}" title="替這把金鑰加註記，例如帳號或用途">+ 備註</button>`;
+        return `<div class="apikey-row">
+          <div class="apikey-ident">
+            <span class="apikey-name">${esc(k.name)}</span>
+            ${alias}${dup}${used}
+          </div>
           <span class="apikey-mask" data-mask="${esc(k.masked)}">${esc(k.masked)}</span>
           <button class="icon-btn apikey-eye" data-reveal="${esc(k.name)}" title="按住顯示">👁</button>
           <button class="icon-btn apikey-copy" data-copy="${esc(k.name)}" title="複製（30 秒後自動清除）">複製</button>
-        </div>`
-      )
+        </div>`;
+      })
       .join("");
   }
+
+  // 備註編輯：就地換成 input，Enter 存、Esc 或失焦取消。
+  // 不用 prompt()——webview 的原生對話框會卡住整個視窗。
+  document.getElementById("apikey-list")?.addEventListener("click", (e) => {
+    const target = e.target.closest("[data-alias-edit]");
+    if (!target || target.tagName === "INPUT") return;
+    const name = target.dataset.aliasEdit;
+    const input = document.createElement("input");
+    input.className = "apikey-alias-input";
+    input.value = target.classList.contains("apikey-alias-empty") ? "" : target.textContent;
+    input.maxLength = 60;
+    input.placeholder = "帳號或用途";
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      if (save) {
+        try {
+          await invoke("set_api_key_alias", { name, alias: input.value });
+        } catch (err) {
+          console.warn("[api-keys] 備註儲存失敗", err);
+        }
+      }
+      renderApiKeys();
+    };
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") finish(true);
+      else if (ev.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+    target.replaceWith(input);
+    input.focus();
+    input.select();
+  });
 
   document.getElementById("apikey-list")?.addEventListener("click", async (e) => {
     const btn = e.target.closest("[data-copy]");

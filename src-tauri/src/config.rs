@@ -18,6 +18,11 @@ pub struct AppConfig {
     /// 直接 early return（既不匹配也不 emit），給使用者一鍵關閉的逃生門。
     #[serde(default = "default_rules_enabled")]
     pub rules_enabled: bool,
+    /// 金鑰備註：環境變數名稱 → 使用者自訂暱稱。只存名稱對名稱，不存金鑰值。
+    /// 為什麼要有：OPENROUTER_API_KEY_A~E 這種名字看不出是哪個帳號，
+    /// 而帳號歸屬只有使用者知道，API 也問不到（實測 /v1/key 的 label 是自動產生的）。
+    #[serde(default)]
+    pub api_key_aliases: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -514,6 +519,7 @@ impl Default for AppConfig {
             providers: default_providers(),
             rules: default_rules(),
             rules_enabled: default_rules_enabled(),
+            api_key_aliases: HashMap::new(),
         }
     }
 }

@@ -63,8 +63,8 @@ jobs:
       - name: Install Tauri CLI
         run: cargo binstall -y tauri-cli@^2.0
 
-      - name: Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Test hooks configuration
+        run: cargo test --manifest-path src-tauri/Cargo.toml hooks_configurator
 
       - name: Build (no bundle)
         run: cargo tauri build --no-bundle

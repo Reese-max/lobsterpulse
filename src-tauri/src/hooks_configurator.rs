@@ -506,6 +506,23 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     }
 }
 
+fn atomic_write_target(path: &Path) -> Result<PathBuf, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => std::fs::canonicalize(path).map_err(|e| {
+            format!(
+                "failed to resolve symlinked settings path {}: {e}",
+                path.display()
+            )
+        }),
+        Ok(_) => Ok(path.to_path_buf()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) => Err(format!(
+            "failed to inspect settings path {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 fn save_text_atomically(path: &Path, content: &str) -> Result<(), String> {
     save_text_atomically_with(path, content, replace_file)
 }
@@ -518,20 +535,29 @@ fn save_text_atomically_with<F>(
 where
     F: FnOnce(&Path, &Path) -> std::io::Result<()>,
 {
-    if let Some(parent) = path.parent() {
+    // Renaming over a symlink replaces the link itself. Resolve an existing
+    // link first so dotfile-managed configuration keeps the link and updates
+    // the canonical target atomically instead.
+    let destination = atomic_write_target(path)?;
+
+    if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let existing_permissions = if path.exists() {
-        let backup = backup_path(path)?;
-        std::fs::copy(path, &backup)
-            .map_err(|e| format!("failed to back up {}: {e}", path.display()))?;
-        Some(std::fs::metadata(path).map_err(|e| e.to_string())?.permissions())
+    let existing_permissions = if destination.exists() {
+        let backup = backup_path(&destination)?;
+        std::fs::copy(&destination, &backup)
+            .map_err(|e| format!("failed to back up {}: {e}", destination.display()))?;
+        Some(
+            std::fs::metadata(&destination)
+                .map_err(|e| e.to_string())?
+                .permissions(),
+        )
     } else {
         None
     };
 
-    let temporary = temporary_path(path)?;
+    let temporary = temporary_path(&destination)?;
     let write_result = (|| -> std::io::Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
@@ -549,15 +575,15 @@ where
         let _ = std::fs::remove_file(&temporary);
         return Err(format!(
             "failed to write temporary settings file for {}: {error}",
-            path.display()
+            destination.display()
         ));
     }
 
-    if let Err(error) = replace(&temporary, path) {
+    if let Err(error) = replace(&temporary, &destination) {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!(
             "failed to atomically replace {}: {error}",
-            path.display()
+            destination.display()
         ));
     }
     Ok(())
@@ -860,6 +886,66 @@ mod r37_silent_fail_surfacing_tests {
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
             .count();
         assert_eq!(leftovers, 0, "failed replace must clean temporary file");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_preserves_symlink_and_updates_managed_target() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tmp_settings_path("symlink-target");
+        let managed_directory = directory.join("managed");
+        std::fs::create_dir_all(&managed_directory).expect("mkdir managed fixture");
+        let target = managed_directory.join("hooks.json");
+        let link = directory.join("hooks.json");
+        let original = b"{\"managed\":true}";
+        write_raw(&target, original);
+        symlink(Path::new("managed/hooks.json"), &link).expect("create relative symlink");
+
+        save_text_atomically(&link, "{\"replacement\":true}").expect("save through symlink");
+
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("inspect symlink")
+                .file_type()
+                .is_symlink(),
+            "atomic save must preserve the dotfile-managed symlink"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read managed target"),
+            "{\"replacement\":true}"
+        );
+        assert_eq!(
+            std::fs::read(backup_path(&target).expect("target backup path"))
+                .expect("read target backup"),
+            original
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_fails_closed_for_broken_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tmp_settings_path("broken-symlink");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let link = directory.join("hooks.json");
+        let missing_target = directory.join("missing.json");
+        symlink(Path::new("missing.json"), &link).expect("create broken symlink");
+
+        let result = save_text_atomically(&link, "{\"replacement\":true}");
+
+        assert!(result.is_err(), "broken symlink must fail closed");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("inspect broken symlink")
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!missing_target.exists(), "must not create the missing target");
         let _ = std::fs::remove_dir_all(&directory);
     }
 

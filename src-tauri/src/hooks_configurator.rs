@@ -1,7 +1,10 @@
 use crate::config::{expand_path, ProviderConfig};
 use log::info;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// R37：`provider_needs_setup` 之前 `Err(_) => return true` 連 IO 錯（PermissionDenied
 /// / disk full）和 parse 錯（corrupt JSON / encoding 損壞）一併沉默吞；壞檔
@@ -142,6 +145,43 @@ fn hook_cmd_powershell(provider_id: &str) -> String {
     }
 }
 
+fn is_lobsterpulse_hook(hook: &Value) -> bool {
+    let command = hook.get("command").and_then(Value::as_str).unwrap_or("");
+    let bash = hook.get("bash").and_then(Value::as_str).unwrap_or("");
+    command.contains(MARKER) || bash.contains(MARKER)
+}
+
+/// Remove LobsterPulse-owned commands while preserving surrounding entries,
+/// matchers, unknown fields, and all third-party hooks.
+fn remove_lobsterpulse_hooks(root: &mut Value) -> Result<bool, String> {
+    let before = root.clone();
+    let Some(hooks_value) = root.get_mut("hooks") else {
+        return Ok(false);
+    };
+    let hooks = hooks_value
+        .as_object_mut()
+        .ok_or("hooks is not an object; refusing to modify it")?;
+
+    for entries_value in hooks.values_mut() {
+        let Some(entries) = entries_value.as_array_mut() else {
+            continue;
+        };
+        entries.retain_mut(|entry| {
+            if let Some(nested_value) = entry.get_mut("hooks") {
+                let Some(nested) = nested_value.as_array_mut() else {
+                    return true;
+                };
+                nested.retain(|hook| !is_lobsterpulse_hook(hook));
+                !nested.is_empty()
+            } else {
+                !is_lobsterpulse_hook(entry)
+            }
+        });
+    }
+
+    Ok(*root != before)
+}
+
 /// Remove only LobsterPulse hooks from a provider's config.
 pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(), String> {
     let path = match &config.settings_path {
@@ -157,28 +197,9 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
     let mut root: Value = serde_json::from_str(&data)
         .map_err(|e| format!("malformed JSON in {}: {e}", path.display()))?;
 
-    if let Some(Value::Object(hooks)) = root.get_mut("hooks") {
-        for (_event, entries) in hooks.iter_mut() {
-            if let Value::Array(arr) = entries {
-                arr.retain(|entry| {
-                    // Check if this entry contains a LobsterPulse hook
-                    let hook_list = if let Some(Value::Array(hl)) = entry.get("hooks") {
-                        hl.clone()
-                    } else {
-                        vec![entry.clone()]
-                    };
-                    !hook_list.iter().any(|h| {
-                        let cmd_str = h.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                        let bash_str = h.get("bash").and_then(|v| v.as_str()).unwrap_or("");
-                        cmd_str.contains(MARKER) || bash_str.contains(MARKER)
-                    })
-                });
-            }
-        }
+    if remove_lobsterpulse_hooks(&mut root)? {
+        save_json(&path, &root)?;
     }
-
-    let formatted = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
-    std::fs::write(&path, formatted).map_err(|e| e.to_string())?;
     info!("Removed LobsterPulse hooks for {provider_id}");
     Ok(())
 }
@@ -189,11 +210,13 @@ pub fn install_provider(provider_id: &str, config: &ProviderConfig) -> Result<()
     // R37：原 `let _ =` 沉默吞 cleanup 失敗（corrupt JSON / 權限拒絕 / 寫入失敗）,
     // operator 看到「install 成功」但舊 hook 可能還在, 沒 log 可查。
     // install 仍繼續走（overwrite 行為, 壞檔本來就會被新寫入覆蓋）— 只 log warn。
-    if let Err(e) = remove_provider(provider_id, config) {
-        log::warn!(
-            "{} — install will proceed and overwrite, stale hooks may remain",
-            provider_settings_warn_msg(provider_id, "install_provider cleanup", &e)
-        );
+    if provider_id != "codex" {
+        if let Err(e) = remove_provider(provider_id, config) {
+            log::warn!(
+                "{} — install will proceed and overwrite, stale hooks may remain",
+                provider_settings_warn_msg(provider_id, "install_provider cleanup", &e)
+            );
+        }
     }
 
     let path = match &config.settings_path {
@@ -311,52 +334,64 @@ fn install_gemini_hooks(path: &PathBuf) -> Result<(), String> {
 
 /// Codex CLI: hooks in ~/.codex/hooks.json + enable feature flag in config.toml
 fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
-    // 1. Enable codex_hooks feature flag in config.toml
+    // Parse and validate before touching either user configuration file.
+    let mut root = load_or_create_json(path)?;
+    remove_lobsterpulse_hooks(&mut root)?;
+
+    let hooks = root
+        .as_object_mut()
+        .ok_or("hooks.json root is not an object; refusing to modify it")?
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+    let hooks = hooks
+        .as_object_mut()
+        .ok_or("hooks is not an object; refusing to modify it")?;
+
+    let cmd = hook_cmd_powershell("codex");
+    let events = [
+        ("SessionStart", false),
+        ("UserPromptSubmit", false),
+        ("PreToolUse", true),
+        ("PostToolUse", true),
+        ("Stop", false),
+    ];
+
+    for (event, needs_matcher) in events {
+        let mut entry = json!({
+            "hooks": [{ "type": "command", "command": cmd.clone() }]
+        });
+        if needs_matcher {
+            entry
+                .as_object_mut()
+                .expect("new hook entry is always an object")
+                .insert("matcher".to_string(), json!(""));
+        }
+
+        let event_hooks = hooks.entry(event).or_insert_with(|| json!([]));
+        event_hooks
+            .as_array_mut()
+            .ok_or_else(|| format!("hooks.{event} is not an array; refusing to modify it"))?
+            .push(entry);
+    }
+
     let config_toml = path
         .parent()
         .ok_or("Invalid hooks.json path")?
         .join("config.toml");
-
     if config_toml.exists() {
         let mut content = std::fs::read_to_string(&config_toml).map_err(|e| e.to_string())?;
         if !content.contains("codex_hooks") {
-            // Add [features] section with codex_hooks = true
             if content.contains("[features]") {
                 content = content.replace("[features]", "[features]\ncodex_hooks = true");
             } else {
                 content.push_str("\n[features]\ncodex_hooks = true\n");
             }
-            std::fs::write(&config_toml, content).map_err(|e| e.to_string())?;
+            save_text_atomically(&config_toml, &content)?;
             info!("Enabled codex_hooks feature flag in config.toml");
         }
     }
 
-    // 2. Write hooks.json
-    let cmd = hook_cmd_powershell("codex");
-
-    let hooks_json = json!({
-        "hooks": {
-            "SessionStart": [{
-                "hooks": [{ "type": "command", "command": cmd }]
-            }],
-            "UserPromptSubmit": [{
-                "hooks": [{ "type": "command", "command": cmd }]
-            }],
-            "PreToolUse": [{
-                "matcher": "",
-                "hooks": [{ "type": "command", "command": cmd }]
-            }],
-            "PostToolUse": [{
-                "matcher": "",
-                "hooks": [{ "type": "command", "command": cmd }]
-            }],
-            "Stop": [{
-                "hooks": [{ "type": "command", "command": cmd }]
-            }]
-        }
-    });
-
-    save_json(path, &hooks_json)?;
+    save_json(path, &root)?;
     info!("Codex CLI hooks configured");
     Ok(())
 }
@@ -404,7 +439,7 @@ fn install_copilot_hooks(path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn load_or_create_json(path: &PathBuf) -> Result<Value, String> {
+fn load_or_create_json(path: &Path) -> Result<Value, String> {
     if path.exists() {
         let data = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
         serde_json::from_str(&data)
@@ -414,13 +449,122 @@ fn load_or_create_json(path: &PathBuf) -> Result<Value, String> {
     }
 }
 
-fn save_json(path: &PathBuf, value: &Value) -> Result<(), String> {
+fn sibling_with_suffix(path: &Path, suffix: &str) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("Invalid settings path: {}", path.display()))?;
+    let mut suffixed = file_name.to_os_string();
+    suffixed.push(suffix);
+    Ok(path.with_file_name(suffixed))
+}
+
+fn backup_path(path: &Path) -> Result<PathBuf, String> {
+    sibling_with_suffix(path, ".bak")
+}
+
+fn temporary_path(path: &Path) -> Result<PathBuf, String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    sibling_with_suffix(
+        path,
+        &format!(".lobsterpulse-{}-{nonce}.tmp", std::process::id()),
+    )
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+#[cfg(windows)]
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn save_text_atomically(path: &Path, content: &str) -> Result<(), String> {
+    save_text_atomically_with(path, content, replace_file)
+}
+
+fn save_text_atomically_with<F>(
+    path: &Path,
+    content: &str,
+    replace: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let formatted = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    std::fs::write(path, formatted).map_err(|e| e.to_string())?;
+
+    let existing_permissions = if path.exists() {
+        let backup = backup_path(path)?;
+        std::fs::copy(path, &backup)
+            .map_err(|e| format!("failed to back up {}: {e}", path.display()))?;
+        Some(std::fs::metadata(path).map_err(|e| e.to_string())?.permissions())
+    } else {
+        None
+    };
+
+    let temporary = temporary_path(path)?;
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        if let Some(permissions) = existing_permissions {
+            std::fs::set_permissions(&temporary, permissions)?;
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "failed to write temporary settings file for {}: {error}",
+            path.display()
+        ));
+    }
+
+    if let Err(error) = replace(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "failed to atomically replace {}: {error}",
+            path.display()
+        ));
+    }
     Ok(())
+}
+
+fn save_json(path: &Path, value: &Value) -> Result<(), String> {
+    let formatted = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    save_text_atomically(path, &formatted)
 }
 
 #[cfg(test)]
@@ -578,4 +722,143 @@ mod r37_silent_fail_surfacing_tests {
         );
         let _ = std::fs::remove_file(&path);
     }
+    fn marker_count(value: &Value) -> usize {
+        match value {
+            Value::String(text) => usize::from(text.contains(MARKER)),
+            Value::Array(values) => values.iter().map(marker_count).sum(),
+            Value::Object(values) => values.values().map(marker_count).sum(),
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn codex_install_reinstall_remove_preserves_unrelated_configuration() {
+        let directory = tmp_settings_path("codex-roundtrip");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let original = json!({
+            "schemaVersion": 7,
+            "futureTopLevel": {"keep": true},
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "third-party",
+                        "futureEntryField": 42,
+                        "hooks": [
+                            {"type": "command", "command": "third-party-pre", "timeout": 9}
+                        ]
+                    },
+                    {
+                        "matcher": "mixed",
+                        "hooks": [
+                            {"type": "command", "command": "old-lobster-pulse-hook codex"},
+                            {"type": "command", "command": "third-party-mixed"}
+                        ]
+                    }
+                ],
+                "FutureEvent": [
+                    {"type": "command", "command": "future-command", "unknown": "keep"}
+                ]
+            }
+        });
+        write_raw(
+            &path,
+            serde_json::to_string_pretty(&original)
+                .expect("serialize fixture")
+                .as_bytes(),
+        );
+        write_raw(&directory.join("config.toml"), b"[features]\nexisting = true\n");
+        let config = provider_with_path(&path);
+
+        install_provider("codex", &config).expect("first install");
+        let first: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read first"))
+                .expect("parse first");
+        assert_eq!(first["schemaVersion"], json!(7));
+        assert_eq!(first["futureTopLevel"], json!({"keep": true}));
+        assert_eq!(first["hooks"]["FutureEvent"], original["hooks"]["FutureEvent"]);
+        assert_eq!(first["hooks"]["PreToolUse"][0], original["hooks"]["PreToolUse"][0]);
+        assert_eq!(
+            first["hooks"]["PreToolUse"][1]["hooks"],
+            json!([{"type": "command", "command": "third-party-mixed"}])
+        );
+        assert_eq!(marker_count(&first), 5);
+        assert!(
+            backup_path(&path).expect("backup path").exists(),
+            "install must keep one bounded backup"
+        );
+
+        install_provider("codex", &config).expect("idempotent reinstall");
+        let second: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read second"))
+                .expect("parse second");
+        assert_eq!(marker_count(&second), 5);
+        assert_eq!(first, second);
+
+        remove_provider("codex", &config).expect("remove provider");
+        let removed: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read removed"))
+                .expect("parse removed");
+        let mut expected = original.clone();
+        remove_lobsterpulse_hooks(&mut expected).expect("clean expected fixture");
+        assert_eq!(removed, expected);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_fails_closed_on_malformed_json() {
+        let directory = tmp_settings_path("codex-malformed");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original = b"{ malformed user hooks";
+        let original_config = b"[features]\nexisting = true\n";
+        write_raw(&path, original);
+        write_raw(&config_path, original_config);
+        let config = provider_with_path(&path);
+
+        let result = install_provider("codex", &config);
+        assert!(result.is_err(), "malformed JSON must fail closed");
+        assert_eq!(std::fs::read(&path).expect("read hooks"), original);
+        assert_eq!(
+            std::fs::read(&config_path).expect("read config"),
+            original_config
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn atomic_replace_failure_keeps_original_and_backup() {
+        let directory = tmp_settings_path("atomic-failure");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let original = b"{\"original\":true}";
+        write_raw(&path, original);
+
+        let result = save_text_atomically_with(
+            &path,
+            "{\"replacement\":true}",
+            |_temporary, _destination| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "injected replace failure",
+                ))
+            },
+        );
+
+        assert!(result.is_err(), "injected replace failure must surface");
+        assert_eq!(std::fs::read(&path).expect("read original"), original);
+        assert_eq!(
+            std::fs::read(backup_path(&path).expect("backup path")).expect("read backup"),
+            original
+        );
+        let leftovers = std::fs::read_dir(&directory)
+            .expect("read fixture dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0, "failed replace must clean temporary file");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
 }

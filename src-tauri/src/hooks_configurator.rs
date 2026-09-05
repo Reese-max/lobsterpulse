@@ -66,7 +66,7 @@ pub fn provider_needs_setup(provider_id: &str, config: &ProviderConfig) -> bool 
             // R37 surface: 壞檔 / 權限拒絕 → log warn 帶 path, 仍回 true
             // (前端顯示「needs setup」正確, 因為壞檔就是要重 setup)
             log::warn!(
-                "{} — settings.json at {} will be overwritten on next install",
+                "{} — settings.json at {} must be repaired before install",
                 provider_settings_warn_msg(provider_id, "provider_needs_setup", &e.to_string()),
                 path.display()
             );
@@ -209,7 +209,8 @@ pub fn install_provider(provider_id: &str, config: &ProviderConfig) -> Result<()
     // Clean up any existing LobsterPulse hooks first.
     // R37：原 `let _ =` 沉默吞 cleanup 失敗（corrupt JSON / 權限拒絕 / 寫入失敗）,
     // operator 看到「install 成功」但舊 hook 可能還在, 沒 log 可查。
-    // install 仍繼續走（overwrite 行為, 壞檔本來就會被新寫入覆蓋）— 只 log warn。
+    // 非 Codex provider 維持既有 cleanup 流程；Codex 會在記憶體內移除自有 hook，
+    // 先驗證完整 JSON，再以一次原子替換寫回。
     if provider_id != "codex" {
         if let Err(e) = remove_provider(provider_id, config) {
             log::warn!(
@@ -740,6 +741,8 @@ mod r37_silent_fail_surfacing_tests {
             "schemaVersion": 7,
             "futureTopLevel": {"keep": true},
             "hooks": {
+                "SessionStart": [],
+                "UserPromptSubmit": [],
                 "PreToolUse": [
                     {
                         "matcher": "third-party",
@@ -756,6 +759,8 @@ mod r37_silent_fail_surfacing_tests {
                         ]
                     }
                 ],
+                "PostToolUse": [],
+                "Stop": [],
                 "FutureEvent": [
                     {"type": "command", "command": "future-command", "unknown": "keep"}
                 ]
@@ -839,10 +844,7 @@ mod r37_silent_fail_surfacing_tests {
             &path,
             "{\"replacement\":true}",
             |_temporary, _destination| {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "injected replace failure",
-                ))
+                Err(std::io::Error::other("injected replace failure"))
             },
         );
 

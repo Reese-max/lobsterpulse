@@ -559,15 +559,24 @@ where
 
     let temporary = temporary_path(&destination)?;
     let write_result = (|| -> std::io::Result<()> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Provider settings may contain credentials. Make a new temporary
+            // file owner-only before it can contain any bytes.
+            options.mode(0o600);
+        }
+
+        let mut file = options.open(&temporary)?;
+        if let Some(permissions) = existing_permissions {
+            // Match an existing destination before writing its contents so
+            // there is never a wider-permission exposure window.
+            file.set_permissions(permissions)?;
+        }
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
-        if let Some(permissions) = existing_permissions {
-            std::fs::set_permissions(&temporary, permissions)?;
-        }
         Ok(())
     })();
 
@@ -889,6 +898,86 @@ mod r37_silent_fail_surfacing_tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_applies_private_permissions_before_replace() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tmp_settings_path("private-temporary");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let original = b"{\"secret\":\"existing\"}";
+        write_raw(&path, original);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict original permissions");
+
+        save_text_atomically_with(
+            &path,
+            "{\"secret\":\"replacement\"}",
+            |temporary, destination| {
+                let temporary_mode =
+                    std::fs::metadata(temporary)?.permissions().mode() & 0o777;
+                if temporary_mode != 0o600 {
+                    return Err(std::io::Error::other(format!(
+                        "temporary file mode was {temporary_mode:o}, expected 600"
+                    )));
+                }
+                std::fs::rename(temporary, destination)
+            },
+        )
+        .expect("save private settings");
+
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("inspect replacement")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read replacement"),
+            "{\"secret\":\"replacement\"}"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_creates_new_temporary_file_as_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tmp_settings_path("new-private-temporary");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+
+        save_text_atomically_with(
+            &path,
+            "{\"secret\":\"new\"}",
+            |temporary, destination| {
+                let temporary_mode =
+                    std::fs::metadata(temporary)?.permissions().mode() & 0o777;
+                if temporary_mode != 0o600 {
+                    return Err(std::io::Error::other(format!(
+                        "new temporary file mode was {temporary_mode:o}, expected 600"
+                    )));
+                }
+                std::fs::rename(temporary, destination)
+            },
+        )
+        .expect("save new private settings");
+
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("inspect new settings")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[cfg(unix)]
     #[test]

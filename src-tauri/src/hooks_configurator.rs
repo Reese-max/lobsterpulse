@@ -535,6 +535,19 @@ fn save_text_atomically_with<F>(
 where
     F: FnOnce(&Path, &Path) -> std::io::Result<()>,
 {
+    save_text_atomically_with_observer(path, content, |_| Ok(()), replace)
+}
+
+fn save_text_atomically_with_observer<B, F>(
+    path: &Path,
+    content: &str,
+    before_write: B,
+    replace: F,
+) -> Result<(), String>
+where
+    B: FnOnce(&Path) -> std::io::Result<()>,
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
     // Renaming over a symlink replaces the link itself. Resolve an existing
     // link first so dotfile-managed configuration keeps the link and updates
     // the canonical target atomically instead.
@@ -575,6 +588,10 @@ where
             // there is never a wider-permission exposure window.
             file.set_permissions(permissions)?;
         }
+        // Keep this observation point immediately before the first write. It
+        // makes the pre-write permission invariant directly testable without
+        // exposing it in the production API.
+        before_write(&temporary)?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
         Ok(())
@@ -901,7 +918,7 @@ mod r37_silent_fail_surfacing_tests {
 
     #[cfg(unix)]
     #[test]
-    fn atomic_save_applies_private_permissions_before_replace() {
+    fn atomic_save_applies_private_permissions_before_first_write() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tmp_settings_path("private-temporary");
@@ -912,19 +929,25 @@ mod r37_silent_fail_surfacing_tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .expect("restrict original permissions");
 
-        save_text_atomically_with(
+        save_text_atomically_with_observer(
             &path,
             "{\"secret\":\"replacement\"}",
-            |temporary, destination| {
-                let temporary_mode =
-                    std::fs::metadata(temporary)?.permissions().mode() & 0o777;
+            |temporary| {
+                let metadata = std::fs::metadata(temporary)?;
+                let temporary_mode = metadata.permissions().mode() & 0o777;
                 if temporary_mode != 0o600 {
                     return Err(std::io::Error::other(format!(
-                        "temporary file mode was {temporary_mode:o}, expected 600"
+                        "pre-write temporary file mode was {temporary_mode:o}, expected 600"
                     )));
                 }
-                std::fs::rename(temporary, destination)
+                if metadata.len() != 0 {
+                    return Err(std::io::Error::other(
+                        "pre-write temporary file already contained content",
+                    ));
+                }
+                Ok(())
             },
+            |temporary, destination| std::fs::rename(temporary, destination),
         )
         .expect("save private settings");
 
@@ -952,19 +975,25 @@ mod r37_silent_fail_surfacing_tests {
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
         let path = directory.join("hooks.json");
 
-        save_text_atomically_with(
+        save_text_atomically_with_observer(
             &path,
             "{\"secret\":\"new\"}",
-            |temporary, destination| {
-                let temporary_mode =
-                    std::fs::metadata(temporary)?.permissions().mode() & 0o777;
+            |temporary| {
+                let metadata = std::fs::metadata(temporary)?;
+                let temporary_mode = metadata.permissions().mode() & 0o777;
                 if temporary_mode != 0o600 {
                     return Err(std::io::Error::other(format!(
-                        "new temporary file mode was {temporary_mode:o}, expected 600"
+                        "pre-write new temporary file mode was {temporary_mode:o}, expected 600"
                     )));
                 }
-                std::fs::rename(temporary, destination)
+                if metadata.len() != 0 {
+                    return Err(std::io::Error::other(
+                        "pre-write new temporary file already contained content",
+                    ));
+                }
+                Ok(())
             },
+            |temporary, destination| std::fs::rename(temporary, destination),
         )
         .expect("save new private settings");
 

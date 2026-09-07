@@ -333,229 +333,41 @@ fn install_gemini_hooks(path: &PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn toml_line_without_comment(line: &str) -> Result<&str, String> {
-    let mut single_quoted = false;
-    let mut double_quoted = false;
-    let mut escaped = false;
-
-    for (index, ch) in line.char_indices() {
-        if double_quoted {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                double_quoted = false;
-            }
-        } else if single_quoted {
-            if ch == '\'' {
-                single_quoted = false;
-            }
-        } else {
-            match ch {
-                '\'' => single_quoted = true,
-                '"' => double_quoted = true,
-                '#' => return Ok(&line[..index]),
-                _ => {}
-            }
-        }
-    }
-
-    if single_quoted || double_quoted || escaped {
-        return Err("config.toml contains an unterminated quoted string".to_string());
-    }
-    Ok(line)
-}
-
-fn toml_find_equals(line: &str) -> Option<usize> {
-    let mut single_quoted = false;
-    let mut double_quoted = false;
-    let mut escaped = false;
-
-    for (index, ch) in line.char_indices() {
-        if double_quoted {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                double_quoted = false;
-            }
-        } else if single_quoted {
-            if ch == '\'' {
-                single_quoted = false;
-            }
-        } else {
-            match ch {
-                '\'' => single_quoted = true,
-                '"' => double_quoted = true,
-                '=' => return Some(index),
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
-fn toml_bracket_delta(line: &str) -> i32 {
-    let mut delta = 0;
-    let mut single_quoted = false;
-    let mut double_quoted = false;
-    let mut escaped = false;
-
-    for ch in line.chars() {
-        if double_quoted {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                double_quoted = false;
-            }
-        } else if single_quoted {
-            if ch == '\'' {
-                single_quoted = false;
-            }
-        } else {
-            match ch {
-                '\'' => single_quoted = true,
-                '"' => double_quoted = true,
-                '[' => delta += 1,
-                ']' => delta -= 1,
-                _ => {}
-            }
-        }
-    }
-    delta
-}
-
-fn toml_key_is_codex_hooks(raw_key: &str) -> bool {
-    let key = raw_key.trim();
-    key == "codex_hooks"
-        || key == "\"codex_hooks\""
-        || key == "'codex_hooks'"
-}
-
 fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
-    let mut content =
+    let content =
         std::fs::read_to_string(config_toml).map_err(|e| format!("{}: {e}", config_toml.display()))?;
-    let mut section = String::new();
-    let mut features_seen = false;
-    let mut features_header_end = None;
-    let mut feature_value_span = None;
-    let mut bracket_depth = 0i32;
-    let mut offset = 0usize;
-    let newline = if content.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut document = content
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?;
 
-    for raw_line in content.split_inclusive('\n') {
-        let line_without_newline = raw_line
-            .strip_suffix('\n')
-            .unwrap_or(raw_line)
-            .strip_suffix('\r')
-            .unwrap_or_else(|| raw_line.strip_suffix('\n').unwrap_or(raw_line));
-        let clean = toml_line_without_comment(line_without_newline)?;
-        let trimmed = clean.trim();
-
-        if trimmed.is_empty() {
-            offset += raw_line.len();
-            continue;
+    if let Some(features) = document.get("features") {
+        if !features.is_table_like() {
+            return Err(format!(
+                "{}: features must be a table or inline table",
+                config_toml.display()
+            ));
         }
-
-        if trimmed.starts_with('[') {
-            if !trimmed.ends_with(']')
-                || trimmed.starts_with("[[")
-                || trimmed.len() < 3
-                || trimmed[1..trimmed.len() - 1].trim().is_empty()
-            {
-                return Err(format!("{}: malformed table header", config_toml.display()));
-            }
-            let name = trimmed[1..trimmed.len() - 1].trim();
-            if name == "features" {
-                if features_seen {
-                    return Err(format!("{}: duplicate [features] table", config_toml.display()));
-                }
-                features_seen = true;
-                features_header_end = Some(offset + raw_line.len());
-            }
-            section.clear();
-            section.push_str(name);
-            bracket_depth = 0;
-            offset += raw_line.len();
-            continue;
-        }
-
-        if bracket_depth > 0 {
-            bracket_depth += toml_bracket_delta(clean);
-            if bracket_depth < 0 {
-                return Err(format!("{}: malformed array", config_toml.display()));
-            }
-            offset += raw_line.len();
-            continue;
-        }
-
-        let equals = toml_find_equals(clean).ok_or_else(|| {
-            format!(
-                "{}: malformed assignment near {}",
-                config_toml.display(),
-                trimmed
-            )
-        })?;
-        if clean[..equals].trim().is_empty() {
-            return Err(format!("{}: assignment has no key", config_toml.display()));
-        }
-
-        if section == "features" && toml_key_is_codex_hooks(&clean[..equals]) {
-            if feature_value_span.is_some() {
-                return Err(format!(
-                    "{}: duplicate codex_hooks in [features]",
-                    config_toml.display()
-                ));
-            }
-            let value = clean[equals + 1..].trim();
-            if value != "true" && value != "false" {
-                return Err(format!(
-                    "{}: [features].codex_hooks must be a boolean",
-                    config_toml.display()
-                ));
-            }
-            let value_offset = clean[equals + 1..]
-                .find(value)
-                .ok_or_else(|| format!("{}: invalid codex_hooks value", config_toml.display()))?;
-            let value_start = offset + equals + 1 + value_offset;
-            feature_value_span = Some((value_start, value_start + value.len(), value == "true"));
-        }
-
-        bracket_depth += toml_bracket_delta(clean);
-        if bracket_depth < 0 {
-            return Err(format!("{}: malformed array", config_toml.display()));
-        }
-        offset += raw_line.len();
     }
 
-    if bracket_depth != 0 {
-        return Err(format!("{}: unterminated array", config_toml.display()));
-    }
+    let current_value = document
+        .get("features")
+        .and_then(|features| features.get("codex_hooks"))
+        .map(|item| item.as_bool());
 
-    match feature_value_span {
-        Some((start, end, true)) => {
-            let _ = (start, end);
-            Ok(false)
-        }
-        Some((start, end, false)) => {
-            content.replace_range(start..end, "true");
-            save_text_atomically(config_toml, &content)?;
+    match current_value {
+        Some(Some(true)) => Ok(false),
+        Some(Some(false)) => {
+            document["features"]["codex_hooks"] = toml_edit::value(true);
+            save_text_atomically(config_toml, &document.to_string())?;
             Ok(true)
         }
+        Some(None) => Err(format!(
+            "{}: [features].codex_hooks must be a boolean",
+            config_toml.display()
+        )),
         None => {
-            if let Some(insert_at) = features_header_end {
-                content.insert_str(insert_at, &format!("codex_hooks = true{newline}"));
-            } else {
-                if !content.is_empty() && !content.ends_with(newline) {
-                    content.push_str(newline);
-                }
-                content.push_str(&format!("[features]{newline}codex_hooks = true{newline}"));
-            }
-            save_text_atomically(config_toml, &content)?;
+            document["features"]["codex_hooks"] = toml_edit::value(true);
+            save_text_atomically(config_toml, &document.to_string())?;
             Ok(true)
         }
     }
@@ -1128,6 +940,141 @@ existing = true
 
         let config = std::fs::read_to_string(&config_path).expect("read config");
         assert!(config.contains("[features]\ncodex_hooks = true\nexisting = true"));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_handles_eof_features_header_without_newline() {
+        let directory = tmp_settings_path("codex-feature-eof-header");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features] # preserve header comment");
+
+        install_provider("codex", &provider_with_path(&path)).expect("install codex hooks");
+
+        let config = std::fs::read_to_string(&config_path).expect("read config");
+        let document = config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("updated config remains valid TOML");
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert!(config.contains("# preserve header comment"));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_enables_dotted_feature_assignment() {
+        let directory = tmp_settings_path("codex-feature-dotted");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(
+            &config_path,
+            b"features.codex_hooks = false # preserve dotted comment\n",
+        );
+
+        install_provider("codex", &provider_with_path(&path)).expect("install codex hooks");
+
+        let config = std::fs::read_to_string(&config_path).expect("read config");
+        let document = config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("updated config remains valid TOML");
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert!(config.contains("# preserve dotted comment"));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_enables_inline_feature_assignment() {
+        let directory = tmp_settings_path("codex-feature-inline");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(
+            &config_path,
+            b"features = { codex_hooks = false, existing = true } # preserve inline comment\n",
+        );
+
+        install_provider("codex", &provider_with_path(&path)).expect("install codex hooks");
+
+        let config = std::fs::read_to_string(&config_path).expect("read config");
+        let document = config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("updated config remains valid TOML");
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["existing"].as_bool(), Some(true));
+        assert!(config.contains("# preserve inline comment"));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_preserves_multiline_toml_strings() {
+        let directory = tmp_settings_path("codex-feature-multiline");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        let original_config = br#"[other]
+basic = """
+line one
+# text inside the string
+"""
+literal = '''
+line two
+'''
+[features]
+codex_hooks = false
+"#;
+        write_raw(&config_path, original_config);
+
+        install_provider("codex", &provider_with_path(&path)).expect("install codex hooks");
+
+        let config = std::fs::read_to_string(&config_path).expect("read config");
+        let document = config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("updated config remains valid TOML");
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(
+            document["other"]["basic"].as_str(),
+            Some("\nline one\n# text inside the string\n")
+        );
+        assert_eq!(
+            document["other"]["literal"].as_str(),
+            Some("\nline two\n")
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_reinstall_remove_keeps_shared_feature_enabled() {
+        let directory = tmp_settings_path("codex-feature-lifecycle");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\ncodex_hooks = false\n");
+        let provider = provider_with_path(&path);
+
+        install_provider("codex", &provider).expect("first install");
+        install_provider("codex", &provider).expect("idempotent reinstall");
+        remove_provider("codex", &provider).expect("remove LobsterPulse hooks");
+
+        let config = std::fs::read_to_string(&config_path).expect("read config");
+        let document = config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("config remains valid TOML");
+        assert_eq!(
+            document["features"]["codex_hooks"].as_bool(),
+            Some(true),
+            "codex_hooks is a shared Codex capability and is not disabled on hook removal"
+        );
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
+                .expect("hooks remain valid JSON");
+        assert!(!hooks.to_string().contains(MARKER));
         let _ = std::fs::remove_dir_all(&directory);
     }
 

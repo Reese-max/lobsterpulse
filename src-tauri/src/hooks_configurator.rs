@@ -334,11 +334,18 @@ fn install_gemini_hooks(path: &PathBuf) -> Result<(), String> {
 }
 
 fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
-    let content =
-        std::fs::read_to_string(config_toml).map_err(|e| format!("{}: {e}", config_toml.display()))?;
-    let mut document = content
-        .parse::<toml_edit::DocumentMut>()
-        .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?;
+    let mut document = if config_toml.exists() {
+        let content = std::fs::read_to_string(config_toml)
+            .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+        content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?
+    } else {
+        // A new Codex home has hooks.json but no config.toml yet. Treat the
+        // missing file as an empty TOML document so install cannot report
+        // success while leaving the feature capability absent.
+        toml_edit::DocumentMut::new()
+    };
 
     if let Some(features) = document.get("features") {
         if !features.is_table_like() {
@@ -435,7 +442,7 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
         .parent()
         .ok_or("Invalid hooks.json path")?
         .join("config.toml");
-    if config_toml.exists() && enable_codex_hooks_feature(&config_toml)? {
+    if enable_codex_hooks_feature(&config_toml)? {
         info!("Enabled codex_hooks feature flag in config.toml");
     }
 
@@ -1096,6 +1103,62 @@ codex_hooks = false
                 .expect("hooks remain valid JSON");
         assert!(!hooks.to_string().contains(MARKER));
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_creates_missing_config_and_roundtrips_hooks() {
+        let home = tmp_settings_path("missing-codex-config");
+        let codex_dir = home.join(".codex");
+        std::fs::create_dir_all(&codex_dir).expect("mkdir isolated Codex home");
+        let hooks_path = codex_dir.join("hooks.json");
+        let config_path = codex_dir.join("config.toml");
+        write_raw(
+            &hooks_path,
+            br#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"third-party-start"}]}]}}"#,
+        );
+        assert!(!config_path.exists(), "fixture must model a fresh Codex home");
+        let provider = provider_with_path(&hooks_path);
+
+        install_provider("codex", &provider).expect("install creates missing config");
+        assert!(config_path.exists(), "install must create config.toml");
+        let first_config = std::fs::read_to_string(&config_path).expect("read created config");
+        let first_document = first_config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("created config remains valid TOML");
+        assert_eq!(
+            first_document["features"]["codex_hooks"].as_bool(),
+            Some(true)
+        );
+        let first_hooks = std::fs::read_to_string(&hooks_path).expect("read installed hooks");
+        assert!(first_hooks.contains(MARKER));
+        assert!(first_hooks.contains("third-party-start"));
+
+        install_provider("codex", &provider).expect("reinstall with created config");
+        assert_eq!(
+            std::fs::read_to_string(&hooks_path).expect("read reinstalled hooks"),
+            first_hooks
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read reinstalled config"),
+            first_config
+        );
+
+        remove_provider("codex", &provider).expect("remove generated hooks");
+        let removed_hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_path).expect("read removed hooks"))
+                .expect("removed hooks remain valid JSON");
+        assert!(removed_hooks.to_string().contains("third-party-start"));
+        assert!(!removed_hooks.to_string().contains(MARKER));
+        let removed_config = std::fs::read_to_string(&config_path).expect("read removed config");
+        let removed_document = removed_config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("removed config remains valid TOML");
+        assert_eq!(
+            removed_document["features"]["codex_hooks"].as_bool(),
+            Some(true),
+            "remove must not disable shared Codex capability"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

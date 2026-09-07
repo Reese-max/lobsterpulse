@@ -357,7 +357,23 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
     match current_value {
         Some(Some(true)) => Ok(false),
         Some(Some(false)) => {
-            document["features"]["codex_hooks"] = toml_edit::value(true);
+            let feature = document
+                .get_mut("features")
+                .and_then(|features| features.get_mut("codex_hooks"))
+                .ok_or_else(|| {
+                    format!(
+                        "{}: [features].codex_hooks disappeared during update",
+                        config_toml.display()
+                    )
+                })?;
+            let decor = feature
+                .as_value()
+                .expect("boolean TOML item is a value")
+                .decor()
+                .clone();
+            let mut enabled = toml_edit::Value::from(true);
+            *enabled.decor_mut() = decor;
+            *feature = toml_edit::Item::Value(enabled);
             save_text_atomically(config_toml, &document.to_string())?;
             Ok(true)
         }
@@ -939,7 +955,11 @@ existing = true
         install_provider("codex", &provider_with_path(&path)).expect("install codex hooks");
 
         let config = std::fs::read_to_string(&config_path).expect("read config");
-        assert!(config.contains("[features]\ncodex_hooks = true\nexisting = true"));
+        let document = config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("updated config remains valid TOML");
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["existing"].as_bool(), Some(true));
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -1039,11 +1059,11 @@ codex_hooks = false
         assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
         assert_eq!(
             document["other"]["basic"].as_str(),
-            Some("\nline one\n# text inside the string\n")
+            Some("line one\n# text inside the string\n")
         );
         assert_eq!(
             document["other"]["literal"].as_str(),
-            Some("\nline two\n")
+            Some("line two\n")
         );
         let _ = std::fs::remove_dir_all(&directory);
     }

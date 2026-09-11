@@ -86,9 +86,25 @@ LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
 - [scripts/bootstrap_git.ps1](scripts/bootstrap_git.ps1)
 - [REPO_SETUP.md](REPO_SETUP.md)
 
-## 執行
+## 安裝 / 執行
 
-### 直接跑目前產物
+> **目前沒有已發佈的 GitHub Release**——clone 這個 repo 不會拿到 exe。
+> 可用的安裝路徑是「自行 build」；第一個 tag（`v*`）推送後，
+> `.github/workflows/release.yml` 會自動產出各平台 zip 到 Releases。
+
+### 自行 build（唯一目前可用的安裝路徑）
+
+```powershell
+cargo install tauri-cli --locked
+cargo tauri build --no-bundle
+```
+
+> ⚠️ **必用 `cargo tauri build`，不可純 `cargo build --release`**。
+> 純 cargo build --release 會跳過 frontend embed，release webview fallback
+> 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
+> 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
+
+產物在 `src-tauri/target/release/`：
 
 ```powershell
 .\src-tauri\target\release\lobster-pulse.exe
@@ -96,30 +112,13 @@ LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
 
 主程式與 sidecar 要放在同一層，因為主程式會找相鄰的 `lobster-pulse-hook.exe`。
 
-### 重新建置 release
+### 發佈 Release（maintainer）
 
-> ⚠️ **必用 `cargo tauri build`，不可純 `cargo build --release`**。
-> 純 cargo build --release 會跳過 frontend embed，release webview fallback
-> 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
-> 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
+推送 `v*` tag 觸發 `release.yml` → 建出 Windows/macOS/Linux 各平台的 zip
+（含 `lobster-pulse` + `lobster-pulse-hook` 兩個 binary）→ 建立 **draft** Release，
+手動 publish 後即為對外下載頁。也支援 `workflow_dispatch` 手動觸發。
 
-兩種變體：
-
-- **快速驗證**（只要 `.exe`，不打 installer）：
-
-  ```powershell
-  cd .\src-tauri
-  cargo tauri build --no-bundle
-  ```
-
-  前置：`cargo install tauri-cli --locked`（鎖版避免 Tauri CLI breaking change）。
-
-- **完整 installer**（要 `.msi` / `.deb` / `.AppImage` 等）：
-
-  ```powershell
-  cargo install tauri-cli --locked
-  cargo tauri build
-  ```
+要 `.msi` / `.deb` / `.AppImage` installer 時改用 `cargo tauri build`（不打 `--no-bundle`）。
 
 ## 品牌資產
 
@@ -177,4 +176,4 @@ repo 內附了一個可以重生品牌圖示的腳本：
 ## 已知保留項
 
 - `CLAUDE.md` 仍主要是 upstream 專案說明，這回合沒有一起重寫
-- docs 裡沒有掛你的實際 repo / release 下載連結，因為你還沒提供正式發佈位置
+- 目前沒有已發佈的 GitHub Release；首個 `v*` tag 會觸發 release.yml 產出各平台 zip（draft → 手動 publish）

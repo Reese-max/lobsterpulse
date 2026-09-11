@@ -82,6 +82,11 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 > 3 重鎖定 (AI Supervisor 方向 UNKNOWN 0/10 + 策略顧問 #1 行動 closure 路徑 +
 > MISSION 自身 2-週 lag 觸發條件過期 ~10 週)。R197 選 **Path A 降級** 1 輪 closure。
 
+> **「0 結構性差距」的口徑聲明**：下表所有「0 結構性差距」僅對**已宣告可達 scope**
+> 成立（本機 4 + OpenAB 5 = 9），不是對外宣稱的 13 provider。4 個永久非本機 scope 的
+> bot（irisx_bot/grokx/lpbot/mimo）已移出分母；若把 13 當分母，實際觀測覆蓋率仍以
+> 表列分子（如 2/13 emit）為準——「0 gap」不代表 13 provider 都在被監控。
+
 **K0 結構性降級口徑 (R182 決議, R197 落地)**:
 
 | 子指標 | 本機可達 | OpenAB scope (受 cicx 等浮動) | 永久非本機 scope (永久 skip) | 結構性差距 |
@@ -105,7 +110,7 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 永久 skip / MISSION R182 補欄 + 4 missing + 永久非 scope 標記不退)。
 
 **未選 Path B 原因**: 1 sprint 工作量 (~500 行 Rust + 9 handler + 護衛), owner M capacity
-未確認, 結構性風險 > 結構性收益 (Path A 已能 0 結構性差距達標, Path B 的 4 missing
+未確認, 結構性風險 > 結構性收益 (Path A 對已宣告可達 scope 9/13 已能 0 結構性差距達標——非對外宣稱的 13 provider 全數, Path B 的 4 missing
 unblock 收益不抵 sprint 級投入)。
 
 ### M1 補 (2026-07-05): otel-genai Phase 2/3 落地 closure

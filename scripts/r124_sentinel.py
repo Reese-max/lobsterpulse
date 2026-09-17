@@ -84,7 +84,12 @@ K41_CHORE_RATIO_MAX: Final[float] = 0.30
 # git status --porcelain 0 檔 dirty。R138 護衛設計: tuple 必須跟事實 sync,
 # owner M 已收 → tuple 跟著空 (= 0 WIP, R13 防護仍守住但暫無 WIP scope)。
 # 若 owner M 開新 WIP, 需在同 commit 加回 tuple。
-OWNER_M_WIP_FILES: Final[tuple[str, ...]] = ()
+OWNER_M_WIP_FILES: Final[tuple[str, ...]] = (
+    "MISSION.md",
+    "README.md",
+    "docs/index.html",
+    ".issue-loop-prompt.md",
+)
 
 
 @dataclass(frozen=True)

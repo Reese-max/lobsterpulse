@@ -63,23 +63,34 @@ jobs:
       - name: Install Tauri CLI
         run: cargo binstall -y tauri-cli@^2.0
 
-      - name: Test hooks configuration
-        run: cargo test --manifest-path src-tauri/Cargo.toml hooks_configurator
-
-      - name: Build (no bundle)
-        run: cargo tauri build --no-bundle
-
-      - name: Set up Python for runtime smoke
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Check counter migration contract
+        run: |
+          python scripts/check_counter_migration.py
+          python -m unittest scripts/test_check_counter_migration.py
+
+      - name: Test hooks configuration
+        run: cargo test --manifest-path src-tauri/Cargo.toml hooks_configurator
+
+      - name: Test postponed counter migration
+        run: cargo test --manifest-path src-tauri/Cargo.toml postponed_counter_migration
+
+      - name: Build (no bundle)
+        run: cargo tauri build --no-bundle
 
       - name: Packaged Codex runtime smoke
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt install -y xvfb dbus-x11
           test/codex-runtime-smoke.sh --skip-build
+
+      - name: Packaged counter migration and Prometheus smoke
+        if: matrix.platform == 'ubuntu-22.04'
+        run: bash test/counter-migration-runtime-smoke.sh
 
       - name: Upload binary
         uses: actions/upload-artifact@v6

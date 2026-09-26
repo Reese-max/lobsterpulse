@@ -1,12 +1,24 @@
 # Changelog
 
+## Counter migration decision · 2026-09-26
+
+**POSTPONED.** The previously announced 2026-07-03 removal did not occur.
+All six legacy counters and their `_total` replacements remain equal-value
+dual emits. New PromQL should use `_total`. Keeping the aliases adds six metric
+families and up to four extra series per provider. The next review is
+2026-10-31, **not** a removal date; removal requires explicit monitoring-owner
+consumer inventory, query updates, and scrape/restart evidence. The
+[machine-readable decision](docs/metrics/counter-migration.json) and
+[issue #11](https://github.com/Reese-max/lobsterpulse/issues/11) track the hold.
+
 ## v0.5.5 (unreleased) · 2026-06-05 — Prometheus metric rename prep (T-0 公告)
 
-> 📢 **DEPRECATION 公告（T+4 週切換 / 2026-07-03）**：6 條 counter-typed
-> Prometheus metric 將從現名 rename 為 `_total` 結尾，對齊
+> **Historical T-0 notice, superseded by the POSTPONED decision above.**
+> The six counter-typed Prometheus metrics were planned to change on
+> 2026-07-03 to names ending in `_total`, to follow the
 > [Prometheus naming convention](https://prometheus.io/docs/practices/naming/)。
-> 抓取端（scrape / recording / alert rule）、Grafana dashboard、文檔引用
-> 對**現名**的所有表達式將於 T+4 週失效。本段是 5 週廣播時程的 T-0 公告
+> The planned removal did not happen. Scrape, recording, alert, and Grafana
+> references to legacy names still work while the hold remains. 本段是 5 週廣播時程的 T-0 公告
 > （後續 T-1 dual-emit shim → T-2 廣播 → T-3 監控窗口 → T-4 切換 →
 > T-5 post-mortem 走 R107+ owner）。
 >
@@ -27,8 +39,8 @@
 | 5 | `lobsterpulse_provider_failure_count` | `lobsterpulse_provider_failure_count_total` | 97 |
 | 6 | `lobsterpulse_provider_session_count` | `lobsterpulse_provider_session_count_total` | 109 |
 
-抓取端 / alert / Grafana dashboard owner 請於 **T-1 (2026-06-12)**
-dual-emit shim 落地前更新對應表達式，避免 T+4 週切換日 silent break。
+抓取端 / alert / Grafana dashboard owner 仍需提供明確 consumer inventory
+和 query 更新證據；原 T-1 (2026-06-12) 與 T+4 時程已過期，不能作為切換依據。
 詳見 [`openspec/changes/prometheus-counter-convention/`](openspec/changes/prometheus-counter-convention/)
 （含 design 5 週時程 + spec R-3 廣播 4 層面）。
 

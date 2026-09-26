@@ -60,6 +60,12 @@ class AttentionReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicting duplicate eventId"):
             replay([a, bad])
 
+    def test_cross_provider_events_do_not_share_a_local_correlation_id(self):
+        # A provider-local correlation value is not evidence of a shared root cause.
+        state = replay([event("claude-wait", "WAITING", 1000, provider="claude"),
+                        event("codex-wait", "WAITING", 1100, provider="codex")])
+        self.assertEqual(len(queue(state)), 2)
+
     def test_routine_completion_and_critical_ack_are_distinct(self):
         state = replay([event("done", "COMPLETED", 1000),
                         event("critical", "ERROR", 1100, reason="CRITICAL_ERROR")])

@@ -59,8 +59,10 @@ Receipt 是當時的判斷快照，不因 policy 改版而重算。純研究 spi
   且在 5 分鐘 correlation window 內的
   `WAITING → RECOVERED` → auto-resolve，保留所有原始 event IDs。
 - 同 provider/session/correlation/kind/reason/freshness 的 5 分鐘
-  duplicate/cascade → 單一 human-facing item，raw evidence 完整可查；
+  duplicate → 單一 human-facing item，raw evidence 完整可查；
   未知 session/correlation 不跨事件合併。
+- 不跨 provider/session 推測 shared root cause；目前沒有可信的全域 cause ID。
+  跨來源 cascade 合併須等真實事件證明共同 identity 後另行設計，避免誤壓人類決策。
 - `COMPLETED` routine 預設不與 `BLOCKING` 同中斷等級；history 可查。
 - `STALE / NOT_MONITORED / EXTERNAL_DEPENDENCY / UNKNOWN` 不得被當
   success/auto-resolved。
@@ -92,7 +94,8 @@ duplicates、8 個獨立 error、1 個 waiting/recovered pair（2 events）。
 預期：100 個 raw IDs 全部可追、9 個 human queue items、1 個 auto-resolved
 item；輸入順序打亂後輸出完全一致。另測 source stale/unknown、
 `NOT_MONITORED`、`EXTERNAL_DEPENDENCY`、critical ack、snooze expiry、
-JSON roundtrip、content-bearing 欄位拒收與禁用 file/shell/network 的負向測試。
+JSON roundtrip、跨 provider 不推測合併、content-bearing 欄位拒收與禁用
+file/shell/network 的負向測試。
 這些是 synthetic 結果，不代表真實多 agent session 的壓縮率或可用性。
 
 ## 3. Runtime 驗證（NEEDS_RUNTIME_VERIFICATION）

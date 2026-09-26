@@ -4087,6 +4087,38 @@ pub fn run() {
             let startup_capsule_w = config.appearance.capsule_width as f64;
             app.manage(AppConfigState(Mutex::new(config)));
 
+            // Runtime-verification hook: `LOBSTERPULSE_HEADLESS_INSTALL=codex,...`
+            // runs the same `install_provider` path as the settings checkbox,
+            // without needing a webview click. Used by
+            // `test/codex-runtime-smoke.sh` to produce packaged-binary install
+            // receipts on a disposable HOME (issue #3 runtime gate).
+            // Test-only knob — never set this in normal use; it force-enables
+            // the listed providers' hooks on every launch.
+            if let Ok(list) = std::env::var("LOBSTERPULSE_HEADLESS_INSTALL") {
+                let state = app.state::<AppConfigState>();
+                let mut config = state.0.lock().unwrap();
+                for pid in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    let Some(provider) = config.providers.get(pid) else {
+                        log::warn!("[headless-install] unknown provider: {pid}");
+                        continue;
+                    };
+                    match hooks_configurator::install_provider(pid, provider) {
+                        Ok(()) => {
+                            if let Some(p) = config.providers.get_mut(pid) {
+                                p.enabled = true;
+                            }
+                            log::info!("[headless-install] {pid}: hooks installed");
+                        }
+                        Err(e) => {
+                            log::error!("[headless-install] {pid}: install failed: {e}")
+                        }
+                    }
+                }
+                if let Err(e) = save_config(&config) {
+                    log::warn!("[headless-install] failed to persist config: {e}");
+                }
+            }
+
             // K14 落地：初始化 process-level Discord health state。
             // OnceLock get_or_init idempotent,重複呼叫安全;沒呼叫前
             // `record_*_failure` 走 no-op、`health_snapshot()` 退化為 Default

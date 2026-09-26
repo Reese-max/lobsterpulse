@@ -100,6 +100,7 @@
 
 ## 典型問題與 SOP
 
+- **Codex runtime smoke（issue #3 gate）**：`./test/codex-runtime-smoke.sh` — disposable `$HOME`（含 `codex_hooks=false`）跑 packaged binary（Xvfb + dbus-run-session + `LOBSTERPULSE_HEADLESS_INSTALL=codex` headless install）→ 真 sidecar 打 SessionStart → 驗 `/metrics` `lobsterpulse_provider_sessions{provider="codex"} ≥1`。證據收 `docs/audits/issue-3-runtime-evidence-*.md`
 - **找不到 tray icon**：Win11 摺進「^」→ `ms-settings:taskbar` → 釘出來
 - **設定頁兩個同名**：tray registry 殭屍 → 清 `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\TrayNotify\IconStreams` + restart explorer
 - **webview 白屏**：用 `cargo tauri build --no-bundle`，不要純 `cargo build --release`

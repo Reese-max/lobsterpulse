@@ -69,6 +69,18 @@ jobs:
       - name: Build (no bundle)
         run: cargo tauri build --no-bundle
 
+      - name: Set up Python for runtime smoke
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Packaged Codex runtime smoke
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt install -y xvfb dbus-x11
+          test/codex-runtime-smoke.sh --skip-build
+
       - name: Upload binary
         uses: actions/upload-artifact@v6
         with:

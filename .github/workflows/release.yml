@@ -5,16 +5,16 @@ name: Release
 # zip to a GitHub Release. The Release is created as a draft so you can
 # review and publish manually.
 #
-# Trigger by pushing a tag matching v*:
-#   git tag v0.2.0
-#   git push origin v0.2.0
+# Only after owner approval, trigger by pushing a tag matching the app version:
+#   git tag v<app-version>
+#   git push origin v<app-version>
 #
-# Manual dispatch is also allowed (uses the workflow's own git ref as tag).
+# A tag must match the Cargo/Tauri/package/docs version. Branch dispatch is
+# intentionally disabled so it cannot create a draft with a branch-name tag.
 
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -45,6 +45,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Verify release version and regression checks
+        run: |
+          python scripts/release_contract.py --tag "${{ github.ref_name }}"
+          python scripts/test_release_contract.py
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -87,7 +96,7 @@ jobs:
             cargo tauri build --no-bundle
           fi
 
-      - name: Package zip
+      - name: Package and verify portable archive
         shell: bash
         run: |
           if [[ -n "${{ matrix.rust-target }}" ]]; then
@@ -95,14 +104,11 @@ jobs:
           else
             BUILD_DIR="src-tauri/target/release"
           fi
-          cd "$BUILD_DIR"
-          ZIP_NAME="lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            7z a -tzip "$ZIP_NAME" lobster-pulse.exe lobster-pulse-hook.exe
-          else
-            zip "$ZIP_NAME" lobster-pulse lobster-pulse-hook
-          fi
-          mv "$ZIP_NAME" "$GITHUB_WORKSPACE/"
+          python scripts/release_contract.py \
+            --tag "${{ github.ref_name }}" \
+            --platform "${{ matrix.name }}" \
+            --build-dir "$BUILD_DIR" \
+            --output-dir "$GITHUB_WORKSPACE"
 
       # Extract the section for this tag from CHANGELOG.md so the draft
       # release body is populated automatically. Runs on every matrix
@@ -124,10 +130,20 @@ jobs:
           if [[ ! -s release-notes.md ]]; then
             echo "_Release notes for $TAG were not found in CHANGELOG.md — falling back to auto-generated notes._" > release-notes.md
           fi
+          cat >> release-notes.md <<'EOF'
+
+          Portable archives contain the main executable and hook sidecar. Verify the
+          matching `.zip.sha256` before unpacking. These CI artifacts are unsigned;
+          Windows SmartScreen may show a warning. Review the publisher and file hash
+          before deciding whether to run the program. Clean Windows 11 installation
+          and sidecar behavior must be checked before this draft is published.
+          EOF
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip
+          files: |
+            lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip
+            lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip.sha256
           draft: true
           body_path: release-notes.md

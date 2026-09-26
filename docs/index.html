@@ -24,7 +24,7 @@
       <div class="nav-links">
         <a href="#features">功能</a>
         <a href="#workflow">工作流</a>
-        <a href="#download">下載</a>
+        <a href="#download">建置</a>
         <a href="#repo">維護</a>
       </div>
     </div>
@@ -46,11 +46,11 @@
           還有需要時才打開的 Gemini，集中在同一個浮動膠囊裡，用繁中介面、橘色品牌與你的工作習慣做預設。
         </p>
         <div class="cta">
-          <a class="btn btn-primary" href="#download">看下載區塊</a>
+          <a class="btn btn-primary" href="#download">看原始碼建置步驟</a>
           <a class="btn btn-secondary" href="#workflow">看預設工作流</a>
         </div>
         <div class="cta-secondary">
-          <span class="dl-version-label">版本：<strong>v0.2.2</strong></span>
+          <span class="dl-version-label">原始碼版本：<strong>v0.5.4</strong>（尚未發行）</span>
           <span class="cta-sep">·</span>
           <span class="link-subtle">品牌：<code>龍蝦監控 / LobsterPulse</code></span>
           <span class="cta-sep">·</span>
@@ -72,8 +72,8 @@
             <span><code>lobsterpulse</code> 設定與 runtime 路徑</span>
           </div>
           <div class="metric-card">
-            <strong>已驗證</strong>
-            <span>release build 與啟動流程</span>
+            <strong>原始碼</strong>
+            <span>目前需要開發工具鏈自行建置</span>
           </div>
         </div>
       </div>
@@ -186,14 +186,14 @@
 
   <section id="download">
     <div class="container">
-      <h2>下載與產物</h2>
-      <p class="section-lede">這份分支目前以你本機的 release 產物和可再生 bundle 資產為主，不再依賴 upstream release。</p>
+      <h2>從原始碼建置</h2>
+      <p class="section-lede">目前沒有已發佈的下載檔或 installer。原始碼中的版本是 v0.5.4；建置需要 Windows 開發工具鏈。請先閱讀 <a href="https://github.com/Reese-max/lobsterpulse#從原始碼建置-windows">README 的完整 Windows 前置需求與步驟</a>。</p>
 
       <div class="download-grid">
         <article class="download-card featured">
-          <div class="download-badge success">已驗證</div>
-          <h3>Windows 桌面版</h3>
-          <p>主程式和 hook sidecar 已經一起重建，現在這兩個檔案就是你自己的交付入口。</p>
+          <div class="download-badge">建置後才有</div>
+          <h3>Windows 本機產物</h3>
+          <p>以下路徑只會在你自己執行建置後出現；它們不是公開下載連結。主程式和 hook sidecar 要保留在同一資料夾。</p>
           <pre><code>src-tauri\target\release\lobster-pulse.exe
 src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
           <div class="download-meta">
@@ -215,13 +215,13 @@ src-tauri\icons\android\</code></pre>
 
         <article class="download-card">
           <div class="download-badge">可重建</div>
-          <h3>原始碼建置</h3>
-          <p>如果你之後要打新的 release 或 bundle，直接從 repo 內重建，不需要回頭依賴上游產物。</p>
-          <p class="download-note">⚠️ <strong>release 必須走 <code>cargo tauri build --no-bundle</code></strong>，不可純 <code>cargo build --release</code>（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。前置 <code>cargo install tauri-cli --locked</code>。</p>
-          <pre><code>cd src-tauri
-cargo tauri build --no-bundle    # 快速驗證：exe + embed frontend，無 installer
-cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage（需 tauri-cli）</code></pre>
-          <p class="download-note">三方對齊 <code>README.md</code> + <code>CLAUDE.md</code>「Build SOP（重要）」段 + <code>build.sh</code>。</p>
+          <h3>建置命令</h3>
+          <p>安裝 Rust stable MSVC、Microsoft C++ Build Tools、WebView2 與 Git 後，在 repo 根目錄使用 Tauri CLI 2 建置。</p>
+          <pre><code>git clone https://github.com/Reese-max/lobsterpulse.git
+cd lobsterpulse
+cargo install tauri-cli --version "^2.0.0" --locked
+cargo tauri build --no-bundle</code></pre>
+          <p class="download-note">不要改用 <code>cargo build --release</code>，它不會嵌入前端。詳細需求與驗證命令見 <a href="https://github.com/Reese-max/lobsterpulse#從原始碼建置-windows">README</a>。</p>
         </article>
       </div>
     </div>
@@ -229,15 +229,14 @@ cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage�
 
   <section id="install">
     <div class="container">
-      <h2>建置與啟動</h2>
-      <p class="section-lede">這三個入口對應你最常用的維護節點：跑程式、重生資產、打 bundle。</p>
+      <h2>建置後啟動</h2>
+      <p class="section-lede">請先依上方步驟建置。以下檔案不在 clone 或原始碼下載檔內。</p>
 
       <div class="install-grid">
         <div class="install-card">
-          <h3>直接跑 release 產物</h3>
-          <pre><code>src-tauri\target\release\lobster-pulse.exe
-src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
-          <p class="install-note">兩個檔案要放在同一層，主程式會用相鄰路徑找到 sidecar。</p>
+          <h3>執行本機產物</h3>
+          <pre><code>.\src-tauri\target\release\lobster-pulse.exe</code></pre>
+          <p class="install-note">在 repo 根目錄啟動主程式。<code>lobster-pulse-hook.exe</code> 必須與主程式同層；sidecar 不需手動啟動。</p>
         </div>
 
         <div class="install-card">
@@ -247,10 +246,11 @@ src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
         </div>
 
         <div class="install-card">
-          <h3>從原始碼重建</h3>
-          <pre><code>cd src-tauri
-cargo build --release</code></pre>
-          <p class="install-note">如果之後要打完整 bundle，再另外補裝 <code>cargo-tauri</code> 後跑 <code>cargo tauri build</code>。</p>
+          <h3>設定與更新</h3>
+          <pre><code>%APPDATA%\lobsterpulse\config.json
+git pull --ff-only
+cargo tauri build --no-bundle</code></pre>
+          <p class="install-note">先關閉程式再更新，主程式與 sidecar 要一起更新；若複製產物使用，保留舊的一對檔案供回復。尚無已發行版本可供下載回滾。</p>
         </div>
       </div>
     </div>
@@ -296,7 +296,7 @@ git merge --ff-only feature/your-change</code></pre>
       <div class="footer-links">
         <a href="#features">功能</a>
         <a href="#workflow">工作流</a>
-        <a href="#download">下載</a>
+        <a href="#download">建置</a>
         <a href="#repo">維護</a>
       </div>
       <p>龍蝦監控 LobsterPulse · 你的自訂桌面 AI CLI 監控器</p>

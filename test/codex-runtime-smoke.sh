@@ -13,8 +13,8 @@
 #    4. a real lobster-pulse-hook sidecar invocation (the exact thing
 #       Codex runs) delivers a Codex event the app actually counts
 #
-#  Everything happens under a disposable $HOME — nothing touches the
-#  developer's real ~/.codex or ~/.lobsterpulse.
+#  Everything happens under disposable home and XDG directories — nothing
+#  touches the developer's real Codex or LobsterPulse configuration.
 #
 #  Requires: cargo, cargo-tauri, Xvfb, dbus-run-session, curl, python3.
 #  Usage: test/codex-runtime-smoke.sh [--skip-build]
@@ -39,7 +39,8 @@ fi
 [ -x "$SIDECAR" ] || fail "missing $SIDECAR"
 
 # ── 2. disposable home with pre-existing codex_hooks = false ──
-HOME_DIR=$(mktemp -d /tmp/lp-codex-smoke-XXXXXX)
+HOME_DIR=$(mktemp -d /tmp/lp-codex-smoke-XXXXXX) || fail "cannot create disposable home"
+[ -n "$HOME_DIR" ] || fail "mktemp returned an empty home path"
 APP_PID=""
 cleanup() {
   if [ -n "$APP_PID" ]; then
@@ -62,7 +63,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$HOME_DIR/.codex"
+export HOME="$HOME_DIR"
+export XDG_CONFIG_HOME="$HOME_DIR/.config"
+export XDG_CACHE_HOME="$HOME_DIR/.cache"
+export XDG_DATA_HOME="$HOME_DIR/.local/share"
+export XDG_STATE_HOME="$HOME_DIR/.local/state"
+export XDG_RUNTIME_DIR="$HOME_DIR/.run"
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" \
+  || fail "cannot create disposable XDG directories"
+mkdir -m 700 "$XDG_RUNTIME_DIR" || fail "cannot create disposable runtime directory"
+
+mkdir -p "$HOME_DIR/.codex" || fail "cannot create disposable Codex directory"
 cat > "$HOME_DIR/.codex/config.toml" <<'EOF'
 # user comment must survive
 [features]

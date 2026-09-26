@@ -30,13 +30,20 @@
 
 ## 監控清單（v5.1+）
 
-LobsterPulse v5.1 同時監控兩條路徑，共 **13 provider**（🤖 OpenAB 9 + 💻 本機 4）。
+LobsterPulse v5.1 **註冊 13 個整合**（🤖 OpenAB 9 + 💻 本機 CLI 4）；
+每個 ID 都可接收對應 hook 事件。這不是「13 個正在監控」的即時宣稱。
 
-> **覆蓋口徑聲明**（K0 量化用）：13 是註冊 provider 數，不等於「本地可觀測」數。
-> 其中 `irisx_bot` / `grokx` / `lpbot` / `mimo` 四個 OpenAB bot 為**永久非本機 scope**
-> （不寫本地 usage snapshot、OpenAB 端不可達，R182 決議移出 K0 量化），
-> 本機可達 scope 上限為 9。即時覆蓋率會隨 OpenAB 端 bot 上下線浮動，
-> 現況數值見 `MISSION.md` 的 K0 口徑表。
+覆蓋數字分開顯示：**已註冊**（registry ID）、**已設定**（app config enabled）、
+**近 24h 有事件**（`/metrics` 事件計數與最近事件年齡）、**非零 session**
+（目前 `/metrics` session 數 > 0）、**新鮮 quota**（對應 snapshot < 24h）。
+請以設定頁「監控覆蓋」與 `python scripts/k0_measure.py` 的帶時間戳收據查看本機現況；
+資料來源中斷顯示「未知」，不推算成 0/13。每個數字保留 13 個已註冊 ID 的對照分母和排除原因。
+
+`irisx_bot` / `grokx` / `lpbot` / `mimo` 的 hook 可送到本機，
+但 quota snapshot 來源及 OpenAB owner 尚待確認；缺 quota 時顯示**外部來源待確認**，
+仍計入 13 個已註冊整合的缺口。契約與目前基線見
+[`src/provider-capabilities.json`](src/provider-capabilities.json) 與
+[`docs/k0-baselines.json`](docs/k0-baselines.json)。
 
 ### 🤖 OpenAB 9 bot
 

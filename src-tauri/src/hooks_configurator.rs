@@ -940,6 +940,123 @@ codex_hooks = false # preserve this comment
         assert!(config.contains("# codex_hooks = false"));
         assert!(config.contains(r#"description = "codex_hooks = false""#));
         assert_eq!(config.matches("codex_hooks = true").count(), 1);
+        // Acceptance gate: the enable flow must also write the real hook entries
+        // (5 events) into hooks.json, not just flip the feature flag.
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
+                .expect("hooks remain valid JSON");
+        assert_eq!(marker_count(&hooks), 5);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_leaves_already_enabled_flag_byte_identical() {
+        // Issue #3 fixture: flag already `true`. Install must not rewrite
+        // config.toml at all (no spurious .bak churn, no decor loss risk).
+        let directory = tmp_settings_path("codex-feature-already-true");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        let original_config = b"# my codex config\n[features]\ncodex_hooks = true # user enabled\nother = 1\n";
+        write_raw(&config_path, original_config);
+
+        install_provider("codex", &provider_with_path(&path)).expect("install codex hooks");
+
+        assert_eq!(
+            std::fs::read(&config_path).expect("read config"),
+            original_config,
+            "already-enabled config.toml must be left byte-identical"
+        );
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
+                .expect("hooks remain valid JSON");
+        assert_eq!(marker_count(&hooks), 5);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_rejects_non_boolean_feature_flag() {
+        // Issue #3 fixture: `codex_hooks` present but not a boolean. Fail
+        // closed — never append a second/conflicting key, never touch files.
+        let directory = tmp_settings_path("codex-feature-nonbool");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{}}"#;
+        let original_config = b"[features]\ncodex_hooks = \"yes\"\n";
+        write_raw(&path, original_hooks);
+        write_raw(&config_path, original_config);
+
+        let result = install_provider("codex", &provider_with_path(&path));
+        assert!(result.is_err(), "non-boolean codex_hooks must fail closed");
+        assert!(
+            result.unwrap_err().contains("must be a boolean"),
+            "error should name the boolean contract"
+        );
+        assert_eq!(std::fs::read(&path).expect("read hooks"), original_hooks);
+        assert_eq!(
+            std::fs::read(&config_path).expect("read config"),
+            original_config
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_does_not_confuse_other_section_codex_hooks_key() {
+        // Issue #3 fixture: a *real* `codex_hooks` key under a different table
+        // is not the feature flag — `[features]` must still get its own entry.
+        let directory = tmp_settings_path("codex-feature-other-key");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(
+            &config_path,
+            b"[other]\ncodex_hooks = false\n[features]\nexisting = true\n",
+        );
+
+        install_provider("codex", &provider_with_path(&path)).expect("install codex hooks");
+
+        let config = std::fs::read_to_string(&config_path).expect("read config");
+        let document = config
+            .parse::<toml_edit::DocumentMut>()
+            .expect("updated config remains valid TOML");
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(
+            document["other"]["codex_hooks"].as_bool(),
+            Some(false),
+            "unrelated [other].codex_hooks key must not be modified"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_preserves_user_owned_true_flag() {
+        // Issue #3 contract: remove/disable must not clobber a user-owned
+        // `codex_hooks = true`. codex_hooks is a shared Codex capability —
+        // removal leaves config.toml byte-identical regardless of who set it.
+        let directory = tmp_settings_path("codex-feature-user-true");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        let original_config = b"[features]\ncodex_hooks = true # user-owned\n";
+        write_raw(&config_path, original_config);
+        let provider = provider_with_path(&path);
+
+        install_provider("codex", &provider).expect("install codex hooks");
+        remove_provider("codex", &provider).expect("remove LobsterPulse hooks");
+
+        assert_eq!(
+            std::fs::read(&config_path).expect("read config"),
+            original_config,
+            "remove must never rewrite config.toml (shared capability)"
+        );
+        let hooks: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
+                .expect("hooks remain valid JSON");
+        assert_eq!(marker_count(&hooks), 0);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

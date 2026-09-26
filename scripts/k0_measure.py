@@ -32,14 +32,22 @@ import urllib.error
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
-# 13 provider 真實清單 (對齊 CLAUDE.md v5.1 「4 本機 CLI + 9 OpenAB bot」)
-# hook_server.rs::KNOWN_PROVIDERS 為 source of truth: 4 + 9 = 13。
-# R108 修 docstring/spec drift: 舊版寫「14 / 4+10」是 R83 落地時尚未對齊 R78
-# (grokx/lpbot/mimo 補完後) 的殘留, 已同步收齊。
-LOCAL_CLI = ["claude", "codex", "copilot", "gemini"]
-OPENAB_BOT = ["cicx", "gitx", "giminix", "codex_bot", "openx",
-              "irisx_bot", "grokx", "lpbot", "mimo"]
-KNOWN_PROVIDERS = LOCAL_CLI + OPENAB_BOT  # 13 個, 對齊 hook_server.rs:323-340
+REGISTRY_PATH = Path(__file__).resolve().parent.parent / "src" / "provider-capabilities.json"
+
+
+def load_registry(path: Path = REGISTRY_PATH) -> Dict:
+    """The versioned registry is the source for K0 provider IDs and denominators."""
+    registry = json.loads(path.read_text(encoding="utf-8"))
+    ids = [p["id"] for p in registry["providers"]]
+    if len(ids) != len(set(ids)) or not registry.get("registry_version"):
+        raise ValueError("invalid provider capability registry")
+    return registry
+
+
+REGISTRY = load_registry()
+LOCAL_CLI = [p["id"] for p in REGISTRY["providers"] if p["scope"] == "local_cli"]
+OPENAB_BOT = [p["id"] for p in REGISTRY["providers"] if p["scope"] == "openab_push"]
+KNOWN_PROVIDERS = LOCAL_CLI + OPENAB_BOT
 
 # 配置
 METRICS_URL = os.environ.get("LOBSTERPULSE_METRICS_URL", "http://127.0.0.1:19380/metrics")
@@ -47,6 +55,110 @@ QUOTA_DIR = Path(os.environ.get("LOBSTERPULSE_QUOTA_DIR",
                                  str(Path.home() / ".lobsterpulse")))
 FRESH_HOURS = 24
 STALE_MARKER = re.compile(r"\.stale-\d{8}$")
+
+
+def read_configured_providers() -> Dict[str, bool] | None:
+    """Return None when config cannot be read; unknown must never become zero."""
+    override = os.environ.get("LOBSTERPULSE_CONFIG_FILE")
+    if override:
+        path = Path(override)
+    elif os.name == "nt":
+        path = Path(os.environ.get("APPDATA", "")) / "lobsterpulse" / "config.json"
+    else:
+        path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "lobsterpulse" / "config.json"
+    try:
+        providers = json.loads(path.read_text(encoding="utf-8"))["providers"]
+        if not isinstance(providers, dict):
+            return None
+        return {p: providers.get(p, {}).get("enabled") is True for p in KNOWN_PROVIDERS}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def parse_provider_metric(metrics_text: str, metric: str) -> Dict[str, float]:
+    """Read a single provider-labelled Prometheus family without inferring missing samples."""
+    pattern = re.compile(rf'^{re.escape(metric)}\{{provider="([^"]+)"\}}\s+([0-9.eE+-]+)$', re.MULTILINE)
+    return {m.group(1): float(m.group(2)) for m in pattern.finditer(metrics_text)
+            if m.group(1) in KNOWN_PROVIDERS}
+
+
+def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
+                           quota: Dict[str, Dict], configured: Dict[str, bool] | None,
+                           *, registry: Dict = None, timestamp: str = None) -> Dict:
+    """Evidence-bearing current coverage; exclusions never erase advertised gaps."""
+    registry = registry or REGISTRY
+    timestamp = timestamp or time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    records = registry["providers"]
+    registered_ids = [p["id"] for p in records]
+    scoped = [p for p in records if p["lifecycle"] == "active"]
+    exclusions = [{"id": p["id"], "reason": f"lifecycle:{p['lifecycle']}"}
+                  for p in records if p["lifecycle"] != "active"]
+    events = parse_provider_metric(metrics_text, "lobsterpulse_provider_events_total")
+    idle = parse_provider_metric(metrics_text, "lobsterpulse_provider_idle_seconds")
+    current_emit = {p["id"] for p in scoped
+                    if events.get(p["id"], 0) > 0
+                    and p["id"] in idle and 0 <= idle[p["id"]] < p["freshness_seconds"]}
+    nonzero = {p["id"] for p in scoped if health.get(p["id"], 0) > 0}
+    fresh_quota = {p["id"] for p in scoped if quota.get(p["id"], {}).get("state") == "fresh"}
+    configured_ids = ({p["id"] for p in scoped if configured.get(p["id"], False)}
+                      if configured is not None else None)
+
+    def dimension(ids: Set[str] | None, *, is_registry_count: bool = False) -> Dict:
+        numerator = len(ids) if ids is not None else None
+        denominator = len(registered_ids) if is_registry_count else len(scoped)
+        return {
+            "status": "MEASURED" if ids is not None else "UNAVAILABLE",
+            "numerator": numerator,
+            "denominator": denominator,
+            "registered_denominator": len(registered_ids),
+            "gap_to_registered": len(registered_ids) - numerator if numerator is not None else None,
+            "provider_ids": sorted(ids) if ids is not None else [],
+            "exclusions": [] if is_registry_count else list(exclusions),
+        }
+
+    provider_states = {}
+    for p in records:
+        pid = p["id"]
+        q_state = quota.get(pid, {}).get("state", "missing")
+        if p["lifecycle"] != "active":
+            status = "OUT_OF_SCOPE"
+        elif configured is not None and not configured.get(pid, False):
+            status = "NOT_CONFIGURED"
+        elif pid in current_emit:
+            status = "LIVE_EMITTING"
+        elif pid in idle and events.get(pid, 0) > 0:
+            status = "STALE"
+        elif p["support_level"] == "hook_intake_quota_external":
+            status = "EXTERNAL_DEPENDENCY"
+        else:
+            status = "NOT_MONITORED"
+        quota_status = ("FRESH" if q_state == "fresh" else
+                        "STALE" if q_state == "stale" else
+                        "EXTERNAL_DEPENDENCY" if p["support_level"] == "hook_intake_quota_external" else
+                        "NOT_MONITORED")
+        provider_states[pid] = {
+            "health_status": status,
+            "quota_status": quota_status,
+            "configured": configured.get(pid) if configured is not None else None,
+            "last_event_age_seconds": idle.get(pid),
+            "session_count": health.get(pid, 0),
+            "quota_state": q_state,
+            "reason": "quota source ownership unconfirmed" if quota_status == "EXTERNAL_DEPENDENCY" else None,
+        }
+
+    return {
+        "registry_version": registry["registry_version"],
+        "baseline_id": registry["baseline_id"],
+        "timestamp": timestamp,
+        "dimensions": {
+            "registered": dimension(set(registered_ids), is_registry_count=True),
+            "configured": dimension(configured_ids),
+            "live_emitting": dimension(current_emit),
+            "nonzero_sessions": dimension(nonzero),
+            "quota_observable": dimension(fresh_quota),
+        },
+        "providers": provider_states,
+    }
 
 
 def read_usage_local_runner_names(local_path: Path) -> Set[str]:
@@ -234,6 +346,8 @@ def main() -> int:
     health = parse_provider_sessions(metrics_text)
     emit_providers = parse_provider_emit(metrics_text)
     quota = scan_quota_snapshots()
+    configured = read_configured_providers()
+    coverage = build_coverage_receipt(metrics_text, health, quota, configured)
 
     # R102: K0-A 拆雙軌
     # K0-A1: /metrics 端點實際 emit 過 provider 樣本的 provider 數
@@ -283,10 +397,19 @@ def main() -> int:
     print("=" * 60)
     print(f"[K0-A1 端點 emit 過的 provider label: "
           f"{sorted(emit_providers)}]")
+    print(f"Registry {coverage['registry_version']} / baseline {coverage['baseline_id']}")
+    for label, receipt in coverage["dimensions"].items():
+        value = "unknown" if receipt["numerator"] is None else str(receipt["numerator"])
+        print(f"{label}: {value}/{receipt['denominator']} "
+              f"(registered {receipt['registered_denominator']}; "
+              f"exclusions {receipt['exclusions']})")
 
     # 寫 machine-readable JSON 供後續儀表板/CI 用
     report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "registry_version": coverage["registry_version"],
+        "baseline_id": coverage["baseline_id"],
+        "coverage_receipt": coverage,
         "metrics_endpoint_alive": bool(metrics_text),
         "providers_total": total,
         "k0a1_health_emit": {

@@ -1,234 +1,198 @@
 #!/usr/bin/env python3
-"""
-K0 target baseline 守護 — 守 R182 Path A (降級) 結構性決議不退化
+"""Fail closed when the current K0 denominator or public coverage labels drift.
 
-R197 落地。對應 openspec/changes/mission-k0-restructure-2026-q3/proposal.md
-「MCAP-2: Path A (降級) 設計草案」+ Decision Asks 段的 Path A 決議。
-
-Path A 降級口徑 (R182 結構性決議, owner M 選 A 不選 B):
-  K0-A1 emit 覆蓋: 2/13 (目前 claude/codex live emit) + OpenAB scope 浮動
-  K0-A2 sample 覆蓋: 1/13 (claude=3 sessions 累加) + 4/13 永久非 scope
-  K0 Quota: K0-B fresh 2/13 + K0-Q 7/13 (usage-local.json 只含
-           claude/codex runner；5 個 OpenAB stale snapshot 算 data path；4 個
-           irisx_bot/grokx/lpbot/mimo 完全不寫 usage-*.json snapshot)
-
-守護鏈 (5 維度):
-  1. k0_measure.py KNOWN_PROVIDERS 結構 = 4 LOCAL_CLI + 9 OPENAB_BOT = 13
-  2. 4 missing bot (irisx_bot/grokx/lpbot/mimo) 標記為永久非 scope
-  3. MISSION.md 90 天目標反映 Path A 降級 (非 13/13 不可達)
-  4. 5 active OpenAB (cicx/gitx/giminix/codex_bot/openx) 不被誤降
-  5. 4 LOCAL_CLI (claude/codex/copilot/gemini) 不可被降為「永久非 scope」
-
-鏡像 R132 k0_drift_check.py + R187 k0_measure.py 護衛模式: 1 個 Python
-script + 1 個 pytest 護衛模組, BASELINE 寫死常數 + DriftResult NamedTuple
-+ render_report table + 退出碼 0/1/2 fail-closed (R13 防護)。
-
-不破 R97 紅線: 走 Python pytest 護衛維度, 不新增 Rust 護衛 mod, chain
-20→20 守住。
+The R81 and R182/R197 rows in MISSION.md are archival receipts. Current scope is
+defined by the dated baseline and versioned provider registry, never by a
+retroactive rewrite of those rows.
 """
 import json
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple, Tuple
 
-# 4 missing bot (R131 結構性確認 0 spec drift, R182 升級為永久非本機 scope)
-MISSING_BOT = frozenset(["irisx_bot", "grokx", "lpbot", "mimo"])
-# 5 active OpenAB bot (cicx 等屬 OpenAB scope 浮動, 非永久 skip)
-ACTIVE_OPENAB = frozenset(["cicx", "gitx", "giminix", "codex_bot", "openx"])
-# 4 LOCAL_CLI (本機端永遠可達, 不可被誤降為永久非 scope)
-LOCAL_CLI = frozenset(["claude", "codex", "copilot", "gemini"])
-
-# 對齊 k0_measure.py KNOWN_PROVIDERS source of truth
-EXPECTED_PROVIDER_COUNT = 13  # 4 LOCAL_CLI + 9 OPENAB_BOT
-
-# Path A 90 天量化目標 (寫死 BASELINE 防悄悄漂回 13/13 或假算本機 4/13)
-EXPECTED_K0A1_TARGET = "2/13"  # 目前 claude/codex live emit
-EXPECTED_K0A2_TARGET = "1/13"  # claude=3 sessions 累加現況
-EXPECTED_K0Q_TARGET = "7/13"   # 2 local fresh + 5 OpenAB stale data path
-EXPECTED_K0B_TARGET = "2/13"   # usage-local runners: claude/codex
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-K0_MEASURE = REPO_ROOT / "scripts" / "k0_measure.py"
-MISSION_MD = REPO_ROOT / "MISSION.md"
+ROOT = Path(__file__).resolve().parent.parent
+REGISTRY = ROOT / "src" / "provider-capabilities.json"
+BASELINES = ROOT / "docs" / "k0-baselines.json"
+REQUIRED_FIELDS = ("id", "lifecycle", "scope", "platform_scope", "required_signal",
+                   "freshness_seconds", "quota_signal", "quota_freshness_seconds",
+                   "owner", "support_level")
+REQUIRED_DIMENSIONS = ("registered", "configured", "live_emitting",
+                       "nonzero_sessions", "quota_observable")
+HISTORICAL_IDS = ("r81-90-day-target", "r182-r197-path-a")
+ORIGINAL_TARGETS = {"live_emit": "13/13", "nonzero_sessions": "13/13", "quota": "13/13"}
+ORIGINAL_OBSERVATIONS = {"live_emit": "2/13", "nonzero_sessions": "1/13",
+                         "fresh_quota": "2/13", "quota_path": "7/13"}
+ORIGINAL_EXCLUSIONS = {"irisx_bot", "grokx", "lpbot", "mimo"}
+INITIAL_BASELINE_ID = "k0-2026-09-26"
 
 
-class DriftResult(NamedTuple):
-    name: str
-    expected: str
-    actual: str
-    status: str  # PASS / REGRESS / MISSING
+def read_json(path: Path):
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def read_file(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8", errors="replace")
+def validate_receipt(receipt: dict, registry: dict) -> list[str]:
+    errors = []
+    if receipt.get("registry_version") != registry.get("registry_version"):
+        errors.append("receipt registry version differs from canonical registry")
+    if receipt.get("baseline_id") != registry.get("baseline_id"):
+        errors.append("receipt baseline differs from canonical registry")
+    if not receipt.get("timestamp"):
+        errors.append("receipt timestamp missing")
+    dimensions = receipt.get("dimensions", {})
+    registered = len(registry["providers"])
+    scoped = [p for p in registry["providers"] if p["lifecycle"] == "active"]
+    excluded = {p["id"]: f"lifecycle:{p['lifecycle']}" for p in registry["providers"]
+                if p["lifecycle"] != "active"}
+    for name in REQUIRED_DIMENSIONS:
+        d = dimensions.get(name, {})
+        expected_denominator = registered if name == "registered" else len(scoped)
+        if d.get("denominator") != expected_denominator or d.get("registered_denominator") != registered:
+            errors.append(f"{name}: denominator disagrees with registry")
+        expected_exclusions = {} if name == "registered" else excluded
+        actual_exclusions = {x.get("id"): x.get("reason") for x in d.get("exclusions", [])}
+        if actual_exclusions != expected_exclusions:
+            errors.append(f"{name}: exclusions incomplete or incorrect")
+        numerator = d.get("numerator")
+        if numerator is not None and (not isinstance(numerator, int) or
+                                      not 0 <= numerator <= expected_denominator):
+            errors.append(f"{name}: invalid numerator")
+        if numerator is not None and d.get("gap_to_registered") != registered - numerator:
+            errors.append(f"{name}: registered gap is hidden")
+        if numerator is None and d.get("status") != "UNAVAILABLE":
+            errors.append(f"{name}: unknown source shown as measured")
+    return errors
 
 
-def check_known_providers(k0_src: str) -> DriftResult:
-    """維度 1: k0_measure.py KNOWN_PROVIDERS 結構 = 4 LOCAL_CLI + 9 OPENAB_BOT = 13
+def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]:
+    errors = []
+    records = registry.get("providers", [])
+    ids = [p.get("id") for p in records]
+    if len(ids) != 13 or len(set(ids)) != 13:
+        errors.append("registry must contain the 13 unique advertised IDs")
+    if not registry.get("registry_version") or not registry.get("baseline_id"):
+        errors.append("registry version or baseline ID missing")
+    for p in records:
+        missing = [field for field in REQUIRED_FIELDS if field not in p]
+        if missing:
+            errors.append(f"{p.get('id')}: missing {missing}")
+            continue
+        if p["lifecycle"] not in ("active", "deprecated", "out_of_scope"):
+            errors.append(f"{p['id']}: unknown lifecycle")
+        if p["scope"] not in ("local_cli", "openab_push"):
+            errors.append(f"{p['id']}: unknown scope")
+        if p["support_level"] not in ("hook_and_quota_reader", "hook_intake_quota_external"):
+            errors.append(f"{p['id']}: unknown support level")
+        if not p["owner"] or not p["platform_scope"] or not p["required_signal"] or not p["quota_signal"]:
+            errors.append(f"{p['id']}: signal or owner missing")
+        if p["freshness_seconds"] <= 0 or p["quota_freshness_seconds"] <= 0:
+            errors.append(f"{p['id']}: freshness must be positive")
 
-    對齊 hook_server.rs:323-340 source of truth, 守住 R131 結構性確認不漂。
-    """
-    if not k0_src:
-        return DriftResult("KNOWN_PROVIDERS_結構", f"{EXPECTED_PROVIDER_COUNT}",
-                           "(missing)", "MISSING")
-    # 抓 LOCAL_CLI 列表
-    m_local = re.search(r'LOCAL_CLI\s*=\s*\[(.*?)\]', k0_src, re.DOTALL)
-    # 抓 OPENAB_BOT 列表
-    m_openab = re.search(r'OPENAB_BOT\s*=\s*\[(.*?)\]', k0_src, re.DOTALL)
-    if not m_local or not m_openab:
-        return DriftResult("KNOWN_PROVIDERS_結構", f"{EXPECTED_PROVIDER_COUNT}",
-                           "(unparseable)", "REGRESS")
-    local_count = len(re.findall(r'"([^"]+)"', m_local.group(1)))
-    openab_count = len(re.findall(r'"([^"]+)"', m_openab.group(1)))
-    total = local_count + openab_count
-    if total == EXPECTED_PROVIDER_COUNT and local_count == 4 and openab_count == 9:
-        return DriftResult("KNOWN_PROVIDERS_結構",
-                           f"4 LOCAL_CLI + 9 OPENAB_BOT = {EXPECTED_PROVIDER_COUNT}",
-                           f"{local_count} LOCAL_CLI + {openab_count} OPENAB_BOT = {total}",
-                           "PASS")
-    return DriftResult("KNOWN_PROVIDERS_結構",
-                       f"4 LOCAL_CLI + 9 OPENAB_BOT = {EXPECTED_PROVIDER_COUNT}",
-                       f"{local_count} LOCAL_CLI + {openab_count} OPENAB_BOT = {total}",
-                       "REGRESS")
+    baseline_rows = baselines.get("baselines", [])
+    by_id = {b.get("id"): b for b in baseline_rows}
+    if len(by_id) != len(baseline_rows):
+        errors.append("duplicate baseline IDs")
+    if tuple(b.get("id") for b in baseline_rows[:2]) != HISTORICAL_IDS:
+        errors.append("historical baselines were removed or reordered")
+    if by_id.get(HISTORICAL_IDS[0], {}).get("targets") != ORIGINAL_TARGETS:
+        errors.append("original 90-day targets were rewritten")
+    if by_id.get(HISTORICAL_IDS[1], {}).get("recorded_observations") != ORIGINAL_OBSERVATIONS:
+        errors.append("R182/R197 observed result was rewritten")
+    if set(by_id.get(HISTORICAL_IDS[1], {}).get("excluded_ids", [])) != ORIGINAL_EXCLUSIONS:
+        errors.append("R182/R197 archived exclusions were rewritten")
+    if INITIAL_BASELINE_ID not in by_id:
+        errors.append("initial dated baseline was removed")
+    initial = by_id.get(INITIAL_BASELINE_ID, {})
+    if initial.get("effective_date") != "2026-09-26" or len(initial.get("health_scope_ids", [])) != 13 or len(initial.get("quota_scope_ids", [])) != 13:
+        errors.append("initial dated baseline was rewritten")
+    current = [b for b in baseline_rows if b.get("status") == "current"]
+    if len(current) != 1:
+        errors.append("exactly one dated current baseline required")
+    else:
+        baseline = current[0]
+        if baseline.get("id") != registry.get("baseline_id"):
+            errors.append("registry baseline ID disagrees with current baseline")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", baseline.get("effective_date", "")):
+            errors.append("current baseline needs an effective date")
+        elif not str(registry.get("registry_version", "")).startswith(baseline["effective_date"] + "."):
+            errors.append("registry version must carry current baseline date")
+        if set(baseline.get("registered_ids", [])) != set(ids):
+            errors.append("current registered denominator disagrees with registry")
+        scoped = {p["id"] for p in records if p.get("lifecycle") == "active"}
+        for dimension in ("health_scope_ids", "quota_scope_ids"):
+            if set(baseline.get(dimension, [])) != scoped:
+                errors.append(f"{dimension} changed without a new dated baseline")
+        if baseline["id"] == INITIAL_BASELINE_ID and len(scoped) != 13:
+            errors.append("initial baseline scope changed; create a new dated baseline")
+        if baseline["id"] != INITIAL_BASELINE_ID and by_id.get(INITIAL_BASELINE_ID, {}).get("status") != "historical":
+            errors.append("scope change must retain the prior baseline as history")
+        if baseline["id"] != INITIAL_BASELINE_ID and baseline.get("effective_date", "") <= "2026-09-26":
+            errors.append("new scope baseline must have a later date")
 
+    try:
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        website = (root / "docs" / "index.html").read_text(encoding="utf-8")
+        mission = (root / "MISSION.md").read_text(encoding="utf-8")
+        ui = (root / "src" / "index.html").read_text(encoding="utf-8")
+        ui_main = (root / "src" / "main.js").read_text(encoding="utf-8")
+        ui_coverage = (root / "src" / "provider-coverage.js").read_text(encoding="utf-8")
+        config_rs = (root / "src-tauri" / "src" / "config.rs").read_text(encoding="utf-8")
+        hook_rs = (root / "src-tauri" / "src" / "hook_server.rs").read_text(encoding="utf-8")
+    except OSError as exc:
+        return errors + [f"required source missing: {exc}"]
+    for name, content in (("README", readme), ("website", website)):
+        advertised_counts = [int(x) for x in re.findall(r"(?:已註冊|註冊)\s*(\d+)", content)]
+        if not advertised_counts or any(x != len(ids) for x in advertised_counts):
+            errors.append(f"{name}: registered count label missing or mismatched")
+        if any(x not in content for x in ("已設定", "非零 session", "quota")):
+            errors.append(f"{name}: distinct runtime coverage labels missing")
+        if "本地可達上限 9" in content or "0 結構性差距" in content:
+            errors.append(f"{name}: obsolete nine-provider or zero-gap claim")
+    if "2026-09-26 現行口徑" not in mission or "歷史紀錄：R182" not in mission:
+        errors.append("MISSION must distinguish current and historical baselines")
+    if 'id="provider-coverage"' not in ui or 'src="provider-coverage.js"' not in ui:
+        errors.append("product UI coverage panel missing")
+    if 'fetch("provider-capabilities.json")' not in ui_main:
+        errors.append("product UI is not using the canonical registry")
+    for marker in ("registered", "configured", "liveEmitting", "nonzeroSessions", "quotaObservable",
+                   "EXTERNAL_DEPENDENCY", "UNSUPPORTED_ON_THIS_HOST", "STALE", "NOT_CONFIGURED"):
+        if marker not in ui_main + ui_coverage:
+            errors.append(f"product UI status/coverage marker missing: {marker}")
 
-def check_missing_bot_in_openab(k0_src: str) -> DriftResult:
-    """維度 2: 4 missing bot 必須在 OPENAB_BOT 列表內 (永久非本機 scope)"""
-    if not k0_src:
-        return DriftResult("4_missing_bot_永久非_scope", "in OPENAB_BOT",
-                           "(missing)", "MISSING")
-    m = re.search(r'OPENAB_BOT\s*=\s*\[(.*?)\]', k0_src, re.DOTALL)
-    if not m:
-        return DriftResult("4_missing_bot_永久非_scope", "in OPENAB_BOT",
-                           "(unparseable)", "REGRESS")
-    listed = set(re.findall(r'"([^"]+)"', m.group(1)))
-    missing_in_list = MISSING_BOT - listed
-    if not missing_in_list:
-        return DriftResult("4_missing_bot_永久非_scope",
-                           f"{sorted(MISSING_BOT)} in OPENAB_BOT",
-                           f"{sorted(MISSING_BOT & listed)} in OPENAB_BOT",
-                           "PASS")
-    return DriftResult("4_missing_bot_永久非_scope",
-                       f"all {len(MISSING_BOT)} in OPENAB_BOT",
-                       f"missing from OPENAB_BOT: {sorted(missing_in_list)}",
-                       "REGRESS")
+    # Restrict to the provider registry function rather than other config maps.
+    config_fn = config_rs.split("fn default_providers()", 1)[-1].split("impl Default for AppConfig", 1)[0]
+    config_ids = set(re.findall(r'm\.insert\(\s*"([a-z_]+)"\.into\(\)', config_fn))
+    if config_ids != set(ids):
+        errors.append("config default_providers IDs disagree with registry")
+    known_match = re.search(r"KNOWN_PROVIDERS[^=]*=\s*&\[(.*?)\]", hook_rs, re.DOTALL)
+    if not known_match or set(re.findall(r'"([a-z_]+)"', known_match.group(1))) != set(ids):
+        errors.append("hook_server KNOWN_PROVIDERS IDs disagree with registry")
 
-
-def check_active_openab_5(k0_src: str) -> DriftResult:
-    """維度 3: 5 active OpenAB bot 不可被誤降 (Path A 不刪 5 個活的)"""
-    if not k0_src:
-        return DriftResult("5_active_OpenAB_不退化", "all 5 in OPENAB_BOT",
-                           "(missing)", "MISSING")
-    m = re.search(r'OPENAB_BOT\s*=\s*\[(.*?)\]', k0_src, re.DOTALL)
-    if not m:
-        return DriftResult("5_active_OpenAB_不退化", "all 5 in OPENAB_BOT",
-                           "(unparseable)", "REGRESS")
-    listed = set(re.findall(r'"([^"]+)"', m.group(1)))
-    missing_in_list = ACTIVE_OPENAB - listed
-    if not missing_in_list:
-        return DriftResult("5_active_OpenAB_不退化",
-                           f"all 5 in OPENAB_BOT",
-                           f"{sorted(ACTIVE_OPENAB & listed)} in OPENAB_BOT",
-                           "PASS")
-    return DriftResult("5_active_OpenAB_不退化",
-                       f"all {len(ACTIVE_OPENAB)} in OPENAB_BOT",
-                       f"missing from OPENAB_BOT: {sorted(missing_in_list)}",
-                       "REGRESS")
-
-
-def check_local_cli_4(k0_src: str) -> DriftResult:
-    """維度 4: 4 LOCAL_CLI 永遠可達, 不可被降為永久非 scope"""
-    if not k0_src:
-        return DriftResult("4_LOCAL_CLI_不可_永久_skip", "all 4 in LOCAL_CLI",
-                           "(missing)", "MISSING")
-    m = re.search(r'LOCAL_CLI\s*=\s*\[(.*?)\]', k0_src, re.DOTALL)
-    if not m:
-        return DriftResult("4_LOCAL_CLI_不可_永久_skip", "all 4 in LOCAL_CLI",
-                           "(unparseable)", "REGRESS")
-    listed = set(re.findall(r'"([^"]+)"', m.group(1)))
-    if listed == LOCAL_CLI:
-        return DriftResult("4_LOCAL_CLI_不可_永久_skip",
-                           f"{sorted(LOCAL_CLI)}",
-                           f"{sorted(listed)}", "PASS")
-    return DriftResult("4_LOCAL_CLI_不可_永久_skip",
-                       f"{sorted(LOCAL_CLI)}",
-                       f"{sorted(listed)}", "REGRESS")
-
-
-def check_mission_k0_target(mission_src: str) -> DriftResult:
-    """維度 5: MISSION.md 90 天目標反映 Path A 降級 (2/13+5/13+4 missing 永久非 scope)
-
-    對應 R182 結構性決議, 守住「不悄悄改回 13/13 不可達目標」+ 「4 missing 永久非 scope」標記不退。
-    """
-    if not mission_src:
-        return DriftResult("MISSION_90_day_target_降級", "Path A 4+5+4 skip",
-                           "(missing)", "MISSING")
-    # 找 R182 補欄 (Path A 決議 entry)
-    r182_marker = "R182 補" in mission_src
-    # 找 4 missing 永久非 scope 標記
-    missing_marker = "4 missing" in mission_src or "4 個 missing" in mission_src
-    # 找永久非 scope 關鍵字
-    permanent_skip = "永久非" in mission_src or "永久 skip" in mission_src
-    if r182_marker and missing_marker and permanent_skip:
-        return DriftResult("MISSION_90_day_target_降級",
-                           "R182 補欄 + 4 missing + 永久非 scope",
-                           f"R182={r182_marker} missing={missing_marker} perm={permanent_skip}",
-                           "PASS")
-    return DriftResult("MISSION_90_day_target_降級",
-                       "R182 補欄 + 4 missing + 永久非 scope",
-                       f"R182={r182_marker} missing={missing_marker} perm={permanent_skip}",
-                       "REGRESS")
-
-
-def run_check() -> Tuple[int, list]:
-    """跑 5 維度 K0 target baseline 守護, 回 (exit_code, results)"""
-    k0_src = read_file(K0_MEASURE)
-    mission_src = read_file(MISSION_MD)
-    results = [
-        check_known_providers(k0_src),
-        check_missing_bot_in_openab(k0_src),
-        check_active_openab_5(k0_src),
-        check_local_cli_4(k0_src),
-        check_mission_k0_target(mission_src),
-    ]
-    if any(r.status == "MISSING" for r in results):
-        return 2, results  # R13 fail-closed: 源檔缺
-    if any(r.status == "REGRESS" for r in results):
-        return 1, results
-    return 0, results
-
-
-def render_report(results: list) -> str:
-    """人類可讀報告 (對齊 k0_drift_check.py 格式)"""
-    lines = []
-    lines.append("=" * 78)
-    lines.append("K0 Target Baseline Check (R182 Path A 結構性降級決議守護)")
-    lines.append("=" * 78)
-    lines.append(f"{'#':<3} {'維度':<35} {'狀態':<10}")
-    lines.append("-" * 78)
-    for i, r in enumerate(results, 1):
-        lines.append(f"{i:<3} {r.name:<35} {r.status:<10}")
-        lines.append(f"    期望: {r.expected}")
-        lines.append(f"    實際: {r.actual}")
-    lines.append("=" * 78)
-    pass_n = sum(1 for r in results if r.status == "PASS")
-    regress_n = sum(1 for r in results if r.status == "REGRESS")
-    missing_n = sum(1 for r in results if r.status == "MISSING")
-    lines.append(f"PASS={pass_n} REGRESS={regress_n} MISSING={missing_n} / 總 5 維度")
-    return "\n".join(lines)
+    try:
+        from k0_measure import build_coverage_receipt, parse_provider_sessions, scan_quota_snapshots
+        # Deliberately empty evidence: registry membership cannot become monitored coverage.
+        receipt = build_coverage_receipt("", parse_provider_sessions(""),
+                                         {pid: {"state": "missing"} for pid in ids}, None,
+                                         registry=registry, timestamp="2026-09-26T00:00:00+0000")
+        errors.extend(validate_receipt(receipt, registry))
+        if receipt["dimensions"]["live_emitting"]["numerator"] != 0:
+            errors.append("registry membership fabricated live coverage")
+    except (ImportError, KeyError, ValueError, TypeError) as exc:
+        errors.append(f"KPI producer disagrees with registry: {exc}")
+    return errors
 
 
 def main() -> int:
-    code, results = run_check()
-    print(render_report(results))
-    if code != 0:
-        print(f"\n[FAIL] 退出碼 {code} (1=REGRESS 漂回 13/13 不可達 / 2=源檔缺)")
-    else:
-        print("\n[OK] R182 Path A 結構性降級決議守住")
-    return code
+    try:
+        errors = validate(read_json(REGISTRY), read_json(BASELINES))
+    except (OSError, ValueError) as exc:
+        print(f"[K0 coverage] required registry/baseline unavailable: {exc}")
+        return 2
+    if errors:
+        for error in errors:
+            print(f"[K0 coverage] FAIL: {error}")
+        return 1
+    print("[K0 coverage] registry, dated baseline, README, UI, Rust inventory and KPI receipt agree")
+    return 0
 
 
 if __name__ == "__main__":

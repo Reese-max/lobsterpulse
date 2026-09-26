@@ -4,8 +4,9 @@
 #
 #  Proves on real binaries (not static parsing tests) that:
 #    1. the packaged lobster-pulse app starts and opens the hook server
-#    2. enabling Codex on a home where [features] codex_hooks = false
-#       flips the flag to true via the real install path
+#    2. enabling Codex on a home where both [features] hooks = false
+#       and the legacy codex_hooks = false flips them to true via the
+#       real install path
 #       (LOBSTERPULSE_HEADLESS_INSTALL drives the same
 #       hooks_configurator::install_provider call the settings
 #       checkbox makes, minus the webview click)
@@ -38,7 +39,7 @@ fi
 [ -x "$APP" ] || fail "missing $APP"
 [ -x "$SIDECAR" ] || fail "missing $SIDECAR"
 
-# ── 2. disposable home with pre-existing codex_hooks = false ──
+# ── 2. disposable home with both Codex hook flags disabled ───
 HOME_DIR=$(mktemp -d /tmp/lp-codex-smoke-XXXXXX) || fail "cannot create disposable home"
 [ -n "$HOME_DIR" ] || fail "mktemp returned an empty home path"
 APP_PID=""
@@ -78,11 +79,12 @@ cat > "$HOME_DIR/.codex/config.toml" <<'EOF'
 # user comment must survive
 [features]
 codex_hooks = false # user disabled hooks
+hooks = false # canonical key also disabled
 EOF
 cat > "$HOME_DIR/.codex/hooks.json" <<'EOF'
 {"hooks":{"PreToolUse":[{"matcher":"third-party","hooks":[{"type":"command","command":"third-party-pre"}]}]}}
 EOF
-info "disposable HOME=$HOME_DIR (codex_hooks=false seeded)"
+info "disposable HOME=$HOME_DIR (hooks=false and codex_hooks=false seeded)"
 
 # ── 3. launch the real app headless ───────────────────────────
 env HOME="$HOME_DIR" LOBSTERPULSE_HEADLESS_INSTALL=codex \
@@ -107,9 +109,11 @@ import sys, tomllib, pathlib
 raw = pathlib.Path(sys.argv[1]).read_bytes()
 doc = tomllib.loads(raw.decode())
 assert doc["features"]["codex_hooks"] is True, f"codex_hooks not true: {doc}"
+assert doc["features"]["hooks"] is True, f"hooks not true: {doc}"
 assert b"# user comment must survive" in raw, "lost top comment"
 assert b"# user disabled hooks" in raw, "lost inline comment"
-print("[smoke] config.toml: codex_hooks = true, comments preserved")
+assert b"# canonical key also disabled" in raw, "lost canonical inline comment"
+print("[smoke] config.toml: hooks = true and codex_hooks = true, comments preserved")
 EOF
 grep -c "lobster-pulse-hook" "$HOME_DIR/.codex/hooks.json" >/dev/null \
   || fail "hooks.json missing sidecar command"
@@ -138,4 +142,4 @@ info "metrics: codex session counted"
 echo "[smoke] --- config.toml after enable ---"; cat "$HOME_DIR/.codex/config.toml"
 echo "[smoke] --- /metrics codex lines ---"
 echo "$METRICS" | grep -i "codex"
-echo "[smoke] PASS — packaged enable flips codex_hooks false→true and a real Codex hook event lands"
+echo "[smoke] PASS — packaged enable flips both Codex hook flags false→true and a sidecar event lands"

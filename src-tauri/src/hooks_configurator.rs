@@ -356,44 +356,53 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         }
     }
 
-    let current_value = document
-        .get("features")
-        .and_then(|features| features.get("codex_hooks"))
-        .map(|item| item.as_bool());
-
-    match current_value {
-        Some(Some(true)) => Ok(false),
-        Some(Some(false)) => {
-            let feature = document
-                .get_mut("features")
-                .and_then(|features| features.get_mut("codex_hooks"))
-                .ok_or_else(|| {
-                    format!(
-                        "{}: [features].codex_hooks disappeared during update",
-                        config_toml.display()
-                    )
-                })?;
-            let decor = feature
-                .as_value()
-                .expect("boolean TOML item is a value")
-                .decor()
-                .clone();
-            let mut enabled = toml_edit::Value::from(true);
-            *enabled.decor_mut() = decor;
-            *feature = toml_edit::Item::Value(enabled);
-            save_text_atomically(config_toml, &document.to_string())?;
-            Ok(true)
-        }
-        Some(None) => Err(format!(
-            "{}: [features].codex_hooks must be a boolean",
-            config_toml.display()
-        )),
-        None => {
-            document["features"]["codex_hooks"] = toml_edit::value(true);
-            save_text_atomically(config_toml, &document.to_string())?;
-            Ok(true)
+    // Codex now calls this feature `hooks`; `codex_hooks` remains a deprecated
+    // alias. The canonical key wins when both exist, so enabling only the
+    // alias can still leave hooks disabled. Validate both before any write.
+    let mut present = false;
+    for key in ["hooks", "codex_hooks"] {
+        if let Some(feature) = document
+            .get("features")
+            .and_then(|features| features.get(key))
+        {
+            present = true;
+            if feature.as_bool().is_none() {
+                return Err(format!(
+                    "{}: [features].{key} must be a boolean",
+                    config_toml.display()
+                ));
+            }
         }
     }
+
+    let mut changed = false;
+    for key in ["hooks", "codex_hooks"] {
+        if let Some(feature) = document
+            .get_mut("features")
+            .and_then(|features| features.get_mut(key))
+        {
+            if feature.as_bool() == Some(false) {
+                let decor = feature
+                    .as_value()
+                    .expect("boolean TOML item is a value")
+                    .decor()
+                    .clone();
+                let mut enabled = toml_edit::Value::from(true);
+                *enabled.decor_mut() = decor;
+                *feature = toml_edit::Item::Value(enabled);
+                changed = true;
+            }
+        }
+    }
+
+    if !present {
+        document["features"]["hooks"] = toml_edit::value(true);
+        changed = true;
+    }
+    if changed {
+        save_text_atomically(config_toml, &document.to_string())?;
+    }
+    Ok(changed)
 }
 
 /// Codex CLI: hooks in ~/.codex/hooks.json + enable feature flag in config.toml
@@ -443,7 +452,7 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
         .ok_or("Invalid hooks.json path")?
         .join("config.toml");
     if enable_codex_hooks_feature(&config_toml)? {
-        info!("Enabled codex_hooks feature flag in config.toml");
+        info!("Enabled Codex hooks feature flag in config.toml");
     }
 
     save_json(path, &root)?;
@@ -950,6 +959,97 @@ codex_hooks = false # preserve this comment
     }
 
     #[test]
+    fn codex_install_enables_canonical_hooks_flag_and_reconciles_alias() {
+        for (name, original) in [
+            (
+                "canonical-false",
+                "# keep this comment\n[features]\nhooks = false # canonical\nother = 42\n",
+            ),
+            (
+                "canonical-false-alias-true",
+                "# keep this comment\n[features]\nhooks = false # canonical\ncodex_hooks = true # legacy\n",
+            ),
+            (
+                "canonical-true-alias-false",
+                "# keep this comment\n[features]\nhooks = true # canonical\ncodex_hooks = false # legacy\n",
+            ),
+            (
+                "both-false",
+                "# keep this comment\n[features]\nhooks = false # canonical\ncodex_hooks = false # legacy\n",
+            ),
+        ] {
+            let directory = tmp_settings_path(name);
+            std::fs::create_dir_all(&directory).expect("mkdir fixture");
+            let hooks_path = directory.join("hooks.json");
+            let config_path = directory.join("config.toml");
+            write_raw(&hooks_path, br#"{"hooks":{}}"#);
+            write_raw(&config_path, original.as_bytes());
+            let provider = provider_with_path(&hooks_path);
+
+            install_provider("codex", &provider).expect("install hooks");
+            let installed = std::fs::read_to_string(&config_path).expect("read config");
+            let document = installed
+                .parse::<toml_edit::DocumentMut>()
+                .expect("valid TOML after install");
+            assert_eq!(document["features"]["hooks"].as_bool(), Some(true), "{name}");
+            if original.contains("codex_hooks =") {
+                assert_eq!(
+                    document["features"]["codex_hooks"].as_bool(),
+                    Some(true),
+                    "{name}"
+                );
+                assert!(installed.contains("# legacy"), "{name}: legacy decor lost");
+            }
+            assert!(installed.contains("# canonical"), "{name}: canonical decor lost");
+            assert!(installed.contains("# keep this comment"), "{name}");
+
+            install_provider("codex", &provider).expect("reinstall hooks");
+            assert_eq!(
+                std::fs::read_to_string(&config_path).expect("read reinstalled config"),
+                installed,
+                "{name}: reinstall must leave config unchanged"
+            );
+            remove_provider("codex", &provider).expect("remove hooks");
+            assert_eq!(
+                std::fs::read_to_string(&config_path).expect("read removed config"),
+                installed,
+                "{name}: remove must leave shared feature unchanged"
+            );
+            let hooks: Value = serde_json::from_str(
+                &std::fs::read_to_string(&hooks_path).expect("read removed hooks"),
+            )
+            .expect("valid hooks JSON");
+            assert_eq!(marker_count(&hooks), 0, "{name}");
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+    }
+
+    #[test]
+    fn codex_install_rejects_non_boolean_canonical_hooks_flag() {
+        let directory = tmp_settings_path("codex-canonical-nonbool");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{}}"#;
+        let original_config = b"[features]\nhooks = \"yes\"\ncodex_hooks = false\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+
+        let error = install_provider("codex", &provider_with_path(&hooks_path))
+            .expect_err("non-boolean canonical feature must fail closed");
+        assert!(error.contains("[features].hooks must be a boolean"));
+        assert_eq!(
+            std::fs::read(&hooks_path).expect("read hooks"),
+            original_hooks
+        );
+        assert_eq!(
+            std::fs::read(&config_path).expect("read config"),
+            original_config
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn codex_install_leaves_already_enabled_flag_byte_identical() {
         // Issue #3 fixture: flag already `true`. Install must not rewrite
         // config.toml at all (no spurious .bak churn, no decor loss risk).
@@ -1022,7 +1122,7 @@ codex_hooks = false # preserve this comment
         let document = config
             .parse::<toml_edit::DocumentMut>()
             .expect("updated config remains valid TOML");
-        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
         assert_eq!(
             document["other"]["codex_hooks"].as_bool(),
             Some(false),
@@ -1082,7 +1182,7 @@ existing = true
         let document = config
             .parse::<toml_edit::DocumentMut>()
             .expect("updated config remains valid TOML");
-        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
         assert_eq!(document["features"]["existing"].as_bool(), Some(true));
         let _ = std::fs::remove_dir_all(&directory);
     }
@@ -1102,7 +1202,7 @@ existing = true
         let document = config
             .parse::<toml_edit::DocumentMut>()
             .expect("updated config remains valid TOML");
-        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
         assert!(config.contains("# preserve header comment"));
         let _ = std::fs::remove_dir_all(&directory);
     }
@@ -1243,7 +1343,7 @@ codex_hooks = false
             .parse::<toml_edit::DocumentMut>()
             .expect("created config remains valid TOML");
         assert_eq!(
-            first_document["features"]["codex_hooks"].as_bool(),
+            first_document["features"]["hooks"].as_bool(),
             Some(true)
         );
         let first_hooks = std::fs::read_to_string(&hooks_path).expect("read installed hooks");
@@ -1271,7 +1371,7 @@ codex_hooks = false
             .parse::<toml_edit::DocumentMut>()
             .expect("removed config remains valid TOML");
         assert_eq!(
-            removed_document["features"]["codex_hooks"].as_bool(),
+            removed_document["features"]["hooks"].as_bool(),
             Some(true),
             "remove must not disable shared Codex capability"
         );

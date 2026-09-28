@@ -767,7 +767,16 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
 /// Codex CLI: hooks in ~/.codex/hooks.json + enable feature flag in config.toml
 fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
     // Parse and validate before touching either user configuration file.
-    let mut root = load_or_create_json(path)?;
+    let original_hooks = match std::fs::read_to_string(path) {
+        Ok(content) => Some(content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let mut root = match &original_hooks {
+        Some(content) => serde_json::from_str(content)
+            .map_err(|error| format!("{} contains malformed JSON: {error}", path.display()))?,
+        None => json!({}),
+    };
     remove_lobsterpulse_hooks(&mut root)?;
 
     let hooks = root
@@ -810,13 +819,46 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
         .parent()
         .ok_or("Invalid hooks.json path")?
         .join("config.toml");
-    if enable_codex_hooks_feature(&config_toml)? {
-        info!("Enabled Codex hooks feature flag in config.toml");
-    }
-
+    // Persist hooks first. If this write fails, no global feature flag changes.
+    // If enabling the flag fails, restore the previous hooks bytes so an
+    // already-enabled Codex installation cannot retain this failed install.
+    let installed_hooks = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())?;
     save_json(path, &root)?;
+    match enable_codex_hooks_feature(&config_toml) {
+        Ok(true) => info!("Enabled Codex hooks feature flag in config.toml"),
+        Ok(false) => {}
+        Err(error) => {
+            return match rollback_codex_hooks_json(path, original_hooks.as_deref(), &installed_hooks) {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!(
+                    "{error}; failed to restore hooks.json after installation error: {rollback_error}"
+                )),
+            };
+        }
+    }
     info!("Codex CLI hooks configured");
     Ok(())
+}
+
+fn rollback_codex_hooks_json(
+    path: &Path,
+    original: Option<&str>,
+    installed: &str,
+) -> Result<(), String> {
+    let current = std::fs::read_to_string(path)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if current != installed {
+        return Err(format!("{}: hooks changed during install; refusing rollback", path.display()));
+    }
+    if let Some(original) = original {
+        save_text_atomically_with(path, original, |temporary, destination| {
+            verify_config_snapshot(path, destination, installed)
+                .map_err(std::io::Error::other)?;
+            replace_file(temporary, destination)
+        })
+    } else {
+        std::fs::remove_file(path).map_err(|error| format!("{}: {error}", path.display()))
+    }
 }
 
 /// GitHub Copilot CLI: hooks in ~/.copilot/config.json
@@ -2016,6 +2058,45 @@ codex_hooks = false
             std::fs::read(&config_path).expect("read config"),
             original_config
         );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_json_write_failure_does_not_enable_feature() {
+        let directory = tmp_settings_path("codex-hooks-write-failure");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{}}"#;
+        let original_config = b"[features]\nhooks = false\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+        let backup = backup_path(&hooks_path).expect("backup path");
+        std::fs::create_dir(&backup).expect("block hooks backup copy");
+
+        let error = install_provider("codex", &provider_with_path(&hooks_path))
+            .expect_err("hooks write must fail");
+        assert!(error.contains("failed to back up"), "{error}");
+        assert_eq!(std::fs::read(&hooks_path).expect("read hooks"), original_hooks);
+        assert_eq!(std::fs::read(&config_path).expect("read config"), original_config);
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_flag_error_removes_new_hooks_file() {
+        let directory = tmp_settings_path("codex-enable-failure-new-hooks");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_config = b"[features]\nhooks = \"invalid\"\n";
+        write_raw(&config_path, original_config);
+
+        let error = install_provider("codex", &provider_with_path(&hooks_path))
+            .expect_err("invalid feature must fail");
+        assert!(error.contains("must be a boolean"), "{error}");
+        assert!(!hooks_path.exists(), "new hooks file must be rolled back");
+        assert_eq!(std::fs::read(&config_path).expect("read config"), original_config);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

@@ -188,6 +188,15 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
         Some(p) => expand_path(p),
         None => return Ok(()),
     };
+    if provider_id == "codex" {
+        let config_toml = path.parent().ok_or("Invalid hooks.json path")?.join("config.toml");
+        let state_path = codex_flag_state_path(&config_toml)?;
+        if !path.exists() && !state_path.exists() {
+            // No managed file or owned feature flag exists. In particular,
+            // disabling Codex before its home exists must not create it.
+            return Ok(());
+        }
+    }
     let _codex_lock = if provider_id == "codex" {
         Some(lock_codex_hooks(&path)?)
     } else {
@@ -886,8 +895,33 @@ fn rollback_codex_hooks_json(
             replace_file(temporary, destination)
         })
     } else {
-        std::fs::remove_file(target).map_err(|error| format!("{}: {error}", target.display()))
+        remove_new_codex_hooks_if_owned(target, installed, installed_identity)
     }
+}
+
+fn remove_new_codex_hooks_if_owned(
+    target: &Path,
+    installed: &str,
+    installed_identity: &str,
+) -> Result<(), String> {
+    // Rename first, then verify the moved inode before deleting it. If an
+    // external editor replaced hooks.json after the earlier verification, its
+    // file is restored (or retained at the reported quarantine path), never
+    // deleted as though it were our newly created file.
+    let quarantine = temporary_path(target)?;
+    std::fs::rename(target, &quarantine)
+        .map_err(|error| format!("{}: {error}", target.display()))?;
+    if let Err(error) = verify_written_hooks(&quarantine, installed, installed_identity) {
+        return match create_file_if_absent(&quarantine, target) {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!(
+                "{error}; replacement retained at {} because restoration failed: {restore_error}",
+                quarantine.display()
+            )),
+        };
+    }
+    std::fs::remove_file(&quarantine)
+        .map_err(|error| format!("{}: {error}", quarantine.display()))
 }
 
 fn verify_written_hooks(target: &Path, expected: &str, identity: &str) -> Result<(), String> {
@@ -2147,6 +2181,16 @@ codex_hooks = false
     }
 
     #[test]
+    fn codex_remove_without_settings_does_not_create_home_or_lock() {
+        let directory = tmp_settings_path("codex-remove-noop");
+        let hooks_path = directory.join("hooks.json");
+        assert!(!directory.exists());
+        remove_provider("codex", &provider_with_path(&hooks_path))
+            .expect("missing Codex settings are a no-op");
+        assert!(!directory.exists(), "no-op removal must not create Codex home");
+    }
+
+    #[test]
     fn codex_install_flag_error_removes_new_hooks_file() {
         let directory = tmp_settings_path("codex-enable-failure-new-hooks");
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
@@ -2177,6 +2221,26 @@ codex_hooks = false
             .expect_err("replacement must not be overwritten");
         assert!(error.contains("identity changed"), "{error}");
         assert_eq!(std::fs::read_to_string(&target).expect("read replacement"), installed);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_hooks_quarantine_preserves_replacement_after_verification_race() {
+        let directory = tmp_settings_path("codex-hooks-quarantine-race");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target = directory.join("hooks.json");
+        let installed = r#"{"hooks":{"SessionStart":[]}}"#;
+        write_raw(&target, installed.as_bytes());
+        let owned_identity = config_file_identity(&target).expect("owned identity");
+        save_text_atomically(&target, installed).expect("external same-text replacement");
+        let replacement_identity = config_file_identity(&target).expect("replacement identity");
+        assert_ne!(owned_identity, replacement_identity);
+
+        let error = remove_new_codex_hooks_if_owned(&target, installed, &owned_identity)
+            .expect_err("replacement must survive quarantine check");
+        assert!(error.contains("identity changed"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target).expect("read replacement"), installed);
+        assert_eq!(config_file_identity(&target).expect("restored identity"), replacement_identity);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

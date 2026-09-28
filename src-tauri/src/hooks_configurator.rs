@@ -1813,7 +1813,14 @@ codex_hooks = false # preserve this comment
         let replacement = "[features]\nhooks = true # managed by user\n";
         save_text_atomically(&config_path, replacement).expect("replace config wholesale");
         let error = remove_provider("codex", &provider).expect_err("must reject replacement");
-        assert!(error.contains("file identity changed"));
+        // After replacement, the filesystem may reuse the pre-install inode.
+        // Either identity mismatch or the uncommitted-original guard must
+        // reject the new user's true value; both leave the file untouched.
+        assert!(
+            error.contains("file identity changed")
+                || error.contains("uncommitted original feature flags changed"),
+            "{error}"
+        );
         assert_eq!(std::fs::read_to_string(&config_path).expect("read config"), replacement);
         assert!(codex_flag_state_path(&config_path).expect("state path").exists());
         let _ = std::fs::remove_dir_all(&directory);

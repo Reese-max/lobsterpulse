@@ -767,10 +767,25 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
 /// Codex CLI: hooks in ~/.codex/hooks.json + enable feature flag in config.toml
 fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
     // Parse and validate before touching either user configuration file.
-    let original_hooks = match std::fs::read_to_string(path) {
+    let hooks_target = atomic_write_target(path)?;
+    let hooks_target = if hooks_target.exists() {
+        std::fs::canonicalize(&hooks_target)
+            .map_err(|error| format!("{}: {error}", hooks_target.display()))?
+    } else {
+        let parent = hooks_target.parent().ok_or("Invalid hooks.json path")?;
+        std::fs::canonicalize(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?
+            .join(hooks_target.file_name().ok_or("Invalid hooks.json path")?)
+    };
+    let original_hooks = match std::fs::read_to_string(&hooks_target) {
         Ok(content) => Some(content),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(format!("{}: {error}", path.display())),
+        Err(error) => return Err(format!("{}: {error}", hooks_target.display())),
+    };
+    let original_identity = if original_hooks.is_some() {
+        Some(config_file_identity(&hooks_target)?)
+    } else {
+        None
     };
     let mut root = match &original_hooks {
         Some(content) => serde_json::from_str(content)
@@ -819,16 +834,33 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
         .parent()
         .ok_or("Invalid hooks.json path")?
         .join("config.toml");
-    // Persist hooks first. If this write fails, no global feature flag changes.
-    // If enabling the flag fails, restore the previous hooks bytes so an
-    // already-enabled Codex installation cannot retain this failed install.
+    // Persist hooks first. Bind both the write and any rollback to the target
+    // we read, so repointing a dotfile symlink cannot overwrite another file.
     let installed_hooks = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())?;
-    save_json(path, &root)?;
+    let mut installed_identity = None;
+    save_text_atomically_with(&hooks_target, &installed_hooks, |temporary, destination| {
+        verify_hooks_snapshot(path, destination, original_hooks.as_deref(), original_identity.as_deref())
+            .map_err(std::io::Error::other)?;
+        installed_identity = Some(config_file_identity(temporary).map_err(std::io::Error::other)?);
+        if original_hooks.is_some() {
+            replace_file(temporary, destination)
+        } else {
+            create_file_if_absent(temporary, destination)
+        }
+    })?;
+    let installed_identity = installed_identity
+        .ok_or_else(|| format!("{}: missing installed hooks identity", hooks_target.display()))?;
+    if let Err(error) = verify_hooks_snapshot(path, &hooks_target, Some(&installed_hooks), Some(&installed_identity)) {
+        return match rollback_codex_hooks_json(&hooks_target, original_hooks.as_deref(), &installed_hooks, &installed_identity) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!("{error}; failed to restore hooks.json: {rollback_error}")),
+        };
+    }
     match enable_codex_hooks_feature(&config_toml) {
         Ok(true) => info!("Enabled Codex hooks feature flag in config.toml"),
         Ok(false) => {}
         Err(error) => {
-            return match rollback_codex_hooks_json(path, original_hooks.as_deref(), &installed_hooks) {
+            return match rollback_codex_hooks_json(&hooks_target, original_hooks.as_deref(), &installed_hooks, &installed_identity) {
                 Ok(()) => Err(error),
                 Err(rollback_error) => Err(format!(
                     "{error}; failed to restore hooks.json after installation error: {rollback_error}"
@@ -841,23 +873,54 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
 }
 
 fn rollback_codex_hooks_json(
-    path: &Path,
+    target: &Path,
     original: Option<&str>,
     installed: &str,
+    installed_identity: &str,
 ) -> Result<(), String> {
-    let current = std::fs::read_to_string(path)
-        .map_err(|error| format!("{}: {error}", path.display()))?;
-    if current != installed {
-        return Err(format!("{}: hooks changed during install; refusing rollback", path.display()));
-    }
+    verify_written_hooks(target, installed, installed_identity)?;
     if let Some(original) = original {
-        save_text_atomically_with(path, original, |temporary, destination| {
-            verify_config_snapshot(path, destination, installed)
+        save_text_atomically_with(target, original, |temporary, destination| {
+            verify_written_hooks(destination, installed, installed_identity)
                 .map_err(std::io::Error::other)?;
             replace_file(temporary, destination)
         })
     } else {
-        std::fs::remove_file(path).map_err(|error| format!("{}: {error}", path.display()))
+        std::fs::remove_file(target).map_err(|error| format!("{}: {error}", target.display()))
+    }
+}
+
+fn verify_written_hooks(target: &Path, expected: &str, identity: &str) -> Result<(), String> {
+    if config_file_identity(target)? != identity {
+        return Err(format!("{}: hooks file identity changed; refusing rollback", target.display()));
+    }
+    let content = std::fs::read_to_string(target)
+        .map_err(|error| format!("{}: {error}", target.display()))?;
+    if content != expected {
+        return Err(format!("{}: hooks changed during install; refusing rollback", target.display()));
+    }
+    Ok(())
+}
+
+fn verify_hooks_snapshot(
+    path: &Path,
+    target: &Path,
+    expected: Option<&str>,
+    identity: Option<&str>,
+) -> Result<(), String> {
+    if let Some(expected) = expected {
+        let current_target = std::fs::canonicalize(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        if current_target != target {
+            return Err(format!("{}: hooks target changed during install", path.display()));
+        }
+        verify_written_hooks(target, expected, identity.ok_or("missing hooks identity")?)
+    } else {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => Err(format!("{}: hooks file appeared during install", path.display())),
+            Err(error) => Err(format!("{}: {error}", path.display())),
+        }
     }
 }
 
@@ -2097,6 +2160,57 @@ codex_hooks = false
         assert!(error.contains("must be a boolean"), "{error}");
         assert!(!hooks_path.exists(), "new hooks file must be rolled back");
         assert_eq!(std::fs::read(&config_path).expect("read config"), original_config);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_hooks_rollback_rejects_replaced_file_with_same_text() {
+        let directory = tmp_settings_path("codex-hooks-replaced-rollback");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target = directory.join("hooks.json");
+        let installed = r#"{"hooks":{"SessionStart":[]}}"#;
+        write_raw(&target, installed.as_bytes());
+        let identity = config_file_identity(&target).expect("original identity");
+        save_text_atomically(&target, installed).expect("replace with identical bytes");
+
+        let error = rollback_codex_hooks_json(&target, Some("{}"), installed, &identity)
+            .expect_err("replacement must not be overwritten");
+        assert!(error.contains("identity changed"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target).expect("read replacement"), installed);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_hooks_repointed_symlink_cannot_change_install_target() {
+        use std::os::unix::fs::symlink;
+        let directory = tmp_settings_path("codex-hooks-repointed-link");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target_a = directory.join("hooks-a.json");
+        let target_b = directory.join("hooks-b.json");
+        let link = directory.join("hooks.json");
+        let original = r#"{"original":true}"#;
+        let installed = r#"{"hooks":{"SessionStart":[]}}"#;
+        write_raw(&target_a, original.as_bytes());
+        write_raw(&target_b, installed.as_bytes());
+        symlink(&target_a, &link).expect("link to original target");
+        let identity = config_file_identity(&target_a).expect("original identity");
+        std::fs::remove_file(&link).expect("unlink first target");
+        symlink(&target_b, &link).expect("repoint link");
+
+        let error = verify_hooks_snapshot(&link, &target_a, Some(original), Some(&identity))
+            .expect_err("repointed link must fail install");
+        assert!(error.contains("target changed"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target_b).expect("read new target"), installed);
+
+        // A rollback after the write is bound to target A, never the current
+        // symlink target B, even when B has the same installed JSON text.
+        save_text_atomically(&target_a, installed).expect("simulate installed file");
+        let installed_identity = config_file_identity(&target_a).expect("installed identity");
+        rollback_codex_hooks_json(&target_a, Some(original), installed, &installed_identity)
+            .expect("restore original target");
+        assert_eq!(std::fs::read_to_string(&target_a).expect("read old target"), original);
+        assert_eq!(std::fs::read_to_string(&target_b).expect("read new target"), installed);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

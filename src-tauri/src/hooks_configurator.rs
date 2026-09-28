@@ -346,9 +346,13 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
     } else {
         target
     };
-    let mut document = if target.exists() {
-        let content = std::fs::read_to_string(&target)
-            .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+    let original_content = if target.exists() {
+        Some(std::fs::read_to_string(&target)
+            .map_err(|e| format!("{}: {e}", config_toml.display()))?)
+    } else {
+        None
+    };
+    let mut document = if let Some(content) = &original_content {
         content
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?
@@ -396,7 +400,6 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         .as_ref()
         .map(|state| state.enabled_from_false.clone())
         .unwrap_or_default();
-    let mut state_changed = false;
     let mut changed = false;
     for key in ["hooks", "codex_hooks"] {
         if let Some(feature) = document
@@ -406,7 +409,6 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
             if feature.as_bool() == Some(false) {
                 if !owned.iter().any(|owned_key| owned_key.as_str() == key) {
                     owned.push(key.to_string());
-                    state_changed = true;
                 }
                 let decor = feature
                     .as_value()
@@ -425,38 +427,52 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         document["features"]["hooks"] = toml_edit::value(true);
         changed = true;
     }
-    // Persist provenance before changing config.toml. A failed state write
-    // must never turn an explicitly disabled user setting on without a way
-    // to restore it when LobsterPulse is removed.
-    if state_changed {
-        let target_text = target.to_str()
-            .ok_or_else(|| format!("{}: target path is not UTF-8", config_toml.display()))?;
-        let state = CodexFlagState {
-            enabled_from_false: owned,
-            target: target_text.to_owned(),
-            // A preliminary state exists before config changes. If the later
-            // write fails, the original file still matches this identity.
-            identity: config_file_identity(&target)?,
-        };
-        write_codex_flag_state(&state_path, &state)?;
-    }
     if changed {
         // Write the verified target, not a symlink that might be repointed
         // between validation and the atomic replacement.
-        let state_before_write = read_codex_flag_state(&state_path)?;
+        let state_to_stage = if owned.is_empty() {
+            None
+        } else {
+            let target_text = target.to_str()
+                .ok_or_else(|| format!("{}: target path is not UTF-8", config_toml.display()))?;
+            let identity = config_file_identity(&target)?;
+            let identity_owned = prior_state
+                .as_ref()
+                .and_then(|state| state_owns_identity(state, &identity))
+                .unwrap_or(false);
+            Some(CodexFlagState {
+                enabled_from_false: owned,
+                target: target_text.to_owned(),
+                identity,
+                identity_owned,
+                pending_identity: None,
+                pending_owned: true,
+            })
+        };
         save_text_atomically_with(&target, &document.to_string(), |temporary, destination| {
-            if let Some(state) = &state_before_write {
-                verify_codex_flag_state(config_toml, state)
+            if let Some(content) = &original_content {
+                verify_config_snapshot(config_toml, &target, content)
+                    .map_err(std::io::Error::other)?;
+            }
+            if let Some(mut state) = state_to_stage {
+                // The temporary file already has its final identity. Persist
+                // both it and the prior target before replacing config.toml:
+                // a failed state write cannot enable hooks, and either side
+                // of a failed rename remains recognizable on retry.
+                state.pending_identity = Some(
+                    config_file_identity(temporary).map_err(std::io::Error::other)?
+                );
+                write_codex_flag_state(&state_path, &state)
+                    .map_err(std::io::Error::other)?;
+                verify_codex_flag_state(config_toml, &state)
+                    .map_err(std::io::Error::other)?;
+            }
+            if let Some(content) = &original_content {
+                verify_config_snapshot(config_toml, &target, content)
                     .map_err(std::io::Error::other)?;
             }
             replace_file(temporary, destination)
         })?;
-        if state_before_write.is_some() {
-            let mut state = read_codex_flag_state(&state_path)?
-                .ok_or_else(|| format!("{}: missing ownership state", state_path.display()))?;
-            state.identity = config_file_identity(&target)?;
-            write_codex_flag_state(&state_path, &state)?;
-        }
     }
     Ok(changed)
 }
@@ -469,6 +485,9 @@ struct CodexFlagState {
     enabled_from_false: Vec<String>,
     target: String,
     identity: String,
+    identity_owned: bool,
+    pending_identity: Option<String>,
+    pending_owned: bool,
 }
 
 fn read_codex_flag_state(path: &Path) -> Result<Option<CodexFlagState>, String> {
@@ -478,7 +497,7 @@ fn read_codex_flag_state(path: &Path) -> Result<Option<CodexFlagState>, String> 
     let data = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let state: Value = serde_json::from_str(&data)
         .map_err(|e| format!("{}: malformed state: {e}", path.display()))?;
-    if state.get("version").and_then(Value::as_u64) != Some(2) {
+    if state.get("version").and_then(Value::as_u64) != Some(3) {
         return Err(format!("{}: unsupported state version", path.display()));
     }
     let target = state.get("target").and_then(Value::as_str)
@@ -487,6 +506,15 @@ fn read_codex_flag_state(path: &Path) -> Result<Option<CodexFlagState>, String> 
     let identity = state.get("identity").and_then(Value::as_str)
         .filter(|identity| !identity.is_empty())
         .ok_or_else(|| format!("{}: invalid identity", path.display()))?;
+    let identity_owned = state.get("identity_owned").and_then(Value::as_bool)
+        .ok_or_else(|| format!("{}: invalid identity_owned", path.display()))?;
+    let pending_identity = match state.get("pending_identity") {
+        Some(Value::String(identity)) if !identity.is_empty() => Some(identity.clone()),
+        Some(Value::Null) | None => None,
+        _ => return Err(format!("{}: invalid pending_identity", path.display())),
+    };
+    let pending_owned = state.get("pending_owned").and_then(Value::as_bool)
+        .ok_or_else(|| format!("{}: invalid pending_owned", path.display()))?;
     let entries = state
         .get("enabled_from_false")
         .and_then(Value::as_array)
@@ -507,27 +535,76 @@ fn read_codex_flag_state(path: &Path) -> Result<Option<CodexFlagState>, String> 
         enabled_from_false: owned,
         target: target.to_string(),
         identity: identity.to_string(),
+        identity_owned,
+        pending_identity,
+        pending_owned,
     }))
 }
 
 fn write_codex_flag_state(path: &Path, state: &CodexFlagState) -> Result<(), String> {
     save_json(path, &json!({
-        "version": 2,
+        "version": 3,
         "enabled_from_false": state.enabled_from_false,
         "target": state.target,
         "identity": state.identity,
+        "identity_owned": state.identity_owned,
+        "pending_identity": state.pending_identity,
+        "pending_owned": state.pending_owned,
     }))
+}
+
+fn state_owns_identity(state: &CodexFlagState, identity: &str) -> Option<bool> {
+    if state.pending_identity.as_deref() == Some(identity) {
+        Some(state.pending_owned)
+    } else if state.identity == identity {
+        Some(state.identity_owned)
+    } else {
+        None
+    }
+}
+
+fn verify_config_snapshot(config_toml: &Path, target: &Path, expected: &str) -> Result<(), String> {
+    let current_target = std::fs::canonicalize(config_toml)
+        .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+    if current_target != target {
+        return Err(format!("{}: config target changed during update", config_toml.display()));
+    }
+    let current = std::fs::read_to_string(target)
+        .map_err(|e| format!("{}: {e}", target.display()))?;
+    if current != expected {
+        return Err(format!("{}: config content changed during update", config_toml.display()));
+    }
+    Ok(())
 }
 
 fn verify_codex_flag_state(config_toml: &Path, state: &CodexFlagState) -> Result<(), String> {
     let current_target = std::fs::canonicalize(config_toml)
         .map_err(|e| format!("{}: cannot restore changed config target: {e}", config_toml.display()))?;
     let saved_target = Path::new(&state.target);
-    if current_target != saved_target || config_file_identity(&current_target)? != state.identity {
+    let identity = config_file_identity(&current_target)?;
+    let ownership = state_owns_identity(state, &identity);
+    if current_target != saved_target || ownership.is_none() {
         return Err(format!(
             "{}: config target or file identity changed; refusing to restore owned feature flags",
             config_toml.display()
         ));
+    }
+    if ownership == Some(false) {
+        // A pending first install did not commit. Its original inode is not
+        // owned; only the original disabled values may be retried or cleaned.
+        let content = std::fs::read_to_string(&current_target)
+            .map_err(|e| format!("{}: {e}", current_target.display()))?;
+        let document = content.parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("{}: malformed TOML: {e}", current_target.display()))?;
+        if state.enabled_from_false.iter().any(|key| {
+            document.get("features").and_then(|features| features.get(key))
+                .and_then(|feature| feature.as_bool()) != Some(false)
+        }) {
+            return Err(format!(
+                "{}: uncommitted original feature flags changed; refusing to claim ownership",
+                config_toml.display()
+            ));
+        }
     }
     Ok(())
 }
@@ -568,6 +645,14 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
     let state = read_codex_flag_state(&state_path)?
         .ok_or_else(|| format!("{}: missing ownership state", state_path.display()))?;
     verify_codex_flag_state(&config_toml, &state)?;
+    let current_identity = config_file_identity(Path::new(&state.target))?;
+    if state_owns_identity(&state, &current_identity) == Some(false) {
+        // Either the enable never committed, or a prior restore committed
+        // but removal of the sidecar failed. The config is already disabled.
+        std::fs::remove_file(&state_path)
+            .map_err(|e| format!("{}: {e}", state_path.display()))?;
+        return Ok(());
+    }
     let owned = &state.enabled_from_false;
     {
         let content = std::fs::read_to_string(&state.target)
@@ -604,10 +689,28 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
                 Path::new(&state.target),
                 &document.to_string(),
                 |temporary, destination| {
-                    // Editors and dotfile managers may atomically replace the
-                    // file while we prepare a temporary copy. Check again at
-                    // the point of commit before replacing the saved target.
+                    // Stage the restoring inode before the rename. If the
+                    // process stops or state deletion fails afterward, the
+                    // next removal recognizes an already-restored config.
                     verify_codex_flag_state(&config_toml, &state)
+                        .map_err(std::io::Error::other)?;
+                    let staged = CodexFlagState {
+                        enabled_from_false: state.enabled_from_false.clone(),
+                        target: state.target.clone(),
+                        identity: current_identity.clone(),
+                        identity_owned: true,
+                        pending_identity: Some(
+                            config_file_identity(temporary).map_err(std::io::Error::other)?
+                        ),
+                        pending_owned: false,
+                    };
+                    verify_config_snapshot(&config_toml, destination, &content)
+                        .map_err(std::io::Error::other)?;
+                    write_codex_flag_state(&state_path, &staged)
+                        .map_err(std::io::Error::other)?;
+                    verify_codex_flag_state(&config_toml, &staged)
+                        .map_err(std::io::Error::other)?;
+                    verify_config_snapshot(&config_toml, destination, &content)
                         .map_err(std::io::Error::other)?;
                     replace_file(temporary, destination)
                 },
@@ -1436,7 +1539,7 @@ codex_hooks = false # preserve this comment
     }
 
     #[test]
-    fn codex_retry_refreshes_preliminary_ownership_identity() {
+    fn codex_retry_commits_after_prepared_enable_did_not_replace_config() {
         let directory = tmp_settings_path("codex-owned-flag-retry");
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
         let hooks_path = directory.join("hooks.json");
@@ -1445,12 +1548,16 @@ codex_hooks = false # preserve this comment
         write_raw(&config_path, b"[features]\nhooks = false\n");
         let target = std::fs::canonicalize(&config_path).expect("resolve target");
         let state_path = codex_flag_state_path(&config_path).expect("state path");
+        let original_identity = config_file_identity(&target).expect("original identity");
         write_codex_flag_state(
             &state_path,
             &CodexFlagState {
                 enabled_from_false: vec!["hooks".to_string()],
                 target: target.to_str().expect("UTF-8 fixture path").to_string(),
-                identity: config_file_identity(&target).expect("original identity"),
+                identity: original_identity.clone(),
+                identity_owned: false,
+                pending_identity: Some("uninstalled-temporary-inode".to_string()),
+                pending_owned: true,
             },
         )
         .expect("write preliminary state");
@@ -1460,12 +1567,56 @@ codex_hooks = false # preserve this comment
         let state = read_codex_flag_state(&state_path)
             .expect("read state")
             .expect("state remains after enable");
-        assert_eq!(state.identity, config_file_identity(&target).expect("new identity"));
+        assert_eq!(state.identity, original_identity);
+        assert_eq!(
+            state.pending_identity.as_deref(),
+            Some(config_file_identity(&target).expect("installed identity").as_str())
+        );
+        assert!(state.pending_owned);
         remove_provider("codex", &provider).expect("restore after retry");
         assert_eq!(
             std::fs::read_to_string(&config_path).expect("read restored config"),
             "[features]\nhooks = false\n"
         );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_cleans_committed_restore_state() {
+        let directory = tmp_settings_path("codex-owned-flag-restored-state");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let provider = provider_with_path(&hooks_path);
+        install_provider("codex", &provider).expect("enable hooks");
+
+        let target = std::fs::canonicalize(&config_path).expect("resolve target");
+        let enabled_identity = config_file_identity(&target).expect("enabled identity");
+        save_text_atomically(&target, "[features]\nhooks = false\n")
+            .expect("simulate completed restore replacement");
+        let restored_identity = config_file_identity(&target).expect("restored identity");
+        let state_path = codex_flag_state_path(&config_path).expect("state path");
+        write_codex_flag_state(
+            &state_path,
+            &CodexFlagState {
+                enabled_from_false: vec!["hooks".to_string()],
+                target: target.to_str().expect("UTF-8 fixture path").to_string(),
+                identity: enabled_identity,
+                identity_owned: true,
+                pending_identity: Some(restored_identity),
+                pending_owned: false,
+            },
+        )
+        .expect("simulate state deletion failure after restore");
+
+        remove_provider("codex", &provider).expect("finish pending restoration");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read config"),
+            "[features]\nhooks = false\n"
+        );
+        assert!(!state_path.exists());
         let _ = std::fs::remove_dir_all(&directory);
     }
 

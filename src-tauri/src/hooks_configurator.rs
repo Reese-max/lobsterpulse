@@ -105,6 +105,53 @@ pub fn provider_needs_setup(provider_id: &str, config: &ProviderConfig) -> bool 
     true
 }
 
+/// Repair an enabled Codex provider persisted by an older LobsterPulse release.
+/// An ordinary launch leaves already configured hooks untouched, preserving
+/// their existing Codex trust decision.
+pub fn reconcile_enabled_codex(config: &ProviderConfig) -> Result<bool, String> {
+    if !config.enabled {
+        return Ok(false);
+    }
+    let path = config
+        .settings_path
+        .as_ref()
+        .map(|path| expand_path(path))
+        .ok_or("No settings path for provider codex")?;
+    let config_toml = path.parent().ok_or("Invalid hooks.json path")?.join("config.toml");
+    let feature_needs_setup = codex_feature_needs_setup(&config_toml)?;
+    if !feature_needs_setup && !provider_needs_setup("codex", config) {
+        return Ok(false);
+    }
+    install_provider("codex", config)?;
+    Ok(true)
+}
+
+fn codex_feature_needs_setup(config_toml: &Path) -> Result<bool, String> {
+    let content = match std::fs::read_to_string(config_toml) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(format!("{}: {error}", config_toml.display())),
+    };
+    let document = content.parse::<toml_edit::DocumentMut>()
+        .map_err(|error| format!("{}: malformed TOML: {error}", config_toml.display()))?;
+    let Some(features) = document.get("features") else {
+        return Ok(true);
+    };
+    if !features.is_table_like() {
+        return Err(format!("{}: features must be a table or inline table", config_toml.display()));
+    }
+    let mut canonical = None;
+    let mut alias = None;
+    for (key, slot) in [("hooks", &mut canonical), ("codex_hooks", &mut alias)] {
+        if let Some(value) = features.get(key) {
+            *slot = Some(value.as_bool().ok_or_else(|| {
+                format!("{}: [features].{key} must be a boolean", config_toml.display())
+            })?);
+        }
+    }
+    Ok(!canonical.or(alias).unwrap_or(false))
+}
+
 // Substring that uniquely identifies LobsterPulse-installed hooks. Matches
 // the sidecar binary filename across all shells + OSes (lobster-pulse-hook
 // on unix, lobster-pulse-hook.exe on windows). Previously "agentpulse" —
@@ -1519,6 +1566,56 @@ mod r37_silent_fail_surfacing_tests {
         let mut expected = original.clone();
         remove_lobsterpulse_hooks(&mut expected).expect("clean expected fixture");
         assert_eq!(removed, expected);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_startup_reconciles_an_already_enabled_provider() {
+        let directory = tmp_settings_path("codex-startup-reconcile");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"lobster-pulse-hook"}]}],"FutureEvent":[{"hooks":[{"type":"command","command":"unrelated-hook"}]}]}}"#;
+        let original_config = b"[features]\nhooks = false\ncodex_hooks = true\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+        let mut provider = provider_with_path(&hooks_path);
+        provider.enabled = true;
+        assert!(!provider_needs_setup("codex", &provider), "old hook marker exists");
+
+        assert!(reconcile_enabled_codex(&provider).expect("startup repair"));
+        let repaired = std::fs::read_to_string(&config_path).expect("read repaired config");
+        let document = repaired.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        let hooks_after = std::fs::read(&hooks_path).expect("read repaired hooks");
+        assert!(!reconcile_enabled_codex(&provider).expect("second startup"));
+        assert_eq!(std::fs::read(&hooks_path).expect("read no-op hooks"), hooks_after);
+        assert_eq!(std::fs::read_to_string(&config_path).expect("read no-op config"), repaired);
+
+        remove_provider("codex", &provider).expect("remove repaired provider");
+        assert_eq!(std::fs::read(&config_path).expect("read restored config"), original_config);
+        let removed: Value = serde_json::from_slice(&std::fs::read(&hooks_path).expect("read removed hooks"))
+            .expect("valid removed hooks");
+        assert_eq!(removed["hooks"]["FutureEvent"][0]["hooks"][0]["command"], "unrelated-hook");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_startup_does_not_enable_a_disabled_provider() {
+        let directory = tmp_settings_path("codex-startup-disabled");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{}}"#;
+        let original_config = b"[features]\nhooks = false\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+        let provider = provider_with_path(&hooks_path);
+        assert!(!reconcile_enabled_codex(&provider).expect("disabled startup"));
+        assert_eq!(std::fs::read(&hooks_path).expect("read hooks"), original_hooks);
+        assert_eq!(std::fs::read(&config_path).expect("read config"), original_config);
+        assert!(!directory.join("lobsterpulse-codex-hooks.lock").exists());
         let _ = std::fs::remove_dir_all(&directory);
     }
 

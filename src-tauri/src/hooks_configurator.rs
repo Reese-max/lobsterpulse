@@ -190,6 +190,9 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
     };
 
     if !path.exists() {
+        if provider_id == "codex" {
+            restore_codex_hooks_feature(&path)?;
+        }
         return Ok(());
     }
 
@@ -199,6 +202,9 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
 
     if remove_lobsterpulse_hooks(&mut root)? {
         save_json(&path, &root)?;
+    }
+    if provider_id == "codex" {
+        restore_codex_hooks_feature(&path)?;
     }
     info!("Removed LobsterPulse hooks for {provider_id}");
     Ok(())
@@ -375,6 +381,9 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         }
     }
 
+    let state_path = codex_flag_state_path(config_toml)?;
+    let mut owned = read_codex_flag_state(&state_path)?;
+    let mut state_changed = false;
     let mut changed = false;
     for key in ["hooks", "codex_hooks"] {
         if let Some(feature) = document
@@ -382,6 +391,10 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
             .and_then(|features| features.get_mut(key))
         {
             if feature.as_bool() == Some(false) {
+                if !owned.iter().any(|owned_key| owned_key.as_str() == key) {
+                    owned.push(key.to_string());
+                    state_changed = true;
+                }
                 let decor = feature
                     .as_value()
                     .expect("boolean TOML item is a value")
@@ -399,10 +412,97 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         document["features"]["hooks"] = toml_edit::value(true);
         changed = true;
     }
+    // Persist provenance before changing config.toml. A failed state write
+    // must never turn an explicitly disabled user setting on without a way
+    // to restore it when LobsterPulse is removed.
+    if state_changed {
+        save_json(&state_path, &json!({"version": 1, "enabled_from_false": owned}))?;
+    }
     if changed {
         save_text_atomically(config_toml, &document.to_string())?;
     }
     Ok(changed)
+}
+
+fn codex_flag_state_path(config_toml: &Path) -> Result<PathBuf, String> {
+    sibling_with_suffix(config_toml, ".lobsterpulse-hooks-state.json")
+}
+
+fn read_codex_flag_state(path: &Path) -> Result<Vec<String>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let data = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let state: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("{}: malformed state: {e}", path.display()))?;
+    if state.get("version").and_then(Value::as_u64) != Some(1) {
+        return Err(format!("{}: unsupported state version", path.display()));
+    }
+    let entries = state
+        .get("enabled_from_false")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{}: missing enabled_from_false", path.display()))?;
+    let mut owned = Vec::new();
+    for entry in entries {
+        let key = entry
+            .as_str()
+            .ok_or_else(|| format!("{}: invalid feature key", path.display()))?;
+        if !["hooks", "codex_hooks"].contains(&key)
+            || owned.iter().any(|item: &String| item.as_str() == key)
+        {
+            return Err(format!("{}: invalid or duplicate feature key", path.display()));
+        }
+        owned.push(key.to_string());
+    }
+    Ok(owned)
+}
+
+fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
+    let config_toml = hooks_json
+        .parent()
+        .ok_or("Invalid hooks.json path")?
+        .join("config.toml");
+    let state_path = codex_flag_state_path(&config_toml)?;
+    if !state_path.exists() {
+        return Ok(());
+    }
+    let owned = read_codex_flag_state(&state_path)?;
+    if config_toml.exists() {
+        let content = std::fs::read_to_string(&config_toml)
+            .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+        let mut document = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?;
+        let mut changed = false;
+        for key in &owned {
+            if let Some(feature) = document
+                .get_mut("features")
+                .and_then(|features| features.get_mut(key))
+            {
+                if feature.as_bool() == Some(true) {
+                    let decor = feature
+                        .as_value()
+                        .expect("boolean TOML item is a value")
+                        .decor()
+                        .clone();
+                    let mut disabled = toml_edit::Value::from(false);
+                    *disabled.decor_mut() = decor;
+                    *feature = toml_edit::Item::Value(disabled);
+                    changed = true;
+                } else if feature.as_bool().is_none() {
+                    return Err(format!(
+                        "{}: [features].{key} must be a boolean",
+                        config_toml.display()
+                    ));
+                }
+            }
+        }
+        if changed {
+            save_text_atomically(&config_toml, &document.to_string())?;
+        }
+    }
+    std::fs::remove_file(&state_path).map_err(|e| format!("{}: {e}", state_path.display()))?;
+    Ok(())
 }
 
 /// Codex CLI: hooks in ~/.codex/hooks.json + enable feature flag in config.toml
@@ -1009,12 +1109,25 @@ codex_hooks = false # preserve this comment
                 installed,
                 "{name}: reinstall must leave config unchanged"
             );
+            let state_path = codex_flag_state_path(&config_path).expect("state path");
+            let owned = read_codex_flag_state(&state_path).expect("owned flags");
+            assert_eq!(
+                owned.contains(&"hooks".to_string()),
+                original.contains("hooks = false # canonical"),
+                "{name}: canonical ownership"
+            );
+            assert_eq!(
+                owned.contains(&"codex_hooks".to_string()),
+                original.contains("codex_hooks = false # legacy"),
+                "{name}: alias ownership"
+            );
             remove_provider("codex", &provider).expect("remove hooks");
             assert_eq!(
                 std::fs::read_to_string(&config_path).expect("read removed config"),
-                installed,
-                "{name}: remove must leave shared feature unchanged"
+                original,
+                "{name}: remove must restore only flags changed from false"
             );
+            assert!(!state_path.exists(), "{name}: ownership state must be removed");
             let hooks: Value = serde_json::from_str(
                 &std::fs::read_to_string(&hooks_path).expect("read removed hooks"),
             )
@@ -1134,8 +1247,7 @@ codex_hooks = false # preserve this comment
     #[test]
     fn codex_remove_preserves_user_owned_true_flag() {
         // Issue #3 contract: remove/disable must not clobber a user-owned
-        // `codex_hooks = true`. codex_hooks is a shared Codex capability —
-        // removal leaves config.toml byte-identical regardless of who set it.
+        // `codex_hooks = true`. Removal leaves user-owned true byte-identical.
         let directory = tmp_settings_path("codex-feature-user-true");
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
         let path = directory.join("hooks.json");
@@ -1151,12 +1263,60 @@ codex_hooks = false # preserve this comment
         assert_eq!(
             std::fs::read(&config_path).expect("read config"),
             original_config,
-            "remove must never rewrite config.toml (shared capability)"
+            "remove must not rewrite user-owned true"
         );
         let hooks: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
                 .expect("hooks remain valid JSON");
         assert_eq!(marker_count(&hooks), 0);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_restores_owned_flag_after_unrelated_config_edit() {
+        let directory = tmp_settings_path("codex-owned-flag-unrelated-edit");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(
+            &config_path,
+            b"[features]\nhooks = false # user disabled\n[other]\nname = \"first\"\n",
+        );
+        let provider = provider_with_path(&path);
+
+        install_provider("codex", &provider).expect("enable hooks");
+        let enabled = std::fs::read_to_string(&config_path).expect("read enabled config");
+        assert!(enabled.contains("hooks = true # user disabled"));
+        std::fs::write(&config_path, enabled.replace("name = \"first\"", "name = \"later\""))
+            .expect("user edits unrelated setting");
+
+        remove_provider("codex", &provider).expect("remove LobsterPulse hooks");
+        let removed = std::fs::read_to_string(&config_path).expect("read restored config");
+        assert!(removed.contains("hooks = false # user disabled"));
+        assert!(removed.contains("name = \"later\""));
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_restores_owned_flag_when_hooks_file_is_missing() {
+        let directory = tmp_settings_path("codex-owned-flag-missing-hooks");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let provider = provider_with_path(&path);
+
+        install_provider("codex", &provider).expect("enable hooks");
+        std::fs::remove_file(&path).expect("simulate missing hooks.json");
+        remove_provider("codex", &provider).expect("restore flag without hooks file");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read restored config"),
+            "[features]\nhooks = false\n"
+        );
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -1293,7 +1453,7 @@ codex_hooks = false
     }
 
     #[test]
-    fn codex_install_reinstall_remove_keeps_shared_feature_enabled() {
+    fn codex_install_reinstall_remove_restores_owned_false_flag() {
         let directory = tmp_settings_path("codex-feature-lifecycle");
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
         let path = directory.join("hooks.json");
@@ -1312,9 +1472,10 @@ codex_hooks = false
             .expect("config remains valid TOML");
         assert_eq!(
             document["features"]["codex_hooks"].as_bool(),
-            Some(true),
-            "codex_hooks is a shared Codex capability and is not disabled on hook removal"
+            Some(false),
+            "remove restores the explicit false that LobsterPulse changed"
         );
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
         let hooks: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
                 .expect("hooks remain valid JSON");

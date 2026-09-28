@@ -1,5 +1,6 @@
 [package]
 name = "lobster-pulse"
+default-run = "lobster-pulse"
 version = "0.5.4"
 description = "Traditional Chinese desktop monitor for Claude, Codex, Copilot, and Gemini sessions"
 authors = ["yazelin"]

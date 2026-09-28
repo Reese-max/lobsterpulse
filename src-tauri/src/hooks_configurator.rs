@@ -1072,15 +1072,98 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
 }
 
 fn create_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::hard_link(source, destination)?;
-    if let Err(error) = std::fs::remove_file(source) {
-        log::warn!(
-            "created {} but could not clean temporary {}: {error}",
-            destination.display(),
-            source.display()
-        );
+    match std::fs::hard_link(source, destination) {
+        Ok(()) => {
+            if let Err(error) = std::fs::remove_file(source) {
+                log::warn!(
+                    "created {} but could not clean temporary {}: {error}",
+                    destination.display(),
+                    source.display()
+                );
+            }
+            Ok(())
+        }
+        Err(link_error) => {
+            // FAT/exFAT and some redirected homes reject hard links. Keep the
+            // no-clobber/complete-file property with each OS's exclusive
+            // rename primitive; if neither is supported, fail closed.
+            rename_file_if_absent(source, destination).map_err(|rename_error| {
+                std::io::Error::new(
+                    rename_error.kind(),
+                    format!(
+                        "hard link failed ({link_error}); exclusive rename failed ({rename_error})"
+                    ),
+                )
+            })
+        }
     }
-    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn rename_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int, c_uint};
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        fn renameat2(
+            olddirfd: c_int,
+            oldpath: *const c_char,
+            newdirfd: c_int,
+            newpath: *const c_char,
+            flags: c_uint,
+        ) -> c_int;
+    }
+    let old = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in source path"))?;
+    let new = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in destination path"))?;
+    // AT_FDCWD = -100; RENAME_NOREPLACE = 1 on Linux.
+    if unsafe { renameat2(-100, old.as_ptr(), -100, new.as_ptr(), 1) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int, c_uint};
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        fn renamex_np(from: *const c_char, to: *const c_char, flags: c_uint) -> c_int;
+    }
+    let old = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in source path"))?;
+    let new = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in destination path"))?;
+    // RENAME_EXCL = 0x00000004 on macOS.
+    if unsafe { renamex_np(old.as_ptr(), new.as_ptr(), 0x00000004) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn rename_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+    if unsafe { MoveFileW(source_wide.as_ptr(), destination_wide.as_ptr()) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn rename_file_if_absent(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "exclusive rename unavailable on this platform",
+    ))
 }
 
 fn atomic_write_target(path: &Path) -> Result<PathBuf, String> {
@@ -1864,6 +1947,35 @@ codex_hooks = false # preserve this comment
         assert_eq!(
             std::fs::read_to_string(&config_path).expect("read external config"),
             external
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn exclusive_rename_never_replaces_an_existing_config() {
+        let directory = tmp_settings_path("codex-exclusive-rename");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let temporary = directory.join("prepared.tmp");
+        let destination = directory.join("config.toml");
+        write_raw(&temporary, b"[features]\nhooks = true\n");
+        write_raw(&destination, b"[user]\nkeep = true\n");
+
+        rename_file_if_absent(&temporary, &destination)
+            .expect_err("existing destination must win");
+        assert_eq!(
+            std::fs::read(&destination).expect("read existing config"),
+            b"[user]\nkeep = true\n"
+        );
+        assert!(temporary.exists(), "failed rename retains prepared file");
+
+        std::fs::remove_file(&destination).expect("remove fixture config");
+        rename_file_if_absent(&temporary, &destination)
+            .expect("exclusive rename creates absent destination");
+        assert!(!temporary.exists(), "successful rename consumes prepared file");
+        assert_eq!(
+            std::fs::read(&destination).expect("read new config"),
+            b"[features]\nhooks = true\n"
         );
         let _ = std::fs::remove_dir_all(&directory);
     }

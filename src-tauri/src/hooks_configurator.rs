@@ -188,6 +188,11 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
         Some(p) => expand_path(p),
         None => return Ok(()),
     };
+    let _codex_lock = if provider_id == "codex" {
+        Some(lock_codex_hooks(&path)?)
+    } else {
+        None
+    };
 
     if !path.exists() {
         if provider_id == "codex" {
@@ -234,7 +239,10 @@ pub fn install_provider(provider_id: &str, config: &ProviderConfig) -> Result<()
     match provider_id {
         "claude" => install_claude_hooks(&path),
         "gemini" => install_gemini_hooks(&path),
-        "codex" => install_codex_hooks(&path),
+        "codex" => {
+            let _lock = lock_codex_hooks(&path)?;
+            install_codex_hooks(&path)
+        },
         "copilot" => install_copilot_hooks(&path),
         _ => Err(format!("Unknown provider: {provider_id}")),
     }
@@ -454,6 +462,7 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
                 verify_config_snapshot(config_toml, &target, content)
                     .map_err(std::io::Error::other)?;
             }
+            let mut staged_state = None;
             if let Some(mut state) = state_to_stage {
                 // The temporary file already has its final identity. Persist
                 // both it and the prior target before replacing config.toml:
@@ -466,12 +475,23 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
                     .map_err(std::io::Error::other)?;
                 verify_codex_flag_state(config_toml, &state)
                     .map_err(std::io::Error::other)?;
+                staged_state = Some(state);
             }
             if let Some(content) = &original_content {
                 verify_config_snapshot(config_toml, &target, content)
                     .map_err(std::io::Error::other)?;
             }
-            replace_file(temporary, destination)
+            if let Some(state) = &staged_state {
+                verify_codex_flag_state(config_toml, state)
+                    .map_err(std::io::Error::other)?;
+            }
+            if original_content.is_none() {
+                // A concurrent creator must win without losing its config.
+                // hard_link is atomic and fails if destination now exists.
+                create_file_if_absent(temporary, destination)
+            } else {
+                replace_file(temporary, destination)
+            }
         })?;
     }
     Ok(changed)
@@ -479,6 +499,27 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
 
 fn codex_flag_state_path(config_toml: &Path) -> Result<PathBuf, String> {
     sibling_with_suffix(config_toml, ".lobsterpulse-hooks-state.json")
+}
+
+fn lock_codex_hooks(hooks_json: &Path) -> Result<std::fs::File, String> {
+    use fs2::FileExt;
+    let parent = hooks_json.parent().ok_or("Invalid hooks.json path")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|e| format!("{}: {e}", parent.display()))?;
+    let lock_path = canonical_parent.join("lobsterpulse-codex-hooks.lock");
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&lock_path)
+        .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    file.try_lock_exclusive()
+        .map_err(|e| format!("{}: Codex hooks update already in progress: {e}", lock_path.display()))?;
+    Ok(file)
 }
 
 struct CodexFlagState {
@@ -712,6 +753,8 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
                         .map_err(std::io::Error::other)?;
                     verify_config_snapshot(&config_toml, destination, &content)
                         .map_err(std::io::Error::other)?;
+                    verify_codex_flag_state(&config_toml, &staged)
+                        .map_err(std::io::Error::other)?;
                     replace_file(temporary, destination)
                 },
             )?;
@@ -883,6 +926,18 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn create_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(source, destination)?;
+    if let Err(error) = std::fs::remove_file(source) {
+        log::warn!(
+            "created {} but could not clean temporary {}: {error}",
+            destination.display(),
+            source.display()
+        );
+    }
+    Ok(())
 }
 
 fn atomic_write_target(path: &Path) -> Result<PathBuf, String> {
@@ -1617,6 +1672,56 @@ codex_hooks = false # preserve this comment
             "[features]\nhooks = false\n"
         );
         assert!(!state_path.exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_and_remove_reject_another_in_progress_update() {
+        let directory = tmp_settings_path("codex-config-lock");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let provider = provider_with_path(&hooks_path);
+        let lock = lock_codex_hooks(&hooks_path).expect("hold lock");
+
+        assert!(install_provider("codex", &provider)
+            .expect_err("concurrent install must fail")
+            .contains("already in progress"));
+        assert!(remove_provider("codex", &provider)
+            .expect_err("concurrent remove must fail")
+            .contains("already in progress"));
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read config"),
+            "[features]\nhooks = false\n"
+        );
+
+        drop(lock);
+        install_provider("codex", &provider).expect("install after lock release");
+        remove_provider("codex", &provider).expect("remove after lock release");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_new_config_commit_preserves_concurrent_creator() {
+        let directory = tmp_settings_path("codex-concurrent-config-create");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let config_path = directory.join("config.toml");
+        let external = "[features]\nhooks = false # created concurrently\n";
+        let result = save_text_atomically_with(
+            &config_path,
+            "[features]\nhooks = true\n",
+            |temporary, destination| {
+                std::fs::write(destination, external)?;
+                create_file_if_absent(temporary, destination)
+            },
+        );
+        assert!(result.is_err(), "atomic create must reject existing config");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read external config"),
+            external
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 

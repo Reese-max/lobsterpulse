@@ -340,8 +340,14 @@ fn install_gemini_hooks(path: &PathBuf) -> Result<(), String> {
 }
 
 fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
-    let mut document = if config_toml.exists() {
-        let content = std::fs::read_to_string(config_toml)
+    let target = atomic_write_target(config_toml)?;
+    let target = if target.exists() {
+        std::fs::canonicalize(&target).map_err(|e| format!("{}: {e}", target.display()))?
+    } else {
+        target
+    };
+    let mut document = if target.exists() {
+        let content = std::fs::read_to_string(&target)
             .map_err(|e| format!("{}: {e}", config_toml.display()))?;
         content
             .parse::<toml_edit::DocumentMut>()
@@ -423,11 +429,11 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
     // must never turn an explicitly disabled user setting on without a way
     // to restore it when LobsterPulse is removed.
     if state_changed {
-        let target = std::fs::canonicalize(config_toml)
-            .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+        let target_text = target.to_str()
+            .ok_or_else(|| format!("{}: target path is not UTF-8", config_toml.display()))?;
         let state = CodexFlagState {
             enabled_from_false: owned,
-            target: target.to_string_lossy().into_owned(),
+            target: target_text.to_owned(),
             // A preliminary state exists before config changes. If the later
             // write fails, the original file still matches this identity.
             identity: config_file_identity(&target)?,
@@ -437,11 +443,6 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
     if changed {
         // Write the verified target, not a symlink that might be repointed
         // between validation and the atomic replacement.
-        let target = if let Some(state) = &prior_state {
-            PathBuf::from(&state.target)
-        } else {
-            atomic_write_target(config_toml)?
-        };
         save_text_atomically(&target, &document.to_string())?;
         if state_changed {
             let mut state = read_codex_flag_state(&state_path)?
@@ -561,14 +562,14 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
         .ok_or_else(|| format!("{}: missing ownership state", state_path.display()))?;
     verify_codex_flag_state(&config_toml, &state)?;
     let owned = &state.enabled_from_false;
-    if config_toml.exists() {
-        let content = std::fs::read_to_string(&config_toml)
-            .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+    {
+        let content = std::fs::read_to_string(&state.target)
+            .map_err(|e| format!("{}: {e}", state.target))?;
         let mut document = content
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?;
         let mut changed = false;
-        for key in &owned {
+        for key in owned {
             if let Some(feature) = document
                 .get_mut("features")
                 .and_then(|features| features.get_mut(key))

@@ -443,8 +443,15 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
     if changed {
         // Write the verified target, not a symlink that might be repointed
         // between validation and the atomic replacement.
-        save_text_atomically(&target, &document.to_string())?;
-        if state_changed {
+        let state_before_write = read_codex_flag_state(&state_path)?;
+        save_text_atomically_with(&target, &document.to_string(), |temporary, destination| {
+            if let Some(state) = &state_before_write {
+                verify_codex_flag_state(config_toml, state)
+                    .map_err(std::io::Error::other)?;
+            }
+            replace_file(temporary, destination)
+        })?;
+        if state_before_write.is_some() {
             let mut state = read_codex_flag_state(&state_path)?
                 .ok_or_else(|| format!("{}: missing ownership state", state_path.display()))?;
             state.identity = config_file_identity(&target)?;
@@ -593,7 +600,18 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
             }
         }
         if changed {
-            save_text_atomically(Path::new(&state.target), &document.to_string())?;
+            save_text_atomically_with(
+                Path::new(&state.target),
+                &document.to_string(),
+                |temporary, destination| {
+                    // Editors and dotfile managers may atomically replace the
+                    // file while we prepare a temporary copy. Check again at
+                    // the point of commit before replacing the saved target.
+                    verify_codex_flag_state(&config_toml, &state)
+                        .map_err(std::io::Error::other)?;
+                    replace_file(temporary, destination)
+                },
+            )?;
         }
     }
     std::fs::remove_file(&state_path).map_err(|e| format!("{}: {e}", state_path.display()))?;
@@ -1414,6 +1432,40 @@ codex_hooks = false # preserve this comment
         assert!(error.contains("file identity changed"));
         assert_eq!(std::fs::read_to_string(&config_path).expect("read config"), replacement);
         assert!(codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_retry_refreshes_preliminary_ownership_identity() {
+        let directory = tmp_settings_path("codex-owned-flag-retry");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let target = std::fs::canonicalize(&config_path).expect("resolve target");
+        let state_path = codex_flag_state_path(&config_path).expect("state path");
+        write_codex_flag_state(
+            &state_path,
+            &CodexFlagState {
+                enabled_from_false: vec!["hooks".to_string()],
+                target: target.to_str().expect("UTF-8 fixture path").to_string(),
+                identity: config_file_identity(&target).expect("original identity"),
+            },
+        )
+        .expect("write preliminary state");
+        let provider = provider_with_path(&hooks_path);
+
+        install_provider("codex", &provider).expect("retry enable");
+        let state = read_codex_flag_state(&state_path)
+            .expect("read state")
+            .expect("state remains after enable");
+        assert_eq!(state.identity, config_file_identity(&target).expect("new identity"));
+        remove_provider("codex", &provider).expect("restore after retry");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read restored config"),
+            "[features]\nhooks = false\n"
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 

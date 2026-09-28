@@ -105,6 +105,53 @@ pub fn provider_needs_setup(provider_id: &str, config: &ProviderConfig) -> bool 
     true
 }
 
+/// Repair an enabled Codex provider persisted by an older LobsterPulse release.
+/// An ordinary launch leaves already configured hooks untouched, preserving
+/// their existing Codex trust decision.
+pub fn reconcile_enabled_codex(config: &ProviderConfig) -> Result<bool, String> {
+    if !config.enabled {
+        return Ok(false);
+    }
+    let path = config
+        .settings_path
+        .as_ref()
+        .map(|path| expand_path(path))
+        .ok_or("No settings path for provider codex")?;
+    let config_toml = path.parent().ok_or("Invalid hooks.json path")?.join("config.toml");
+    let feature_needs_setup = codex_feature_needs_setup(&config_toml)?;
+    if !feature_needs_setup && !provider_needs_setup("codex", config) {
+        return Ok(false);
+    }
+    install_provider("codex", config)?;
+    Ok(true)
+}
+
+fn codex_feature_needs_setup(config_toml: &Path) -> Result<bool, String> {
+    let content = match std::fs::read_to_string(config_toml) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(format!("{}: {error}", config_toml.display())),
+    };
+    let document = content.parse::<toml_edit::DocumentMut>()
+        .map_err(|error| format!("{}: malformed TOML: {error}", config_toml.display()))?;
+    let Some(features) = document.get("features") else {
+        return Ok(true);
+    };
+    if !features.is_table_like() {
+        return Err(format!("{}: features must be a table or inline table", config_toml.display()));
+    }
+    let mut canonical = None;
+    let mut alias = None;
+    for (key, slot) in [("hooks", &mut canonical), ("codex_hooks", &mut alias)] {
+        if let Some(value) = features.get(key) {
+            *slot = Some(value.as_bool().ok_or_else(|| {
+                format!("{}: [features].{key} must be a boolean", config_toml.display())
+            })?);
+        }
+    }
+    Ok(!canonical.or(alias).unwrap_or(false))
+}
+
 // Substring that uniquely identifies LobsterPulse-installed hooks. Matches
 // the sidecar binary filename across all shells + OSes (lobster-pulse-hook
 // on unix, lobster-pulse-hook.exe on windows). Previously "agentpulse" —
@@ -188,8 +235,29 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
         Some(p) => expand_path(p),
         None => return Ok(()),
     };
+    if provider_id == "codex" {
+        let parent = path.parent().ok_or("Invalid hooks.json path")?;
+        let config_toml = parent.join("config.toml");
+        let state_path = codex_flag_state_path(&config_toml)?;
+        let lock_path = parent.join("lobsterpulse-codex-hooks.lock");
+        if !path.exists() && !state_path.exists() && !lock_path.exists() {
+            // No managed file or owned feature flag exists. In particular,
+            // disabling Codex before its home exists must not create it. An
+            // existing lock may belong to an install that has not written
+            // either settings file yet, so acquire it before returning.
+            return Ok(());
+        }
+    }
+    let _codex_lock = if provider_id == "codex" {
+        Some(lock_codex_hooks(&path)?)
+    } else {
+        None
+    };
 
     if !path.exists() {
+        if provider_id == "codex" {
+            restore_codex_hooks_feature(&path)?;
+        }
         return Ok(());
     }
 
@@ -199,6 +267,9 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
 
     if remove_lobsterpulse_hooks(&mut root)? {
         save_json(&path, &root)?;
+    }
+    if provider_id == "codex" {
+        restore_codex_hooks_feature(&path)?;
     }
     info!("Removed LobsterPulse hooks for {provider_id}");
     Ok(())
@@ -228,7 +299,10 @@ pub fn install_provider(provider_id: &str, config: &ProviderConfig) -> Result<()
     match provider_id {
         "claude" => install_claude_hooks(&path),
         "gemini" => install_gemini_hooks(&path),
-        "codex" => install_codex_hooks(&path),
+        "codex" => {
+            let _lock = lock_codex_hooks(&path)?;
+            install_codex_hooks(&path)
+        },
         "copilot" => install_copilot_hooks(&path),
         _ => Err(format!("Unknown provider: {provider_id}")),
     }
@@ -334,9 +408,19 @@ fn install_gemini_hooks(path: &PathBuf) -> Result<(), String> {
 }
 
 fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
-    let mut document = if config_toml.exists() {
-        let content = std::fs::read_to_string(config_toml)
-            .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+    let target = atomic_write_target(config_toml)?;
+    let target = if target.exists() {
+        std::fs::canonicalize(&target).map_err(|e| format!("{}: {e}", target.display()))?
+    } else {
+        target
+    };
+    let original_content = if target.exists() {
+        Some(std::fs::read_to_string(&target)
+            .map_err(|e| format!("{}: {e}", config_toml.display()))?)
+    } else {
+        None
+    };
+    let mut document = if let Some(content) = &original_content {
         content
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?
@@ -356,50 +440,418 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         }
     }
 
-    let current_value = document
-        .get("features")
-        .and_then(|features| features.get("codex_hooks"))
-        .map(|item| item.as_bool());
-
-    match current_value {
-        Some(Some(true)) => Ok(false),
-        Some(Some(false)) => {
-            let feature = document
-                .get_mut("features")
-                .and_then(|features| features.get_mut("codex_hooks"))
-                .ok_or_else(|| {
-                    format!(
-                        "{}: [features].codex_hooks disappeared during update",
-                        config_toml.display()
-                    )
-                })?;
-            let decor = feature
-                .as_value()
-                .expect("boolean TOML item is a value")
-                .decor()
-                .clone();
-            let mut enabled = toml_edit::Value::from(true);
-            *enabled.decor_mut() = decor;
-            *feature = toml_edit::Item::Value(enabled);
-            save_text_atomically(config_toml, &document.to_string())?;
-            Ok(true)
-        }
-        Some(None) => Err(format!(
-            "{}: [features].codex_hooks must be a boolean",
-            config_toml.display()
-        )),
-        None => {
-            document["features"]["codex_hooks"] = toml_edit::value(true);
-            save_text_atomically(config_toml, &document.to_string())?;
-            Ok(true)
+    // Codex now calls this feature `hooks`; `codex_hooks` remains a deprecated
+    // alias. The canonical key wins when both exist, so enabling only the
+    // alias can still leave hooks disabled. Validate both before any write.
+    let mut present = false;
+    for key in ["hooks", "codex_hooks"] {
+        if let Some(feature) = document
+            .get("features")
+            .and_then(|features| features.get(key))
+        {
+            present = true;
+            if feature.as_bool().is_none() {
+                return Err(format!(
+                    "{}: [features].{key} must be a boolean",
+                    config_toml.display()
+                ));
+            }
         }
     }
+
+    let state_path = codex_flag_state_path(config_toml)?;
+    let prior_state = read_codex_flag_state(&state_path)?;
+    if let Some(state) = &prior_state {
+        verify_codex_flag_state(config_toml, state)?;
+    }
+    let mut owned = prior_state
+        .as_ref()
+        .map(|state| state.enabled_from_false.clone())
+        .unwrap_or_default();
+    let mut changed = false;
+    for key in ["hooks", "codex_hooks"] {
+        if let Some(feature) = document
+            .get_mut("features")
+            .and_then(|features| features.get_mut(key))
+        {
+            if feature.as_bool() == Some(false) {
+                if !owned.iter().any(|owned_key| owned_key.as_str() == key) {
+                    owned.push(key.to_string());
+                }
+                let decor = feature
+                    .as_value()
+                    .expect("boolean TOML item is a value")
+                    .decor()
+                    .clone();
+                let mut enabled = toml_edit::Value::from(true);
+                *enabled.decor_mut() = decor;
+                *feature = toml_edit::Item::Value(enabled);
+                changed = true;
+            }
+        }
+    }
+
+    if !present {
+        document["features"]["hooks"] = toml_edit::value(true);
+        changed = true;
+    }
+    if changed {
+        // Write the verified target, not a symlink that might be repointed
+        // between validation and the atomic replacement.
+        let state_to_stage = if owned.is_empty() {
+            None
+        } else {
+            let target_text = target.to_str()
+                .ok_or_else(|| format!("{}: target path is not UTF-8", config_toml.display()))?;
+            let identity = config_file_identity(&target)?;
+            let identity_owned = prior_state
+                .as_ref()
+                .and_then(|state| state_owns_identity(state, &identity))
+                .unwrap_or(false);
+            Some(CodexFlagState {
+                enabled_from_false: owned,
+                target: target_text.to_owned(),
+                identity,
+                identity_owned,
+                pending_identity: None,
+                pending_owned: true,
+            })
+        };
+        save_text_atomically_with(&target, &document.to_string(), |temporary, destination| {
+            if let Some(content) = &original_content {
+                verify_config_snapshot(config_toml, &target, content)
+                    .map_err(std::io::Error::other)?;
+            }
+            let mut staged_state = None;
+            if let Some(mut state) = state_to_stage {
+                // The temporary file already has its final identity. Persist
+                // both it and the prior target before replacing config.toml:
+                // a failed state write cannot enable hooks, and either side
+                // of a failed rename remains recognizable on retry.
+                state.pending_identity = Some(
+                    config_file_identity(temporary).map_err(std::io::Error::other)?
+                );
+                write_codex_flag_state(&state_path, &state)
+                    .map_err(std::io::Error::other)?;
+                verify_codex_flag_state(config_toml, &state)
+                    .map_err(std::io::Error::other)?;
+                staged_state = Some(state);
+            }
+            if let Some(content) = &original_content {
+                verify_config_snapshot(config_toml, &target, content)
+                    .map_err(std::io::Error::other)?;
+            }
+            if let Some(state) = &staged_state {
+                verify_codex_flag_state(config_toml, state)
+                    .map_err(std::io::Error::other)?;
+            }
+            if original_content.is_none() {
+                // A concurrent creator must win without losing its config.
+                // hard_link is atomic and fails if destination now exists.
+                create_file_if_absent(temporary, destination)
+            } else {
+                replace_file(temporary, destination)
+            }
+        })?;
+    }
+    Ok(changed)
+}
+
+fn codex_flag_state_path(config_toml: &Path) -> Result<PathBuf, String> {
+    sibling_with_suffix(config_toml, ".lobsterpulse-hooks-state.json")
+}
+
+fn lock_codex_hooks(hooks_json: &Path) -> Result<std::fs::File, String> {
+    use fs2::FileExt;
+    let parent = hooks_json.parent().ok_or("Invalid hooks.json path")?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|e| format!("{}: {e}", parent.display()))?;
+    let lock_path = canonical_parent.join("lobsterpulse-codex-hooks.lock");
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&lock_path)
+        .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    file.try_lock_exclusive()
+        .map_err(|e| format!("{}: Codex hooks update already in progress: {e}", lock_path.display()))?;
+    Ok(file)
+}
+
+struct CodexFlagState {
+    enabled_from_false: Vec<String>,
+    target: String,
+    identity: String,
+    identity_owned: bool,
+    pending_identity: Option<String>,
+    pending_owned: bool,
+}
+
+fn read_codex_flag_state(path: &Path) -> Result<Option<CodexFlagState>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let state: Value = serde_json::from_str(&data)
+        .map_err(|e| format!("{}: malformed state: {e}", path.display()))?;
+    if state.get("version").and_then(Value::as_u64) != Some(3) {
+        return Err(format!("{}: unsupported state version", path.display()));
+    }
+    let target = state.get("target").and_then(Value::as_str)
+        .filter(|target| Path::new(target).is_absolute())
+        .ok_or_else(|| format!("{}: invalid target", path.display()))?;
+    let identity = state.get("identity").and_then(Value::as_str)
+        .filter(|identity| !identity.is_empty())
+        .ok_or_else(|| format!("{}: invalid identity", path.display()))?;
+    let identity_owned = state.get("identity_owned").and_then(Value::as_bool)
+        .ok_or_else(|| format!("{}: invalid identity_owned", path.display()))?;
+    let pending_identity = match state.get("pending_identity") {
+        Some(Value::String(identity)) if !identity.is_empty() => Some(identity.clone()),
+        Some(Value::Null) | None => None,
+        _ => return Err(format!("{}: invalid pending_identity", path.display())),
+    };
+    let pending_owned = state.get("pending_owned").and_then(Value::as_bool)
+        .ok_or_else(|| format!("{}: invalid pending_owned", path.display()))?;
+    let entries = state
+        .get("enabled_from_false")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{}: missing enabled_from_false", path.display()))?;
+    let mut owned = Vec::new();
+    for entry in entries {
+        let key = entry
+            .as_str()
+            .ok_or_else(|| format!("{}: invalid feature key", path.display()))?;
+        if !["hooks", "codex_hooks"].contains(&key)
+            || owned.iter().any(|item: &String| item.as_str() == key)
+        {
+            return Err(format!("{}: invalid or duplicate feature key", path.display()));
+        }
+        owned.push(key.to_string());
+    }
+    Ok(Some(CodexFlagState {
+        enabled_from_false: owned,
+        target: target.to_string(),
+        identity: identity.to_string(),
+        identity_owned,
+        pending_identity,
+        pending_owned,
+    }))
+}
+
+fn write_codex_flag_state(path: &Path, state: &CodexFlagState) -> Result<(), String> {
+    save_json(path, &json!({
+        "version": 3,
+        "enabled_from_false": state.enabled_from_false,
+        "target": state.target,
+        "identity": state.identity,
+        "identity_owned": state.identity_owned,
+        "pending_identity": state.pending_identity,
+        "pending_owned": state.pending_owned,
+    }))
+}
+
+fn state_owns_identity(state: &CodexFlagState, identity: &str) -> Option<bool> {
+    if state.pending_identity.as_deref() == Some(identity) {
+        Some(state.pending_owned)
+    } else if state.identity == identity {
+        Some(state.identity_owned)
+    } else {
+        None
+    }
+}
+
+fn verify_config_snapshot(config_toml: &Path, target: &Path, expected: &str) -> Result<(), String> {
+    let current_target = std::fs::canonicalize(config_toml)
+        .map_err(|e| format!("{}: {e}", config_toml.display()))?;
+    if current_target != target {
+        return Err(format!("{}: config target changed during update", config_toml.display()));
+    }
+    let current = std::fs::read_to_string(target)
+        .map_err(|e| format!("{}: {e}", target.display()))?;
+    if current != expected {
+        return Err(format!("{}: config content changed during update", config_toml.display()));
+    }
+    Ok(())
+}
+
+fn verify_codex_flag_state(config_toml: &Path, state: &CodexFlagState) -> Result<(), String> {
+    let current_target = std::fs::canonicalize(config_toml)
+        .map_err(|e| format!("{}: cannot restore changed config target: {e}", config_toml.display()))?;
+    let saved_target = Path::new(&state.target);
+    let identity = config_file_identity(&current_target)?;
+    let ownership = state_owns_identity(state, &identity);
+    if current_target != saved_target || ownership.is_none() {
+        return Err(format!(
+            "{}: config target or file identity changed; refusing to restore owned feature flags",
+            config_toml.display()
+        ));
+    }
+    if ownership == Some(false) {
+        // A pending first install did not commit. Its original inode is not
+        // owned; only the original disabled values may be retried or cleaned.
+        let content = std::fs::read_to_string(&current_target)
+            .map_err(|e| format!("{}: {e}", current_target.display()))?;
+        let document = content.parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("{}: malformed TOML: {e}", current_target.display()))?;
+        if state.enabled_from_false.iter().any(|key| {
+            document.get("features").and_then(|features| features.get(key))
+                .and_then(|feature| feature.as_bool()) != Some(false)
+        }) {
+            return Err(format!(
+                "{}: uncommitted original feature flags changed; refusing to claim ownership",
+                config_toml.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn config_file_identity(path: &Path) -> Result<String, String> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(format!("unix:{}:{}", metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn config_file_identity(path: &Path) -> Result<String, String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(format!("{}: {}", path.display(), std::io::Error::last_os_error()));
+    }
+    Ok(format!(
+        "windows:{}:{}:{}",
+        info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+    ))
+}
+
+fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
+    let config_toml = hooks_json
+        .parent()
+        .ok_or("Invalid hooks.json path")?
+        .join("config.toml");
+    let state_path = codex_flag_state_path(&config_toml)?;
+    if !state_path.exists() {
+        return Ok(());
+    }
+    let state = read_codex_flag_state(&state_path)?
+        .ok_or_else(|| format!("{}: missing ownership state", state_path.display()))?;
+    verify_codex_flag_state(&config_toml, &state)?;
+    let current_identity = config_file_identity(Path::new(&state.target))?;
+    if state_owns_identity(&state, &current_identity) == Some(false) {
+        // Either the enable never committed, or a prior restore committed
+        // but removal of the sidecar failed. The config is already disabled.
+        std::fs::remove_file(&state_path)
+            .map_err(|e| format!("{}: {e}", state_path.display()))?;
+        return Ok(());
+    }
+    let owned = &state.enabled_from_false;
+    {
+        let content = std::fs::read_to_string(&state.target)
+            .map_err(|e| format!("{}: {e}", state.target))?;
+        let mut document = content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?;
+        let mut changed = false;
+        for key in owned {
+            if let Some(feature) = document
+                .get_mut("features")
+                .and_then(|features| features.get_mut(key))
+            {
+                if feature.as_bool() == Some(true) {
+                    let decor = feature
+                        .as_value()
+                        .expect("boolean TOML item is a value")
+                        .decor()
+                        .clone();
+                    let mut disabled = toml_edit::Value::from(false);
+                    *disabled.decor_mut() = decor;
+                    *feature = toml_edit::Item::Value(disabled);
+                    changed = true;
+                } else if feature.as_bool().is_none() {
+                    return Err(format!(
+                        "{}: [features].{key} must be a boolean",
+                        config_toml.display()
+                    ));
+                }
+            }
+        }
+        if changed {
+            save_text_atomically_with(
+                Path::new(&state.target),
+                &document.to_string(),
+                |temporary, destination| {
+                    // Stage the restoring inode before the rename. If the
+                    // process stops or state deletion fails afterward, the
+                    // next removal recognizes an already-restored config.
+                    verify_codex_flag_state(&config_toml, &state)
+                        .map_err(std::io::Error::other)?;
+                    let staged = CodexFlagState {
+                        enabled_from_false: state.enabled_from_false.clone(),
+                        target: state.target.clone(),
+                        identity: current_identity.clone(),
+                        identity_owned: true,
+                        pending_identity: Some(
+                            config_file_identity(temporary).map_err(std::io::Error::other)?
+                        ),
+                        pending_owned: false,
+                    };
+                    verify_config_snapshot(&config_toml, destination, &content)
+                        .map_err(std::io::Error::other)?;
+                    write_codex_flag_state(&state_path, &staged)
+                        .map_err(std::io::Error::other)?;
+                    verify_codex_flag_state(&config_toml, &staged)
+                        .map_err(std::io::Error::other)?;
+                    verify_config_snapshot(&config_toml, destination, &content)
+                        .map_err(std::io::Error::other)?;
+                    verify_codex_flag_state(&config_toml, &staged)
+                        .map_err(std::io::Error::other)?;
+                    replace_file(temporary, destination)
+                },
+            )?;
+        }
+    }
+    std::fs::remove_file(&state_path).map_err(|e| format!("{}: {e}", state_path.display()))?;
+    Ok(())
 }
 
 /// Codex CLI: hooks in ~/.codex/hooks.json + enable feature flag in config.toml
 fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
     // Parse and validate before touching either user configuration file.
-    let mut root = load_or_create_json(path)?;
+    let hooks_target = atomic_write_target(path)?;
+    let hooks_target = if hooks_target.exists() {
+        std::fs::canonicalize(&hooks_target)
+            .map_err(|error| format!("{}: {error}", hooks_target.display()))?
+    } else {
+        let parent = hooks_target.parent().ok_or("Invalid hooks.json path")?;
+        std::fs::canonicalize(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?
+            .join(hooks_target.file_name().ok_or("Invalid hooks.json path")?)
+    };
+    let original_hooks = match std::fs::read_to_string(&hooks_target) {
+        Ok(content) => Some(content),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("{}: {error}", hooks_target.display())),
+    };
+    let original_identity = if original_hooks.is_some() {
+        Some(config_file_identity(&hooks_target)?)
+    } else {
+        None
+    };
+    let mut root = match &original_hooks {
+        Some(content) => serde_json::from_str(content)
+            .map_err(|error| format!("{} contains malformed JSON: {error}", path.display()))?,
+        None => json!({}),
+    };
     remove_lobsterpulse_hooks(&mut root)?;
 
     let hooks = root
@@ -442,13 +894,119 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
         .parent()
         .ok_or("Invalid hooks.json path")?
         .join("config.toml");
-    if enable_codex_hooks_feature(&config_toml)? {
-        info!("Enabled codex_hooks feature flag in config.toml");
+    // Persist hooks first. Bind both the write and any rollback to the target
+    // we read, so repointing a dotfile symlink cannot overwrite another file.
+    let installed_hooks = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())?;
+    let mut installed_identity = None;
+    save_text_atomically_with(&hooks_target, &installed_hooks, |temporary, destination| {
+        verify_hooks_snapshot(path, destination, original_hooks.as_deref(), original_identity.as_deref())
+            .map_err(std::io::Error::other)?;
+        installed_identity = Some(config_file_identity(temporary).map_err(std::io::Error::other)?);
+        if original_hooks.is_some() {
+            replace_file(temporary, destination)
+        } else {
+            create_file_if_absent(temporary, destination)
+        }
+    })?;
+    let installed_identity = installed_identity
+        .ok_or_else(|| format!("{}: missing installed hooks identity", hooks_target.display()))?;
+    if let Err(error) = verify_hooks_snapshot(path, &hooks_target, Some(&installed_hooks), Some(&installed_identity)) {
+        return match rollback_codex_hooks_json(&hooks_target, original_hooks.as_deref(), &installed_hooks, &installed_identity) {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(format!("{error}; failed to restore hooks.json: {rollback_error}")),
+        };
     }
-
-    save_json(path, &root)?;
+    match enable_codex_hooks_feature(&config_toml) {
+        Ok(true) => info!("Enabled Codex hooks feature flag in config.toml"),
+        Ok(false) => {}
+        Err(error) => {
+            return match rollback_codex_hooks_json(&hooks_target, original_hooks.as_deref(), &installed_hooks, &installed_identity) {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(format!(
+                    "{error}; failed to restore hooks.json after installation error: {rollback_error}"
+                )),
+            };
+        }
+    }
     info!("Codex CLI hooks configured");
     Ok(())
+}
+
+fn rollback_codex_hooks_json(
+    target: &Path,
+    original: Option<&str>,
+    installed: &str,
+    installed_identity: &str,
+) -> Result<(), String> {
+    verify_written_hooks(target, installed, installed_identity)?;
+    if let Some(original) = original {
+        save_text_atomically_with(target, original, |temporary, destination| {
+            verify_written_hooks(destination, installed, installed_identity)
+                .map_err(std::io::Error::other)?;
+            replace_file(temporary, destination)
+        })
+    } else {
+        remove_new_codex_hooks_if_owned(target, installed, installed_identity)
+    }
+}
+
+fn remove_new_codex_hooks_if_owned(
+    target: &Path,
+    installed: &str,
+    installed_identity: &str,
+) -> Result<(), String> {
+    // Rename first, then verify the moved inode before deleting it. If an
+    // external editor replaced hooks.json after the earlier verification, its
+    // file is restored (or retained at the reported quarantine path), never
+    // deleted as though it were our newly created file.
+    let quarantine = temporary_path(target)?;
+    std::fs::rename(target, &quarantine)
+        .map_err(|error| format!("{}: {error}", target.display()))?;
+    if let Err(error) = verify_written_hooks(&quarantine, installed, installed_identity) {
+        return match create_file_if_absent(&quarantine, target) {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!(
+                "{error}; replacement retained at {} because restoration failed: {restore_error}",
+                quarantine.display()
+            )),
+        };
+    }
+    std::fs::remove_file(&quarantine)
+        .map_err(|error| format!("{}: {error}", quarantine.display()))
+}
+
+fn verify_written_hooks(target: &Path, expected: &str, identity: &str) -> Result<(), String> {
+    if config_file_identity(target)? != identity {
+        return Err(format!("{}: hooks file identity changed; refusing rollback", target.display()));
+    }
+    let content = std::fs::read_to_string(target)
+        .map_err(|error| format!("{}: {error}", target.display()))?;
+    if content != expected {
+        return Err(format!("{}: hooks changed during install; refusing rollback", target.display()));
+    }
+    Ok(())
+}
+
+fn verify_hooks_snapshot(
+    path: &Path,
+    target: &Path,
+    expected: Option<&str>,
+    identity: Option<&str>,
+) -> Result<(), String> {
+    if let Some(expected) = expected {
+        let current_target = std::fs::canonicalize(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        if current_target != target {
+            return Err(format!("{}: hooks target changed during install", path.display()));
+        }
+        verify_written_hooks(target, expected, identity.ok_or("missing hooks identity")?)
+    } else {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(_) => Err(format!("{}: hooks file appeared during install", path.display())),
+            Err(error) => Err(format!("{}: {error}", path.display())),
+        }
+    }
 }
 
 /// GitHub Copilot CLI: hooks in ~/.copilot/config.json
@@ -558,6 +1116,101 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn create_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    match std::fs::hard_link(source, destination) {
+        Ok(()) => {
+            if let Err(error) = std::fs::remove_file(source) {
+                log::warn!(
+                    "created {} but could not clean temporary {}: {error}",
+                    destination.display(),
+                    source.display()
+                );
+            }
+            Ok(())
+        }
+        Err(link_error) => {
+            // FAT/exFAT and some redirected homes reject hard links. Keep the
+            // no-clobber/complete-file property with each OS's exclusive
+            // rename primitive; if neither is supported, fail closed.
+            rename_file_if_absent(source, destination).map_err(|rename_error| {
+                std::io::Error::new(
+                    rename_error.kind(),
+                    format!(
+                        "hard link failed ({link_error}); exclusive rename failed ({rename_error})"
+                    ),
+                )
+            })
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int, c_uint};
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        fn renameat2(
+            olddirfd: c_int,
+            oldpath: *const c_char,
+            newdirfd: c_int,
+            newpath: *const c_char,
+            flags: c_uint,
+        ) -> c_int;
+    }
+    let old = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in source path"))?;
+    let new = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in destination path"))?;
+    // AT_FDCWD = -100; RENAME_NOREPLACE = 1 on Linux.
+    if unsafe { renameat2(-100, old.as_ptr(), -100, new.as_ptr(), 1) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int, c_uint};
+    use std::os::unix::ffi::OsStrExt;
+    unsafe extern "C" {
+        fn renamex_np(from: *const c_char, to: *const c_char, flags: c_uint) -> c_int;
+    }
+    let old = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in source path"))?;
+    let new = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in destination path"))?;
+    // RENAME_EXCL = 0x00000004 on macOS.
+    if unsafe { renamex_np(old.as_ptr(), new.as_ptr(), 0x00000004) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+fn rename_file_if_absent(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileW;
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+    if unsafe { MoveFileW(source_wide.as_ptr(), destination_wide.as_ptr()) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn rename_file_if_absent(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "exclusive rename unavailable on this platform",
+    ))
 }
 
 fn atomic_write_target(path: &Path) -> Result<PathBuf, String> {
@@ -917,6 +1570,56 @@ mod r37_silent_fail_surfacing_tests {
     }
 
     #[test]
+    fn codex_startup_reconciles_an_already_enabled_provider() {
+        let directory = tmp_settings_path("codex-startup-reconcile");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"lobster-pulse-hook"}]}],"FutureEvent":[{"hooks":[{"type":"command","command":"unrelated-hook"}]}]}}"#;
+        let original_config = b"[features]\nhooks = false\ncodex_hooks = true\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+        let mut provider = provider_with_path(&hooks_path);
+        provider.enabled = true;
+        assert!(!provider_needs_setup("codex", &provider), "old hook marker exists");
+
+        assert!(reconcile_enabled_codex(&provider).expect("startup repair"));
+        let repaired = std::fs::read_to_string(&config_path).expect("read repaired config");
+        let document = repaired.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        let hooks_after = std::fs::read(&hooks_path).expect("read repaired hooks");
+        assert!(!reconcile_enabled_codex(&provider).expect("second startup"));
+        assert_eq!(std::fs::read(&hooks_path).expect("read no-op hooks"), hooks_after);
+        assert_eq!(std::fs::read_to_string(&config_path).expect("read no-op config"), repaired);
+
+        remove_provider("codex", &provider).expect("remove repaired provider");
+        assert_eq!(std::fs::read(&config_path).expect("read restored config"), original_config);
+        let removed: Value = serde_json::from_slice(&std::fs::read(&hooks_path).expect("read removed hooks"))
+            .expect("valid removed hooks");
+        assert_eq!(removed["hooks"]["FutureEvent"][0]["hooks"][0]["command"], "unrelated-hook");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_startup_does_not_enable_a_disabled_provider() {
+        let directory = tmp_settings_path("codex-startup-disabled");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{}}"#;
+        let original_config = b"[features]\nhooks = false\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+        let provider = provider_with_path(&hooks_path);
+        assert!(!reconcile_enabled_codex(&provider).expect("disabled startup"));
+        assert_eq!(std::fs::read(&hooks_path).expect("read hooks"), original_hooks);
+        assert_eq!(std::fs::read(&config_path).expect("read config"), original_config);
+        assert!(!directory.join("lobsterpulse-codex-hooks.lock").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn codex_install_enables_existing_false_feature_flag() {
         let directory = tmp_settings_path("codex-feature-false");
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
@@ -946,6 +1649,113 @@ codex_hooks = false # preserve this comment
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
                 .expect("hooks remain valid JSON");
         assert_eq!(marker_count(&hooks), 5);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_enables_canonical_hooks_flag_and_reconciles_alias() {
+        for (name, original) in [
+            (
+                "canonical-false",
+                "# keep this comment\n[features]\nhooks = false # canonical\nother = 42\n",
+            ),
+            (
+                "canonical-false-alias-true",
+                "# keep this comment\n[features]\nhooks = false # canonical\ncodex_hooks = true # legacy\n",
+            ),
+            (
+                "canonical-true-alias-false",
+                "# keep this comment\n[features]\nhooks = true # canonical\ncodex_hooks = false # legacy\n",
+            ),
+            (
+                "both-false",
+                "# keep this comment\n[features]\nhooks = false # canonical\ncodex_hooks = false # legacy\n",
+            ),
+        ] {
+            let directory = tmp_settings_path(name);
+            std::fs::create_dir_all(&directory).expect("mkdir fixture");
+            let hooks_path = directory.join("hooks.json");
+            let config_path = directory.join("config.toml");
+            write_raw(&hooks_path, br#"{"hooks":{}}"#);
+            write_raw(&config_path, original.as_bytes());
+            let provider = provider_with_path(&hooks_path);
+
+            install_provider("codex", &provider).expect("install hooks");
+            let installed = std::fs::read_to_string(&config_path).expect("read config");
+            let document = installed
+                .parse::<toml_edit::DocumentMut>()
+                .expect("valid TOML after install");
+            assert_eq!(document["features"]["hooks"].as_bool(), Some(true), "{name}");
+            if original.contains("codex_hooks =") {
+                assert_eq!(
+                    document["features"]["codex_hooks"].as_bool(),
+                    Some(true),
+                    "{name}"
+                );
+                assert!(installed.contains("# legacy"), "{name}: legacy decor lost");
+            }
+            assert!(installed.contains("# canonical"), "{name}: canonical decor lost");
+            assert!(installed.contains("# keep this comment"), "{name}");
+
+            install_provider("codex", &provider).expect("reinstall hooks");
+            assert_eq!(
+                std::fs::read_to_string(&config_path).expect("read reinstalled config"),
+                installed,
+                "{name}: reinstall must leave config unchanged"
+            );
+            let state_path = codex_flag_state_path(&config_path).expect("state path");
+            let owned = read_codex_flag_state(&state_path)
+                .expect("owned flags")
+                .expect("state after enable")
+                .enabled_from_false;
+            assert_eq!(
+                owned.contains(&"hooks".to_string()),
+                original.contains("hooks = false # canonical"),
+                "{name}: canonical ownership"
+            );
+            assert_eq!(
+                owned.contains(&"codex_hooks".to_string()),
+                original.contains("codex_hooks = false # legacy"),
+                "{name}: alias ownership"
+            );
+            remove_provider("codex", &provider).expect("remove hooks");
+            assert_eq!(
+                std::fs::read_to_string(&config_path).expect("read removed config"),
+                original,
+                "{name}: remove must restore only flags changed from false"
+            );
+            assert!(!state_path.exists(), "{name}: ownership state must be removed");
+            let hooks: Value = serde_json::from_str(
+                &std::fs::read_to_string(&hooks_path).expect("read removed hooks"),
+            )
+            .expect("valid hooks JSON");
+            assert_eq!(marker_count(&hooks), 0, "{name}");
+            let _ = std::fs::remove_dir_all(&directory);
+        }
+    }
+
+    #[test]
+    fn codex_install_rejects_non_boolean_canonical_hooks_flag() {
+        let directory = tmp_settings_path("codex-canonical-nonbool");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{}}"#;
+        let original_config = b"[features]\nhooks = \"yes\"\ncodex_hooks = false\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+
+        let error = install_provider("codex", &provider_with_path(&hooks_path))
+            .expect_err("non-boolean canonical feature must fail closed");
+        assert!(error.contains("[features].hooks must be a boolean"));
+        assert_eq!(
+            std::fs::read(&hooks_path).expect("read hooks"),
+            original_hooks
+        );
+        assert_eq!(
+            std::fs::read(&config_path).expect("read config"),
+            original_config
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -1022,7 +1832,7 @@ codex_hooks = false # preserve this comment
         let document = config
             .parse::<toml_edit::DocumentMut>()
             .expect("updated config remains valid TOML");
-        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
         assert_eq!(
             document["other"]["codex_hooks"].as_bool(),
             Some(false),
@@ -1034,8 +1844,7 @@ codex_hooks = false # preserve this comment
     #[test]
     fn codex_remove_preserves_user_owned_true_flag() {
         // Issue #3 contract: remove/disable must not clobber a user-owned
-        // `codex_hooks = true`. codex_hooks is a shared Codex capability —
-        // removal leaves config.toml byte-identical regardless of who set it.
+        // `codex_hooks = true`. Removal leaves user-owned true byte-identical.
         let directory = tmp_settings_path("codex-feature-user-true");
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
         let path = directory.join("hooks.json");
@@ -1051,12 +1860,281 @@ codex_hooks = false # preserve this comment
         assert_eq!(
             std::fs::read(&config_path).expect("read config"),
             original_config,
-            "remove must never rewrite config.toml (shared capability)"
+            "remove must not rewrite user-owned true"
         );
         let hooks: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
                 .expect("hooks remain valid JSON");
         assert_eq!(marker_count(&hooks), 0);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_restores_owned_flag_after_unrelated_config_edit() {
+        let directory = tmp_settings_path("codex-owned-flag-unrelated-edit");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(
+            &config_path,
+            b"[features]\nhooks = false # user disabled\n[other]\nname = \"first\"\n",
+        );
+        let provider = provider_with_path(&path);
+
+        install_provider("codex", &provider).expect("enable hooks");
+        let enabled = std::fs::read_to_string(&config_path).expect("read enabled config");
+        assert!(enabled.contains("hooks = true # user disabled"));
+        std::fs::write(&config_path, enabled.replace("name = \"first\"", "name = \"later\""))
+            .expect("user edits unrelated setting");
+
+        remove_provider("codex", &provider).expect("remove LobsterPulse hooks");
+        let removed = std::fs::read_to_string(&config_path).expect("read restored config");
+        assert!(removed.contains("hooks = false # user disabled"));
+        assert!(removed.contains("name = \"later\""));
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_rejects_wholesale_config_replacement() {
+        let directory = tmp_settings_path("codex-owned-flag-replaced-config");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let provider = provider_with_path(&hooks_path);
+
+        install_provider("codex", &provider).expect("enable hooks");
+        let replacement = "[features]\nhooks = true # managed by user\n";
+        save_text_atomically(&config_path, replacement).expect("replace config wholesale");
+        let error = remove_provider("codex", &provider).expect_err("must reject replacement");
+        // After replacement, the filesystem may reuse the pre-install inode.
+        // Either identity mismatch or the uncommitted-original guard must
+        // reject the new user's true value; both leave the file untouched.
+        assert!(
+            error.contains("file identity changed")
+                || error.contains("uncommitted original feature flags changed"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_to_string(&config_path).expect("read config"), replacement);
+        assert!(codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_retry_commits_after_prepared_enable_did_not_replace_config() {
+        let directory = tmp_settings_path("codex-owned-flag-retry");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let target = std::fs::canonicalize(&config_path).expect("resolve target");
+        let state_path = codex_flag_state_path(&config_path).expect("state path");
+        let original_identity = config_file_identity(&target).expect("original identity");
+        write_codex_flag_state(
+            &state_path,
+            &CodexFlagState {
+                enabled_from_false: vec!["hooks".to_string()],
+                target: target.to_str().expect("UTF-8 fixture path").to_string(),
+                identity: original_identity.clone(),
+                identity_owned: false,
+                pending_identity: Some("uninstalled-temporary-inode".to_string()),
+                pending_owned: true,
+            },
+        )
+        .expect("write preliminary state");
+        let provider = provider_with_path(&hooks_path);
+
+        install_provider("codex", &provider).expect("retry enable");
+        let state = read_codex_flag_state(&state_path)
+            .expect("read state")
+            .expect("state remains after enable");
+        assert_eq!(state.identity, original_identity);
+        assert_eq!(
+            state.pending_identity.as_deref(),
+            Some(config_file_identity(&target).expect("installed identity").as_str())
+        );
+        assert!(state.pending_owned);
+        remove_provider("codex", &provider).expect("restore after retry");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read restored config"),
+            "[features]\nhooks = false\n"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_cleans_committed_restore_state() {
+        let directory = tmp_settings_path("codex-owned-flag-restored-state");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let provider = provider_with_path(&hooks_path);
+        install_provider("codex", &provider).expect("enable hooks");
+
+        let target = std::fs::canonicalize(&config_path).expect("resolve target");
+        let enabled_identity = config_file_identity(&target).expect("enabled identity");
+        save_text_atomically(&target, "[features]\nhooks = false\n")
+            .expect("simulate completed restore replacement");
+        let restored_identity = config_file_identity(&target).expect("restored identity");
+        let state_path = codex_flag_state_path(&config_path).expect("state path");
+        write_codex_flag_state(
+            &state_path,
+            &CodexFlagState {
+                enabled_from_false: vec!["hooks".to_string()],
+                target: target.to_str().expect("UTF-8 fixture path").to_string(),
+                identity: enabled_identity,
+                identity_owned: true,
+                pending_identity: Some(restored_identity),
+                pending_owned: false,
+            },
+        )
+        .expect("simulate state deletion failure after restore");
+
+        remove_provider("codex", &provider).expect("finish pending restoration");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read config"),
+            "[features]\nhooks = false\n"
+        );
+        assert!(!state_path.exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_and_remove_reject_another_in_progress_update() {
+        let directory = tmp_settings_path("codex-config-lock");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let provider = provider_with_path(&hooks_path);
+        let lock = lock_codex_hooks(&hooks_path).expect("hold lock");
+
+        assert!(install_provider("codex", &provider)
+            .expect_err("concurrent install must fail")
+            .contains("already in progress"));
+        assert!(remove_provider("codex", &provider)
+            .expect_err("concurrent remove must fail")
+            .contains("already in progress"));
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read config"),
+            "[features]\nhooks = false\n"
+        );
+
+        drop(lock);
+        install_provider("codex", &provider).expect("install after lock release");
+        remove_provider("codex", &provider).expect("remove after lock release");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_new_config_commit_preserves_concurrent_creator() {
+        let directory = tmp_settings_path("codex-concurrent-config-create");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let config_path = directory.join("config.toml");
+        let external = "[features]\nhooks = false # created concurrently\n";
+        let result = save_text_atomically_with(
+            &config_path,
+            "[features]\nhooks = true\n",
+            |temporary, destination| {
+                std::fs::write(destination, external)?;
+                create_file_if_absent(temporary, destination)
+            },
+        );
+        assert!(result.is_err(), "atomic create must reject existing config");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read external config"),
+            external
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn exclusive_rename_never_replaces_an_existing_config() {
+        let directory = tmp_settings_path("codex-exclusive-rename");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let temporary = directory.join("prepared.tmp");
+        let destination = directory.join("config.toml");
+        write_raw(&temporary, b"[features]\nhooks = true\n");
+        write_raw(&destination, b"[user]\nkeep = true\n");
+
+        rename_file_if_absent(&temporary, &destination)
+            .expect_err("existing destination must win");
+        assert_eq!(
+            std::fs::read(&destination).expect("read existing config"),
+            b"[user]\nkeep = true\n"
+        );
+        assert!(temporary.exists(), "failed rename retains prepared file");
+
+        std::fs::remove_file(&destination).expect("remove fixture config");
+        rename_file_if_absent(&temporary, &destination)
+            .expect("exclusive rename creates absent destination");
+        assert!(!temporary.exists(), "successful rename consumes prepared file");
+        assert_eq!(
+            std::fs::read(&destination).expect("read new config"),
+            b"[features]\nhooks = true\n"
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_remove_rejects_repointed_config_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tmp_settings_path("codex-owned-flag-repointed-config");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let original = directory.join("original.toml");
+        let replacement = directory.join("replacement.toml");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{}}"#);
+        write_raw(&original, b"[features]\nhooks = false\n");
+        write_raw(&replacement, b"[features]\nhooks = true # user-owned\n");
+        symlink(&original, &config_path).expect("create config symlink");
+        let provider = provider_with_path(&hooks_path);
+
+        install_provider("codex", &provider).expect("enable original target");
+        std::fs::remove_file(&config_path).expect("unlink original target");
+        symlink(&replacement, &config_path).expect("repoint config symlink");
+        let error = remove_provider("codex", &provider).expect_err("must reject repointed link");
+        assert!(error.contains("config target or file identity changed"));
+        assert_eq!(
+            std::fs::read_to_string(&replacement).expect("read new target"),
+            "[features]\nhooks = true # user-owned\n"
+        );
+        assert!(std::fs::read_to_string(&original)
+            .expect("read original target")
+            .contains("hooks = true"));
+        assert!(codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_restores_owned_flag_when_hooks_file_is_missing() {
+        let directory = tmp_settings_path("codex-owned-flag-missing-hooks");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&path, br#"{"hooks":{}}"#);
+        write_raw(&config_path, b"[features]\nhooks = false\n");
+        let provider = provider_with_path(&path);
+
+        install_provider("codex", &provider).expect("enable hooks");
+        std::fs::remove_file(&path).expect("simulate missing hooks.json");
+        remove_provider("codex", &provider).expect("restore flag without hooks file");
+        assert_eq!(
+            std::fs::read_to_string(&config_path).expect("read restored config"),
+            "[features]\nhooks = false\n"
+        );
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -1082,7 +2160,7 @@ existing = true
         let document = config
             .parse::<toml_edit::DocumentMut>()
             .expect("updated config remains valid TOML");
-        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
         assert_eq!(document["features"]["existing"].as_bool(), Some(true));
         let _ = std::fs::remove_dir_all(&directory);
     }
@@ -1102,7 +2180,7 @@ existing = true
         let document = config
             .parse::<toml_edit::DocumentMut>()
             .expect("updated config remains valid TOML");
-        assert_eq!(document["features"]["codex_hooks"].as_bool(), Some(true));
+        assert_eq!(document["features"]["hooks"].as_bool(), Some(true));
         assert!(config.contains("# preserve header comment"));
         let _ = std::fs::remove_dir_all(&directory);
     }
@@ -1193,7 +2271,7 @@ codex_hooks = false
     }
 
     #[test]
-    fn codex_install_reinstall_remove_keeps_shared_feature_enabled() {
+    fn codex_install_reinstall_remove_restores_owned_false_flag() {
         let directory = tmp_settings_path("codex-feature-lifecycle");
         std::fs::create_dir_all(&directory).expect("mkdir fixture");
         let path = directory.join("hooks.json");
@@ -1212,9 +2290,10 @@ codex_hooks = false
             .expect("config remains valid TOML");
         assert_eq!(
             document["features"]["codex_hooks"].as_bool(),
-            Some(true),
-            "codex_hooks is a shared Codex capability and is not disabled on hook removal"
+            Some(false),
+            "remove restores the explicit false that LobsterPulse changed"
         );
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
         let hooks: Value =
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read hooks"))
                 .expect("hooks remain valid JSON");
@@ -1243,7 +2322,7 @@ codex_hooks = false
             .parse::<toml_edit::DocumentMut>()
             .expect("created config remains valid TOML");
         assert_eq!(
-            first_document["features"]["codex_hooks"].as_bool(),
+            first_document["features"]["hooks"].as_bool(),
             Some(true)
         );
         let first_hooks = std::fs::read_to_string(&hooks_path).expect("read installed hooks");
@@ -1271,7 +2350,7 @@ codex_hooks = false
             .parse::<toml_edit::DocumentMut>()
             .expect("removed config remains valid TOML");
         assert_eq!(
-            removed_document["features"]["codex_hooks"].as_bool(),
+            removed_document["features"]["hooks"].as_bool(),
             Some(true),
             "remove must not disable shared Codex capability"
         );
@@ -1296,6 +2375,141 @@ codex_hooks = false
             std::fs::read(&config_path).expect("read config"),
             original_config
         );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_json_write_failure_does_not_enable_feature() {
+        let directory = tmp_settings_path("codex-hooks-write-failure");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_hooks = br#"{"hooks":{}}"#;
+        let original_config = b"[features]\nhooks = false\n";
+        write_raw(&hooks_path, original_hooks);
+        write_raw(&config_path, original_config);
+        let backup = backup_path(&hooks_path).expect("backup path");
+        std::fs::create_dir(&backup).expect("block hooks backup copy");
+
+        let error = install_provider("codex", &provider_with_path(&hooks_path))
+            .expect_err("hooks write must fail");
+        assert!(error.contains("failed to back up"), "{error}");
+        assert_eq!(std::fs::read(&hooks_path).expect("read hooks"), original_hooks);
+        assert_eq!(std::fs::read(&config_path).expect("read config"), original_config);
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_remove_without_settings_does_not_create_home_or_lock() {
+        let directory = tmp_settings_path("codex-remove-noop");
+        let hooks_path = directory.join("hooks.json");
+        assert!(!directory.exists());
+        remove_provider("codex", &provider_with_path(&hooks_path))
+            .expect("missing Codex settings are a no-op");
+        assert!(!directory.exists(), "no-op removal must not create Codex home");
+    }
+
+    #[test]
+    fn codex_remove_observes_in_progress_first_install_lock() {
+        let directory = tmp_settings_path("codex-remove-first-install-lock");
+        let hooks_path = directory.join("hooks.json");
+        let provider = provider_with_path(&hooks_path);
+        let lock = lock_codex_hooks(&hooks_path).expect("first install holds lock");
+        assert!(!hooks_path.exists());
+        let error = remove_provider("codex", &provider)
+            .expect_err("removal must see in-progress first install");
+        assert!(error.contains("already in progress"), "{error}");
+        drop(lock);
+        remove_provider("codex", &provider).expect("no-op after installer releases lock");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_install_flag_error_removes_new_hooks_file() {
+        let directory = tmp_settings_path("codex-enable-failure-new-hooks");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        let original_config = b"[features]\nhooks = \"invalid\"\n";
+        write_raw(&config_path, original_config);
+
+        let error = install_provider("codex", &provider_with_path(&hooks_path))
+            .expect_err("invalid feature must fail");
+        assert!(error.contains("must be a boolean"), "{error}");
+        assert!(!hooks_path.exists(), "new hooks file must be rolled back");
+        assert_eq!(std::fs::read(&config_path).expect("read config"), original_config);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_hooks_rollback_rejects_replaced_file_with_same_text() {
+        let directory = tmp_settings_path("codex-hooks-replaced-rollback");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target = directory.join("hooks.json");
+        let installed = r#"{"hooks":{"SessionStart":[]}}"#;
+        write_raw(&target, installed.as_bytes());
+        let identity = config_file_identity(&target).expect("original identity");
+        save_text_atomically(&target, installed).expect("replace with identical bytes");
+
+        let error = rollback_codex_hooks_json(&target, Some("{}"), installed, &identity)
+            .expect_err("replacement must not be overwritten");
+        assert!(error.contains("identity changed"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target).expect("read replacement"), installed);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_hooks_quarantine_preserves_replacement_after_verification_race() {
+        let directory = tmp_settings_path("codex-hooks-quarantine-race");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target = directory.join("hooks.json");
+        let installed = r#"{"hooks":{"SessionStart":[]}}"#;
+        write_raw(&target, installed.as_bytes());
+        let owned_identity = config_file_identity(&target).expect("owned identity");
+        save_text_atomically(&target, installed).expect("external same-text replacement");
+        let replacement_identity = config_file_identity(&target).expect("replacement identity");
+        assert_ne!(owned_identity, replacement_identity);
+
+        let error = remove_new_codex_hooks_if_owned(&target, installed, &owned_identity)
+            .expect_err("replacement must survive quarantine check");
+        assert!(error.contains("identity changed"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target).expect("read replacement"), installed);
+        assert_eq!(config_file_identity(&target).expect("restored identity"), replacement_identity);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_hooks_repointed_symlink_cannot_change_install_target() {
+        use std::os::unix::fs::symlink;
+        let directory = tmp_settings_path("codex-hooks-repointed-link");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target_a = directory.join("hooks-a.json");
+        let target_b = directory.join("hooks-b.json");
+        let link = directory.join("hooks.json");
+        let original = r#"{"original":true}"#;
+        let installed = r#"{"hooks":{"SessionStart":[]}}"#;
+        write_raw(&target_a, original.as_bytes());
+        write_raw(&target_b, installed.as_bytes());
+        symlink(&target_a, &link).expect("link to original target");
+        let identity = config_file_identity(&target_a).expect("original identity");
+        std::fs::remove_file(&link).expect("unlink first target");
+        symlink(&target_b, &link).expect("repoint link");
+
+        let error = verify_hooks_snapshot(&link, &target_a, Some(original), Some(&identity))
+            .expect_err("repointed link must fail install");
+        assert!(error.contains("target changed"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target_b).expect("read new target"), installed);
+
+        // A rollback after the write is bound to target A, never the current
+        // symlink target B, even when B has the same installed JSON text.
+        save_text_atomically(&target_a, installed).expect("simulate installed file");
+        let installed_identity = config_file_identity(&target_a).expect("installed identity");
+        rollback_codex_hooks_json(&target_a, Some(original), installed, &installed_identity)
+            .expect("restore original target");
+        assert_eq!(std::fs::read_to_string(&target_a).expect("read old target"), original);
+        assert_eq!(std::fs::read_to_string(&target_b).expect("read new target"), installed);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

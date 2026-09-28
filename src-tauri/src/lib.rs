@@ -4083,6 +4083,17 @@ pub fn run() {
 
             // Load config
             let config = load_config();
+            if let Some(provider) = config.providers.get("codex") {
+                if provider.enabled {
+                    match hooks_configurator::reconcile_enabled_codex(provider) {
+                        Ok(true) => log::info!("[codex] repaired enabled provider hooks at startup"),
+                        Ok(false) => {}
+                        Err(error) => log::warn!(
+                            "[codex] enabled provider needs manual hooks repair: {error}"
+                        ),
+                    }
+                }
+            }
             save_config(&config).ok(); // Ensure file exists with defaults
             let startup_capsule_w = config.appearance.capsule_width as f64;
             app.manage(AppConfigState(Mutex::new(config)));

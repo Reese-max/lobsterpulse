@@ -59,7 +59,7 @@ CLI 呼叫 `lobster-pulse-hook.exe` sidecar，settings path 為各 CLI 標準位
 
 啟用本機 Codex 監控後，請開啟互動式 Codex CLI，使用啟動時的 **Review hooks** 提示或輸入 `/hooks`，檢查 LobsterPulse 的 hook 命令後將它們標記為可信任。Codex 會略過尚未信任的 hook；安裝設定成功不代表監控事件已開始送出。hook 定義改變時須重新審查並信任。LobsterPulse 不會替你作出信任決定。詳見 [Codex Hooks 文件](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)。
 
-若啟用前 `[features].hooks` 或舊別名 `codex_hooks` 明確設為 `false`，LobsterPulse 會在 Codex 設定目錄記錄自己改動的鍵；移除 Codex 監控時只把這些鍵還原為 `false`，原本由使用者設為 `true` 的鍵保持不變。重新安裝不會丟失原始狀態。
+若啟用前 `[features].hooks` 或舊別名 `codex_hooks` 明確設為 `false`，LobsterPulse 會在 Codex 設定目錄記錄自己改動的鍵與設定檔身分；移除 Codex 監控時只把這些鍵還原為 `false`，原本由使用者設為 `true` 的鍵保持不變。重新安裝不會丟失原始狀態。若符號連結改指向別處或設定檔被整份替換，還原會回報錯誤並保留紀錄，避免修改新的使用者設定。
 
 Source of truth：`src-tauri/src/config.rs::default_providers()`（line 356-449），跨 4 同步點（providers / sounds / waiting_sounds / usage poller）必須對齊；R67 護欄測試守住一致性，跨點新增 provider 會被 CI 1 秒抓。
 

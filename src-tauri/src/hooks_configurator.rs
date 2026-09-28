@@ -189,11 +189,15 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
         None => return Ok(()),
     };
     if provider_id == "codex" {
-        let config_toml = path.parent().ok_or("Invalid hooks.json path")?.join("config.toml");
+        let parent = path.parent().ok_or("Invalid hooks.json path")?;
+        let config_toml = parent.join("config.toml");
         let state_path = codex_flag_state_path(&config_toml)?;
-        if !path.exists() && !state_path.exists() {
+        let lock_path = parent.join("lobsterpulse-codex-hooks.lock");
+        if !path.exists() && !state_path.exists() && !lock_path.exists() {
             // No managed file or owned feature flag exists. In particular,
-            // disabling Codex before its home exists must not create it.
+            // disabling Codex before its home exists must not create it. An
+            // existing lock may belong to an install that has not written
+            // either settings file yet, so acquire it before returning.
             return Ok(());
         }
     }
@@ -2188,6 +2192,21 @@ codex_hooks = false
         remove_provider("codex", &provider_with_path(&hooks_path))
             .expect("missing Codex settings are a no-op");
         assert!(!directory.exists(), "no-op removal must not create Codex home");
+    }
+
+    #[test]
+    fn codex_remove_observes_in_progress_first_install_lock() {
+        let directory = tmp_settings_path("codex-remove-first-install-lock");
+        let hooks_path = directory.join("hooks.json");
+        let provider = provider_with_path(&hooks_path);
+        let lock = lock_codex_hooks(&hooks_path).expect("first install holds lock");
+        assert!(!hooks_path.exists());
+        let error = remove_provider("codex", &provider)
+            .expect_err("removal must see in-progress first install");
+        assert!(error.contains("already in progress"), "{error}");
+        drop(lock);
+        remove_provider("codex", &provider).expect("no-op after installer releases lock");
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

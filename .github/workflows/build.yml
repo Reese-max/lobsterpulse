@@ -70,7 +70,7 @@ jobs:
         run: cargo tauri build --no-bundle
 
       - name: Set up Python for runtime smoke
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'windows-latest'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -80,6 +80,11 @@ jobs:
         run: |
           sudo apt install -y xvfb dbus-x11
           test/codex-runtime-smoke.sh --skip-build
+
+      - name: Packaged Codex runtime smoke (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: ./test/codex-runtime-smoke.ps1
 
       - name: Upload binary
         uses: actions/upload-artifact@v6

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert the installed Codex TOML settings in the Windows runtime smoke."""
+"""Assert installed Codex settings and sidecar path for packaged runtime smokes."""
 
 from pathlib import Path
 import json
@@ -7,8 +7,12 @@ import sys
 import tomllib
 
 
+if len(sys.argv) not in (3, 4):
+    raise SystemExit("usage: codex-runtime-smoke-config.py CONFIG_TOML HOOKS_JSON [SIDECAR_NAME]")
+
 config_path = Path(sys.argv[1])
 hooks_path = Path(sys.argv[2])
+expected_sidecar = Path(sys.argv[3]).name if len(sys.argv) == 4 else "lobster-pulse-hook.exe"
 raw = config_path.read_bytes()
 document = tomllib.loads(raw.decode("utf-8"))
 features = document.get("features")
@@ -39,8 +43,8 @@ def strings_in(value):
 
 
 hook_strings = tuple(strings_in(hooks_document))
-assert any("lobster-pulse-hook.exe" in value for value in hook_strings), (
-    "installed Windows sidecar command missing from hooks.json"
+assert any(expected_sidecar in value for value in hook_strings), (
+    f"installed sidecar {expected_sidecar!r} command missing from hooks.json"
 )
 assert "third-party-pre" in hook_strings, "pre-existing third-party hook missing from hooks.json"
 print("[smoke] config.toml: effective hook flags true; comments preserved")

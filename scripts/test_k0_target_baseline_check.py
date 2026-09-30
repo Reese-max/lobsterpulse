@@ -1,8 +1,13 @@
 """Regression fixtures for the current K0 capability and denominator contract."""
 import copy
+import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -134,3 +139,144 @@ def test_readme_mismatch_fails(tmp_path):
     readme.write_text(readme.read_text(encoding="utf-8").replace("註冊 13", "註冊 12"),
                       encoding="utf-8")
     assert any("README: registered count" in e for e in guard.validate(registry, baselines, root=tmp_path))
+
+
+def test_review_metrics_outage_is_unknown(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(measure, "fetch_metrics", lambda: "")
+    monkeypatch.setattr(measure, "scan_quota_snapshots", lambda: empty_quota(measure.REGISTRY))
+    monkeypatch.setattr(measure, "read_configured_providers",
+                        lambda: dict.fromkeys(measure.KNOWN_PROVIDERS, True))
+    monkeypatch.setattr(measure, "__file__", str(tmp_path / "scripts" / "k0_measure.py"))
+    assert measure.main() == 0
+    receipt = json.loads((tmp_path / ".harness-k0.json").read_text(encoding="utf-8"))["coverage_receipt"]
+    for name in ("live_emitting", "nonzero_sessions"):
+        assert receipt["dimensions"][name]["numerator"] is None
+        assert receipt["dimensions"][name]["status"] == "UNAVAILABLE"
+    assert receipt["providers"]["claude"]["health_status"] == "UNAVAILABLE"
+    assert receipt["providers"]["claude"]["session_count"] is None
+    assert "live_emitting: unknown/13" in capsys.readouterr().out
+
+
+def test_review_macos_config_uses_application_support(tmp_path, monkeypatch):
+    monkeypatch.delenv("LOBSTERPULSE_CONFIG_FILE", raising=False)
+    monkeypatch.setattr(measure.sys, "platform", "darwin")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "wrong-windows-path"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "wrong-linux-path"))
+    config = tmp_path / "Library" / "Application Support" / "lobsterpulse" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"providers": {"codex": {"enabled": True}}}), encoding="utf-8")
+    configured = measure.read_configured_providers()
+    assert configured is not None
+    assert configured["codex"] is True
+    assert configured["mimo"] is False
+
+
+@pytest.mark.parametrize("age,mtime_age,runners,expected", [
+    (90000, 0, [{"name": "codex", "ok": True}], "stale"),
+    (10, 90000, [{"name": "codex", "ok": True}], "fresh"),
+    (10, 0, [], "missing"),
+    (10, 0, [{"name": "codex", "ok": False}], "missing"),
+    (10, 0, [{"name": "codex", "ok": "true"}], "missing"),
+    (-10, 0, [{"name": "codex", "ok": True}], "missing"),
+])
+def test_review_quota_uses_successful_payload_timestamp(
+        tmp_path, monkeypatch, age, mtime_age, runners, expected):
+    now = 1_790_000_000
+    monkeypatch.setattr(measure.time, "time", lambda: now)
+    monkeypatch.setattr(measure, "QUOTA_DIR", tmp_path)
+    for filename in ("usage-local.json", "usage-irisx_bot.json"):
+        path = tmp_path / filename
+        path.write_text(json.dumps({"updated_at": now - age, "runners": runners}), encoding="utf-8")
+        os.utime(path, (now - mtime_age, now - mtime_age))
+    quota = measure.scan_quota_snapshots()
+    for pid in ("codex", "irisx_bot"):
+        assert quota[pid]["state"] == expected
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""), quota, None)
+    assert receipt["dimensions"]["quota_observable"]["numerator"] == (2 if expected == "fresh" else 0)
+    # Run the actual UI calculator against the same on-disk payloads.
+    snapshots = {"__local__": json.loads((tmp_path / "usage-local.json").read_text()),
+                 "irisx_bot": json.loads((tmp_path / "usage-irisx_bot.json").read_text())}
+    ui = subprocess.run(["node", "-e", """
+const { build } = require('./src/provider-coverage.js');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(build(input.registry, null, null, input.snapshots, {}, input.now)));
+"""], input=json.dumps({"registry": measure.REGISTRY, "snapshots": snapshots, "now": now}),
+        text=True, capture_output=True, check=True, cwd=guard.ROOT)
+    ui_coverage = json.loads(ui.stdout)
+    assert ui_coverage["dimensions"]["quotaObservable"]["numerator"] == receipt["dimensions"]["quota_observable"]["numerator"]
+    for pid in ("codex", "irisx_bot"):
+        row = next(r for r in ui_coverage["rows"] if r["id"] == pid)
+        assert row["quotaStatus"] == receipt["providers"][pid]["quota_status"]
+
+
+def test_review_quota_errors_stay_unknown_and_shared_file_is_read_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(measure, "QUOTA_DIR", tmp_path)
+    (tmp_path / "usage-local.json").write_text("{broken", encoding="utf-8")
+    reads = []
+    read_snapshot = measure.read_quota_snapshot
+    def tracked_read(path, now):
+        reads.append(path)
+        return read_snapshot(path, now)
+    monkeypatch.setattr(measure, "read_quota_snapshot", tracked_read)
+    quota = measure.scan_quota_snapshots()
+    assert reads.count(tmp_path / "usage-local.json") == 1
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""), quota, None)
+    assert receipt["dimensions"]["quota_observable"]["numerator"] is None
+    assert receipt["providers"]["codex"]["quota_status"] == "UNAVAILABLE"
+
+
+def test_review_deprecated_quota_has_out_of_scope_status():
+    registry, _ = current()
+    registry["providers"][-1]["lifecycle"] = "deprecated"
+    quota = empty_quota(registry)
+    quota["mimo"] = {"state": "fresh"}
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""), quota, None,
+                                             registry=registry)
+    assert receipt["providers"]["mimo"]["quota_status"] == "OUT_OF_SCOPE"
+    assert receipt["dimensions"]["quota_observable"]["numerator"] == 0
+
+
+def test_review_openx_falls_back_after_corrupt_primary(tmp_path, monkeypatch):
+    monkeypatch.setattr(measure, "QUOTA_DIR", tmp_path)
+    (tmp_path / "usage-openx.json").write_text("{broken", encoding="utf-8")
+    legacy = tmp_path / "usage-bot.json"
+    legacy.write_text(json.dumps({"updated_at": measure.time.time() - 10,
+                                  "runners": [{"name": "opencode", "ok": True}]}), encoding="utf-8")
+    quota = measure.scan_quota_snapshots()
+    assert quota["openx"]["state"] == "fresh"
+    assert quota["openx"]["path"] == str(legacy)
+
+
+@pytest.mark.parametrize("index,field", [
+    (0, "registered_ids"), (1, "registered_ids"),
+    (2, "registered_ids"), (2, "health_scope_ids"), (2, "quota_scope_ids"),
+])
+def test_review_archived_provider_ids_cannot_be_rewritten(index, field):
+    registry, baselines = current()
+    registry["providers"][-1]["lifecycle"] = "deprecated"
+    registry.update(registry_version="2026-09-27.1", baseline_id="k0-2026-09-27")
+    previous = baselines["baselines"][-1]
+    previous["status"] = "historical"
+    next_baseline = copy.deepcopy(previous)
+    next_baseline.update(id="k0-2026-09-27", effective_date="2026-09-27", status="current")
+    next_baseline["health_scope_ids"].remove("mimo")
+    next_baseline["quota_scope_ids"].remove("mimo")
+    baselines["baselines"].append(next_baseline)
+    assert guard.validate(registry, baselines) == []
+    baselines["baselines"][index][field] = ["mimo"] * 13
+    assert guard.validate(registry, baselines), "historical provider identities were rewritten"
+
+
+@pytest.mark.parametrize("dimension,changes", [
+    ("live_emitting", {"provider_ids": ["fake"]}),
+    ("live_emitting", {"status": "UNAVAILABLE"}),
+    ("configured", {"provider_ids": ["claude"], "gap_to_registered": 12}),
+    ("registered", {"numerator": 0, "gap_to_registered": 13}),
+])
+def test_review_receipt_rejects_contradictory_evidence(dimension, changes):
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None)
+    receipt["dimensions"][dimension].update(changes)
+    assert guard.validate_receipt(receipt, registry)

@@ -19,10 +19,13 @@
         eventAge !== null && eventAge < provider.freshness_seconds;
       const nonzero = active && state != null && (state.sessions || []).some(s => s.provider === id);
       const snap = provider.scope === "local_cli"
-        ? ((snapshots?.__local__?.runners || []).some(r => r?.name === id) ? snapshots.__local__ : null)
+        ? snapshots?.__local__
         : snapshots?.[id];
-      const quotaAge = ageSeconds(snap?.updated_at, nowSeconds);
-      const quota = active && snapshotReadAvailable && quotaAge !== null &&
+      const quotaAge = Number.isFinite(snap?.updated_at) && snap.updated_at <= nowSeconds
+        ? ageSeconds(snap.updated_at, nowSeconds) : null;
+      const hasQuota = Array.isArray(snap?.runners) && snap.runners.some(r =>
+        r?.ok === true && (provider.scope !== "local_cli" || r.name === id));
+      const quota = active && snapshotReadAvailable && hasQuota && quotaAge !== null &&
         quotaAge < provider.quota_freshness_seconds;
       let healthStatus = "NOT_MONITORED";
       if (!active) healthStatus = "OUT_OF_SCOPE";
@@ -36,7 +39,7 @@
       if (!active) quotaStatus = "OUT_OF_SCOPE";
       else if (!snapshotReadAvailable) quotaStatus = "UNAVAILABLE";
       else if (quota) quotaStatus = "FRESH";
-      else if (quotaAge !== null) quotaStatus = "STALE";
+      else if (hasQuota && quotaAge !== null) quotaStatus = "STALE";
       else if (provider.support_level === "hook_intake_quota_external") quotaStatus = "EXTERNAL_DEPENDENCY";
       return { id, configured, live, nonzero, quota, healthStatus, quotaStatus,
         eventAgeSeconds: eventAge, quotaAgeSeconds: quotaAge };

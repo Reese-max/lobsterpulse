@@ -30,7 +30,8 @@ test("recent OpenAB hook is live while stale quota is not observable", () => {
     provider_totals: { irisx_bot: { events_total: 2, last_event_at: new Date((now - 10) * 1000).toISOString() } },
     sessions: [{ provider: "irisx_bot" }],
   };
-  const snapshots = { irisx_bot: { updated_at: now - 90000 } };
+  const snapshots = { irisx_bot: { updated_at: now - 90000,
+    runners: [{ name: "claude", ok: true }] } };
   const coverage = build(registry, enabled, state, snapshots, detected, now);
   assert.equal(coverage.rows.find(r => r.id === "irisx_bot").healthStatus, "LIVE_EMITTING");
   assert.equal(coverage.rows.find(r => r.id === "irisx_bot").quotaStatus, "STALE");
@@ -55,4 +56,22 @@ test("deprecated provider requires explicit exclusion rather than disappearing",
   assert.equal(coverage.dimensions.liveEmitting.denominator, 12);
   assert.deepEqual(coverage.dimensions.liveEmitting.exclusions,
     [{ id: "mimo", reason: "lifecycle:deprecated" }]);
+});
+
+test("quota coverage requires a successful runner and a valid observation timestamp", () => {
+  for (const snapshot of [
+    { updated_at: now, runners: [] },
+    { updated_at: now, runners: [{ name: "codex", ok: false }] },
+    { updated_at: now, runners: [{ name: "codex", ok: "true" }] },
+    { updated_at: now + 10, runners: [{ name: "codex", ok: true }] },
+  ]) {
+    const coverage = build(registry, enabled, { provider_totals: {}, sessions: [] },
+      { __local__: snapshot, irisx_bot: snapshot }, detected, now);
+    assert.equal(coverage.dimensions.quotaObservable.numerator, 0, JSON.stringify(snapshot));
+    assert.notEqual(coverage.rows.find(r => r.id === "irisx_bot").quotaStatus, "FRESH");
+  }
+  const snapshot = { updated_at: now - 10, runners: [{ name: "codex", ok: true }] };
+  const coverage = build(registry, enabled, { provider_totals: {}, sessions: [] },
+    { __local__: snapshot, irisx_bot: snapshot }, detected, now);
+  assert.equal(coverage.dimensions.quotaObservable.numerator, 2);
 });

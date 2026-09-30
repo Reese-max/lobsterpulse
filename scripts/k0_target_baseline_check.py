@@ -6,6 +6,7 @@ defined by the dated baseline and versioned provider registry, never by a
 retroactive rewrite of those rows.
 """
 import json
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -24,6 +25,12 @@ ORIGINAL_OBSERVATIONS = {"live_emit": "2/13", "nonzero_sessions": "1/13",
                          "fresh_quota": "2/13", "quota_path": "7/13"}
 ORIGINAL_EXCLUSIONS = {"irisx_bot", "grokx", "lpbot", "mimo"}
 INITIAL_BASELINE_ID = "k0-2026-09-26"
+# Pin identities and observations, not the mutable archival status or prose.
+BASELINE_FINGERPRINTS = {
+    "r81-90-day-target": "0b07460b71ffb3c225c45d45bcc69e7f38a4accd2d32af9597cad8869d2ac673",
+    "r182-r197-path-a": "633fdc16126bebd0cceae88c8f06dcca05518702b26281ead8ce94442ca58c45",
+    "k0-2026-09-26": "3cd00d77f5024a6290e42fec449149840cc6bae5a8b7828ec385beb6d6655e62",
+}
 
 
 def read_json(path: Path):
@@ -53,13 +60,26 @@ def validate_receipt(receipt: dict, registry: dict) -> list[str]:
         if actual_exclusions != expected_exclusions:
             errors.append(f"{name}: exclusions incomplete or incorrect")
         numerator = d.get("numerator")
-        if numerator is not None and (not isinstance(numerator, int) or
+        if numerator is not None and (type(numerator) is not int or
                                       not 0 <= numerator <= expected_denominator):
             errors.append(f"{name}: invalid numerator")
         if numerator is not None and d.get("gap_to_registered") != registered - numerator:
             errors.append(f"{name}: registered gap is hidden")
         if numerator is None and d.get("status") != "UNAVAILABLE":
             errors.append(f"{name}: unknown source shown as measured")
+        provider_ids = d.get("provider_ids")
+        eligible = {p["id"] for p in (registry["providers"] if name == "registered" else scoped)}
+        if (not isinstance(provider_ids, list) or
+                any(not isinstance(pid, str) for pid in provider_ids) or
+                len(set(provider_ids)) != len(provider_ids) or not set(provider_ids) <= eligible):
+            errors.append(f"{name}: invalid provider IDs")
+        elif numerator is None:
+            if provider_ids or d.get("gap_to_registered") is not None:
+                errors.append(f"{name}: unknown source contains measured evidence")
+        elif len(provider_ids) != numerator or d.get("status") != "MEASURED":
+            errors.append(f"{name}: numerator, provider IDs and status disagree")
+        if name == "registered" and numerator != registered:
+            errors.append("registered: all registry IDs must be counted")
     return errors
 
 
@@ -91,6 +111,12 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
     by_id = {b.get("id"): b for b in baseline_rows}
     if len(by_id) != len(baseline_rows):
         errors.append("duplicate baseline IDs")
+    for baseline_id, fingerprint in BASELINE_FINGERPRINTS.items():
+        protected = {k: v for k, v in by_id.get(baseline_id, {}).items()
+                     if k not in ("status", "note")}
+        encoded = json.dumps(protected, sort_keys=True, separators=(",", ":")).encode()
+        if hashlib.sha256(encoded).hexdigest() != fingerprint:
+            errors.append(f"{baseline_id}: immutable baseline was rewritten")
     if tuple(b.get("id") for b in baseline_rows[:2]) != HISTORICAL_IDS:
         errors.append("historical baselines were removed or reordered")
     if by_id.get(HISTORICAL_IDS[0], {}).get("targets") != ORIGINAL_TARGETS:

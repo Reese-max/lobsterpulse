@@ -24,13 +24,15 @@ grep -q 'lobsterpulse_provider_sessions{provider="irisx_bot"} 1' "$HOME_DIR/cove
 grep -q 'lobsterpulse_provider_idle_seconds{provider="irisx_bot"}' "$HOME_DIR/coverage-metrics.txt"
 
 mkdir -p "$HOME_DIR/.lobsterpulse"
-cat >"$HOME_DIR/.lobsterpulse/usage-local.json" <<'EOF'
-{"runners":[{"name":"codex","ok":true}],"updated_at":1780000000}
+python3 - "$HOME_DIR/.lobsterpulse" <<'EOF'
+import json, pathlib, sys, time
+directory = pathlib.Path(sys.argv[1])
+now = int(time.time())
+for provider, runner, timestamp in (("local", "codex", now), ("cicx", "claude", now - 172800)):
+    (directory / f"usage-{provider}.json").write_text(json.dumps({
+        "runners": [{"name": runner, "ok": True}], "updated_at": timestamp,
+    }), encoding="utf-8")
 EOF
-cat >"$HOME_DIR/.lobsterpulse/usage-cicx.json" <<'EOF'
-{"runners":[{"name":"cicx","ok":true}],"updated_at":1780000000}
-EOF
-touch -d '2 days ago' "$HOME_DIR/.lobsterpulse/usage-cicx.json"
 
 LOBSTERPULSE_METRICS_URL="$METRICS_URL" \
 LOBSTERPULSE_QUOTA_DIR="$HOME_DIR/.lobsterpulse" \

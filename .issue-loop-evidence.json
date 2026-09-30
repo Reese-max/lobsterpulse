@@ -1,0 +1,20 @@
+{
+  "repo": "Reese-max/lobsterpulse",
+  "issue": 7,
+  "base_sha": "bbc3268bf2535bb0a20ddd69bd2e859cf0ae7bdf",
+  "red_proof": "Before implementation changes: `python -X utf8 -m pytest -q scripts/test_k0_target_baseline_check.py -k review` exited 1 with 17 failed, 8 deselected (outage 0 instead of null; macOS config None; stale/failed quota treated as fresh; rewritten archives and contradictory receipts accepted). `node --test scripts/test_provider_coverage.mjs` exited 1 with 1 failed, 4 passed: an empty quota envelope produced numerator 1 instead of 0. During fix review, `python -X utf8 -m pytest -q scripts/test_k0_target_baseline_check.py -k corrupt_primary` also reproduced the OpenX legacy fallback regression (1 failed); it is now green.",
+  "test_command": "python -X utf8 -m pytest -q scripts/test_k0_measure.py scripts/test_k0_target_baseline_check.py collector/tests && node --test scripts/test_provider_coverage.mjs test/quota-cards-lib.test.js && python -X utf8 scripts/k0_target_baseline_check.py && node scripts/provider_inventory_guard.mjs && node --check src/provider-coverage.js && node --check src/main.js && bash -n test/provider-coverage-runtime-smoke.sh && git diff --check",
+  "test_exit": 0,
+  "tests_passed": 126,
+  "tests_failed": 0,
+  "summary": "Fixed six review defects with regression-first evidence: preserve unknown metrics, validate successful quota payloads and updated_at consistently across Python/UI, find macOS configuration, pin initial historical baseline identities, and reject contradictory receipt evidence. Existing quota fixtures now contain successful timestamped payloads; all prior assertions remain. The Git Bash validation command passes 100 Python and 26 Node tests plus registry/inventory/syntax checks.",
+  "not_done": [
+    "needs-human: later baseline versions can still reuse an ID/version after changing scope; selecting a durable immutable reference and approval contract is outside a safe self-review fix. The three baselines present at the reviewed head are now pinned.",
+    "Linux packaged-app smoke and visible WebView acceptance were not rerun on this Windows host; only smoke shell syntax and real Python/JavaScript calculations were verified. No Rust/build claim is made.",
+    "OpenAB signal ownership/backend-to-runner mappings and the synthetic 45/50-persona comprehension study remain unverified, as disclosed by PR #7.",
+    "Full script baseline before edits: 116 passed, 2 skipped, 2 failed in scripts/test_chain_staleness.py (hardcoded 17 Rust files versus 29; simulated future stale count 27/29). Those unrelated tests were not changed.",
+    "The full Node baseline has one unrelated failure in test/runtime-sync.test.js because runtime/config.template.json differs from the local runtime configuration; local configuration was not changed.",
+    "The full script worktree sentinel also fails on dirty review files and unrelated untracked .impeccable/hook.cache.json created during review. The cache is left untouched and excluded from this commit; no claim of a green full suite or clean untracked worktree is made.",
+    "No push, PR comment, branch change, merge or issue closure was performed."
+  ]
+}

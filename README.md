@@ -36,6 +36,7 @@ LobsterPulse v5.1 **註冊 13 個整合**（🤖 OpenAB 9 + 💻 本機 CLI 4）
 覆蓋數字分開顯示：**已註冊**（registry ID）、**已設定**（app config enabled）、
 **近 24h 有事件**（`/metrics` 事件計數與最近事件年齡）、**非零 session**
 （目前 `/metrics` session 數 > 0）、**新鮮 quota**（對應 snapshot < 24h）。
+quota 必須含成功的 runner，且內容的 `updated_at` 在新鮮度門檻內；複製檔案或更新 mtime 不會讓舊資料變新。
 請以設定頁「監控覆蓋」與 `python scripts/k0_measure.py` 的帶時間戳收據查看本機現況；
 資料來源中斷顯示「未知」，不推算成 0/13。每個數字保留 13 個已註冊 ID 的對照分母和排除原因。
 

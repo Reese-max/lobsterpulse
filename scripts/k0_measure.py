@@ -30,7 +30,7 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, Set
 
 REGISTRY_PATH = Path(__file__).resolve().parent.parent / "src" / "provider-capabilities.json"
 
@@ -62,6 +62,8 @@ def read_configured_providers() -> Dict[str, bool] | None:
     override = os.environ.get("LOBSTERPULSE_CONFIG_FILE")
     if override:
         path = Path(override)
+    elif sys.platform == "darwin":
+        path = Path.home() / "Library" / "Application Support" / "lobsterpulse" / "config.json"
     elif os.name == "nt":
         path = Path(os.environ.get("APPDATA", "")) / "lobsterpulse" / "config.json"
     else:
@@ -84,7 +86,8 @@ def parse_provider_metric(metrics_text: str, metric: str) -> Dict[str, float]:
 
 def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
                            quota: Dict[str, Dict], configured: Dict[str, bool] | None,
-                           *, registry: Dict = None, timestamp: str = None) -> Dict:
+                           *, registry: Dict = None, timestamp: str = None,
+                           metrics_available: bool = True) -> Dict:
     """Evidence-bearing current coverage; exclusions never erase advertised gaps."""
     registry = registry or REGISTRY
     timestamp = timestamp or time.strftime("%Y-%m-%dT%H:%M:%S%z")
@@ -124,6 +127,8 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
             status = "OUT_OF_SCOPE"
         elif configured is not None and not configured.get(pid, False):
             status = "NOT_CONFIGURED"
+        elif not metrics_available:
+            status = "UNAVAILABLE"
         elif pid in current_emit:
             status = "LIVE_EMITTING"
         elif pid in idle and events.get(pid, 0) > 0:
@@ -132,7 +137,9 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
             status = "EXTERNAL_DEPENDENCY"
         else:
             status = "NOT_MONITORED"
-        quota_status = ("FRESH" if q_state == "fresh" else
+        quota_status = ("OUT_OF_SCOPE" if p["lifecycle"] != "active" else
+                        "UNAVAILABLE" if q_state in ("no_dir", "unavailable") else
+                        "FRESH" if q_state == "fresh" else
                         "STALE" if q_state == "stale" else
                         "EXTERNAL_DEPENDENCY" if p["support_level"] == "hook_intake_quota_external" else
                         "NOT_MONITORED")
@@ -141,8 +148,9 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
             "quota_status": quota_status,
             "configured": configured.get(pid) if configured is not None else None,
             "last_event_age_seconds": idle.get(pid),
-            "session_count": health.get(pid, 0),
+            "session_count": health.get(pid, 0) if metrics_available else None,
             "quota_state": q_state,
+            "quota_age_seconds": quota.get(pid, {}).get("snapshot_age_seconds"),
             "reason": "quota source ownership unconfirmed" if quota_status == "EXTERNAL_DEPENDENCY" else None,
         }
 
@@ -153,38 +161,29 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
         "dimensions": {
             "registered": dimension(set(registered_ids), is_registry_count=True),
             "configured": dimension(configured_ids),
-            "live_emitting": dimension(current_emit),
-            "nonzero_sessions": dimension(nonzero),
-            "quota_observable": dimension(fresh_quota),
+            "live_emitting": dimension(current_emit if metrics_available else None),
+            "nonzero_sessions": dimension(nonzero if metrics_available else None),
+            "quota_observable": dimension(fresh_quota if all(
+                quota.get(p["id"], {}).get("state") not in ("no_dir", "unavailable")
+                for p in scoped) else None),
         },
         "providers": provider_states,
     }
 
 
-def read_usage_local_runner_names(local_path: Path) -> Set[str]:
-    """讀 usage-local.json 裡實際有 snapshot 的本機 runner 名稱。
-
-    usage-local.json 是多 runner 聚合檔；檔案存在只代表本機 quota pipeline 有
-    寫入，不能直接推論 claude/codex/copilot/gemini 四個 provider 都有新鮮
-    資料。只有 runners[].name 內真的出現的本機 provider 才能計為 fresh/stale。
-    """
+def read_quota_snapshot(path: Path, now: float) -> tuple:
+    """Read content and diagnostic mtime from the same file, without a stat/read race."""
     try:
-        data = json.loads(local_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return set()
-
-    runners = data.get("runners")
-    if not isinstance(runners, list):
-        return set()
-
-    names: Set[str] = set()
-    for runner in runners:
-        if not isinstance(runner, dict):
-            continue
-        name = str(runner.get("name", "")).strip()
-        if name in LOCAL_CLI:
-            names.add(name)
-    return names
+        with path.open(encoding="utf-8") as stream:
+            data = json.load(stream)
+            age_h = (now - os.fstat(stream.fileno()).st_mtime) / 3600
+        if not isinstance(data, dict) or not isinstance(data.get("runners"), list):
+            return None, "unavailable", None
+        return data, "measured", round(age_h, 2)
+    except FileNotFoundError:
+        return None, "missing", None
+    except (OSError, ValueError):
+        return None, "unavailable", None
 
 
 def fetch_metrics() -> str:
@@ -236,10 +235,10 @@ def parse_provider_emit(metrics_text: str) -> set:
 
 
 def scan_quota_snapshots() -> Dict[str, Dict]:
-    """
-    掃 QUOTA_DIR 裡所有 usage-*.json, 區分新鮮 (mtime < FRESH_HOURS) 與 stale。
-    本機 CLI (claude/codex/copilot/gemini) 走 usage-local.json (合併 1 個檔)。
-    OpenAB bot 各走 usage-{id}.json。
+    """Measure successful runner payloads using registry thresholds and updated_at.
+
+    mtime remains diagnostic only: copying an old snapshot cannot refresh it.
+    Local runners share one read; OpenAB keeps its exact filename/legacy alias.
     """
     out: Dict[str, Dict] = {}
     if not QUOTA_DIR.is_dir():
@@ -247,84 +246,51 @@ def scan_quota_snapshots() -> Dict[str, Dict]:
                    "path": None} for p in KNOWN_PROVIDERS}
 
     now = time.time()
-    # 本機 CLI 共用 usage-local.json, 但只把 runners[].name 實際出現的
-    # provider 算成有 snapshot。檔案存在但缺 copilot/gemini runner 時, 不能
-    # 把 copilot/gemini 誤算 fresh。
-    local_path = QUOTA_DIR / "usage-local.json"
-    if local_path.exists():
-        age_h = (now - local_path.stat().st_mtime) / 3600.0
-        local_runners = read_usage_local_runner_names(local_path)
-        for p in LOCAL_CLI:
-            if p in local_runners:
-                out[p] = {
-                    "state": "fresh" if age_h < FRESH_HOURS else "stale",
-                    "mtime_age_hours": round(age_h, 2),
-                    "path": str(local_path),
-                }
-            else:
-                out[p] = {"state": "missing", "mtime_age_hours": None,
-                          "path": None}
-    else:
-        for p in LOCAL_CLI:
-            out[p] = {"state": "missing", "mtime_age_hours": None,
-                      "path": str(local_path)}
-
-    # OpenAB bot 各看 usage-{id}.json (可能含 .stale-YYYYMMDD 後綴)。
-    # 實際檔名格式 (對齊 STALE_MARKER 正則 \.stale-\d{8}$):
-    #   - usage-{bot}.json                  ← fresh (主檔,OpenAB 正常寫入)
-    #   - usage-{bot}.json.stale-YYYYMMDD   ← stale (主檔被 rename 成 .stale-日期 標記過期)
-    # glob 抓所有匹配,再用 STALE_MARKER 分流:符合的進 stale_paths,其餘(嚴格就
-    # 是 usage-{bot}.json) 進 fresh_path。R110 修:移除 R83 殘留的 `candidates`
-    # 死碼(從未被引用,且硬編碼 .stale- 無日期跟 STALE_MARKER 8 位數要求不一致,
-    # 誤導讀者以為 stale 檔無日期)。
-    #
-    # R114 修:openx 需對齊 hook_server.rs:376-378 別名 — OpenAB BackendType::Other
-    # 寫 usage-bot.json (legacy), 而 hook_server 把 POST /hook/bot rewrite 成
-    # "openx"。本腳本若只看 usage-openx.json* 會永遠漏算 openx (就算 OpenAB
-    # 正常運作也計不到), 必須雙 glob 把 usage-bot.json* 也納入 openx bucket。
-    # 修法:openx 加第二個 base name "usage-bot", 跟主檔名併行 glob。對齊
-    # hook_server.rs 的別名語意, 避免 K0 Quota coverage 永遠少算 1 個 provider。
-    for bot in OPENAB_BOT:
-        base_names = [f"usage-{bot}"]
-        if bot == "openx":
-            base_names.append("usage-bot")
-        all_files: List[Path] = []
-        for base in base_names:
-            all_files.extend(QUOTA_DIR.glob(f"{base}.json*"))
-        fresh_path = None
-        stale_paths: List[Path] = []
-        for f in all_files:
-            if STALE_MARKER.search(f.name):
-                stale_paths.append(f)
-            else:
-                fresh_path = f
-        if fresh_path and fresh_path.exists():
-            age_h = (now - fresh_path.stat().st_mtime) / 3600.0
-            out[bot] = {
-                "state": "fresh" if age_h < FRESH_HOURS else "stale",
-                "mtime_age_hours": round(age_h, 2),
-                "path": str(fresh_path),
-            }
-        elif stale_paths:
-            # 取最舊 stale 檔案, age 是「自從變 stale 多久」
-            latest = max(stale_paths, key=lambda p: p.stat().st_mtime)
-            age_h = (now - latest.stat().st_mtime) / 3600.0
-            out[bot] = {
-                "state": "stale",
-                "mtime_age_hours": round(age_h, 2),
-                "path": str(latest),
-            }
-        else:
-            out[bot] = {"state": "missing", "mtime_age_hours": None,
-                        "path": None}
+    cache = {}
+    for provider in REGISTRY["providers"]:
+        pid = provider["id"]
+        local = provider["scope"] == "local_cli"
+        names = ["usage-local" if local else f"usage-{pid}"]
+        if pid == "openx":
+            names.append("usage-bot")
+        paths = [QUOTA_DIR / f"{name}.json" for name in names]
+        if not local:
+            paths += sorted((path for name in names
+                             for path in QUOTA_DIR.glob(f"{name}.json.stale-*")
+                             if STALE_MARKER.search(path.name)), reverse=True)
+        selected = None
+        for path in paths:
+            if path not in cache:
+                cache[path] = read_quota_snapshot(path, now)
+            candidate = cache[path]
+            if selected is None or candidate[1] != "missing":
+                selected = (path, *candidate)
+            if candidate[0] is not None:
+                break
+        path, snapshot, state, mtime_age = selected
+        age = None
+        if snapshot is not None:
+            runners = [r for r in snapshot["runners"] if isinstance(r, dict)
+                       and r.get("ok") is True and (not local or r.get("name") == pid)]
+            updated = snapshot.get("updated_at")
+            if type(updated) in (int, float) and 0 < updated <= now:
+                age = now - updated
+            state = "missing"
+            if runners and age is not None:
+                state = "fresh" if age < provider["quota_freshness_seconds"] else "stale"
+                if STALE_MARKER.search(path.name):
+                    state = "stale"
+        out[pid] = {"state": state, "mtime_age_hours": mtime_age,
+                    "snapshot_age_seconds": age,
+                    "path": str(path) if state != "missing" else None}
     return out
 
 
 def render_table(health: Dict[str, float], quota: Dict[str, Dict]) -> str:
-    """人類可讀: provider | metrics_sessions | quota_state | quota_age_h"""
+    """人類可讀: provider | metrics_sessions | quota_state | diagnostic mtime_age_h"""
     rows = []
     rows.append(f"{'provider':<14} {'metrics':>8} {'quota_state':<10} "
-                f"{'age_h':>8}  visual")
+                f"{'mtime_h':>8}  visual")
     rows.append("-" * 60)
     for p in KNOWN_PROVIDERS:
         sess = health.get(p, 0.0)
@@ -347,7 +313,8 @@ def main() -> int:
     emit_providers = parse_provider_emit(metrics_text)
     quota = scan_quota_snapshots()
     configured = read_configured_providers()
-    coverage = build_coverage_receipt(metrics_text, health, quota, configured)
+    coverage = build_coverage_receipt(metrics_text, health, quota, configured,
+                                      metrics_available=bool(metrics_text))
 
     # R102: K0-A 拆雙軌
     # K0-A1: /metrics 端點實際 emit 過 provider 樣本的 provider 數

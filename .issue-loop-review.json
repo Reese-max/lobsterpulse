@@ -1,0 +1,56 @@
+{
+  "pr": 10,
+  "head": "5e5cdfa9f5fb754a7075d70b05983e04eba92980",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 117,
+      "issue": "fixed: UNKNOWN provider identity is allowed to deduplicate and auto-resolve WAITING events, although the documented policy requires known provider/session/correlation IDs."
+    },
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 131,
+      "issue": "fixed: The unknown-identity fallback (eventId, eventId) can collide with a legitimate session/correlation pair, merging and potentially auto-resolving evidence whose identity is unknown."
+    },
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 134,
+      "issue": "fixed: The dedupe key uses the classified why_now instead of reasonCode, so distinct errors such as AUTH_FAILED and TRANSPORT_FAILED collapse into one human-facing item contrary to the documented same-reason rule."
+    },
+    {
+      "severity": "low",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 33,
+      "issue": "fixed: schemaVersion=true and schemaVersion=1.0 pass the integer v1 schema check and are retained as malformed raw evidence."
+    },
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 168,
+      "issue": "fixed: Decision and clock timestamps are not validated before state mutation: ACK/RESOLVE accept nonnumeric or negative at_ms, SNOOZE accepts boolean deadlines, and advance_time can write fractional receipt timestamps."
+    },
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 93,
+      "issue": "needs-human: window_ms can change correlation results while policyVersion remains identical and the window is absent from receipts. Choose a version-bound policy configuration or a versioned persisted configuration contract before changing this API."
+    },
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 176,
+      "issue": "needs-human: CRITICAL can be RESOLVED and disappear permanently; the existing test explicitly expects this, while issue #9 says CRITICAL only allows acknowledge and its acceptance text only prohibits dismiss. Clarify whether audited manual resolution is permitted."
+    },
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 162,
+      "issue": "needs-human: queue() keeps ACKED BLOCKING items visible, while issue #9 describes BLOCKING as persistent until ack/resolve. Clarify whether ACK stops reminders or removes the item from the human queue before changing this documented behavior."
+    }
+  ],
+  "fixed": false,
+  "summary": "Fixed five replay defects covering unknown identities, reason-specific deduplication, integer schema versions and timestamp validation; all five added regression tests failed before the fix, and the replay suite now passes 13/13 in Git Bash. needs-human: clarify the window/version contract, CRITICAL manual resolution and BLOCKING ACK queue semantics; fixed=false because these findings remain open. Collector tests passed 56/56, but the pre-existing Node suite has a local runtime-config drift failure (21/22 passed); packaged attention runtime verification remains deferred."
+}

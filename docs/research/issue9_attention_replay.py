@@ -26,19 +26,23 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _validate_timestamp(value, field):
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{field} must be a nonnegative integer")
+
+
 def validate_event(raw):
     """Reject missing fields and content-bearing extras rather than silently dropping them."""
     if not isinstance(raw, dict) or set(raw) != EVENT_FIELDS:
         raise ValueError(f"event must contain exactly {sorted(EVENT_FIELDS)}")
-    if raw["schemaVersion"] != SCHEMA_VERSION:
+    if type(raw["schemaVersion"]) is not int or raw["schemaVersion"] != SCHEMA_VERSION:
         raise ValueError("unsupported event schema version")
     for field in ("eventId", "providerId", "sessionId", "correlationId", "sourceContractVersion"):
         if not isinstance(raw[field], str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", raw[field]):
             raise ValueError(f"invalid {field}")
     if raw["kind"] not in KINDS or raw["sourceFreshness"] not in FRESHNESS:
         raise ValueError("unknown event kind or freshness")
-    if not isinstance(raw["observedAtMs"], int) or isinstance(raw["observedAtMs"], bool) or raw["observedAtMs"] < 0:
-        raise ValueError("observedAtMs must be a nonnegative integer")
+    _validate_timestamp(raw["observedAtMs"], "observedAtMs")
     if not isinstance(raw["reasonCode"], str) or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", raw["reasonCode"]):
         raise ValueError("reasonCode must be a bounded code, not free text")
     if not isinstance(raw["payloadHash"], str) or not re.fullmatch(r"[0-9a-f]{64}", raw["payloadHash"]):
@@ -113,9 +117,9 @@ def replay(raw_events, policy_version=POLICY_VERSION, window_ms=WINDOW_MS):
     dedupe = {}
     for event in distinct:
         source_key = (event["providerId"], event["sessionId"], event["correlationId"])
+        source_known = "UNKNOWN" not in source_key
         prior = waiting.get(source_key)
-        if (event["kind"] == "RECOVERED" and event["sessionId"] != "UNKNOWN"
-                and event["correlationId"] != "UNKNOWN"
+        if (event["kind"] == "RECOVERED" and source_known
                 and event["sourceFreshness"] == "FRESH" and prior is not None
                 and prior["state"] == "OPEN" and prior["sourceFreshness"] == "FRESH"
                 and event["observedAtMs"] - prior["lastSeenAtMs"] <= window_ms):
@@ -127,11 +131,7 @@ def replay(raw_events, policy_version=POLICY_VERSION, window_ms=WINDOW_MS):
             waiting.pop(source_key, None)
             continue
         severity, why_now = _classification(event)
-        # Unknown session or correlation identity cannot prove two events share a cause.
-        correlation_key = (event["sessionId"], event["correlationId"])
-        if "UNKNOWN" in correlation_key:
-            correlation_key = (event["eventId"], event["eventId"])
-        key = (event["providerId"], correlation_key, event["kind"], why_now, event["sourceFreshness"])
+        key = (source_key, event["kind"], event["reasonCode"], event["sourceFreshness"])
         prior = dedupe.get(key)
         if (prior is not None and prior["state"] == "OPEN"
                 and event["observedAtMs"] - prior["lastSeenAtMs"] <= window_ms):
@@ -151,9 +151,10 @@ def replay(raw_events, policy_version=POLICY_VERSION, window_ms=WINDOW_MS):
             "createdAtMs": event["observedAtMs"], "lastSeenAtMs": event["observedAtMs"],
         }
         state["items"].append(item)
-        dedupe[key] = item
-        if (event["kind"] == "WAITING" and event["sessionId"] != "UNKNOWN"
-                and event["correlationId"] != "UNKNOWN" and event["sourceFreshness"] == "FRESH"):
+        # Unknown identity cannot prove two events share a cause.
+        if source_known:
+            dedupe[key] = item
+        if event["kind"] == "WAITING" and source_known and event["sourceFreshness"] == "FRESH":
             waiting[source_key] = item
         _receipt(state, item, "NEW", "CLASSIFIED", event["observedAtMs"])
     return state
@@ -166,11 +167,12 @@ def queue(state):
 
 
 def decide(state, item_id, action, at_ms, until_ms=None):
+    _validate_timestamp(at_ms, "at_ms")
     item = next((item for item in state["items"] if item["itemId"] == item_id), None)
     if item is None:
         raise ValueError("unknown attention item")
     before = item["state"]
-    if action == "SNOOZE" and item["severity"] == "NEEDS_DECISION" and before == "OPEN" and isinstance(until_ms, int) and until_ms > at_ms:
+    if action == "SNOOZE" and item["severity"] == "NEEDS_DECISION" and before == "OPEN" and type(until_ms) is int and until_ms > at_ms:
         item["state"], item["snoozeUntilMs"] = "SNOOZED", until_ms
     elif action == "ACK" and item["severity"] in {"BLOCKING", "CRITICAL"} and before == "OPEN":
         item["state"] = "ACKED"
@@ -182,6 +184,7 @@ def decide(state, item_id, action, at_ms, until_ms=None):
 
 
 def advance_time(state, now_ms):
+    _validate_timestamp(now_ms, "now_ms")
     for item in state["items"]:
         if item["state"] == "SNOOZED" and item["snoozeUntilMs"] <= now_ms:
             item["state"], item["snoozeUntilMs"] = "OPEN", None

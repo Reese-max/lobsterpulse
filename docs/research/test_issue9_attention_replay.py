@@ -66,6 +66,72 @@ class AttentionReplayTests(unittest.TestCase):
                         event("codex-wait", "WAITING", 1100, provider="codex")])
         self.assertEqual(len(queue(state)), 2)
 
+    def test_unknown_source_identity_never_dedupes_or_resolves(self):
+        for field in ("provider", "session", "correlation"):
+            with self.subTest(field=field):
+                identity = {field: "UNKNOWN"}
+                state = replay([event("w1", "WAITING", 1000, **identity),
+                                event("w2", "WAITING", 1100, **identity),
+                                event("r", "RECOVERED", 1200, **identity)])
+                self.assertEqual(len(state["items"]), 3)
+                self.assertEqual([item["sourceEventIds"] for item in queue(state)], [["w1"], ["w2"]])
+                self.assertFalse(any(item["state"] == "AUTO_RESOLVED" for item in state["items"]))
+
+    def test_unknown_identity_cannot_collide_with_known_identity(self):
+        for field in ("sessionId", "correlationId"):
+            for unknown_first in (False, True):
+                with self.subTest(field=field, unknown_first=unknown_first):
+                    known = event("known", "WAITING", 1100 if unknown_first else 1000,
+                                  session="alias", correlation="alias")
+                    unknown = event("alias", "WAITING", 1000 if unknown_first else 1100,
+                                    session="alias", correlation="alias")
+                    unknown[field] = "UNKNOWN"
+                    recovery = event("r", "RECOVERED", 1200, session="alias", correlation="alias")
+                    state = replay([known, unknown, recovery])
+                    self.assertEqual(len(state["items"]), 2)
+                    self.assertEqual([item["sourceEventIds"] for item in queue(state)], [["alias"]])
+                    resolved = [item for item in state["items"] if item["state"] == "AUTO_RESOLVED"]
+                    self.assertEqual([item["sourceEventIds"] for item in resolved], [["known", "r"]])
+
+    def test_different_reasons_remain_separate_while_true_duplicates_merge(self):
+        for kind in ("ERROR", "WAITING", "QUOTA"):
+            for freshness in ("FRESH", "STALE", "UNKNOWN"):
+                with self.subTest(kind=kind, freshness=freshness):
+                    state = replay([event("a", kind, 1000, freshness=freshness, reason="AUTH_REQUIRED"),
+                                    event("b", kind, 1100, freshness=freshness, reason="CAPACITY_REQUIRED"),
+                                    event("a2", kind, 1200, freshness=freshness, reason="AUTH_REQUIRED")])
+                    self.assertEqual([item["sourceEventIds"] for item in queue(state)], [["a", "a2"], ["b"]])
+
+    def test_schema_version_requires_an_integer(self):
+        for version in (True, 1.0):
+            with self.subTest(version=version), self.assertRaisesRegex(ValueError, "schema version"):
+                replay([dict(event("w", "WAITING", 1000), schemaVersion=version)])
+
+    def test_invalid_decision_times_leave_state_unchanged(self):
+        for invalid in (-1, True, 1.5, None, "later"):
+            for action in ("ACK", "RESOLVE", "SNOOZE"):
+                with self.subTest(value=invalid, action=action):
+                    state = replay([event("w", "WAITING" if action == "SNOOZE" else "ERROR", 0)])
+                    before = json.dumps(state, sort_keys=True)
+                    with self.assertRaises(ValueError):
+                        decide(state, state["items"][0]["itemId"], action, invalid, 2000)
+                    self.assertEqual(json.dumps(state, sort_keys=True), before)
+            with self.subTest(value=invalid, action="SNOOZE_UNTIL"):
+                state = replay([event("w", "WAITING", 0)])
+                item_id = state["items"][0]["itemId"]
+                before = json.dumps(state, sort_keys=True)
+                with self.assertRaises(ValueError):
+                    decide(state, item_id, "SNOOZE", 0, invalid)
+                self.assertEqual(json.dumps(state, sort_keys=True), before)
+            with self.subTest(value=invalid, action="ADVANCE_TIME"):
+                state = replay([event("w", "WAITING", 0)])
+                item_id = state["items"][0]["itemId"]
+                decide(state, item_id, "SNOOZE", 0, 1)
+                before = json.dumps(state, sort_keys=True)
+                with self.assertRaises(ValueError):
+                    advance_time(state, invalid)
+                self.assertEqual(json.dumps(state, sort_keys=True), before)
+
     def test_routine_completion_and_critical_ack_are_distinct(self):
         state = replay([event("done", "COMPLETED", 1000),
                         event("critical", "ERROR", 1100, reason="CRITICAL_ERROR")])

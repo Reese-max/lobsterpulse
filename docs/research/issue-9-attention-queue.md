@@ -24,7 +24,8 @@ tray、hooks 或 `/metrics`。`UNKNOWN` 是保留值，不能靠 UI 文案猜出
 
 `kind` 表示觀測事件／來源狀態，`sourceFreshness` 獨立描述證據新鮮度。
 `NOT_MONITORED`、`EXTERNAL_DEPENDENCY`、`UNKNOWN` 必須留在 schema；
-`UNKNOWN` session/correlation 不跨事件 dedupe，也不據此 auto-resolve。
+`UNKNOWN` provider/session/correlation 不跨事件 dedupe，也不據此 auto-resolve。
+`schemaVersion` 必須為整數 `1`，不接受布林值或浮點數。
 拒收未列欄位，尤其 prompt、tool content、
 token、credential。`payloadHash` 只是 synthetic evidence 參照，不包含 payload。
 
@@ -70,6 +71,8 @@ Receipt 是當時的判斷快照，不因 policy 改版而重算。純研究 spi
   source freshness。
 - `NEEDS_DECISION` 可 snooze；到期若原因仍在 → 重新進 queue；resolved 不重複喚醒。
 - `CRITICAL` 不支援永久 dismiss；提供可審計 acknowledge，不無限轟炸。
+- 事件、決策與推進時鐘的時間都必須是非負整數毫秒；snooze 到期時間
+  必須是晚於決策時間的整數。非法時間在修改 state 或 receipt 前拒收。
 - Bounded pre-investigation 負向測試：不讀任意檔案/prompt/credential、
   不啟動 shell/network write——只限 allowlisted telemetry。
 - 相同 raw events + policy version → correlation/severity deterministic。
@@ -94,7 +97,8 @@ duplicates、8 個獨立 error、1 個 waiting/recovered pair（2 events）。
 預期：100 個 raw IDs 全部可追、9 個 human queue items、1 個 auto-resolved
 item；輸入順序打亂後輸出完全一致。另測 source stale/unknown、
 `NOT_MONITORED`、`EXTERNAL_DEPENDENCY`、critical ack、snooze expiry、
-JSON roundtrip、跨 provider 不推測合併、content-bearing 欄位拒收與禁用
+JSON roundtrip、跨 provider 不推測合併、未知身分不與合法 ID 撞 key、
+不同 reasonCode 不合併、schema version／時間型別驗證、content-bearing 欄位拒收與禁用
 file/shell/network 的負向測試。
 這些是 synthetic 結果，不代表真實多 agent session 的壓縮率或可用性。
 

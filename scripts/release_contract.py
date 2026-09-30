@@ -64,7 +64,7 @@ def package_release(tag: str, platform: str, build_dir: pathlib.Path,
             raise ValueError("release archive verification failed")
     checksum = output_dir / f"{archive.name}.sha256"
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    checksum.write_text(f"{digest}  {archive.name}\n", encoding="ascii")
+    checksum.write_text(f"{digest}  {archive.name}\n", encoding="ascii", newline="\n")
     return archive, checksum
 
 

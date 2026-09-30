@@ -46,8 +46,8 @@ class ReleaseContractTests(unittest.TestCase):
                 self.assertEqual(sorted(zipped.namelist()), ["lobster-pulse-hook.exe", "lobster-pulse.exe"])
                 self.assertEqual(zipped.read("lobster-pulse-hook.exe"), b"sidecar fixture")
             self.assertEqual(
-                checksum.read_text(encoding="ascii"),
-                f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
+                checksum.read_bytes(),
+                f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n".encode("ascii"),
             )
 
 

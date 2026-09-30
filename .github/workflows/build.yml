@@ -9,7 +9,7 @@ name: Build
 #   - manual dispatch (Actions tab → Run workflow)
 #
 # Produces build artifacts (binary only, no installer bundles) for download.
-# For a full release with installers, see release.yml (tag-triggered).
+# The tag-triggered release.yml prepares draft portable archives.
 
 on:
   push:
@@ -35,6 +35,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check app version and release archive contract
+        run: |
+          python scripts/release_contract.py
+          python scripts/test_release_contract.py
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -68,12 +77,6 @@ jobs:
 
       - name: Build (no bundle)
         run: cargo tauri build --no-bundle
-
-      - name: Set up Python for runtime smoke
-        if: matrix.platform == 'ubuntu-22.04'
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
 
       - name: Packaged Codex runtime smoke
         if: matrix.platform == 'ubuntu-22.04'

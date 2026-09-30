@@ -48,4 +48,4 @@ assert any(expected_sidecar in value for value in hook_strings), (
 )
 assert "third-party-pre" in hook_strings, "pre-existing third-party hook missing from hooks.json"
 print("[smoke] config.toml: effective hook flags true; comments preserved")
-print("[smoke] hooks.json: Windows sidecar installed; third-party hook preserved")
+print("[smoke] hooks.json: expected sidecar installed; third-party hook preserved")

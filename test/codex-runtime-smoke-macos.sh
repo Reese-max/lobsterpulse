@@ -120,7 +120,7 @@ for _ in $(seq 1 60); do
   sleep 0.5
 done
 [[ -n "$PORT" ]] || fail 'packaged app did not publish its port within 30 seconds'
-[[ "$PORT" =~ ^[0-9]+$$ ]] || fail 'app published an invalid port'
+[[ "$PORT" =~ ^[0-9]+$ ]] || fail 'app published an invalid port'
 (( PORT >= 1 && PORT <= 65435 )) || fail 'app published an out-of-range port'
 printf '[smoke] packaged app started with isolated home\n'
 
@@ -131,7 +131,7 @@ python3 "$REPO_ROOT/test/codex-runtime-smoke-config.py" \
 # Exercise the exact macOS sidecar configured for Codex with a synthetic event.
 EVENT_FILE="$HOME_DIR/session-start.json"
 printf '%s\n' '{"hook_event_name":"SessionStart","sessionId":"macos-smoke-codex-1","cwd":"/tmp/lp-smoke"}' > "$EVENT_FILE"
-env -i PATH="$PATH" HOME="$HOME_DIR" TMPDIR="$HOME_DIR/tmp" LANG="${LANG:-C.UTF-8}" \
+if ! env -i PATH="$PATH" HOME="$HOME_DIR" TMPDIR="$HOME_DIR/tmp" LANG="${LANG:-C.UTF-8}" \
   XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
   XDG_DATA_HOME="$XDG_DATA_HOME" XDG_STATE_HOME="$XDG_STATE_HOME" \
   XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
@@ -152,19 +152,21 @@ except subprocess.TimeoutExpired:
     raise SystemExit(124)
 raise SystemExit(result.returncode)
 PY
-  || fail 'packaged sidecar failed to deliver the synthetic event'
+then
+  fail 'packaged sidecar failed to deliver the synthetic event'
+fi
 [[ ! -s "$HOME_DIR/sidecar.stderr.log" ]] || fail 'sidecar reported a delivery failure'
 
 METRICS_FILE="$HOME_DIR/metrics.txt"
 METRICS_URI="http://127.0.0.1:$((PORT + 100))/metrics"
 for _ in $(seq 1 40); do
   if curl --fail --silent "$METRICS_URI" -o "$METRICS_FILE" 2>/dev/null &&
-     grep -Eq 'lobsterpulse_provider_event_type_total${provider="codex",type="SessionStart"} [1-9][0-9]*([[:space:]]|$$)' "$METRICS_FILE"; then
+     grep -Eq 'lobsterpulse_provider_event_type_total\\{provider="codex",type="SessionStart"\\} [1-9][0-9]*([[:space:]]|$)' "$METRICS_FILE"; then
     break
   fi
   sleep 0.25
 done
-grep -Eq 'lobsterpulse_provider_event_type_total${provider="codex",type="SessionStart"} [1-9][0-9]*([[:space:]]|$$)' "$METRICS_FILE" \
+grep -Eq 'lobsterpulse_provider_event_type_total\\{provider="codex",type="SessionStart"\\} [1-9][0-9]*([[:space:]]|$)' "$METRICS_FILE" \
   || fail 'synthetic Codex SessionStart was not counted by app metrics'
 
 printf '[smoke] metrics: synthetic Codex SessionStart counted\n'

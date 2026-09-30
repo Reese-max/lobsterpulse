@@ -161,12 +161,12 @@ METRICS_FILE="$HOME_DIR/metrics.txt"
 METRICS_URI="http://127.0.0.1:$((PORT + 100))/metrics"
 for _ in $(seq 1 40); do
   if curl --fail --silent "$METRICS_URI" -o "$METRICS_FILE" 2>/dev/null &&
-     grep -Eq 'lobsterpulse_provider_event_type_total\\{provider="codex",type="SessionStart"\\} [1-9][0-9]*([[:space:]]|$)' "$METRICS_FILE"; then
+     grep -Eq 'lobsterpulse_provider_event_type_total[{]provider="codex",type="SessionStart"[}] [1-9][0-9]*([[:space:]]|$)' "$METRICS_FILE"; then
     break
   fi
   sleep 0.25
 done
-grep -Eq 'lobsterpulse_provider_event_type_total\\{provider="codex",type="SessionStart"\\} [1-9][0-9]*([[:space:]]|$)' "$METRICS_FILE" \
+grep -Eq 'lobsterpulse_provider_event_type_total[{]provider="codex",type="SessionStart"[}] [1-9][0-9]*([[:space:]]|$)' "$METRICS_FILE" \
   || fail 'synthetic Codex SessionStart was not counted by app metrics'
 
 printf '[smoke] metrics: synthetic Codex SessionStart counted\n'

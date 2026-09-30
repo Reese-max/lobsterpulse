@@ -75,6 +75,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Validate provider capability and K0 receipts
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          python -m pip install pytest
+          python scripts/k0_target_baseline_check.py
+          python -m pytest -q scripts/test_k0_measure.py scripts/test_k0_target_baseline_check.py
+          node scripts/provider_inventory_guard.mjs
+          node --test scripts/test_provider_coverage.mjs
+
       - name: Packaged Codex runtime smoke
         if: matrix.platform == 'ubuntu-22.04'
         run: |

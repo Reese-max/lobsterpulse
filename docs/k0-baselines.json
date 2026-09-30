@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "baselines": [
+    {
+      "id": "r81-90-day-target",
+      "recorded_at": null,
+      "status": "historical",
+      "registered_ids": ["claude","codex","copilot","gemini","cicx","gitx","giminix","codex_bot","openx","irisx_bot","grokx","lpbot","mimo"],
+      "targets": {"live_emit":"13/13","nonzero_sessions":"13/13","quota":"13/13"},
+      "note": "Original 90-day target preserved from MISSION.md; no later result is recalculated against a changed denominator."
+    },
+    {
+      "id": "r182-r197-path-a",
+      "recorded_at": null,
+      "status": "historical_superseded",
+      "registered_ids": ["claude","codex","copilot","gemini","cicx","gitx","giminix","codex_bot","openx","irisx_bot","grokx","lpbot","mimo"],
+      "recorded_observations": {"live_emit":"2/13","nonzero_sessions":"1/13","fresh_quota":"2/13","quota_path":"7/13"},
+      "excluded_ids": ["irisx_bot","grokx","lpbot","mimo"],
+      "note": "Archives the R182/R197 decision as written. Its assumption that these four hook-capable bots are wholly non-local and its zero-gap conclusion are superseded, not current truth."
+    },
+    {
+      "id": "k0-2026-09-26",
+      "effective_date": "2026-09-26",
+      "status": "current",
+      "registered_ids": ["claude","codex","copilot","gemini","cicx","gitx","giminix","codex_bot","openx","irisx_bot","grokx","lpbot","mimo"],
+      "health_scope_ids": ["claude","codex","copilot","gemini","cicx","gitx","giminix","codex_bot","openx","irisx_bot","grokx","lpbot","mimo"],
+      "quota_scope_ids": ["claude","codex","copilot","gemini","cicx","gitx","giminix","codex_bot","openx","irisx_bot","grokx","lpbot","mimo"],
+      "note": "All registered active providers remain in both observed denominators. Missing OpenAB quota sources are gaps with explicit status until ownership and signals are confirmed."
+    }
+  ]
+}

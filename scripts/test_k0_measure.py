@@ -35,6 +35,7 @@ M0 bug 範例: 若有人手滑刪 R114 openx alias (`base_names.append("usage-bo
 R132/R137/R144/R172 既 ~5 case 模式)。
 """
 import os
+import json
 import sys
 import time
 from pathlib import Path
@@ -200,7 +201,8 @@ def test_scan_quota_snapshots_openx_雙_base_name_別名(tmp_path, monkeypatch):
 
     # 模擬 OpenAB legacy: 寫 usage-bot.json (BackendType::Other 走這名)
     legacy = tmp_path / "usage-bot.json"
-    legacy.write_text("{}", encoding="utf-8")
+    legacy.write_text(json.dumps({"updated_at": time.time() - 3600,
+                                  "runners": [{"name": "opencode", "ok": True}]}), encoding="utf-8")
     # mtime 設為 1 小時前 (fresh)
     fresh_mtime = time.time() - 3600
     os.utime(legacy, (fresh_mtime, fresh_mtime))
@@ -232,12 +234,14 @@ def test_scan_quota_snapshots_STALE_MARKER_分流(tmp_path, monkeypatch):
 
     # 同 bot 寫 2 個檔: 1 個 fresh (主檔) + 1 個 stale (8 位數日期後綴)
     fresh_file = tmp_path / "usage-cicx.json"
-    fresh_file.write_text("{}", encoding="utf-8")
+    fresh_file.write_text(json.dumps({"updated_at": time.time() - 3600,
+                                      "runners": [{"name": "claude", "ok": True}]}), encoding="utf-8")
     fresh_mtime = time.time() - 3600
     os.utime(fresh_file, (fresh_mtime, fresh_mtime))
 
     stale_file = tmp_path / "usage-cicx.json.stale-20260501"
-    stale_file.write_text("{}", encoding="utf-8")
+    stale_file.write_text(json.dumps({"updated_at": time.time() - 30 * 24 * 3600,
+                                      "runners": [{"name": "claude", "ok": True}]}), encoding="utf-8")
     # stale 檔 mtime 設 30 天前, 對齊 STALE_MARKER 行為
     stale_mtime = time.time() - 30 * 24 * 3600
     os.utime(stale_file, (stale_mtime, stale_mtime))
@@ -266,10 +270,8 @@ def test_scan_quota_snapshots_本機_4_CLI_共用_usage_local_json(tmp_path, mon
     # 模擬 4 個本機 CLI runner 都有寫入同一個 usage-local.json
     local = tmp_path / "usage-local.json"
     local.write_text(
-        '{"runners": ['
-        '{"name": "claude"}, {"name": "codex"}, '
-        '{"name": "copilot"}, {"name": "gemini"}'
-        ']}',
+        json.dumps({"updated_at": time.time() - 3600, "runners": [
+            {"name": p, "ok": True} for p in k0.LOCAL_CLI]}),
         encoding="utf-8",
     )
     fresh_mtime = time.time() - 3600  # 1 小時前, fresh
@@ -304,7 +306,8 @@ def test_scan_quota_snapshots_usage_local_只算實際_runner_不造假(tmp_path
 
     local = tmp_path / "usage-local.json"
     local.write_text(
-        '{"runners": [{"name": "claude"}, {"name": "codex"}]}',
+        json.dumps({"updated_at": time.time() - 3600, "runners": [
+            {"name": "claude", "ok": True}, {"name": "codex", "ok": True}]}),
         encoding="utf-8",
     )
     fresh_mtime = time.time() - 3600

@@ -2750,7 +2750,10 @@ codex_hooks = false
         let state_path = codex_flag_state_path(&config_toml).expect("state path");
         let pending_state = CodexFlagState {
             enabled_from_false: vec!["hooks".to_string()],
-            target: config_toml.to_string_lossy().into_owned(),
+            target: std::fs::canonicalize(&config_toml)
+                .expect("canonical config target")
+                .to_string_lossy()
+                .into_owned(),
             identity: original_identity.clone(),
             identity_owned: false,
             pending_identity: Some(candidate_identity),

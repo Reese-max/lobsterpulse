@@ -2732,6 +2732,100 @@ codex_hooks = false
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn codex_pending_flag_state_refuses_editor_inode_until_snapshot_recovery() {
+        let directory = tmp_settings_path("codex-pending-state-editor-conflict");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let config_toml = directory.join("config.toml");
+        let candidate = directory.join("candidate.tmp");
+        let editor_temp = directory.join("editor.tmp");
+        let preserved_editor = directory.join("editor-preserved.toml");
+        let original = b"[features]\nhooks = false\n";
+        let external = b"[features]\nhooks = false\n# external editor update\n";
+        write_raw(&config_toml, original);
+        write_raw(&candidate, b"[features]\nhooks = true\n");
+        let original_identity = config_file_identity(&config_toml).expect("original identity");
+        let candidate_identity = config_file_identity(&candidate).expect("candidate identity");
+        let state_path = codex_flag_state_path(&config_toml).expect("state path");
+        let pending_state = CodexFlagState {
+            enabled_from_false: vec!["hooks".to_string()],
+            target: config_toml.to_string_lossy().into_owned(),
+            identity: original_identity.clone(),
+            identity_owned: false,
+            pending_identity: Some(candidate_identity),
+            pending_owned: true,
+        };
+        write_codex_flag_state(&state_path, &pending_state).expect("persist pending state");
+
+        let error = replace_file_if_snapshot_unchanged_with(
+            &candidate,
+            &config_toml,
+            std::str::from_utf8(original).expect("UTF-8 original"),
+            &original_identity,
+            || {
+                write_raw(&editor_temp, external);
+                rename_file_if_absent(&editor_temp, &config_toml)
+            },
+        )
+        .expect_err("editor recreation in commit gap must win");
+        assert!(error.to_string().contains("prior snapshot retained at"), "{error}");
+        assert_eq!(
+            std::fs::read(&config_toml).expect("read external edit"),
+            external,
+            "external edit remains at the config path"
+        );
+
+        let persisted = read_codex_flag_state(&state_path)
+            .expect("read state")
+            .expect("pending state remains available for recovery");
+        let editor_identity = config_file_identity(&config_toml).expect("editor identity");
+        assert_ne!(editor_identity, original_identity);
+        assert_eq!(state_owns_identity(&persisted, &editor_identity), None);
+        let verify_error = verify_codex_flag_state(&config_toml, &persisted)
+            .expect_err("pending transaction must not claim the editor's new inode");
+        assert!(verify_error.contains("identity changed"), "{verify_error}");
+        let retry_error = enable_codex_hooks_feature(&config_toml)
+            .expect_err("unresolved external edit must keep automatic retry fail-closed");
+        assert!(retry_error.contains("identity changed"), "{retry_error}");
+        assert_eq!(
+            std::fs::read(&config_toml).expect("external edit survives retry"),
+            external
+        );
+
+        let recovery = std::fs::read_dir(&directory)
+            .expect("read fixture directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                std::fs::read(path)
+                    .ok()
+                    .as_deref()
+                    .is_some_and(|bytes| bytes == original)
+            })
+            .expect("original snapshot retained for owner-directed recovery");
+
+        // The owner keeps the editor's file and restores the exact prior
+        // snapshot. The pending ownership record then permits a safe retry.
+        std::fs::rename(&config_toml, &preserved_editor).expect("preserve external edit");
+        std::fs::rename(&recovery, &config_toml).expect("restore original snapshot");
+        let restored_identity = config_file_identity(&config_toml).expect("restored identity");
+        assert_eq!(restored_identity, original_identity);
+        assert!(verify_codex_flag_state(&config_toml, &persisted).is_ok());
+        assert!(enable_codex_hooks_feature(&config_toml).expect("retry after recovery"));
+        let enabled = std::fs::read_to_string(&config_toml).expect("read retried config");
+        let document = enabled.parse::<toml_edit::DocumentMut>().expect("parse retried config");
+        assert_eq!(
+            document.get("features").and_then(|features| features.get("hooks")).and_then(|flag| flag.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            std::fs::read(&preserved_editor).expect("preserved editor file"),
+            external
+        );
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     #[cfg(unix)]
     #[test]
     fn codex_hooks_repointed_symlink_cannot_change_install_target() {

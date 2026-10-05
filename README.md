@@ -17,6 +17,8 @@
 - 音效資料夾：`~/.config/lobsterpulse/sounds/`
 - runtime port 檔：`~/.lobsterpulse/port`
 
+*注意：上述執行檔**只會在你自行建置後出現**，clone 本身不含任何執行檔。*
+
 ## 預設工作流
 
 這版不是照 upstream 原封不動保留，而是直接往你的使用習慣收斂：

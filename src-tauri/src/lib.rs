@@ -12330,6 +12330,35 @@ mod render_prometheus_tests {
     // spec.md Scenario, 否則這條 test fail 並列出「未列名 metric」清單。
 
     #[test]
+    fn postponed_counter_migration_help_has_no_expired_removal_deadline() {
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            !body.contains("scheduled removal week 4"),
+            "POSTPONED migration must not advertise the expired removal deadline"
+        );
+        assert!(
+            body.contains("migration state: POSTPONED"),
+            "exporter HELP must expose the selected POSTPONED compatibility state"
+        );
+        assert!(
+            body.contains("next review 2026-11-05"),
+            "exporter HELP must expose the next migration review date"
+        );
+    }
+
+    #[test]
     fn lp_metrics_contract_size_is_47_matching_emit_paths() {
         // 7 段分組對齊 design.md: R103 41 條 + R113 T-1 dual-emit 6 條新 _total 名
         // = 4 + 8 + 4 + 7 + 14 + 1 + 9 = 47 (T-4 切換日後回到 41, 見

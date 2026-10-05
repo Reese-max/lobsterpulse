@@ -11,8 +11,6 @@
 
 ## 目前這版的重點
 
-- 主程式執行檔：`src-tauri/target/release/lobster-pulse.exe`
-- hook sidecar：`src-tauri/target/release/lobster-pulse-hook.exe`
 - app 設定檔：`~/.config/lobsterpulse/config.json`
 - 音效資料夾：`~/.config/lobsterpulse/sounds/`
 - runtime port 檔：`~/.lobsterpulse/port`
@@ -94,38 +92,67 @@ LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
 
 ## 執行
 
-### 直接跑目前產物
+**目前只提供從原始碼建置（source-only）。** [GitHub Releases](https://github.com/Reese-max/lobsterpulse/releases)
+尚無已發佈版本，clone 或下載原始碼都不含任何執行檔。決策與升級到
+DISTRIBUTED_BINARY 的條件記在 [RELEASE.md](RELEASE.md)，護欄是
+`npm test`（`scripts/release_contract.py`）。
+
+### 前置需求
+
+| 平台 | 需求 |
+|---|---|
+| Windows 11 | Git、Rust stable MSVC toolchain、Microsoft C++ Build Tools（Desktop development with C++）、WebView2 Runtime |
+| macOS | Git、Rust stable、Xcode Command Line Tools |
+| Linux | Git、Rust stable、`libwebkit2gtk-4.1-dev`、`libgtk-3-dev`、`libayatana-appindicator3-dev`、`librsvg2-dev`、`libasound2-dev`、`libsoup-3.0-dev`、`libjavascriptcoregtk-4.1-dev` |
+
+### 從原始碼建置
+
+```bash
+git clone https://github.com/Reese-max/lobsterpulse.git
+cd lobsterpulse
+cargo install tauri-cli --locked
+cargo tauri build --no-bundle
+```
+
+> ⚠️ **必用 `cargo tauri build --no-bundle`，不可純 `cargo build --release`**。
+> 純 cargo build --release 會跳過 frontend embed，release webview fallback
+> 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
+> 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
+
+想連 installer（`.msi` / `.deb` / `.AppImage`）一起打，再跑一次
+`cargo tauri build`（不加 `--no-bundle`）。
+
+### 啟動與設定位置
 
 ```powershell
 .\src-tauri\target\release\lobster-pulse.exe
 ```
 
-主程式與 sidecar 要放在同一層，因為主程式會找相鄰的 `lobster-pulse-hook.exe`。
+`lobster-pulse.exe` 與 `lobster-pulse-hook.exe` 必須留在**同一層** ——
+主程式會去找相鄰的 sidecar，分開就收不到 hook 事件。設定檔在
+`%APPDATA%\lobsterpulse\config.json`（Linux / macOS 是 `~/.config/lobsterpulse/config.json`）。
 
-### 重新建置 release
+provider 預設全部未啟用；要監控哪一個，從 tray 右鍵選單逐一開啟，
+LobsterPulse 才會寫對應 CLI 的 hook config（啟用會改動該 CLI 的設定檔，
+請先在自己的測試環境確認內容）。
 
-> ⚠️ **必用 `cargo tauri build`，不可純 `cargo build --release`**。
-> 純 cargo build --release 會跳過 frontend embed，release webview fallback
-> 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
-> 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
+### 升級與回滾
 
-兩種變體：
+升級：關掉程式 → `git pull --ff-only` → `cargo tauri build --no-bundle`。
+若你把兩個執行檔複製到別的資料夾使用，升級時要**同時**換掉主程式與 sidecar。
 
-- **快速驗證**（只要 `.exe`，不打 installer）：
+回滾：目前沒有 auto-update，也沒有已發佈版本可以下載回退。保留上一組
+`lobster-pulse` + `lobster-pulse-hook`（建議放在以版本命名的資料夾），
+出問題時把兩個檔案一起換回去即可。
 
-  ```powershell
-  cd .\src-tauri
-  cargo tauri build --no-bundle
-  ```
+### 簽章狀態（誠實說明）
 
-  前置：`cargo install tauri-cli --locked`（鎖版避免 Tauri CLI breaking change）。
-
-- **完整 installer**（要 `.msi` / `.deb` / `.AppImage` 等）：
-
-  ```powershell
-  cargo install tauri-cli --locked
-  cargo tauri build
-  ```
+產出**未簽章**，也沒有購買 code signing 憑證。未來若有 GitHub Release，
+Windows 第一次執行很可能出現 SmartScreen「Windows 已保護你的電腦」——
+那是未簽章程式的正常行為。請先比對 Release 附的 `.zip.sha256`
+（`Get-FileHash .\lobster-pulse-<tag>-windows.zip -Algorithm SHA256`），
+再自行決定是否執行；不要為了跑起來去關閉 SmartScreen 或改執行原則。
+細節見 [RELEASE.md](RELEASE.md)。
 
 ## 品牌資產
 

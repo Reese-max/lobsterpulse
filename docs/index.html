@@ -50,7 +50,7 @@
           <a class="btn btn-secondary" href="#workflow">看預設工作流</a>
         </div>
         <div class="cta-secondary">
-          <span class="dl-version-label">版本：<strong>v0.2.2</strong></span>
+          <span class="dl-version-label">版本：<strong>v0.5.4</strong></span>
           <span class="cta-sep">·</span>
           <span class="link-subtle">品牌：<code>龍蝦監控 / LobsterPulse</code></span>
           <span class="cta-sep">·</span>
@@ -187,15 +187,24 @@
   <section id="download">
     <div class="container">
       <h2>下載與產物</h2>
-      <p class="section-lede">這份分支目前以你本機的 release 產物和可再生 bundle 資產為主，不再依賴 upstream release。</p>
+      <p class="section-lede">
+        版本：<code>v0.5.4</code>。截至目前為止這個 repo
+        <strong>尚未發行 GitHub Release</strong>（沒有 tag、沒有 release），
+        因此「下載」路徑目前就是「從原始碼重建」。Owner 可記錄於 issue #6：
+        <code>SOURCE_ONLY</code>（以可重現建置為正式分發，直至 Owner 發行可下載 bundle）。
+      </p>
 
       <div class="download-grid">
         <article class="download-card featured">
-          <div class="download-badge success">已驗證</div>
-          <h3>Windows 桌面版</h3>
-          <p>主程式和 hook sidecar 已經一起重建，現在這兩個檔案就是你自己的交付入口。</p>
-          <pre><code>src-tauri\target\release\lobster-pulse.exe
-src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
+          <div class="download-badge">待發行</div>
+          <h3>Windows 桌面版（待發行）</h3>
+          <p>
+            主程式與 hook sidecar 最終會以一個 zip 捆綁發行（兩個檔案必須放同層，
+            主程式會以相鄰路徑尋找 sidecar）。截至目前為止沒有已發佈版本可下載，
+            請依照下方的「原始碼建置」重建。
+          </p>
+          <pre><code>lobster-pulse.exe
+lobster-pulse-hook.exe</code></pre>
           <div class="download-meta">
             <span>同層放置</span>
             <span>桌面浮動膠囊</span>
@@ -204,25 +213,38 @@ src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
         </article>
 
         <article class="download-card">
-          <div class="download-badge">已同步</div>
+          <div class="download-badge">可重建</div>
+          <h3>原始碼建置</h3>
+          <p>從 repo 內重建就是當前真實的安裝路徑，每個版本都能完整重現。</p>
+          <p class="download-note">前置：鎖定 Tauri CLI 版本（避免 breaking change）：
+            <code>cargo install tauri-cli --locked</code>
+          </p>
+          <pre><code>cd src-tauri
+cargo tauri build --no-bundle    # 快速驗證：exe + embed frontend，無 installer
+cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage（需 tauri-cli）</code></pre>
+          <p class="download-note">⚠️ <strong>不可純 <code>cargo build --release</code></strong>
+            （Tauri v2 release webview 會 fallback 到 devUrl 白屏）。
+          </p>
+          <p class="download-note">三方對齊 <code>README.md</code> + <code>CLAUDE.md</code>「Build SOP（重要）」段 + <code>build.sh</code>。</p>
+        </article>
+
+        <article class="download-card">
+          <div class="download-badge">資產同步</div>
           <h3>Bundle icon 資產包</h3>
-          <p>現在不只 Windows icon，連 macOS、iOS、Android 那批 bundle icon 也會跟主視覺同步重生。</p>
+          <p>不只 Windows icon，連 macOS、iOS、Android 那批 bundle icon 也會跟主視覺同步重生。</p>
           <pre><code>src-tauri\icons\icon.icns
 src-tauri\icons\ios\
 src-tauri\icons\android\</code></pre>
           <p class="download-note">由 <code>scripts\generate_brand_assets.ps1</code> 內建呼叫 Tauri icon 生成器完成。</p>
         </article>
+      </div>
 
-        <article class="download-card">
-          <div class="download-badge">可重建</div>
-          <h3>原始碼建置</h3>
-          <p>如果你之後要打新的 release 或 bundle，直接從 repo 內重建，不需要回頭依賴上游產物。</p>
-          <p class="download-note">⚠️ <strong>release 必須走 <code>cargo tauri build --no-bundle</code></strong>，不可純 <code>cargo build --release</code>（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。前置 <code>cargo install tauri-cli --locked</code>。</p>
-          <pre><code>cd src-tauri
-cargo tauri build --no-bundle    # 快速驗證：exe + embed frontend，無 installer
-cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage（需 tauri-cli）</code></pre>
-          <p class="download-note">三方對齊 <code>README.md</code> + <code>CLAUDE.md</code>「Build SOP（重要）」段 + <code>build.sh</code>。</p>
-        </article>
+      <div class="download-note" style="margin-top: 16px;">
+        <strong>如何產出一個 release：</strong>推上 <code>v*</code> tag（
+        <code>git tag v0.5.4 && git push origin v0.5.4</code>），
+        觸發 <a href=".github/workflows/release.yml">.github/workflows/release.yml</a>
+        即可自動產出四套 zip（Linux / macOS-arm64 / macOS-x64 / Windows）
+        並建立 draft release（含 SHA-256 checksum）。Owner 審查後手動 publish。
       </div>
     </div>
   </section>
@@ -230,14 +252,19 @@ cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage�
   <section id="install">
     <div class="container">
       <h2>建置與啟動</h2>
-      <p class="section-lede">這三個入口對應你最常用的維護節點：跑程式、重生資產、打 bundle。</p>
+      <p class="section-lede">
+        目前以可重現的原始碼重建為正式安裝路徑（兩個執行檔必須在同一層，主程式會以
+        相鄰路徑尋找 sidecar）。設定檔預設在 <code>~/.config/lobsterpulse/config.json</code>。
+      </p>
 
       <div class="install-grid">
         <div class="install-card">
-          <h3>直接跑 release 產物</h3>
-          <pre><code>src-tauri\target\release\lobster-pulse.exe
-src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
-          <p class="install-note">兩個檔案要放在同一層，主程式會用相鄰路徑找到 sidecar。</p>
+          <h3>啟動兩個執行檔</h3>
+          <pre><code>src-tauri\target\release\lobster-pulse.exe</code></pre>
+          <p class="install-note">
+            <code>lobster-pulse.exe</code> 與 <code>lobster-pulse-hook.exe</code> 要放在同一層，
+            主程式會用相鄰路徑找到 sidecar，分開就收不到 hook 事件。
+          </p>
         </div>
 
         <div class="install-card">
@@ -249,8 +276,12 @@ src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
         <div class="install-card">
           <h3>從原始碼重建</h3>
           <pre><code>cd src-tauri
-cargo build --release</code></pre>
-          <p class="install-note">如果之後要打完整 bundle，再另外補裝 <code>cargo-tauri</code> 後跑 <code>cargo tauri build</code>。</p>
+cargo install tauri-cli --locked
+cargo tauri build --no-bundle</code></pre>
+          <p class="install-note">
+            這是當前真實的安裝路徑（需要 Rust + Tauri 工具鏈；與 issue #6 的
+            「無開發者工具鏈也能安裝」目標不同，待 Owner 發行可下載 bundle 後取代此說明）。
+          </p>
         </div>
       </div>
     </div>

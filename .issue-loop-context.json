@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "repo": "Reese-max/lobsterpulse",
+  "issue": 6,
+  "worker": "w16",
+  "runner": "cline",
+  "base_ref": "origin/main",
+  "base_sha": "41e09eb922a37323c30878323bfea955712e2a55",
+  "starting_head": "41e09eb922a37323c30878323bfea955712e2a55"
+}

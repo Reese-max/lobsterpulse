@@ -17,6 +17,80 @@
 - 音效資料夾：`~/.config/lobsterpulse/sounds/`
 - runtime port 檔：`~/.lobsterpulse/port`
 
+> **注意**：上述執行檔**只會在你自行建置後出現**，clone 本身不含任何執行檔
+> （目前為 `SOURCE_ONLY` 路徑，詳見下方「安裝與下載」）。
+
+## 安裝與下載 (Installation / Download)
+
+> ⚠️ **Issue #6 稽核狀態**：截至目前為止這個 repo **尚未發行任何 GitHub Release**
+> （沒有 tag、沒有 release）。因此所有安裝路徑都是「可重現的原始碼重建」；任何
+> 指向已發行二進位下載的連結在發行前都不應假設存在。
+
+### 當前真實的安裝路徑：從原始碼建置
+
+LobsterPulse 目前以「可重現的原始碼建置」為正式安裝路徑（Owner 決策：`SOURCE_ONLY`
+直到 Owner 發行可下載 bundle）。使用者需要先建置 Tauri 工具鏈，之後每個版本都能完整重現。
+
+前置（Windows 11 / macOS / Linux 通用）：
+
+```powershell
+# 鎖定 Tauri CLI 版本，避免 Breaking change
+cargo install tauri-cli --locked
+
+# 建置：只產出兩個執行檔（無 installer）
+cd src-tauri
+cargo tauri build --no-bundle
+```
+
+產出：
+- `src-tauri/target/release/lobster-pulse.exe`（主程式）
+- `src-tauri/target/release/lobster-pulse-hook.exe`（hook sidecar）
+
+### 啟動與兩個檔案必須同層
+
+主程式會以相鄰路徑尋找 `lobster-pulse-hook.exe`，建置後兩個檔案放在同一目錄即可啟動：
+
+```powershell
+.\src-tauri\target\release\lobster-pulse.exe
+```
+
+### 設定與資料
+
+- 設定檔：`~/.config/lobsterpulse/config.json`（Windows：`%APPDATA%\lobsterpulse\config.json`）
+- 音效資料夾：`~/.config/lobsterpulse/sounds/`
+- runtime port 檔：`~/.lobsterpulse/port`
+
+### 升級與回滾 (Upgrade / Rollback)
+
+- 升級：關閉程式後重新建置（或日後下載新版本），**同時**換掉主程式與 sidecar 兩個檔案。
+- 回滾：目前沒有 auto-update 也沒有已發佈版本可下載。保留上一組兩個執行檔
+  （建議放在以版本命名的資料夾，如 `lobster-pulse-v0.5.4/`），出問題時把兩個檔案
+  一起換回即可。
+
+### 如何產出一個 release（發行者注意）
+
+本專案使用 `.github/workflows/release.yml` 產出 release：
+1. 與 Owner 確認版本（以 `CHANGELOG.md` 的 `## v0.5.x` 段為準）。
+2. 標記 tag：`git tag v0.5.4 && git push origin v0.5.4`
+3. workflow 會在 `v*` tag 觸發，產出 Linux / macOS-arm64 / macOS-x64 / Windows 四套 zip，
+   每套包含主程式 + sidecar，並建立 draft release 與 SHA-256 checksum。
+4. Owner 審查後手動 publish（本 Issue 不執行 publish / sign / deploy）。
+
+> ℹ️ **SmartScreen / 簽章**：預設發行的是**未簽章**的可攜式 bundle；Windows SmartScreen
+> 可能會顯示警告。若日後需要簽章，請改為發行簽章的 installer，並在 Release notes 中說明。
+> 請勿提供繞過平台安全（關閉 SmartScreen、修改執行原則）的指令。
+
+### Owner 決策欄位（Issue #6）
+
+在 `DISTRIBUTED_BINARY` 與 `SOURCE_ONLY` 之間由 Owner 記錄決定：
+- 當前實踐路徑：`SOURCE_ONLY`（以可重現建置為正式分發，直至 Owner 發行可下載的二進位 bundle）。
+- Owner 決策：`<OWNER DECISION: DISTRIBUTED_BINARY | SOURCE_ONLY>`（由 Owner 記錄於 PR / issue 更新）。
+
+### 聲明：本 Issue 不需要
+
+本 Issue 不要求、也不引入：自動更新服務、套件管理器（Homebrew / AUR 等）、遥測（telemetry）、
+或付費 code signing。
+
 ## 預設工作流
 
 這版不是照 upstream 原封不動保留，而是直接往你的使用習慣收斂：
@@ -29,6 +103,10 @@
 注意：provider 預設仍然是 `未啟用`，避免第一次打開就直接改你本機 hook 設定；但音效預設與顯示順序已經換成你的工作流。
 
 ## 監控清單（v5.1+）
+
+> ℹ️「v5.1+」指上方監控清單的列表版本（與 provider 總數），**不是 App 主版本**。
+> App 主版本以 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
+> 為準（目前 `v0.5.4`），三者已對齊，護欄見 `test/version-consistency.test.js`。
 
 LobsterPulse v5.1 同時監控兩條路徑，共 **13 provider**（🤖 OpenAB 9 + 💻 本機 4）。
 
@@ -90,20 +168,18 @@ LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
 - [scripts/bootstrap_git.ps1](scripts/bootstrap_git.ps1)
 - [REPO_SETUP.md](REPO_SETUP.md)
 
-## 執行
+## 建置與啟動
 
-### 直接跑目前產物
+從原始碼重建後，兩個執行檔（`lobster-pulse.exe` / `lobster-pulse-hook.exe`）必須在同一層，
+主程式會以相鄰路徑尋找 sidecar：
 
 ```powershell
 .\src-tauri\target\release\lobster-pulse.exe
 ```
 
-主程式與 sidecar 要放在同一層，因為主程式會找相鄰的 `lobster-pulse-hook.exe`。
-
-### 重新建置 release
-
-> ⚠️ **必用 `cargo tauri build`，不可純 `cargo build --release`**。
-> 純 cargo build --release 會跳過 frontend embed，release webview fallback
+> ⚠️ **重新建置必須用 `cargo tauri build`（或 `cargo tauri build --no-bundle`），
+> 不可純 `cargo build --release`**。**
+> 純 `cargo build --release` 會跳過 frontend embed，release webview fallback
 > 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
 > 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
 
@@ -181,4 +257,4 @@ repo 內附了一個可以重生品牌圖示的腳本：
 ## 已知保留項
 
 - `CLAUDE.md` 仍主要是 upstream 專案說明，這回合沒有一起重寫
-- docs 裡沒有掛你的實際 repo / release 下載連結，因為你還沒提供正式發佈位置
+- README / docs 已記錄可重現的安裝路徑（`SOURCE_ONLY`，詳見「安裝與下載」）；正式發佈位置待 Owner 發行 GitHub Release 後取代此說明

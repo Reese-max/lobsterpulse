@@ -1,6 +1,6 @@
 {
   "name": "lobster-pulse",
-  "version": "0.2.2",
+  "version": "0.5.4",
   "description": "Traditional Chinese desktop monitor for Claude, Codex, Copilot, and Gemini sessions",
   "scripts": {
     "tauri": "cargo tauri",

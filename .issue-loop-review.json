@@ -1,0 +1,20 @@
+{
+  "pr": 8,
+  "head": "bc4dd1af14b341278d586a1e18f83fe449f06935",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "scripts/release_contract.py",
+      "line": 67,
+      "issue": "On Windows, Path.write_text translates the checksum line ending to CRLF. Git Bash sha256sum -c treats the trailing carriage return as part of the archive filename and fails to verify a valid archive. The existing read_text assertion normalizes line endings and misses this; write an LF-only checksum and assert its raw bytes."
+    },
+    {
+      "severity": "med",
+      "file": "README.md",
+      "line": 94,
+      "issue": "needs-human: Issue #6 still lacks a recorded owner decision of SOURCE_ONLY or DISTRIBUTED_BINARY and clean-machine evidence for the chosen path. The PR correctly discloses these gaps, but CI and fixture archive tests do not fulfill the issue's source-build or Windows download/launch/sidecar acceptance."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed the Windows SHA-256 CRLF defect with a byte-level regression: red reproduced, then all 3 release-contract tests and real Git Bash sha256sum verification passed. needs-human: record SOURCE_ONLY or DISTRIBUTED_BINARY and complete the selected clean-machine acceptance before closing #6. Broader suite limitations are recorded in .issue-loop-evidence.json; no push or release was performed."
+}

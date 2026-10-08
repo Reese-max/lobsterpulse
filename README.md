@@ -11,10 +11,10 @@
 
 ## 目前這版的重點
 
-- 主程式執行檔：`src-tauri/target/release/lobster-pulse.exe`
-- hook sidecar：`src-tauri/target/release/lobster-pulse-hook.exe`
-- app 設定檔：`~/.config/lobsterpulse/config.json`
-- 音效資料夾：`~/.config/lobsterpulse/sounds/`
+- 自行建置後的主程式：`src-tauri/target/release/lobster-pulse.exe`
+- 自行建置後的 hook sidecar：`src-tauri/target/release/lobster-pulse-hook.exe`
+- app 設定檔：Windows 為 `%APPDATA%\lobsterpulse\config.json`；Linux 為 `~/.config/lobsterpulse/config.json`
+- 音效資料夾：設定目錄下的 `lobsterpulse/sounds/`
 - runtime port 檔：`~/.lobsterpulse/port`
 
 ## 預設工作流
@@ -28,9 +28,9 @@
 
 注意：provider 預設仍然是 `未啟用`，避免第一次打開就直接改你本機 hook 設定；但音效預設與顯示順序已經換成你的工作流。
 
-## 監控清單（v5.1+）
+## 監控清單
 
-LobsterPulse v5.1 同時監控兩條路徑，共 **13 provider**（🤖 OpenAB 9 + 💻 本機 4）。
+目前原始碼同時監控兩條路徑，共 **13 provider**（🤖 OpenAB 9 + 💻 本機 4）。
 
 ### 🤖 OpenAB 9 bot
 
@@ -90,40 +90,53 @@ LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
 - [scripts/bootstrap_git.ps1](scripts/bootstrap_git.ps1)
 - [REPO_SETUP.md](REPO_SETUP.md)
 
-## 執行
+## 安裝 / 執行
 
-### 直接跑目前產物
+**目前僅提供[從原始碼建置](#從原始碼建置-windows)。**
+[GitHub Releases](https://github.com/Reese-max/lobsterpulse/releases) 尚無已發佈版本；
+clone 或下載原始碼不會包含 exe。原始碼中的 app 版本是 `0.5.4`，不是已發行版本。
+是否提供可下載二進位檔仍待維護者決定（[issue #6](https://github.com/Reese-max/lobsterpulse/issues/6)）。
+
+### 從原始碼建置 Windows
+
+先安裝 Git、[Rust stable MSVC toolchain、Microsoft C++ Build Tools（Desktop development with C++）與 WebView2 Runtime](https://v2.tauri.app/start/prerequisites/)；
+Windows 11 通常已有 WebView2，缺少時依 Tauri 說明安裝。這條路徑需要開發工具鏈。
+開啟新的 PowerShell 視窗，從 repo 根目錄執行：
+
+```powershell
+git clone https://github.com/Reese-max/lobsterpulse.git
+cd lobsterpulse
+cargo install tauri-cli --version "^2.0.0" --locked
+cargo tauri build --no-bundle
+Test-Path .\src-tauri\target\release\lobster-pulse.exe
+Test-Path .\src-tauri\target\release\lobster-pulse-hook.exe
+```
+
+兩個 `Test-Path` 都應回傳 `True`。**必須使用 `cargo tauri build --no-bundle`**；
+`cargo build --release` 不會嵌入前端，可能以開發伺服器 URL 啟動而顯示白畫面。
+
+兩個執行檔必須留在同一資料夾。建置完成後從 repo 根目錄啟動：
 
 ```powershell
 .\src-tauri\target\release\lobster-pulse.exe
 ```
 
-主程式與 sidecar 要放在同一層，因為主程式會找相鄰的 `lobster-pulse-hook.exe`。
+Windows 設定檔位置是 `$env:APPDATA\lobsterpulse\config.json`；首次執行後在 tray 選單啟用所需 provider。
+啟用會修改對應 CLI 的 hook 設定，請先在自己的測試環境確認其內容。
 
-### 重新建置 release
+更新原始碼時先關閉程式，再執行 `git pull --ff-only` 和 `cargo tauri build --no-bundle`。
+若複製產物到另一資料夾使用，請一併複製主程式與 sidecar，並保留舊的一對檔案供回復。
+目前沒有自動更新或已發行版本可供下載回滾。
 
-> ⚠️ **必用 `cargo tauri build`，不可純 `cargo build --release`**。
-> 純 cargo build --release 會跳過 frontend embed，release webview fallback
-> 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
-> 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
+### 發行準備（maintainer，尚未執行）
 
-兩種變體：
+維護者決定發行二進位檔並核准版本後，`v<app version>` tag 可觸發
+[`release.yml`](.github/workflows/release.yml)。工作流程核對 Cargo、Tauri、package.json、
+docs 和 tag，檢查主程式與 sidecar，建立 zip 與 SHA-256 檔，產生 **draft** Release
+供人工審查。請先確認實際產物、簽章狀態和乾淨 Windows 11 的下載、啟動、sidecar 測試，
+再另行決定是否發佈。CI 產物不是穩定下載頁。
 
-- **快速驗證**（只要 `.exe`，不打 installer）：
-
-  ```powershell
-  cd .\src-tauri
-  cargo tauri build --no-bundle
-  ```
-
-  前置：`cargo install tauri-cli --locked`（鎖版避免 Tauri CLI breaking change）。
-
-- **完整 installer**（要 `.msi` / `.deb` / `.AppImage` 等）：
-
-  ```powershell
-  cargo install tauri-cli --locked
-  cargo tauri build
-  ```
+目前沒有 installer、簽章或已發佈的 portable archive；Windows SmartScreen 提示仍須在實際發行前驗證並如實寫入 release notes。
 
 ## 品牌資產
 
@@ -152,7 +165,7 @@ repo 內附了一個可以重生品牌圖示的腳本：
 - landing page：`docs/index.html`
 - interactive demo：`docs/demo-app/`
 
-這兩塊都已經改成你的品牌版，不再指回 upstream 的 GitHub release、logo 或 repo API。
+這兩塊都已經改成你的品牌版，建置說明指向本 repo，不指向 upstream release。
 
 ## git 結構
 
@@ -172,13 +185,10 @@ repo 內附了一個可以重生品牌圖示的腳本：
 
 ## 驗證狀態
 
-這版目前已驗證過：
-
-- `cargo check`
-- `cargo tauri build --no-bundle`（release 二進位，frontend 已 embed）
-- `lobster-pulse.exe` 可成功啟動
+Build CI 在 Linux、macOS、Windows 編譯並測試原始碼；它不等於已發佈安裝包。
+從全新 Windows 11 下載與執行的驗收尚未完成，結果追蹤於 [issue #6](https://github.com/Reese-max/lobsterpulse/issues/6)。
 
 ## 已知保留項
 
 - `CLAUDE.md` 仍主要是 upstream 專案說明，這回合沒有一起重寫
-- docs 裡沒有掛你的實際 repo / release 下載連結，因為你還沒提供正式發佈位置
+- 目前沒有已發佈的 GitHub Release；release workflow 僅為尚未實際發行的準備路徑

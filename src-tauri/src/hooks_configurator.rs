@@ -2,7 +2,7 @@ use crate::config::{expand_path, ProviderConfig};
 use log::info;
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -261,12 +261,39 @@ pub fn remove_provider(provider_id: &str, config: &ProviderConfig) -> Result<(),
         return Ok(());
     }
 
-    let data = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let (data, codex_snapshot) = if provider_id == "codex" {
+        let target = std::fs::canonicalize(&path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let (data, identity) = read_optional_text_snapshot(&target)?
+            .ok_or_else(|| format!("{} disappeared during removal", path.display()))?;
+        (data, Some((target, identity)))
+    } else {
+        (std::fs::read_to_string(&path).map_err(|error| error.to_string())?, None)
+    };
     let mut root: Value = serde_json::from_str(&data)
         .map_err(|e| format!("malformed JSON in {}: {e}", path.display()))?;
 
     if remove_lobsterpulse_hooks(&mut root)? {
-        save_json(&path, &root)?;
+        if let Some((target, identity)) = &codex_snapshot {
+            let updated = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())?;
+            save_text_atomically_with(target, &updated, |temporary, destination| {
+                verify_hooks_snapshot(
+                    &path,
+                    destination,
+                    Some(data.as_str()),
+                    Some(identity.as_str()),
+                )
+                .map_err(std::io::Error::other)?;
+                replace_file_if_snapshot_unchanged(
+                    temporary,
+                    destination,
+                    data.as_str(),
+                    identity,
+                )
+            })?;
+        } else {
+            save_json(&path, &root)?;
+        }
     }
     if provider_id == "codex" {
         restore_codex_hooks_feature(&path)?;
@@ -414,11 +441,9 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
     } else {
         target
     };
-    let original_content = if target.exists() {
-        Some(std::fs::read_to_string(&target)
-            .map_err(|e| format!("{}: {e}", config_toml.display()))?)
-    } else {
-        None
+    let (original_content, original_identity) = match read_optional_text_snapshot(&target)? {
+        Some((content, identity)) => (Some(content), Some(identity)),
+        None => (None, None),
     };
     let mut document = if let Some(content) = &original_content {
         content
@@ -503,7 +528,10 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         } else {
             let target_text = target.to_str()
                 .ok_or_else(|| format!("{}: target path is not UTF-8", config_toml.display()))?;
-            let identity = config_file_identity(&target)?;
+            let identity = match &original_identity {
+                Some(identity) => identity.clone(),
+                None => config_file_identity(&target)?,
+            };
             let identity_owned = prior_state
                 .as_ref()
                 .and_then(|state| state_owns_identity(state, &identity))
@@ -519,8 +547,15 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
         };
         save_text_atomically_with(&target, &document.to_string(), |temporary, destination| {
             if let Some(content) = &original_content {
-                verify_config_snapshot(config_toml, &target, content)
-                    .map_err(std::io::Error::other)?;
+                verify_config_snapshot(
+                    config_toml,
+                    &target,
+                    content,
+                    original_identity.as_deref().ok_or_else(|| {
+                        std::io::Error::other("missing config snapshot identity")
+                    })?,
+                )
+                .map_err(std::io::Error::other)?;
             }
             let mut staged_state = None;
             if let Some(mut state) = state_to_stage {
@@ -538,19 +573,32 @@ fn enable_codex_hooks_feature(config_toml: &Path) -> Result<bool, String> {
                 staged_state = Some(state);
             }
             if let Some(content) = &original_content {
-                verify_config_snapshot(config_toml, &target, content)
-                    .map_err(std::io::Error::other)?;
+                verify_config_snapshot(
+                    config_toml,
+                    &target,
+                    content,
+                    original_identity.as_deref().ok_or_else(|| {
+                        std::io::Error::other("missing config snapshot identity")
+                    })?,
+                )
+                .map_err(std::io::Error::other)?;
             }
             if let Some(state) = &staged_state {
                 verify_codex_flag_state(config_toml, state)
                     .map_err(std::io::Error::other)?;
             }
-            if original_content.is_none() {
-                // A concurrent creator must win without losing its config.
-                // hard_link is atomic and fails if destination now exists.
-                create_file_if_absent(temporary, destination)
+            if let (Some(content), Some(identity)) =
+                (original_content.as_deref(), original_identity.as_deref())
+            {
+                replace_file_if_snapshot_unchanged(
+                    temporary,
+                    destination,
+                    content,
+                    identity,
+                )
             } else {
-                replace_file(temporary, destination)
+                // A concurrent creator must win without losing its config.
+                create_file_if_absent(temporary, destination)
             }
         })?;
     }
@@ -664,11 +712,19 @@ fn state_owns_identity(state: &CodexFlagState, identity: &str) -> Option<bool> {
     }
 }
 
-fn verify_config_snapshot(config_toml: &Path, target: &Path, expected: &str) -> Result<(), String> {
+fn verify_config_snapshot(
+    config_toml: &Path,
+    target: &Path,
+    expected: &str,
+    expected_identity: &str,
+) -> Result<(), String> {
     let current_target = std::fs::canonicalize(config_toml)
         .map_err(|e| format!("{}: {e}", config_toml.display()))?;
     if current_target != target {
         return Err(format!("{}: config target changed during update", config_toml.display()));
+    }
+    if config_file_identity(target)? != expected_identity {
+        return Err(format!("{}: config file identity changed during update", config_toml.display()));
     }
     let current = std::fs::read_to_string(target)
         .map_err(|e| format!("{}: {e}", target.display()))?;
@@ -708,6 +764,29 @@ fn verify_codex_flag_state(config_toml: &Path, state: &CodexFlagState) -> Result
         }
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn config_file_identity_from_handle(file: &std::fs::File) -> Result<String, String> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    Ok(format!("unix:{}:{}", metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn config_file_identity_from_handle(file: &std::fs::File) -> Result<String, String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(format!(
+        "windows:{}:{}:{}",
+        info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+    ))
 }
 
 #[cfg(unix)]
@@ -758,6 +837,12 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
     {
         let content = std::fs::read_to_string(&state.target)
             .map_err(|e| format!("{}: {e}", state.target))?;
+        if config_file_identity(Path::new(&state.target))? != current_identity {
+            return Err(format!(
+                "{}: config changed while being read; refusing to restore owned feature flags",
+                config_toml.display()
+            ));
+        }
         let mut document = content
             .parse::<toml_edit::DocumentMut>()
             .map_err(|e| format!("{}: malformed TOML: {e}", config_toml.display()))?;
@@ -805,17 +890,32 @@ fn restore_codex_hooks_feature(hooks_json: &Path) -> Result<(), String> {
                         ),
                         pending_owned: false,
                     };
-                    verify_config_snapshot(&config_toml, destination, &content)
-                        .map_err(std::io::Error::other)?;
+                    verify_config_snapshot(
+                        &config_toml,
+                        destination,
+                        &content,
+                        &current_identity,
+                    )
+                    .map_err(std::io::Error::other)?;
                     write_codex_flag_state(&state_path, &staged)
                         .map_err(std::io::Error::other)?;
                     verify_codex_flag_state(&config_toml, &staged)
                         .map_err(std::io::Error::other)?;
-                    verify_config_snapshot(&config_toml, destination, &content)
-                        .map_err(std::io::Error::other)?;
+                    verify_config_snapshot(
+                        &config_toml,
+                        destination,
+                        &content,
+                        &current_identity,
+                    )
+                    .map_err(std::io::Error::other)?;
                     verify_codex_flag_state(&config_toml, &staged)
                         .map_err(std::io::Error::other)?;
-                    replace_file(temporary, destination)
+                    replace_file_if_snapshot_unchanged(
+                        temporary,
+                        destination,
+                        &content,
+                        &current_identity,
+                    )
                 },
             )?;
         }
@@ -837,15 +937,9 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
             .map_err(|error| format!("{}: {error}", parent.display()))?
             .join(hooks_target.file_name().ok_or("Invalid hooks.json path")?)
     };
-    let original_hooks = match std::fs::read_to_string(&hooks_target) {
-        Ok(content) => Some(content),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(format!("{}: {error}", hooks_target.display())),
-    };
-    let original_identity = if original_hooks.is_some() {
-        Some(config_file_identity(&hooks_target)?)
-    } else {
-        None
+    let (original_hooks, original_identity) = match read_optional_text_snapshot(&hooks_target)? {
+        Some((content, identity)) => (Some(content), Some(identity)),
+        None => (None, None),
     };
     let mut root = match &original_hooks {
         Some(content) => serde_json::from_str(content)
@@ -902,8 +996,15 @@ fn install_codex_hooks(path: &PathBuf) -> Result<(), String> {
         verify_hooks_snapshot(path, destination, original_hooks.as_deref(), original_identity.as_deref())
             .map_err(std::io::Error::other)?;
         installed_identity = Some(config_file_identity(temporary).map_err(std::io::Error::other)?);
-        if original_hooks.is_some() {
-            replace_file(temporary, destination)
+        if let Some(original) = original_hooks.as_deref() {
+            let identity = original_identity.as_deref()
+                .ok_or_else(|| std::io::Error::other("missing hooks snapshot identity"))?;
+            replace_file_if_snapshot_unchanged(
+                temporary,
+                destination,
+                original,
+                identity,
+            )
         } else {
             create_file_if_absent(temporary, destination)
         }
@@ -943,7 +1044,12 @@ fn rollback_codex_hooks_json(
         save_text_atomically_with(target, original, |temporary, destination| {
             verify_written_hooks(destination, installed, installed_identity)
                 .map_err(std::io::Error::other)?;
-            replace_file(temporary, destination)
+            replace_file_if_snapshot_unchanged(
+                temporary,
+                destination,
+                installed,
+                installed_identity,
+            )
         })
     } else {
         remove_new_codex_hooks_if_owned(target, installed, installed_identity)
@@ -1084,6 +1190,108 @@ fn temporary_path(path: &Path) -> Result<PathBuf, String> {
         path,
         &format!(".lobsterpulse-{}-{nonce}.tmp", std::process::id()),
     )
+}
+
+fn read_optional_text_snapshot(path: &Path) -> Result<Option<(String, String)>, String> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let identity = config_file_identity_from_handle(&file)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if config_file_identity(path)? != identity {
+        return Err(format!("{}: file changed while being read", path.display()));
+    }
+    Ok(Some((content, identity)))
+}
+
+/// Replace a Codex file only if the exact version read by the caller still owns
+/// the destination. The old file is moved aside first, then the staged file is
+/// installed with an exclusive no-replace operation. An editor that saves in
+/// this interval wins; we return an error and preserve the old snapshot rather
+/// than overwrite the editor's new path.
+fn replace_file_if_snapshot_unchanged(
+    source: &Path,
+    destination: &Path,
+    expected_content: &str,
+    expected_identity: &str,
+) -> std::io::Result<()> {
+    replace_file_if_snapshot_unchanged_with(
+        source,
+        destination,
+        expected_content,
+        expected_identity,
+        || Ok(()),
+    )
+}
+
+fn replace_file_if_snapshot_unchanged_with<F>(
+    source: &Path,
+    destination: &Path,
+    expected_content: &str,
+    expected_identity: &str,
+    before_commit: F,
+) -> std::io::Result<()>
+where
+    F: FnOnce() -> std::io::Result<()>,
+{
+    let quarantine = temporary_path(destination).map_err(std::io::Error::other)?;
+    std::fs::rename(destination, &quarantine)?;
+
+    let comparison = (|| -> std::io::Result<()> {
+        let identity = config_file_identity(&quarantine).map_err(std::io::Error::other)?;
+        let content = std::fs::read_to_string(&quarantine)?;
+        if identity != expected_identity || content != expected_content {
+            return Err(std::io::Error::other(
+                "destination changed after its snapshot was read",
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = comparison {
+        return Err(restore_quarantined_snapshot(&quarantine, destination, error));
+    }
+
+    if let Err(error) = before_commit() {
+        return Err(restore_quarantined_snapshot(&quarantine, destination, error));
+    }
+
+    if let Err(error) = create_file_if_absent(source, destination) {
+        return Err(restore_quarantined_snapshot(
+            &quarantine,
+            destination,
+            std::io::Error::other(format!(
+                "destination was recreated before no-clobber commit: {error}"
+            )),
+        ));
+    }
+
+    if let Err(error) = std::fs::remove_file(&quarantine) {
+        log::warn!(
+            "updated {} but could not remove prior snapshot {}: {error}",
+            destination.display(),
+            quarantine.display()
+        );
+    }
+    Ok(())
+}
+
+fn restore_quarantined_snapshot(
+    quarantine: &Path,
+    destination: &Path,
+    cause: std::io::Error,
+) -> std::io::Error {
+    match create_file_if_absent(quarantine, destination) {
+        Ok(()) => cause,
+        Err(restore_error) => std::io::Error::other(format!(
+            "{cause}; prior snapshot retained at {} because restoring it would overwrite a concurrent file: {restore_error}",
+            quarantine.display()
+        )),
+    }
 }
 
 #[cfg(not(windows))]
@@ -2476,6 +2684,148 @@ codex_hooks = false
         assert!(error.contains("identity changed"), "{error}");
         assert_eq!(std::fs::read_to_string(&target).expect("read replacement"), installed);
         assert_eq!(config_file_identity(&target).expect("restored identity"), replacement_identity);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn codex_snapshot_commit_preserves_editor_save_after_comparison() {
+        let directory = tmp_settings_path("codex-editor-save-in-commit-gap");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target = directory.join("hooks.json");
+        let candidate = directory.join("candidate.tmp");
+        let editor_temp = directory.join("editor.tmp");
+        let original = b"{\"hooks\":{\"thirdParty\":true}}";
+        let external = b"{\"hooks\":{\"userEditAfterRead\":true}}";
+        write_raw(&target, original);
+        write_raw(&candidate, b"{\"hooks\":{\"lobsterpulse\":true}}");
+        let snapshot_identity = config_file_identity(&target).expect("snapshot identity");
+
+        let error = replace_file_if_snapshot_unchanged_with(
+            &candidate,
+            &target,
+            std::str::from_utf8(original).expect("UTF-8 snapshot"),
+            &snapshot_identity,
+            || {
+                // Runs after the old path has been compared and moved aside,
+                // at the exact interval that used to end in replace_file().
+                write_raw(&editor_temp, external);
+                rename_file_if_absent(&editor_temp, &target)
+            },
+        )
+        .expect_err("editor's concurrent save must win");
+
+        assert!(error.to_string().contains("prior snapshot retained at"), "{error}");
+        assert_eq!(
+            std::fs::read(&target).expect("read editor save"),
+            external,
+            "the no-clobber commit must not overwrite the external editor's new file"
+        );
+        assert!(
+            std::fs::read_dir(&directory)
+                .expect("read fixture directory")
+                .filter_map(Result::ok)
+                .any(|entry| std::fs::read(entry.path()).ok().as_deref() == Some(original.as_slice())),
+            "prior snapshot must remain recoverable when the editor wins"
+        );
+        assert!(candidate.exists(), "failed commit must retain its staged candidate");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn codex_pending_flag_state_refuses_editor_inode_until_snapshot_recovery() {
+        let directory = tmp_settings_path("codex-pending-state-editor-conflict");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let config_toml = directory.join("config.toml");
+        let candidate = directory.join("candidate.tmp");
+        let editor_temp = directory.join("editor.tmp");
+        let preserved_editor = directory.join("editor-preserved.toml");
+        let original = b"[features]\nhooks = false\n";
+        let external = b"[features]\nhooks = false\n# external editor update\n";
+        write_raw(&config_toml, original);
+        write_raw(&candidate, b"[features]\nhooks = true\n");
+        let original_identity = config_file_identity(&config_toml).expect("original identity");
+        let candidate_identity = config_file_identity(&candidate).expect("candidate identity");
+        let state_path = codex_flag_state_path(&config_toml).expect("state path");
+        let pending_state = CodexFlagState {
+            enabled_from_false: vec!["hooks".to_string()],
+            target: std::fs::canonicalize(&config_toml)
+                .expect("canonical config target")
+                .to_string_lossy()
+                .into_owned(),
+            identity: original_identity.clone(),
+            identity_owned: false,
+            pending_identity: Some(candidate_identity),
+            pending_owned: true,
+        };
+        write_codex_flag_state(&state_path, &pending_state).expect("persist pending state");
+
+        let error = replace_file_if_snapshot_unchanged_with(
+            &candidate,
+            &config_toml,
+            std::str::from_utf8(original).expect("UTF-8 original"),
+            &original_identity,
+            || {
+                write_raw(&editor_temp, external);
+                rename_file_if_absent(&editor_temp, &config_toml)
+            },
+        )
+        .expect_err("editor recreation in commit gap must win");
+        assert!(error.to_string().contains("prior snapshot retained at"), "{error}");
+        assert_eq!(
+            std::fs::read(&config_toml).expect("read external edit"),
+            external,
+            "external edit remains at the config path"
+        );
+
+        let persisted = read_codex_flag_state(&state_path)
+            .expect("read state")
+            .expect("pending state remains available for recovery");
+        let editor_identity = config_file_identity(&config_toml).expect("editor identity");
+        assert_ne!(editor_identity, original_identity);
+        assert_eq!(state_owns_identity(&persisted, &editor_identity), None);
+        let verify_error = verify_codex_flag_state(&config_toml, &persisted)
+            .expect_err("pending transaction must not claim the editor's new inode");
+        assert!(verify_error.contains("identity changed"), "{verify_error}");
+        let retry_error = enable_codex_hooks_feature(&config_toml)
+            .expect_err("unresolved external edit must keep automatic retry fail-closed");
+        assert!(retry_error.contains("identity changed"), "{retry_error}");
+        assert_eq!(
+            std::fs::read(&config_toml).expect("external edit survives retry"),
+            external
+        );
+
+        let recovery = std::fs::read_dir(&directory)
+            .expect("read fixture directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                std::fs::read(path)
+                    .ok()
+                    .as_deref()
+                    .is_some_and(|bytes| bytes == original)
+            })
+            .expect("original snapshot retained for owner-directed recovery");
+
+        // The owner keeps the editor's file and restores the exact prior
+        // snapshot. The pending ownership record then permits a safe retry.
+        std::fs::rename(&config_toml, &preserved_editor).expect("preserve external edit");
+        std::fs::rename(&recovery, &config_toml).expect("restore original snapshot");
+        let restored_identity = config_file_identity(&config_toml).expect("restored identity");
+        assert_eq!(restored_identity, original_identity);
+        assert!(verify_codex_flag_state(&config_toml, &persisted).is_ok());
+        assert!(enable_codex_hooks_feature(&config_toml).expect("retry after recovery"));
+        let enabled = std::fs::read_to_string(&config_toml).expect("read retried config");
+        let document = enabled.parse::<toml_edit::DocumentMut>().expect("parse retried config");
+        assert_eq!(
+            document.get("features").and_then(|features| features.get("hooks")).and_then(|flag| flag.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            std::fs::read(&preserved_editor).expect("preserved editor file"),
+            external
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 

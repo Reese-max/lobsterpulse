@@ -1,0 +1,23 @@
+name: Attention research replay
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/attention-replay.yml'
+      - 'docs/research/issue-9-attention-queue.md'
+      - 'docs/research/issue9_attention_replay.py'
+      - 'docs/research/test_issue9_attention_replay.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s docs/research -p 'test_issue9_attention_replay.py' -v

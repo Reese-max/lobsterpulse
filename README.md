@@ -34,8 +34,10 @@
 - Visual Studio Build Tools 2022 的 **Desktop development with C++**，包含 MSVC x64/x86
   build tools 與 Windows 10/11 SDK。
 - Microsoft Edge WebView2 Runtime。
-- Tauri CLI `2.11.4`。`--locked` 只要求使用該 crate 發佈時的 lockfile；必須同時指定
-  `--version 2.11.4` 才是固定 CLI 版本。
+- Tauri CLI `2.11.4`。這是本次本機 source build 實際驗證並建議重現的版本；
+  `--locked` 只要求使用該 crate 發佈時的 lockfile，必須同時指定 `--version 2.11.4`
+  才是固定 CLI 版本。既有 build / release CI 仍安裝 `tauri-cli@^2.0`，因此本文件不宣稱
+  repository 的所有環境都已鎖在 `2.11.4`。
 - Node.js 只用於執行 `npm test` 文件與版本護欄，不是這個靜態 frontend 的 build prerequisite。
 
 可先核對既有工具；缺少工具時請依
@@ -257,11 +259,11 @@ repo 內附了一個可以重生品牌圖示的腳本：
 候選變更應執行下列 admission checks；build 成功本身不代表桌面 runtime 已驗收：
 
 - `npm test`（版本與安裝文件護欄）
-- `cargo test --locked`
+- `cargo test --manifest-path src-tauri/Cargo.toml --locked`
 - `cargo tauri build --no-bundle`（release 二進位，frontend 已 embed）
 - 兩個平台對應產物的存在性與 SHA-256 檢查
 
 ## 已知保留項
 
-- `CLAUDE.md` 仍主要是 upstream 專案說明，這回合沒有一起重寫
+- `CLAUDE.md` 仍主要是 upstream 專案說明；本次只釐清本機 source build 驗證使用的 CLI 版本與既有 CI 範圍
 - repository 目前沒有可下載的正式 bundle；本文件只證明 source build 路徑，不作 Owner 發行方式決策

@@ -206,7 +206,9 @@
 cargo tauri build --no-bundle</code></pre>
           <p class="download-note">
             兩個命令都由 repository root 執行。<code>--locked</code> 不會自行固定 CLI
-            release；必須保留 <code>--version 2.11.4</code>。
+            release；必須保留 <code>--version 2.11.4</code>。這是本次本機 source build
+            實際驗證並建議重現的版本；既有 build / release CI 仍使用
+            <code>tauri-cli@^2.0</code>，不代表全環境已鎖在 2.11.4。
           </p>
           <div class="download-meta">
             <span>MSVC toolchain</span>
@@ -276,7 +278,7 @@ sha256sum src-tauri/target/release/lobster-pulse \
         <div class="install-card">
           <h3>不假設已發佈下載</h3>
           <pre><code>npm test
-cargo test --locked</code></pre>
+cargo test --manifest-path src-tauri/Cargo.toml --locked</code></pre>
           <p class="install-note">
             文件與版本護欄會拒絕未固定的 Tauri CLI、錯誤 cwd 路徑與不存在的 checksum 宣稱。
           </p>

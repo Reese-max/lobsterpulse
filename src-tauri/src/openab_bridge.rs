@@ -314,10 +314,13 @@ mod write_offset_at_tests {
 
     #[test]
     fn write_offset_at_returns_err_on_invalid_path() {
-        // Windows / Unix 都會拒絕 NUL 裝置或不可寫的 path
-        // 用 control char（U+0001）做檔名 → 大多 fs 拒絕
-        let bad = std::path::PathBuf::from("\x01invalid\x02");
+        // 普通檔案不能作為父目錄；不依賴 OS 的檔名或權限規則，也不寫入 cwd。
+        let parent = tmp_path("invalid-parent");
+        std::fs::File::create(&parent).expect("regular-file parent fixture");
+        let bad = parent.join("offset");
         let result = write_offset_at(&bad, 1);
+        // 在 assertion 前清理，即使回傳值不符契約也不留下 fixture。
+        std::fs::remove_file(&parent).expect("remove parent fixture");
         assert!(result.is_err(), "invalid path 應回 Err 而不是 silent fail");
     }
 

@@ -24,7 +24,7 @@
       <div class="nav-links">
         <a href="#features">功能</a>
         <a href="#workflow">工作流</a>
-        <a href="#download">下載</a>
+        <a href="#download">安裝</a>
         <a href="#repo">維護</a>
       </div>
     </div>
@@ -46,7 +46,7 @@
           還有需要時才打開的 Gemini，集中在同一個浮動膠囊裡，用繁中介面、橘色品牌與你的工作習慣做預設。
         </p>
         <div class="cta">
-          <a class="btn btn-primary" href="#download">看下載區塊</a>
+          <a class="btn btn-primary" href="#download">看原始碼安裝</a>
           <a class="btn btn-secondary" href="#workflow">看預設工作流</a>
         </div>
         <div class="cta-secondary">
@@ -72,8 +72,8 @@
             <span><code>lobsterpulse</code> 設定與 runtime 路徑</span>
           </div>
           <div class="metric-card">
-            <strong>已驗證</strong>
-            <span>release build 與啟動流程</span>
+            <strong>可驗證</strong>
+            <span>source build、產物與 hash</span>
           </div>
         </div>
       </div>
@@ -186,101 +186,108 @@
 
   <section id="download">
     <div class="container">
-      <h2>下載與產物</h2>
+      <h2>安裝與產物</h2>
       <p class="section-lede">
-        版本：<code>v0.5.4</code>。截至目前為止這個 repo
-        <strong>尚未發行 GitHub Release</strong>（沒有 tag、沒有 release），
-        因此「下載」路徑目前就是「從原始碼重建」。Owner 可記錄於 issue #6：
-        <code>SOURCE_ONLY</code>（以可重現建置為正式分發，直至 Owner 發行可下載 bundle）。
+        版本：<code>v0.5.4</code>。這個 repository 目前沒有可供安裝者下載的已發佈
+        bundle 或 installer；以下只記錄可驗證的原始碼建置。這是 repository 現況，
+        不代替 Owner 的發行方式決策，也不會建立 tag、release 或 installer。
       </p>
 
       <div class="download-grid">
         <article class="download-card featured">
-          <div class="download-badge">待發行</div>
-          <h3>Windows 桌面版（待發行）</h3>
+          <div class="download-badge">Windows 11</div>
+          <h3>前置需求與建置</h3>
           <p>
-            主程式與 hook sidecar 最終會以一個 zip 捆綁發行（兩個檔案必須放同層，
-            主程式會以相鄰路徑尋找 sidecar）。截至目前為止沒有已發佈版本可下載，
-            請依照下方的「原始碼建置」重建。
+            需要 Rust <code>1.77.2+</code> 的 MSVC toolchain、Visual Studio Build Tools
+            2022（Desktop development with C++、MSVC x64/x86、Windows SDK）與
+            Microsoft Edge WebView2 Runtime。Node.js 只用於 <code>npm test</code>。
           </p>
-          <pre><code>lobster-pulse.exe
-lobster-pulse-hook.exe</code></pre>
+          <pre><code>cargo install tauri-cli --version 2.11.4 --locked
+cargo tauri build --no-bundle</code></pre>
+          <p class="download-note">
+            兩個命令都由 repository root 執行。<code>--locked</code> 不會自行固定 CLI
+            release；必須保留 <code>--version 2.11.4</code>。
+          </p>
           <div class="download-meta">
-            <span>同層放置</span>
-            <span>桌面浮動膠囊</span>
-            <span>繁中 UI</span>
+            <span>MSVC toolchain</span>
+            <span>Windows SDK</span>
+            <span>WebView2</span>
           </div>
         </article>
 
         <article class="download-card">
-          <div class="download-badge">可重建</div>
-          <h3>原始碼建置</h3>
-          <p>從 repo 內重建就是當前真實的安裝路徑，每個版本都能完整重現。</p>
-          <p class="download-note">前置：鎖定 Tauri CLI 版本（避免 breaking change）：
-            <code>cargo install tauri-cli --locked</code>
+          <div class="download-badge">Windows 產物</div>
+          <h3>存在性與 SHA-256</h3>
+          <pre><code>src-tauri\target\release\lobster-pulse.exe
+src-tauri\target\release\lobster-pulse-hook.exe
+
+Get-FileHash -Algorithm SHA256 -LiteralPath @(
+  '.\src-tauri\target\release\lobster-pulse.exe',
+  '.\src-tauri\target\release\lobster-pulse-hook.exe'
+)</code></pre>
+          <p class="download-note">
+            主程式與 sidecar 必須保留在同一目錄。這些 hash 只驗證本機 build；
+            release workflow 目前沒有建立 checksum manifest。
           </p>
-          <pre><code>cd src-tauri
-cargo tauri build --no-bundle    # 快速驗證：exe + embed frontend，無 installer
-cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage（需 tauri-cli）</code></pre>
-          <p class="download-note">⚠️ <strong>不可純 <code>cargo build --release</code></strong>
-            （Tauri v2 release webview 會 fallback 到 devUrl 白屏）。
-          </p>
-          <p class="download-note">三方對齊 <code>README.md</code> + <code>CLAUDE.md</code>「Build SOP（重要）」段 + <code>build.sh</code>。</p>
         </article>
 
         <article class="download-card">
-          <div class="download-badge">資產同步</div>
-          <h3>Bundle icon 資產包</h3>
-          <p>不只 Windows icon，連 macOS、iOS、Android 那批 bundle icon 也會跟主視覺同步重生。</p>
-          <pre><code>src-tauri\icons\icon.icns
-src-tauri\icons\ios\
-src-tauri\icons\android\</code></pre>
-          <p class="download-note">由 <code>scripts\generate_brand_assets.ps1</code> 內建呼叫 Tauri icon 生成器完成。</p>
-        </article>
-      </div>
+          <div class="download-badge">macOS / Linux</div>
+          <h3>平台分開核對</h3>
+          <p>
+            macOS 需要 Xcode Command Line Tools；Linux 需要發行版對應的 WebKitGTK 與
+            Tauri 系統開發套件。完整清單見
+            <a href="https://v2.tauri.app/start/prerequisites/">Tauri v2 prerequisites</a>。
+          </p>
+          <pre><code>src-tauri/target/release/lobster-pulse
+src-tauri/target/release/lobster-pulse-hook
 
-      <div class="download-note" style="margin-top: 16px;">
-        <strong>如何產出一個 release：</strong>推上 <code>v*</code> tag（
-        <code>git tag v0.5.4 && git push origin v0.5.4</code>），
-        觸發 <a href=".github/workflows/release.yml">.github/workflows/release.yml</a>
-        即可自動產出四套 zip（Linux / macOS-arm64 / macOS-x64 / Windows）
-        並建立 draft release（含 SHA-256 checksum）。Owner 審查後手動 publish。
+# macOS
+shasum -a 256 src-tauri/target/release/lobster-pulse \
+  src-tauri/target/release/lobster-pulse-hook
+
+# Linux
+sha256sum src-tauri/target/release/lobster-pulse \
+  src-tauri/target/release/lobster-pulse-hook</code></pre>
+          <p class="download-note">不要把 Windows <code>.exe</code> 路徑混入這兩個平台的命令。</p>
+        </article>
       </div>
     </div>
   </section>
 
   <section id="install">
     <div class="container">
-      <h2>建置與啟動</h2>
+      <h2>驗證邊界</h2>
       <p class="section-lede">
-        目前以可重現的原始碼重建為正式安裝路徑（兩個執行檔必須在同一層，主程式會以
-        相鄰路徑尋找 sidecar）。設定檔預設在 <code>~/.config/lobsterpulse/config.json</code>。
+        build 成功只證明 source candidate 能產生 frontend 已嵌入的二進位；不等於
+        桌面 runtime、hook 寫入、自動啟動或 installer 已驗收。
       </p>
 
       <div class="install-grid">
         <div class="install-card">
-          <h3>啟動兩個執行檔</h3>
-          <pre><code>src-tauri\target\release\lobster-pulse.exe</code></pre>
+          <h3>必用 Tauri build</h3>
+          <pre><code>cargo tauri build --no-bundle</code></pre>
           <p class="install-note">
-            <code>lobster-pulse.exe</code> 與 <code>lobster-pulse-hook.exe</code> 要放在同一層，
-            主程式會用相鄰路徑找到 sidecar，分開就收不到 hook 事件。
+            不可以 <code>cargo build --release</code> 代替；後者不執行 Tauri frontend
+            embedding，release webview 可能回退到 dev URL。
           </p>
         </div>
 
         <div class="install-card">
-          <h3>重生品牌資產</h3>
-          <pre><code>.\scripts\generate_brand_assets.ps1</code></pre>
-          <p class="install-note">這會一起更新 docs logo、Windows icon、<code>icon.icns</code>、iOS 與 Android icon。</p>
+          <h3>不假設已發佈下載</h3>
+          <pre><code>npm test
+cargo test --locked</code></pre>
+          <p class="install-note">
+            文件與版本護欄會拒絕未固定的 Tauri CLI、錯誤 cwd 路徑與不存在的 checksum 宣稱。
+          </p>
         </div>
 
         <div class="install-card">
-          <h3>從原始碼重建</h3>
-          <pre><code>cd src-tauri
-cargo install tauri-cli --locked
-cargo tauri build --no-bundle</code></pre>
+          <h3>不作發行決策</h3>
+          <pre><code>source build != published release
+build pass != runtime pass</code></pre>
           <p class="install-note">
-            這是當前真實的安裝路徑（需要 Rust + Tauri 工具鏈；與 issue #6 的
-            「無開發者工具鏈也能安裝」目標不同，待 Owner 發行可下載 bundle 後取代此說明）。
+            這份文件不要求 tag、push、release、installer、簽章或 Owner 的分發模式決策。
           </p>
         </div>
       </div>
@@ -327,7 +334,7 @@ git merge --ff-only feature/your-change</code></pre>
       <div class="footer-links">
         <a href="#features">功能</a>
         <a href="#workflow">工作流</a>
-        <a href="#download">下載</a>
+        <a href="#download">安裝</a>
         <a href="#repo">維護</a>
       </div>
       <p>龍蝦監控 LobsterPulse · 你的自訂桌面 AI CLI 監控器</p>

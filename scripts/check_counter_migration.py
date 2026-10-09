@@ -57,6 +57,15 @@ def validate_closed_phase(metadata: str, record: dict) -> None:
         require(item.get("state") and item.get("reason"), f"{item.get('id')} lacks state or evidence reason")
 
 
+def validate_exporter_diagnostics(source: str) -> None:
+    """Inspect the renderer, so a negative test literal is not emitted HELP."""
+    renderers = re.findall(r"(?ms)^fn render_prometheus_body\(\n.*?^}\n", source)
+    require(len(renderers) == 1, "cannot locate unique exporter renderer")
+    body = renderers[0]
+    require("migration {} since {}; review {}" in body, "exporter HELP lacks decision/review diagnostics")
+    require("scheduled removal week 4" not in body, "exporter still announces expired removal")
+
+
 def validate() -> None:
     record = json.loads(read(MANIFEST))
     state = record.get("state")
@@ -94,8 +103,7 @@ def validate() -> None:
 
     source = read(Path("src-tauri/src/lib.rs"))
     require('include_str!("../../docs/metrics/counter-migration.json")' in source, "exporter must embed manifest")
-    require("migration {} since {}; review {}" in source, "exporter HELP lacks decision/review diagnostics")
-    require("scheduled removal week 4" not in source, "exporter still announces expired removal")
+    validate_exporter_diagnostics(source)
     contract = re.search(r"const LP_METRICS: &\[&str\] = &\[(.*?)\];", source, re.S)
     require(contract is not None, "cannot locate LP_METRICS contract")
     names = re.findall(r'"(lobsterpulse_[a-z0-9_]+)"', contract.group(1))

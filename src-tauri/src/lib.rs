@@ -4106,6 +4106,17 @@ pub fn run() {
 
             // Load config
             let config = load_config();
+            if let Some(provider) = config.providers.get("codex") {
+                if provider.enabled {
+                    match hooks_configurator::reconcile_enabled_codex(provider) {
+                        Ok(true) => log::info!("[codex] repaired enabled provider hooks at startup"),
+                        Ok(false) => {}
+                        Err(error) => log::warn!(
+                            "[codex] enabled provider needs manual hooks repair: {error}"
+                        ),
+                    }
+                }
+            }
             save_config(&config).ok(); // Ensure file exists with defaults
             let startup_capsule_w = config.appearance.capsule_width as f64;
             app.manage(AppConfigState(Mutex::new(config)));
@@ -12340,6 +12351,54 @@ mod render_prometheus_tests {
     // `render_prometheus_body` output is a subset of the LP_METRICS contract.
     // 護欄核心：每次新加 emit 必須先列入 LP_METRICS const + design.md 對照表 +
     // spec.md Scenario, 否則這條 test fail 並列出「未列名 metric」清單。
+
+    #[test]
+    fn postponed_counter_migration_help_has_no_expired_removal_deadline() {
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            !body.contains("scheduled removal week 4"),
+            "POSTPONED migration must not advertise the expired removal deadline"
+        );
+        let migration = counter_migration_status();
+        assert_eq!(
+            migration.state, "POSTPONED",
+            "the selected compatibility state must remain explicit"
+        );
+        let expected_notice = format!(
+            "migration {} since {}; review {} (not a removal date)",
+            migration.state, migration.decision_date, migration.next_review_date
+        );
+        for legacy in [
+            "lobsterpulse_tokens_input",
+            "lobsterpulse_tokens_output",
+            "lobsterpulse_provider_tokens_input",
+            "lobsterpulse_provider_tokens_output",
+            "lobsterpulse_provider_failure_count",
+            "lobsterpulse_provider_session_count",
+        ] {
+            let prefix = format!("# HELP {legacy} ");
+            let help = body
+                .lines()
+                .find(|line| line.starts_with(prefix.as_str()))
+                .expect("every legacy alias must still expose a HELP line");
+            assert!(
+                help.contains(expected_notice.as_str()),
+                "manifest/HELP disagreement for {legacy}: {help}"
+            );
+        }
+    }
 
     #[test]
     fn lp_metrics_contract_size_is_47_matching_emit_paths() {

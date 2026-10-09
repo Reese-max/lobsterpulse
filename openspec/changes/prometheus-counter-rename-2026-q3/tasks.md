@@ -1,5 +1,13 @@
 # Tasks: Prometheus Counter Rename `2026-Q3` (T-1 dual-emit shim)
 
+> **Current decision: POSTPONED (2026-09-26; review 2026-10-31).** This
+> closed OpenSpec records only T-1 implementation. Required T-2 through T-5
+> successors are tracked, with blocked reasons, in
+> [`docs/metrics/counter-migration.json`](../../../docs/metrics/counter-migration.json)
+> and [issue #11](https://github.com/Reese-max/lobsterpulse/issues/11).
+> The old 2026-07-03 cutover did not happen; the review date is not a new
+> removal date.
+
 > 來源：R106 (2026-06-05) 收 closure 的 `prometheus-counter-convention` spec
 > 對齊契約 — 6 條 counter 現名 → 目標名對照表 + 影響面盤點 + 5 週時程。
 > 本 change 走 T-1 週（5 週時程第 1 週）的實作切入口，承接 R106 spec closure
@@ -30,7 +38,8 @@
 - [x] **T-PCR2: `render_prometheus_body` 6 條 counter dual-emit block** — 對齊 R-PCR2
   - 範圍：`src-tauri/src/lib.rs:2206-2267` 6 條 counter emit 區段
   - 對每條 counter：保留舊 emit block + 加新 emit block（HELP/TYPE/sample）
-  - 舊名 HELP comment 加 `# DEPRECATED: use {new_name}, scheduled removal week 4`
+  - 舊名 HELP comment originally advertised week 4; the current exporter
+    instead embeds the POSTPONED decision and review date from the manifest.
   - 樣本值同 source（從同 map / 變數讀，不重算）
   - 對應 emit 順序：tokens_input (L2223) → tokens_output (L2225) →
     provider_tokens_input (L2227) → provider_tokens_output (L2233) →
@@ -67,6 +76,7 @@
 
 - [x] **T-PCR6: 收 closure** — 對齊 K40 spec coverage 計數
   - tasks.md 4 個 [x] 全勾 + `.openspec.yaml` status=closed + phase=1/1
+    applies to T-1 only; the required successors link to the migration manifest.
   - spectra validate 4/4 通過
   - 含 commit hash + 落地驗證（cargo test --lib 0 flake + fmt + clippy clean）
   - 驗證：`grep -c "^- \[x\]" tasks.md` = 4；`.openspec.yaml` status=closed；

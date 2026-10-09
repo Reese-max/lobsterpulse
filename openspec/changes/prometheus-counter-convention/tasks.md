@@ -1,5 +1,9 @@
 # Tasks: Prometheus Counter Naming Convention (`_total` suffix)
 
+> **Historical design closure; POSTPONED on 2026-09-26.** The
+> [migration manifest](../../../docs/metrics/counter-migration.json) records
+> the current state and 2026-10-31 review. The 2026-07-03 cutover did not occur.
+
 > 來源：R105 (2026-06-05) 接力清單首位 — 6 條 counter 缺 `_total` 結尾違反
 > Prometheus naming convention。R102/R103 開 + 收 otel-provider-metrics-contract
 > closure 時，design.md「Spec drift 候選」段把這 6 條列為 follow-up，本 change

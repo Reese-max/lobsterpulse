@@ -29,7 +29,7 @@
 
 ## Build SOP（重要）
 
-**必須** `cargo tauri build --no-bundle`，不可純 `cargo build --release`（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。前置 `cargo install tauri-cli --locked`。
+**必須** `cargo tauri build --no-bundle`，不可純 `cargo build --release`（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。本次本機 source build 實際驗證並建議重現的前置為 `cargo install tauri-cli --version 2.11.4 --locked`；既有 build / release CI 仍接受 `tauri-cli@^2.0`，不宣稱所有環境都已鎖在 2.11.4。
 
 釋放 exe lock：`python -c "import os; os.replace('exe-path', 'exe-path.bak')"`（cmd.exe del 在 MSYS2 下無效）。
 

@@ -2479,6 +2479,49 @@ codex_hooks = false
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn codex_snapshot_commit_preserves_editor_save_after_comparison() {
+        let directory = tmp_settings_path("codex-editor-save-in-commit-gap");
+        std::fs::create_dir_all(&directory).expect("mkdir fixture");
+        let target = directory.join("hooks.json");
+        let candidate = directory.join("candidate.tmp");
+        let editor_temp = directory.join("editor.tmp");
+        let original = b"{\"hooks\":{\"thirdParty\":true}}";
+        let external = b"{\"hooks\":{\"userEditAfterRead\":true}}";
+        write_raw(&target, original);
+        write_raw(&candidate, b"{\"hooks\":{\"lobsterpulse\":true}}");
+        let snapshot_identity = config_file_identity(&target).expect("snapshot identity");
+
+        let error = replace_file_if_snapshot_unchanged_with(
+            &candidate,
+            &target,
+            std::str::from_utf8(original).expect("UTF-8 snapshot"),
+            &snapshot_identity,
+            || {
+                write_raw(&editor_temp, external);
+                rename_file_if_absent(&editor_temp, &target)
+            },
+        )
+        .expect_err("editor's concurrent save must win");
+
+        assert!(error.to_string().contains("prior snapshot retained at"), "{error}");
+        assert_eq!(
+            std::fs::read(&target).expect("read editor save"),
+            external,
+            "the no-clobber commit must not overwrite the external editor's new file"
+        );
+        assert!(
+            std::fs::read_dir(&directory)
+                .expect("read fixture directory")
+                .filter_map(Result::ok)
+                .any(|entry| std::fs::read(entry.path()).ok().as_deref() == Some(original.as_slice())),
+            "prior snapshot must remain recoverable when the editor wins"
+        );
+        assert!(candidate.exists(), "failed commit must retain its staged candidate");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     #[cfg(unix)]
     #[test]
     fn codex_hooks_repointed_symlink_cannot_change_install_target() {

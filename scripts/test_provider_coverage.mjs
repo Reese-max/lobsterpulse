@@ -75,3 +75,31 @@ test("quota coverage requires a successful runner and a valid observation timest
     { __local__: snapshot, irisx_bot: snapshot }, detected, now);
   assert.equal(coverage.dimensions.quotaObservable.numerator, 2);
 });
+
+
+test("future health timestamps never become live coverage or change other dimensions", () => {
+  for (const lastEvent of [now + 10, new Date((now + 10) * 1000).toISOString()]) {
+    const state = {
+      provider_totals: { codex: { events_total: 1, last_event_at: lastEvent } },
+      sessions: [{ provider: "codex" }],
+    };
+    const coverage = build(registry, enabled, state, {}, detected, now);
+    const codex = coverage.rows.find(r => r.id === "codex");
+    assert.equal(codex.live, false, String(lastEvent));
+    assert.equal(codex.eventAgeSeconds, null);
+    assert.notEqual(codex.healthStatus, "LIVE_EMITTING");
+    assert.equal(coverage.dimensions.liveEmitting.numerator, 0);
+    assert.equal(coverage.dimensions.liveEmitting.denominator, 13);
+    assert.equal(coverage.dimensions.registered.numerator, 13);
+    assert.equal(coverage.dimensions.configured.numerator, 13);
+    assert.equal(coverage.dimensions.nonzeroSessions.numerator, 1);
+    assert.equal(state.provider_totals.codex.last_event_at, lastEvent);
+  }
+  const recent = build(registry, enabled, {
+    provider_totals: { codex: { events_total: 1, last_event_at: now - 10 } },
+    sessions: [],
+  }, {}, detected, now);
+  assert.equal(recent.rows.find(r => r.id === "codex").healthStatus, "LIVE_EMITTING");
+  assert.equal(recent.rows.find(r => r.id === "codex").eventAgeSeconds, 10);
+  assert.equal(recent.dimensions.liveEmitting.numerator, 1);
+});

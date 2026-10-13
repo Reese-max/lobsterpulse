@@ -3,7 +3,8 @@
 (function (root) {
   function ageSeconds(timestamp, nowSeconds) {
     const value = typeof timestamp === "number" ? timestamp : Date.parse(timestamp) / 1000;
-    return Number.isFinite(value) && value > 0 ? Math.max(0, nowSeconds - value) : null;
+    // A future clock value cannot establish a recent observation.
+    return Number.isFinite(value) && value > 0 && value <= nowSeconds ? nowSeconds - value : null;
   }
 
   function build(registry, config, state, snapshots, detected, nowSeconds, snapshotReadAvailable = true) {

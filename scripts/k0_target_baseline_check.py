@@ -161,6 +161,7 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
         ui = (root / "src" / "index.html").read_text(encoding="utf-8")
         ui_main = (root / "src" / "main.js").read_text(encoding="utf-8")
         ui_coverage = (root / "src" / "provider-coverage.js").read_text(encoding="utf-8")
+        kpi_script = (root / "scripts" / "k0_measure.py").read_text(encoding="utf-8")
         config_rs = (root / "src-tauri" / "src" / "config.rs").read_text(encoding="utf-8")
         hook_rs = (root / "src-tauri" / "src" / "hook_server.rs").read_text(encoding="utf-8")
     except OSError as exc:
@@ -169,11 +170,32 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
         advertised_counts = [int(x) for x in re.findall(r"(?:已註冊|註冊)\s*(\d+)", content)]
         if not advertised_counts or any(x != len(ids) for x in advertised_counts):
             errors.append(f"{name}: registered count label missing or mismatched")
-        if any(x not in content for x in ("已設定", "非零 session", "quota")):
-            errors.append(f"{name}: distinct runtime coverage labels missing")
+        required_claims = (
+            "已設定", "近 24h 有事件", "非零 session", "新鮮 quota",
+            "不同", "未知", "已註冊分母", "排除",
+        )
+        if name == "README":
+            required_claims += ("不是「13 個正在監控」", "外部來源待確認")
+        else:
+            required_claims += ("不是「13 個正在監控」", "尚待 OpenAB owner 確認")
+        missing_claims = [claim for claim in required_claims if claim not in content]
+        if missing_claims:
+            errors.append(f"{name}: truthful coverage claims missing: {missing_claims}")
         if "本地可達上限 9" in content or "0 結構性差距" in content:
             errors.append(f"{name}: obsolete nine-provider or zero-gap claim")
-    if "2026-09-26 現行口徑" not in mission or "歷史紀錄：R182" not in mission:
+    current_kpi = mission.split("## 90 天成功指標（KPI）", 1)
+    current_kpi = current_kpi[1].split("### 歷史紀錄：R182", 1)[0] if len(current_kpi) == 2 else ""
+    current_claims = (
+        "2026-09-26 現行口徑", "全部 13 個已註冊 active ID", "已設定",
+        "近 24h 有事件", "非零 session", "新鮮 quota", "帶版本收據",
+        "來源中斷時標未知", "scope 變更必須新增有日期的基線",
+    )
+    if not current_kpi or any(claim not in current_kpi for claim in current_claims):
+        errors.append("MISSION: current K0 claims or denominator receipt contract drifted")
+    historical_kpi = mission.split("### 歷史紀錄：R182", 1)
+    historical_kpi = historical_kpi[1] if len(historical_kpi) == 2 else ""
+    if (not historical_kpi or "不作為現行 KPI 判定" not in historical_kpi or
+            "已由 2026-09-26 基線取代" not in historical_kpi):
         errors.append("MISSION must distinguish current and historical baselines")
     if 'id="provider-coverage"' not in ui or 'src="provider-coverage.js"' not in ui:
         errors.append("product UI coverage panel missing")
@@ -183,6 +205,14 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
                    "EXTERNAL_DEPENDENCY", "UNSUPPORTED_ON_THIS_HOST", "STALE", "NOT_CONFIGURED"):
         if marker not in ui_main + ui_coverage:
             errors.append(f"product UI status/coverage marker missing: {marker}")
+    for marker in ("已註冊", "已設定", "近 24h 有事件", "非零 session", "新鮮 quota",
+                   "registeredDenominator", "對照差距", "未知", "exclusions"):
+        if marker not in ui_main + ui_coverage:
+            errors.append(f"product UI truthful summary marker missing: {marker}")
+
+    for marker in ("registered denominator", "gap to registered", "exclusions"):
+        if marker not in kpi_script:
+            errors.append(f"KPI receipt output omits registered-scope claim: {marker}")
 
     # Restrict to the provider registry function rather than other config maps.
     config_fn = config_rs.split("fn default_providers()", 1)[-1].split("impl Default for AppConfig", 1)[0]
@@ -202,6 +232,35 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
         errors.extend(validate_receipt(receipt, registry))
         if receipt["dimensions"]["live_emitting"]["numerator"] != 0:
             errors.append("registry membership fabricated live coverage")
+
+        # Exercise the public KPI formatter against scope exclusions. A 13-ID
+        # registry with four out-of-scope IDs and two live providers must report
+        # 2/9 eligible, retain the 13-ID comparison denominator, and expose the
+        # resulting gap and exclusions instead of implying 13 supported or zero gap.
+        synthetic_registry = {**registry, "providers": [
+            {**provider, "lifecycle": "out_of_scope"}
+            if provider["id"] in ORIGINAL_EXCLUSIONS else dict(provider)
+            for provider in registry["providers"]
+        ]}
+        metrics = "".join(
+            f'lobsterpulse_provider_events_total{{provider="{pid}"}} 1\n'
+            f'lobsterpulse_provider_idle_seconds{{provider="{pid}"}} 10\n'
+            for pid in ("claude", "cicx")
+        )
+        synthetic_receipt = build_coverage_receipt(
+            metrics, parse_provider_sessions(metrics),
+            {pid: {"state": "missing"} for pid in ids}, None,
+            registry=synthetic_registry, timestamp="2026-09-26T00:00:00+0000",
+        )
+        errors.extend(validate_receipt(synthetic_receipt, synthetic_registry))
+        from k0_measure import format_coverage_dimension
+        rendered = format_coverage_dimension(
+            "live_emitting", synthetic_receipt["dimensions"]["live_emitting"])
+        if ("2/9" not in rendered or "registered denominator 13" not in rendered or
+                "gap to registered 11" not in rendered or
+                not all(pid in rendered for pid in ORIGINAL_EXCLUSIONS) or
+                "13/13" in rendered or "0 gap" in rendered):
+            errors.append("KPI formatter hides synthetic coverage denominator, gap, or exclusions")
     except (ImportError, KeyError, ValueError, TypeError) as exc:
         errors.append(f"KPI producer disagrees with registry: {exc}")
     return errors

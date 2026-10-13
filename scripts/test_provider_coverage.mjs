@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { build } = require("../src/provider-coverage.js");
+const { build, formatSummary } = require("../src/provider-coverage.js");
 const registry = JSON.parse(readFileSync(new URL("../src/provider-capabilities.json", import.meta.url), "utf8"));
 const now = 1_780_000_000;
+const permanentlyExcluded = new Set(["irisx_bot", "grokx", "lpbot", "mimo"]);
 const enabled = { providers: Object.fromEntries(registry.providers.map(p => [p.id, { enabled: true }])) };
 const detected = Object.fromEntries(registry.providers.filter(p => p.scope === "local_cli").map(p => [p.id, true]));
 
@@ -56,6 +57,30 @@ test("deprecated provider requires explicit exclusion rather than disappearing",
   assert.equal(coverage.dimensions.liveEmitting.denominator, 12);
   assert.deepEqual(coverage.dimensions.liveEmitting.exclusions,
     [{ id: "mimo", reason: "lifecycle:deprecated" }]);
+});
+
+test("13 registered, two live, four excluded keeps the registered gap explicit", () => {
+  const next = structuredClone(registry);
+  for (const provider of next.providers) {
+    if (permanentlyExcluded.has(provider.id)) provider.lifecycle = "out_of_scope";
+  }
+  const state = {
+    provider_totals: Object.fromEntries(["claude", "cicx"].map(id => [id, {
+      events_total: 1, last_event_at: new Date((now - 10) * 1000).toISOString(),
+    }])),
+    sessions: [],
+  };
+  const coverage = build(next, enabled, state, {}, detected, now);
+  const dimension = coverage.dimensions.liveEmitting;
+  assert.equal(dimension.numerator, 2);
+  assert.equal(dimension.denominator, 9);
+  assert.equal(dimension.registeredDenominator, 13);
+  assert.deepEqual(new Set(dimension.exclusions.map(item => item.id)), permanentlyExcluded);
+
+  const summary = formatSummary(coverage);
+  assert.match(summary, /已註冊 13\/13/);
+  assert.match(summary, /近 24h 有事件 2\/9（已註冊分母 13，對照差距 11）/);
+  assert.doesNotMatch(summary, /近 24h 有事件 13\/13|0 gap/);
 });
 
 test("quota coverage requires a successful runner and a valid observation timestamp", () => {

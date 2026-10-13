@@ -23,6 +23,21 @@ def empty_quota(registry):
     return {p["id"]: {"state": "missing"} for p in registry["providers"]}
 
 
+PUBLIC_CLAIM_FILES = [
+    "README.md", "MISSION.md", "docs/index.html", "src/index.html",
+    "src/main.js", "src/provider-coverage.js", "scripts/k0_measure.py",
+    "src-tauri/src/config.rs", "src-tauri/src/hook_server.rs",
+]
+
+
+def copy_public_claim_files(target_root):
+    for name in PUBLIC_CLAIM_FILES:
+        source = guard.ROOT / name
+        target = target_root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+
+
 def test_current_13_registry_and_public_claims_agree():
     registry, baselines = current()
     assert guard.validate(registry, baselines) == []
@@ -127,18 +142,28 @@ def test_historical_target_rewrite_and_receipt_mismatch_fail():
 
 def test_readme_mismatch_fails(tmp_path):
     registry, baselines = current()
-    files = ["README.md", "MISSION.md", "docs/index.html", "src/index.html",
-             "src/main.js", "src/provider-coverage.js", "src-tauri/src/config.rs",
-             "src-tauri/src/hook_server.rs"]
-    for name in files:
-        source = guard.ROOT / name
-        target = tmp_path / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+    copy_public_claim_files(tmp_path)
     readme = tmp_path / "README.md"
     readme.write_text(readme.read_text(encoding="utf-8").replace("註冊 13", "註冊 12"),
                       encoding="utf-8")
     assert any("README: registered count" in e for e in guard.validate(registry, baselines, root=tmp_path))
+
+
+@pytest.mark.parametrize("filename,old,new,error", [
+    ("README.md", "不是「13 個正在監控」", "就是「13 個正在監控」", "README: truthful coverage claims"),
+    ("docs/index.html", "不是「13 個正在監控」", "已是「13 個正在監控」", "website: truthful coverage claims"),
+    ("MISSION.md", "全部 13 個已註冊 active ID", "全部 9 個已註冊 active ID", "MISSION: current K0 claims"),
+    ("src/provider-coverage.js", "對照差距", "已監控", "product UI truthful summary marker"),
+    ("scripts/k0_measure.py", "gap to registered", "unlabeled gap", "KPI receipt output omits"),
+])
+def test_claim_surface_drift_fails(tmp_path, filename, old, new, error):
+    registry, baselines = current()
+    copy_public_claim_files(tmp_path)
+    path = tmp_path / filename
+    content = path.read_text(encoding="utf-8")
+    assert old in content
+    path.write_text(content.replace(old, new, 1), encoding="utf-8")
+    assert any(error in message for message in guard.validate(registry, baselines, root=tmp_path))
 
 
 def test_review_metrics_outage_is_unknown(tmp_path, monkeypatch, capsys):

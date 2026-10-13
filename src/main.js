@@ -80,15 +80,7 @@ async function renderProviderCoverage() {
       providerCoverageDetected, Date.now() / 1000,
       window.__quotaSnapshotReadAvailable === true,
     );
-    const labels = [
-      ["已註冊", "registered"], ["已設定", "configured"],
-      ["近 24h 有事件", "liveEmitting"], ["非零 session", "nonzeroSessions"],
-      ["新鮮 quota", "quotaObservable"],
-    ];
-    const counts = labels.map(([name, key]) => {
-      const d = coverage.dimensions[key];
-      return `${name} ${d.numerator === null ? "未知" : d.numerator}/${d.denominator}`;
-    }).join(" · ");
+    const counts = window.ProviderCoverage.formatSummary(coverage);
     const states = {
       LIVE_EMITTING: "近 24h 有事件", FRESH: "新鮮", STALE: "過期",
       NOT_CONFIGURED: "未設定", NOT_MONITORED: "未監控",

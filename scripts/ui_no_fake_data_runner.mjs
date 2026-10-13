@@ -244,7 +244,9 @@ async function installMockTauri(page) {
 }
 
 async function openScenario(browser, scenario) {
+  console.log(`[ui-no-fake-data] scenario ${scenario}`);
   const page = await browser.newPage({ viewport: { width: 390, height: 720 } });
+  page.setDefaultTimeout(10_000);
   await installMockTauri(page);
   await page.goto(appUrl(scenario));
   await page.waitForSelector("#capsule-project");
@@ -268,10 +270,10 @@ async function run() {
 
     {
       const page = await openScenario(browser, "idleOnly");
-      await page.waitForFunction(() => document.querySelector("#capsule-status")?.textContent.includes("尚無執行中"));
+      await page.waitForFunction(() => document.querySelector('.session-row[data-id="idle-1"]'));
       assert.equal(await page.locator("#capsule-icons .provider-icon").count(), 0, "idle-only state must not synthesize an active provider icon");
-      assert.match(await page.locator("#capsule-project").innerText(), /龍蝦監控|LobsterPulse/);
-      assert.match(await page.locator("#capsule-status").innerText(), /尚無執行中/);
+      assert.equal(await page.locator("#capsule-project").innerText(), "額度監控", "capsule uses the current app name");
+      assert.equal(await page.locator("#capsule-status").innerText(), "", "idle capsule retains the current brand-only contract");
       await page.close();
     }
 
@@ -314,12 +316,11 @@ async function run() {
 
     {
       const page = await openScenario(browser, "staleQuota");
-      await page.waitForFunction(() => document.querySelectorAll(".quota-runner.stale").length === 1);
-      assert.equal(await page.locator(".quota-runner.stale").count(), 1, "stale quota runner should be visibly downgraded");
-      assert.match(await page.locator(".quota-runner-stale").innerText(), /舊/);
-      assert.equal(await page.locator(".quota-runner.stale .percent-value").count(), 0, "stale quota must not show fresh percent ring");
-      const cls = await page.locator(".quota-runner.stale").first().getAttribute("class");
-      assert.ok(!/\bcrit\b|\bwarn\b/.test(cls || ""), `stale quota must not carry fresh severity class, got ${cls}`);
+      await page.waitForFunction(() => document.querySelectorAll(".quota-card.stale").length === 1);
+      assert.equal(await page.locator(".quota-card.stale").count(), 1, "stale quota runner should be visibly downgraded");
+      assert.match(await page.locator(".qc-stale-badge").innerText(), /舊/);
+      assert.equal(await page.locator(".quota-card.stale .qc-window.qc-warn").count(), 0, "stale quota must not show a fresh-data low-quota warning");
+      assert.doesNotMatch(await page.locator(".quota-card.stale").innerText(), /🔥/, "stale quota must not show a fresh-data fire badge");
       const capsuleClass = await page.locator("#capsule-quota").getAttribute("class");
       assert.match(capsuleClass || "", /\bhidden\b/, "stale quota must not show a capsule percent alert");
       await page.close();
@@ -327,19 +328,18 @@ async function run() {
 
     {
       const page = await openScenario(browser, "freshQuota");
-      await page.waitForFunction(() => document.querySelectorAll(".quota-runner .percent-value").length === 1);
-      assert.equal(await page.locator(".quota-runner.stale").count(), 0, "fresh quota must not be downgraded");
-      assert.match(await page.locator(".quota-runner .percent-value").innerText(), /7/);
-      assert.match(await page.locator(".quota-runner").first().getAttribute("class"), /\bcrit\b/);
+      await page.waitForFunction(() => document.querySelectorAll('.quota-card[data-provider="claude"] .qc-window').length === 1);
+      assert.equal(await page.locator(".quota-card.stale").count(), 0, "fresh quota must not be downgraded");
+      assert.match(await page.locator(".quota-card .qc-window-meta").innerText(), /7% left/);
+      assert.equal(await page.locator(".quota-card .qc-window.qc-warn").count(), 1, "fresh low quota retains its warning");
       await page.close();
     }
 
     {
       const page = await openScenario(browser, "nullQuotaText");
-      await page.waitForFunction(() => document.querySelectorAll(".quota-runner").length === 1);
-      assert.doesNotMatch(await page.locator(".quota-runner").innerText(), /null/i, "missing local quota must not render null literal");
-      assert.match(await page.locator(".quota-runner").innerText(), /--/, "missing local quota should render as unavailable");
-      assert.equal(await page.locator(".quota-runner .percent-value").count(), 0, "missing local quota must not render a fake percent ring");
+      await page.waitForFunction(() => document.querySelector("#quota-bar")?.textContent.includes("暫無 quota 資料"));
+      assert.doesNotMatch(await page.locator("#quota-bar").innerText(), /null/i, "missing local quota must not render null literal");
+      assert.equal(await page.locator(".quota-card").count(), 0, "missing local quota must not render a fabricated quota card");
       assert.match(await page.locator("#capsule-quota").getAttribute("class"), /\bhidden\b/, "missing local quota must not show capsule alert");
       await page.close();
     }
@@ -356,19 +356,19 @@ async function run() {
 
     {
       const page = await openScenario(browser, "openabQuota");
-      await page.waitForFunction(() => document.querySelectorAll(".quota-runner .percent-value").length === 1);
+      await page.waitForFunction(() => document.querySelectorAll('.quota-card[data-provider="claude"] .qc-window').length === 1);
       assert.match(await page.locator(".quota-section-title").innerText(), /OpenAB 額度/);
-      assert.match(await page.locator(".quota-runner .percent-value").innerText(), /7/);
-      await page.waitForFunction(() => !document.querySelector("#capsule-quota")?.classList.contains("hidden"));
-      assert.match(await page.locator("#capsule-quota").innerText(), /7%/);
-      assert.equal(await page.locator("#capsule-quota").getAttribute("data-provider"), "claude");
+      assert.match(await page.locator(".quota-card .qc-window-meta").innerText(), /7% left/);
+      assert.match(await page.locator("#capsule-quota").getAttribute("class"), /\bhidden\b/, "brand-only capsule keeps OpenAB quota details in the expanded panel");
+      assert.equal(await page.locator("#capsule-icons .provider-icon").count(), 0);
       await page.close();
     }
 
     {
       const page = await openScenario(browser, "unknown");
-      const icon = page.locator("#capsule-icons .provider-icon").first();
-      await page.waitForFunction(() => document.querySelectorAll("#capsule-icons .provider-icon").length === 1);
+      const icon = page.locator('.session-row[data-id="mystery-1"] .provider-icon');
+      await page.waitForFunction(() => document.querySelector('.session-row[data-id="mystery-1"] .provider-icon'));
+      assert.equal(await page.locator("#capsule-icons .provider-icon").count(), 0, "active sessions do not restore retired capsule icons");
       assert.equal(await icon.getAttribute("data-provider"), "mystery_provider");
       assert.equal(await icon.evaluate((el) => getComputedStyle(el).color), "rgb(136, 136, 136)");
       assert.equal(await icon.locator("path").count(), 1, "unknown icon should use question-mark path, not Claude logo");

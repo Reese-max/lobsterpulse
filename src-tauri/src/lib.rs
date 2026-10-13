@@ -35,6 +35,23 @@ struct AppSessionManager(Mutex<SessionManager>);
 struct AppConfigState(Mutex<AppConfig>);
 static LOCAL_USAGE_RUNNERS_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
+#[derive(serde::Deserialize)]
+struct CounterMigrationStatus {
+    state: String,
+    decision_date: String,
+    next_review_date: String,
+}
+
+// Embed the reviewed migration decision in the binary so /metrics and the
+// repository manifest cannot disagree after a release is built.
+fn counter_migration_status() -> &'static CounterMigrationStatus {
+    static STATUS: std::sync::OnceLock<CounterMigrationStatus> = std::sync::OnceLock::new();
+    STATUS.get_or_init(|| {
+        serde_json::from_str(include_str!("../../docs/metrics/counter-migration.json"))
+            .expect("counter migration manifest must be valid JSON")
+    })
+}
+
 /// R100 提取：OpenAB bot id 列表單一 source of truth。
 ///
 /// 驅動 `read_usage_snapshots_with_home` + `collect_quota_snapshot_mtimes` 兩個 fn
@@ -79,7 +96,7 @@ pub const OPENAB_BOT_IDS: &[&str] = &[
 /// 7. Event / process accounting（9 條：events_total / event_type_total /
 ///    sessions_by_state / discord health 三條 / hook health 三條）
 ///
-/// 計 41 條 = 護欄 test 集合大小下界。
+/// 計 41 條原始契約 + 6 條 POSTPONED 相容別名 = 47 條。
 ///
 /// R103 對齊筆記：R102 開工時只盤到當時 emit 過的 26 條；R46 (event_type_total)、
 /// R44 (sessions_by_state)、R47 (idle_ratio / max_session_age)、
@@ -3171,17 +3188,23 @@ fn render_prometheus_body(
             "lobsterpulse_provider_active{{provider=\"{p}\"}} {c}\n"
         ));
     }
-    // R113 T-1 dual-emit (對齊 R106 spec 對齊契約 5 週時程 T-1 週): 舊名加
-    // # DEPRECATED comment 標 owner 切換日, 新名加入 (T-4 切換日後舊條移除)
-    out.push_str("# HELP lobsterpulse_tokens_input Lifetime input tokens across all providers (DEPRECATED: use lobsterpulse_tokens_input_total, scheduled removal week 4)\n# TYPE lobsterpulse_tokens_input counter\n");
+    // The six legacy names remain available while the owner inventory is unknown.
+    // HELP gives scrape operators the embedded decision and review date without
+    // adding another metric family or changing any sample values.
+    let migration = counter_migration_status();
+    let migration_notice = format!(
+        "migration {} since {}; review {} (not a removal date)",
+        migration.state, migration.decision_date, migration.next_review_date
+    );
+    out.push_str(&format!("# HELP lobsterpulse_tokens_input Lifetime input tokens across all providers (DEPRECATED: use lobsterpulse_tokens_input_total; {migration_notice})\n# TYPE lobsterpulse_tokens_input counter\n"));
     out.push_str(&format!("lobsterpulse_tokens_input {tot_in}\n"));
     out.push_str("# HELP lobsterpulse_tokens_input_total Lifetime input tokens across all providers\n# TYPE lobsterpulse_tokens_input_total counter\n");
     out.push_str(&format!("lobsterpulse_tokens_input_total {tot_in}\n"));
-    out.push_str("# HELP lobsterpulse_tokens_output Lifetime output tokens across all providers (DEPRECATED: use lobsterpulse_tokens_output_total, scheduled removal week 4)\n# TYPE lobsterpulse_tokens_output counter\n");
+    out.push_str(&format!("# HELP lobsterpulse_tokens_output Lifetime output tokens across all providers (DEPRECATED: use lobsterpulse_tokens_output_total; {migration_notice})\n# TYPE lobsterpulse_tokens_output counter\n"));
     out.push_str(&format!("lobsterpulse_tokens_output {tot_out}\n"));
     out.push_str("# HELP lobsterpulse_tokens_output_total Lifetime output tokens across all providers\n# TYPE lobsterpulse_tokens_output_total counter\n");
     out.push_str(&format!("lobsterpulse_tokens_output_total {tot_out}\n"));
-    out.push_str("# HELP lobsterpulse_provider_tokens_input Lifetime input tokens per provider (DEPRECATED: use lobsterpulse_provider_tokens_input_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_tokens_input counter\n");
+    out.push_str(&format!("# HELP lobsterpulse_provider_tokens_input Lifetime input tokens per provider (DEPRECATED: use lobsterpulse_provider_tokens_input_total; {migration_notice})\n# TYPE lobsterpulse_provider_tokens_input counter\n"));
     for (p, n) in &provider_in_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_tokens_input{{provider=\"{p}\"}} {n}\n"
@@ -3193,7 +3216,7 @@ fn render_prometheus_body(
             "lobsterpulse_provider_tokens_input_total{{provider=\"{p}\"}} {n}\n"
         ));
     }
-    out.push_str("# HELP lobsterpulse_provider_tokens_output Lifetime output tokens per provider (DEPRECATED: use lobsterpulse_provider_tokens_output_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_tokens_output counter\n");
+    out.push_str(&format!("# HELP lobsterpulse_provider_tokens_output Lifetime output tokens per provider (DEPRECATED: use lobsterpulse_provider_tokens_output_total; {migration_notice})\n# TYPE lobsterpulse_provider_tokens_output counter\n"));
     for (p, n) in &provider_out_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_tokens_output{{provider=\"{p}\"}} {n}\n"
@@ -3209,7 +3232,7 @@ fn render_prometheus_body(
     // `failure_count` 來源是 `ProviderTotals`，由 `bump_provider_totals` 在
     // `PostToolUseFailure` 事件時 `+= 1` 累加；不依賴 live session（失敗事件
     // 之後 session 仍會轉 idle/移除，但累計保留在 ProviderTotals 不蒸發）。
-    out.push_str("# HELP lobsterpulse_provider_failure_count Lifetime tool/post failure count per provider (DEPRECATED: use lobsterpulse_provider_failure_count_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_failure_count counter\n");
+    out.push_str(&format!("# HELP lobsterpulse_provider_failure_count Lifetime tool/post failure count per provider (DEPRECATED: use lobsterpulse_provider_failure_count_total; {migration_notice})\n# TYPE lobsterpulse_provider_failure_count counter\n"));
     for (p, n) in &provider_fail_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_failure_count{{provider=\"{p}\"}} {n}\n"
@@ -3234,7 +3257,7 @@ fn render_prometheus_body(
     // 跟 K6/K7 lifetime aggregate 對齊：counter 類型，session 結束 / stale 回收後
     // live 為 0，但 ProviderTotals.session_count 仍保留 → metric 反映歷史累計。
     // 差異化 `lobsterpulse_provider_sessions`（live）：本 metric 顯示「曾經開過」總量。
-    out.push_str("# HELP lobsterpulse_provider_session_count Lifetime session count per provider (DEPRECATED: use lobsterpulse_provider_session_count_total, scheduled removal week 4)\n# TYPE lobsterpulse_provider_session_count counter\n");
+    out.push_str(&format!("# HELP lobsterpulse_provider_session_count Lifetime session count per provider (DEPRECATED: use lobsterpulse_provider_session_count_total; {migration_notice})\n# TYPE lobsterpulse_provider_session_count counter\n"));
     for (p, n) in &provider_session_count_sorted {
         out.push_str(&format!(
             "lobsterpulse_provider_session_count{{provider=\"{p}\"}} {n}\n"
@@ -12330,6 +12353,54 @@ mod render_prometheus_tests {
     // spec.md Scenario, 否則這條 test fail 並列出「未列名 metric」清單。
 
     #[test]
+    fn postponed_counter_migration_help_has_no_expired_removal_deadline() {
+        let body = render_prometheus_body(
+            &[],
+            0,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            None,
+            &HashMap::new(),
+            &discord::DiscordHealth::default(),
+            hook_server::HookServerMetrics::default(),
+            Utc::now(),
+        );
+        assert!(
+            !body.contains("scheduled removal week 4"),
+            "POSTPONED migration must not advertise the expired removal deadline"
+        );
+        let migration = counter_migration_status();
+        assert_eq!(
+            migration.state, "POSTPONED",
+            "the selected compatibility state must remain explicit"
+        );
+        let expected_notice = format!(
+            "migration {} since {}; review {} (not a removal date)",
+            migration.state, migration.decision_date, migration.next_review_date
+        );
+        for legacy in [
+            "lobsterpulse_tokens_input",
+            "lobsterpulse_tokens_output",
+            "lobsterpulse_provider_tokens_input",
+            "lobsterpulse_provider_tokens_output",
+            "lobsterpulse_provider_failure_count",
+            "lobsterpulse_provider_session_count",
+        ] {
+            let prefix = format!("# HELP {legacy} ");
+            let help = body
+                .lines()
+                .find(|line| line.starts_with(prefix.as_str()))
+                .expect("every legacy alias must still expose a HELP line");
+            assert!(
+                help.contains(expected_notice.as_str()),
+                "manifest/HELP disagreement for {legacy}: {help}"
+            );
+        }
+    }
+
+    #[test]
     fn lp_metrics_contract_size_is_47_matching_emit_paths() {
         // 7 段分組對齊 design.md: R103 41 條 + R113 T-1 dual-emit 6 條新 _total 名
         // = 4 + 8 + 4 + 7 + 14 + 1 + 9 = 47 (T-4 切換日後回到 41, 見
@@ -12673,7 +12744,8 @@ mod render_prometheus_tests {
     /// SSoT 迭代), 若新 provider 的 render path 漏 emit 對應 label, 本 test 會
     /// fail 列出「漏 X 條」+ 反向 sanity check 確保不是空 body 偽綠。
     #[test]
-    fn render_prometheus_body_per_provider_emit_covers_all_13_known_providers() {
+    fn postponed_counter_migration_preserves_values_for_all_13_providers() {
+        assert_eq!(hook_server::KNOWN_PROVIDERS.len(), 13);
         let mut totals = HashMap::<String, ProviderTotals>::new();
         let mut sessions = Vec::with_capacity(hook_server::KNOWN_PROVIDERS.len());
         for (idx, provider) in hook_server::KNOWN_PROVIDERS.iter().enumerate() {
@@ -12711,6 +12783,53 @@ mod render_prometheus_tests {
             hook_server::HookServerMetrics::default(),
             Utc::now(),
         );
+
+        let migration = counter_migration_status();
+        assert_eq!(migration.state, "POSTPONED");
+        assert_eq!(migration.decision_date, "2026-09-26");
+        assert_eq!(migration.next_review_date, "2026-10-31");
+        assert!(body.contains("migration POSTPONED since 2026-09-26; review 2026-10-31"));
+        assert!(!body.contains("scheduled removal"));
+        assert!(body.contains("lobsterpulse_tokens_input_total 9100\n"));
+        assert!(body.contains("lobsterpulse_tokens_output_total 4550\n"));
+        assert!(body.contains("lobsterpulse_tokens_input 9100\n"));
+        assert!(body.contains("lobsterpulse_tokens_output 4550\n"));
+
+        for (idx, provider) in hook_server::KNOWN_PROVIDERS.iter().enumerate() {
+            let i = idx as u64 + 1;
+            for (legacy, canonical, value) in [
+                (
+                    "lobsterpulse_provider_tokens_input",
+                    "lobsterpulse_provider_tokens_input_total",
+                    i * 100,
+                ),
+                (
+                    "lobsterpulse_provider_tokens_output",
+                    "lobsterpulse_provider_tokens_output_total",
+                    i * 50,
+                ),
+                (
+                    "lobsterpulse_provider_failure_count",
+                    "lobsterpulse_provider_failure_count_total",
+                    idx as u64,
+                ),
+                (
+                    "lobsterpulse_provider_session_count",
+                    "lobsterpulse_provider_session_count_total",
+                    i * 3,
+                ),
+            ] {
+                let label = format!("{{provider=\"{provider}\"}} {value}\n");
+                assert!(
+                    body.contains(&format!("{canonical}{label}")),
+                    "missing canonical value for {provider}: {canonical}"
+                );
+                assert!(
+                    body.contains(&format!("{legacy}{label}")),
+                    "dual-emit value drift for {provider}: {legacy}"
+                );
+            }
+        }
 
         // 對 13 provider × 5 metric family 全部斷言 emit
         let mut missing: Vec<String> = Vec::new();

@@ -1,0 +1,10 @@
+{
+  "repo": "Reese-max/lobsterpulse",
+  "issue": 6,
+  "base_sha": "41e09eb922a37323c30878323bfea955712e2a55",
+  "candidate_sha": "2752b1b04b70169bccab5a5bef9fffae69c84bb1",
+  "reviewer": "fresh-issue-loop-reviewer",
+  "read_only": true,
+  "status": "pass",
+  "findings": []
+}

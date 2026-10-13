@@ -2517,7 +2517,17 @@ async function renderProviders() {
         await saveConfig();
         renderProviderCoverage();
       } else if (cb.checked) {
-        try { await invoke("install_provider_hooks", { providerId: pid }); } catch (e) {}
+        try {
+          await invoke("install_provider_hooks", { providerId: pid });
+        } catch (e) {
+          // Backend installs fail closed (for example on malformed Codex TOML).
+          // Keep the checkbox aligned with the persisted state so the UI cannot
+          // claim monitoring is enabled when the hook/config write did not finish.
+          cb.checked = !!p.enabled;
+          console.warn(`[provider] install_provider_hooks failed for ${pid}:`, e);
+          alert(`啟用 ${cleanProviderName(p.name)} 監控失敗，監控未啟用：${e}`);
+          return;
+        }
         appConfig = await invoke("get_config");
         appConfig.setup_done = true; saveConfig();
         renderProviderCoverage();

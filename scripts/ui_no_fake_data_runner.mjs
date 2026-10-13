@@ -78,6 +78,12 @@ async function installMockTauri(page) {
     const freshTs = now - 30;
     const calls = [];
     const config = JSON.parse(JSON.stringify(window.__LP_TEST_CONFIG__));
+    if (scenario === "codexInstallFailure") {
+      config.providers.codex.enabled = false;
+      config.providers.codex.settings_path = "~/.codex/hooks.json";
+    }
+    window.__lpAlerts = [];
+    window.alert = (message) => window.__lpAlerts.push(String(message));
     const baseState = {
       active_session: null,
       sessions: [],
@@ -141,6 +147,10 @@ async function installMockTauri(page) {
     const handlers = {
       get_config: () => config,
       save_app_config: ({ newConfig }) => Object.assign(config, newConfig),
+      install_provider_hooks: () => {
+        if (scenario === "codexInstallFailure") throw new Error("mock Codex install rejected");
+        config.providers.codex.enabled = true;
+      },
       get_server_port: () => 19280,
       get_state: () => {
         if (scenario === "stateFailure") throw new Error("mock get_state unavailable");
@@ -256,6 +266,25 @@ async function openScenario(browser, scenario) {
 async function run() {
   const browser = await chromium.launch();
   try {
+    {
+      const page = await openScenario(browser, "codexInstallFailure");
+      await page.evaluate(async () => {
+        window.showView("settings");
+        await window.renderProviders();
+      });
+      const codexToggle = page.locator('.provider-check[data-provider="codex"]');
+      await codexToggle.waitFor();
+      assert.equal(await codexToggle.isChecked(), false, "Codex starts disabled in the install-failure fixture");
+      await codexToggle.click();
+      await page.waitForFunction(() => window.__lpAlerts.length === 1);
+      assert.equal(await codexToggle.isChecked(), false, "failed Codex setup must roll back the checked state");
+      assert.match(await page.evaluate(() => window.__lpAlerts[0]), /監控未啟用/);
+      const config = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke("get_config"));
+      assert.equal(config.providers.codex.enabled, false, "failed Codex setup must leave persisted monitoring disabled");
+      assert.equal(await page.evaluate(() => window.__lpMockCalls.filter((cmd) => cmd === "install_provider_hooks").length), 1);
+      await page.close();
+    }
+
     {
       const page = await openScenario(browser, "empty");
       assert.equal(await page.locator("#capsule-icons .provider-icon").count(), 0, "empty capsule must not synthesize provider icons");

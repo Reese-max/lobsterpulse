@@ -1,5 +1,9 @@
 # Proposal: Prometheus Counter Naming Convention (`_total` suffix)
 
+> **Historical proposal, superseded by POSTPONED on 2026-09-26.** See the
+> [migration manifest](../../../docs/metrics/counter-migration.json) for the
+> current contract and 2026-10-31 review. The 2026-07-03 cutover did not occur.
+
 ## Goal
 
 把 LobsterPulse 現有 **6 條** TYPE=counter 但**缺 `_total` 結尾**的 `lobsterpulse_*`

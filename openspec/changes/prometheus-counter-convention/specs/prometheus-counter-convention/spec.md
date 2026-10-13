@@ -1,5 +1,10 @@
 # Spec: Prometheus Counter Naming Convention (`_total` suffix)
 
+> **Historical convention spec, superseded by POSTPONED on 2026-09-26.** See
+> the [migration manifest](../../../../../docs/metrics/counter-migration.json)
+> for the current contract and 2026-10-31 review. The 2026-07-03 cutover did
+> not occur.
+
 > Delta spec for change `prometheus-counter-convention`. Source of truth
 > for the 6 `lobsterpulse_*` counter-typed metrics that currently lack
 > the `_total` suffix required by Prometheus naming convention

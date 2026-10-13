@@ -322,20 +322,10 @@ mod tests {
         // 先建立檔案，才能以 read-only 開啟
         File::create(&path).unwrap();
         let mut ro = OpenOptions::new().read(true).open(&path).unwrap();
-        let err = write_csv_row(&mut ro, 1_700_000_000, "cicx", 50).unwrap_err();
-        // 不鎖特定 kind（不同 OS 回的 kind 不同：Windows BadFileDesc、Unix InvalidInput/Other），
+        // 不鎖特定 kind（映射依 OS / Rust 版本而異），
         // 只要是 io::Error 就代表 caller 不會誤把這列算進 `written`。
-        let k = err.kind();
-        assert!(
-            matches!(
-                k,
-                std::io::ErrorKind::InvalidInput
-                    | std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::PermissionDenied
-                    | std::io::ErrorKind::Other
-            ),
-            "read-only 檔寫入應回 io::Error，實際 kind={k:?}"
-        );
+        write_csv_row(&mut ro, 1_700_000_000, "cicx", 50)
+            .expect_err("read-only 檔寫入應回 io::Error");
         drop(ro);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

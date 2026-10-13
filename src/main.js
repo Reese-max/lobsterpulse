@@ -1831,8 +1831,8 @@ function qcSetCollapsed(name, v) {
   } catch (_) { /* localStorage 不可用時收合僅存活於當次 render */ }
 }
 
-function renderQcWindow(w) {
-  const warn = w.remainPct < 20;
+function renderQcWindow(w, { stale = false } = {}) {
+  const warn = !stale && w.remainPct < 20;
   const reset = w.resetText ? `Resets in ${w.resetText}` : "—";
   return `
     <div class="qc-window${warn ? " qc-warn" : ""}">
@@ -1888,7 +1888,7 @@ function renderQuotaCard(card, { stale = false } = {}) {
       <span class="qc-title">${titleText}</span>${basis}${staleBadge}${sub}
       <span class="qc-chevron">▾</span>
     </div>
-    ${windows.map(renderQcWindow).join("")}
+    ${windows.map(w => renderQcWindow(w, { stale })).join("")}
     ${spark}
   </div>`;
 }

@@ -24,7 +24,7 @@
       <div class="nav-links">
         <a href="#features">功能</a>
         <a href="#workflow">工作流</a>
-        <a href="#download">下載</a>
+        <a href="#download">安裝</a>
         <a href="#repo">維護</a>
       </div>
     </div>
@@ -46,11 +46,11 @@
           還有需要時才打開的 Gemini，集中在同一個浮動膠囊裡，用繁中介面、橘色品牌與你的工作習慣做預設。
         </p>
         <div class="cta">
-          <a class="btn btn-primary" href="#download">看下載區塊</a>
+          <a class="btn btn-primary" href="#download">看原始碼安裝</a>
           <a class="btn btn-secondary" href="#workflow">看預設工作流</a>
         </div>
         <div class="cta-secondary">
-          <span class="dl-version-label">版本：<strong>v0.2.2</strong></span>
+          <span class="dl-version-label">版本：<strong>v0.5.4</strong></span>
           <span class="cta-sep">·</span>
           <span class="link-subtle">品牌：<code>龍蝦監控 / LobsterPulse</code></span>
           <span class="cta-sep">·</span>
@@ -72,8 +72,8 @@
             <span><code>lobsterpulse</code> 設定與 runtime 路徑</span>
           </div>
           <div class="metric-card">
-            <strong>已驗證</strong>
-            <span>release build 與啟動流程</span>
+            <strong>可驗證</strong>
+            <span>source build、產物與 hash</span>
           </div>
         </div>
       </div>
@@ -186,42 +186,72 @@
 
   <section id="download">
     <div class="container">
-      <h2>下載與產物</h2>
-      <p class="section-lede">這份分支目前以你本機的 release 產物和可再生 bundle 資產為主，不再依賴 upstream release。</p>
+      <h2>安裝與產物</h2>
+      <p class="section-lede">
+        版本：<code>v0.5.4</code>。這個 repository 目前沒有可供安裝者下載的已發佈
+        bundle 或 installer；以下只記錄可驗證的原始碼建置。這是 repository 現況，
+        不代替 Owner 的發行方式決策，也不會建立 tag、release 或 installer。
+      </p>
 
       <div class="download-grid">
         <article class="download-card featured">
-          <div class="download-badge success">已驗證</div>
-          <h3>Windows 桌面版</h3>
-          <p>主程式和 hook sidecar 已經一起重建，現在這兩個檔案就是你自己的交付入口。</p>
-          <pre><code>src-tauri\target\release\lobster-pulse.exe
-src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
+          <div class="download-badge">Windows 11</div>
+          <h3>前置需求與建置</h3>
+          <p>
+            需要 Rust <code>1.77.2+</code> 的 MSVC toolchain、Visual Studio Build Tools
+            2022（Desktop development with C++、MSVC x64/x86、Windows SDK）與
+            Microsoft Edge WebView2 Runtime。Node.js 只用於 <code>npm test</code>。
+          </p>
+          <pre><code>cargo install tauri-cli --version 2.11.4 --locked
+cargo tauri build --no-bundle</code></pre>
+          <p class="download-note">
+            兩個命令都由 repository root 執行。<code>--locked</code> 不會自行固定 CLI
+            release；必須保留 <code>--version 2.11.4</code>。這是本次本機 source build
+            實際驗證並建議重現的版本；既有 build / release CI 仍使用
+            <code>tauri-cli@^2.0</code>，不代表全環境已鎖在 2.11.4。
+          </p>
           <div class="download-meta">
-            <span>同層放置</span>
-            <span>桌面浮動膠囊</span>
-            <span>繁中 UI</span>
+            <span>MSVC toolchain</span>
+            <span>Windows SDK</span>
+            <span>WebView2</span>
           </div>
         </article>
 
         <article class="download-card">
-          <div class="download-badge">已同步</div>
-          <h3>Bundle icon 資產包</h3>
-          <p>現在不只 Windows icon，連 macOS、iOS、Android 那批 bundle icon 也會跟主視覺同步重生。</p>
-          <pre><code>src-tauri\icons\icon.icns
-src-tauri\icons\ios\
-src-tauri\icons\android\</code></pre>
-          <p class="download-note">由 <code>scripts\generate_brand_assets.ps1</code> 內建呼叫 Tauri icon 生成器完成。</p>
+          <div class="download-badge">Windows 產物</div>
+          <h3>存在性與 SHA-256</h3>
+          <pre><code>src-tauri\target\release\lobster-pulse.exe
+src-tauri\target\release\lobster-pulse-hook.exe
+
+Get-FileHash -Algorithm SHA256 -LiteralPath @(
+  '.\src-tauri\target\release\lobster-pulse.exe',
+  '.\src-tauri\target\release\lobster-pulse-hook.exe'
+)</code></pre>
+          <p class="download-note">
+            主程式與 sidecar 必須保留在同一目錄。這些 hash 只驗證本機 build；
+            release workflow 目前沒有建立 checksum manifest。
+          </p>
         </article>
 
         <article class="download-card">
-          <div class="download-badge">可重建</div>
-          <h3>原始碼建置</h3>
-          <p>如果你之後要打新的 release 或 bundle，直接從 repo 內重建，不需要回頭依賴上游產物。</p>
-          <p class="download-note">⚠️ <strong>release 必須走 <code>cargo tauri build --no-bundle</code></strong>，不可純 <code>cargo build --release</code>（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。前置 <code>cargo install tauri-cli --locked</code>。</p>
-          <pre><code>cd src-tauri
-cargo tauri build --no-bundle    # 快速驗證：exe + embed frontend，無 installer
-cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage（需 tauri-cli）</code></pre>
-          <p class="download-note">三方對齊 <code>README.md</code> + <code>CLAUDE.md</code>「Build SOP（重要）」段 + <code>build.sh</code>。</p>
+          <div class="download-badge">macOS / Linux</div>
+          <h3>平台分開核對</h3>
+          <p>
+            macOS 需要 Xcode Command Line Tools；Linux 需要發行版對應的 WebKitGTK 與
+            Tauri 系統開發套件。完整清單見
+            <a href="https://v2.tauri.app/start/prerequisites/">Tauri v2 prerequisites</a>。
+          </p>
+          <pre><code>src-tauri/target/release/lobster-pulse
+src-tauri/target/release/lobster-pulse-hook
+
+# macOS
+shasum -a 256 src-tauri/target/release/lobster-pulse \
+  src-tauri/target/release/lobster-pulse-hook
+
+# Linux
+sha256sum src-tauri/target/release/lobster-pulse \
+  src-tauri/target/release/lobster-pulse-hook</code></pre>
+          <p class="download-note">不要把 Windows <code>.exe</code> 路徑混入這兩個平台的命令。</p>
         </article>
       </div>
     </div>
@@ -229,28 +259,38 @@ cargo tauri build                 # 完整 installer：.msi / .deb / .AppImage�
 
   <section id="install">
     <div class="container">
-      <h2>建置與啟動</h2>
-      <p class="section-lede">這三個入口對應你最常用的維護節點：跑程式、重生資產、打 bundle。</p>
+      <h2>驗證邊界</h2>
+      <p class="section-lede">
+        build 成功只證明 source candidate 能產生 frontend 已嵌入的二進位；不等於
+        桌面 runtime、hook 寫入、自動啟動或 installer 已驗收。
+      </p>
 
       <div class="install-grid">
         <div class="install-card">
-          <h3>直接跑 release 產物</h3>
-          <pre><code>src-tauri\target\release\lobster-pulse.exe
-src-tauri\target\release\lobster-pulse-hook.exe</code></pre>
-          <p class="install-note">兩個檔案要放在同一層，主程式會用相鄰路徑找到 sidecar。</p>
+          <h3>必用 Tauri build</h3>
+          <pre><code>cargo tauri build --no-bundle</code></pre>
+          <p class="install-note">
+            不可以 <code>cargo build --release</code> 代替；後者不執行 Tauri frontend
+            embedding，release webview 可能回退到 dev URL。
+          </p>
         </div>
 
         <div class="install-card">
-          <h3>重生品牌資產</h3>
-          <pre><code>.\scripts\generate_brand_assets.ps1</code></pre>
-          <p class="install-note">這會一起更新 docs logo、Windows icon、<code>icon.icns</code>、iOS 與 Android icon。</p>
+          <h3>不假設已發佈下載</h3>
+          <pre><code>npm test
+cargo test --manifest-path src-tauri/Cargo.toml --locked</code></pre>
+          <p class="install-note">
+            文件與版本護欄會拒絕未固定的 Tauri CLI、錯誤 cwd 路徑與不存在的 checksum 宣稱。
+          </p>
         </div>
 
         <div class="install-card">
-          <h3>從原始碼重建</h3>
-          <pre><code>cd src-tauri
-cargo build --release</code></pre>
-          <p class="install-note">如果之後要打完整 bundle，再另外補裝 <code>cargo-tauri</code> 後跑 <code>cargo tauri build</code>。</p>
+          <h3>不作發行決策</h3>
+          <pre><code>source build != published release
+build pass != runtime pass</code></pre>
+          <p class="install-note">
+            這份文件不要求 tag、push、release、installer、簽章或 Owner 的分發模式決策。
+          </p>
         </div>
       </div>
     </div>
@@ -296,7 +336,7 @@ git merge --ff-only feature/your-change</code></pre>
       <div class="footer-links">
         <a href="#features">功能</a>
         <a href="#workflow">工作流</a>
-        <a href="#download">下載</a>
+        <a href="#download">安裝</a>
         <a href="#repo">維護</a>
       </div>
       <p>龍蝦監控 LobsterPulse · 你的自訂桌面 AI CLI 監控器</p>

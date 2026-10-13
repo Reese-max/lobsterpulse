@@ -65,7 +65,24 @@
     };
   }
 
-  const api = { build };
+  function formatSummary(coverage) {
+    const labels = [
+      ["已註冊", "registered"], ["已設定", "configured"],
+      ["近 24h 有事件", "liveEmitting"], ["非零 session", "nonzeroSessions"],
+      ["新鮮 quota", "quotaObservable"],
+    ];
+    return labels.map(([label, key]) => {
+      const dimension = coverage.dimensions[key];
+      const value = dimension.numerator === null
+        ? "未知" : `${dimension.numerator}/${dimension.denominator}`;
+      if (key === "registered") return `${label} ${value}`;
+      const gap = dimension.numerator === null
+        ? "未知" : dimension.registeredDenominator - dimension.numerator;
+      return `${label} ${value}（已註冊分母 ${dimension.registeredDenominator}，對照差距 ${gap}）`;
+    }).join(" · ");
+  }
+
+  const api = { build, formatSummary };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.ProviderCoverage = api;
 })(typeof window !== "undefined" ? window : globalThis);

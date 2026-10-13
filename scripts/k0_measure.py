@@ -171,6 +171,20 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
     }
 
 
+def format_coverage_dimension(label: str, dimension: Dict) -> str:
+    """Render a receipt dimension with both eligibility and advertised scope."""
+    numerator = dimension["numerator"]
+    value = "unknown" if numerator is None else str(numerator)
+    gap = dimension["gap_to_registered"]
+    gap_value = "unknown" if gap is None else str(gap)
+    exclusions = ", ".join(
+        f'{entry["id"]} ({entry["reason"]})' for entry in dimension["exclusions"]
+    ) or "none"
+    return (f'{label}: {value}/{dimension["denominator"]} '
+            f'(registered denominator {dimension["registered_denominator"]}; '
+            f'gap to registered {gap_value}; exclusions {exclusions})')
+
+
 def read_quota_snapshot(path: Path, now: float) -> tuple:
     """Read content and diagnostic mtime from the same file, without a stat/read race."""
     try:
@@ -366,10 +380,7 @@ def main() -> int:
           f"{sorted(emit_providers)}]")
     print(f"Registry {coverage['registry_version']} / baseline {coverage['baseline_id']}")
     for label, receipt in coverage["dimensions"].items():
-        value = "unknown" if receipt["numerator"] is None else str(receipt["numerator"])
-        print(f"{label}: {value}/{receipt['denominator']} "
-              f"(registered {receipt['registered_denominator']}; "
-              f"exclusions {receipt['exclusions']})")
+        print(format_coverage_dimension(label, receipt))
 
     # 寫 machine-readable JSON 供後續儀表板/CI 用
     report = {

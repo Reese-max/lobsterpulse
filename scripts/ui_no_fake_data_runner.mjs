@@ -319,9 +319,8 @@ async function run() {
       await page.waitForFunction(() => document.querySelectorAll(".quota-card.stale").length === 1);
       assert.equal(await page.locator(".quota-card.stale").count(), 1, "stale quota runner should be visibly downgraded");
       assert.match(await page.locator(".qc-stale-badge").innerText(), /舊/);
-      assert.equal(await page.locator(".quota-card.stale .percent-value").count(), 0, "stale quota must not show fresh percent ring");
-      const cls = await page.locator(".quota-card.stale").first().getAttribute("class");
-      assert.ok(!/\bcrit\b|\bwarn\b/.test(cls || ""), `stale quota must not carry fresh severity class, got ${cls}`);
+      assert.equal(await page.locator(".quota-card.stale .qc-window.qc-warn").count(), 0, "stale quota must not show a fresh-data low-quota warning");
+      assert.doesNotMatch(await page.locator(".quota-card.stale").innerText(), /🔥/, "stale quota must not show a fresh-data fire badge");
       const capsuleClass = await page.locator("#capsule-quota").getAttribute("class");
       assert.match(capsuleClass || "", /\bhidden\b/, "stale quota must not show a capsule percent alert");
       await page.close();

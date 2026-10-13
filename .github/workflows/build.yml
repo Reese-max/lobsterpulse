@@ -19,6 +19,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  ui-smoke:
+    name: Browser UI contracts
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser and system dependencies
+        run: npm exec --yes --package playwright -- playwright install --with-deps chromium
+      - name: Verify all browser UI scenarios
+        run: npm run test:ui-no-fake-data
+
   build:
     strategy:
       fail-fast: false

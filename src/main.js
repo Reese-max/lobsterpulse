@@ -63,6 +63,53 @@ const LOCAL_PROVIDERS = ["claude", "codex", "copilot", "gemini"];
 // OpenAB bot 優先顯示，本機 CLI 接在後面。codex_bot=OpenAB CODEX，codex=本機 CLI（獨立 id）。
 const PROVIDER_ORDER = [...OPENAB_BOTS, ...LOCAL_PROVIDERS];
 const QUOTA_STALE_SECONDS = 3600;
+let providerRegistryPromise = null;
+let providerCoverageDetected = null;
+
+async function renderProviderCoverage() {
+  const box = $("provider-coverage");
+  if (!box || currentView !== "settings") return;
+  try {
+    providerRegistryPromise ||= fetch("provider-capabilities.json").then(async response => {
+      if (!response.ok) throw new Error(`registry HTTP ${response.status}`);
+      return response.json();
+    });
+    const registry = await providerRegistryPromise;
+    const coverage = window.ProviderCoverage.build(
+      registry, appConfig, lastState, window.__lastQuotaSnapshots,
+      providerCoverageDetected, Date.now() / 1000,
+      window.__quotaSnapshotReadAvailable === true,
+    );
+    const labels = [
+      ["已註冊", "registered"], ["已設定", "configured"],
+      ["近 24h 有事件", "liveEmitting"], ["非零 session", "nonzeroSessions"],
+      ["新鮮 quota", "quotaObservable"],
+    ];
+    const counts = labels.map(([name, key]) => {
+      const d = coverage.dimensions[key];
+      return `${name} ${d.numerator === null ? "未知" : d.numerator}/${d.denominator}`;
+    }).join(" · ");
+    const states = {
+      LIVE_EMITTING: "近 24h 有事件", FRESH: "新鮮", STALE: "過期",
+      NOT_CONFIGURED: "未設定", NOT_MONITORED: "未監控",
+      EXTERNAL_DEPENDENCY: "外部來源待確認",
+      UNSUPPORTED_ON_THIS_HOST: "此主機未偵測到 CLI",
+      UNAVAILABLE: "資料來源中斷", OUT_OF_SCOPE: "不在當前範圍",
+    };
+    const rows = coverage.rows.map(row => `<div class="provider-coverage-row">
+      <span>${esc(row.id)}</span>
+      <span>事件：${esc(states[row.healthStatus])} · session：${coverage.dimensions.nonzeroSessions.numerator === null ? "未知" : row.nonzero ? "非零" : "無"} · quota：${esc(states[row.quotaStatus])}</span>
+    </div>`).join("");
+    const excluded = coverage.dimensions.liveEmitting.exclusions;
+    box.innerHTML = `<div class="provider-coverage-title">監控覆蓋 · ${esc(coverage.registryVersion)} / ${esc(coverage.baselineId)}</div>
+      <div class="provider-coverage-summary">${esc(counts)}</div>
+      <div>更新：${esc(coverage.timestamp)} · 排除：${excluded.length ? esc(excluded.map(x => `${x.id} (${x.reason})`).join(", ")) : "無"}</div>
+      ${rows}`;
+  } catch (error) {
+    box.textContent = "覆蓋 registry 或執行資料不可用；無法宣稱目前監控覆蓋率";
+    console.warn("[coverage] unavailable", error);
+  }
+}
 
 // ─── State ───
 const COLORS = {
@@ -189,6 +236,7 @@ function showView(view) {
   const wasExpanded = currentView !== "capsule";
   const prevView = currentView;
   currentView = view;
+  if (view === "settings") renderProviderCoverage();
   $("view-usage").classList.toggle("hidden", view !== "usage");
   $("view-expanded").classList.toggle("hidden", view !== "expanded");
   $("view-settings").classList.toggle("hidden", view !== "settings");
@@ -2332,6 +2380,8 @@ async function refreshQuotas() {
       ? { runners: liveSnap.runners.filter(r => r.ok), source: liveSnap.source || "live_api", updated_at: liveSnap.updated_at || 0 }
       : null;
     window.__lastQuotaSnapshots = snapshots;
+    window.__quotaSnapshotReadAvailable = snapshotsRes.status === "fulfilled";
+    if (currentView === "settings") renderProviderCoverage();
     // snapshot 更新時同步刷新 capsule quota 提示
     updateCapsuleQuota();
 
@@ -2341,6 +2391,8 @@ async function refreshQuotas() {
 
     if (quotaSourcesUnavailable) {
       window.__lastQuotaSnapshots = {};
+      window.__quotaSnapshotReadAvailable = false;
+      if (currentView === "settings") renderProviderCoverage();
       updateCapsuleQuota();
       const wrap = document.getElementById("quota-bar-wrap");
       if (wrap) wrap.classList.remove("hidden");
@@ -2419,6 +2471,7 @@ async function refreshQuotas() {
 
 async function renderProviders() {
   const detected = await invoke("detect_installed_providers");
+  providerCoverageDetected = detected;
   const list = $("provider-list");
 
   // Fixed order instead of HashMap random order
@@ -2449,6 +2502,7 @@ async function renderProviders() {
       ${!isOpenAbBot ? `<button class="provider-open" data-provider="${id}" title="開啟 ${esc(cleanProviderName(p.name))} 設定檔"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg></button>` : ""}
     </div>`;
   }).join("");
+  renderProviderCoverage();
 
   // Listen for toggle changes
   list.querySelectorAll(".provider-check").forEach(cb => {
@@ -2461,14 +2515,17 @@ async function renderProviders() {
         appConfig.providers[pid].enabled = cb.checked;
         appConfig.setup_done = true;
         await saveConfig();
+        renderProviderCoverage();
       } else if (cb.checked) {
         try { await invoke("install_provider_hooks", { providerId: pid }); } catch (e) {}
         appConfig = await invoke("get_config");
         appConfig.setup_done = true; saveConfig();
+        renderProviderCoverage();
       } else {
         try { await invoke("remove_provider_hooks", { providerId: pid }); } catch (e) {}
         appConfig = await invoke("get_config");
         appConfig.setup_done = true; saveConfig();
+        renderProviderCoverage();
       }
     });
   });
@@ -2621,6 +2678,7 @@ let lastState = null;
 
 function renderStateUnavailable(error) {
   lastState = null;
+  if (currentView === "settings") renderProviderCoverage();
   lastStructureJson = "__state_unavailable__";
   const project = $("capsule-project");
   const status = $("capsule-status");
@@ -2674,6 +2732,7 @@ async function refreshState() {
   try {
     const st = await invoke("get_state");
     lastState = st;
+    if (currentView === "settings") renderProviderCoverage();
 
     // Build a structure key that ignores formatted_time but includes active session
     const activeId = st.active_session?.id || "";

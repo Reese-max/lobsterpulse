@@ -52,5 +52,15 @@
     }
   ],
   "fixed": false,
-  "summary": "Fixed five replay defects covering unknown identities, reason-specific deduplication, integer schema versions and timestamp validation; all five added regression tests failed before the fix, and the replay suite now passes 13/13 in Git Bash. needs-human: clarify the window/version contract, CRITICAL manual resolution and BLOCKING ACK queue semantics; fixed=false because these findings remain open. Collector tests passed 56/56, but the pre-existing Node suite has a local runtime-config drift failure (21/22 passed); packaged attention runtime verification remains deferred."
+  "summary": "Fixed five replay defects covering unknown identities, reason-specific deduplication, integer schema versions and timestamp validation; all five added regression tests failed before the fix, and the replay suite now passes 13/13 in Git Bash. needs-human: clarify the window/version contract, CRITICAL manual resolution and BLOCKING ACK queue semantics; fixed=false because these findings remain open. Collector tests passed 56/56, but the pre-existing Node suite has a local runtime-config drift failure (21/22 passed); packaged attention runtime verification remains deferred.",
+  "merged_main_record": {
+    "repo": "Reese-max/lobsterpulse",
+    "issue": 6,
+    "base_sha": "41e09eb922a37323c30878323bfea955712e2a55",
+    "candidate_sha": "2752b1b04b70169bccab5a5bef9fffae69c84bb1",
+    "reviewer": "fresh-issue-loop-reviewer",
+    "read_only": true,
+    "status": "pass",
+    "findings": []
+  }
 }

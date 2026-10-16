@@ -1,11 +1,12 @@
 {
   "name": "lobster-pulse",
-  "version": "0.2.2",
+  "version": "0.5.4",
   "description": "Traditional Chinese desktop monitor for Claude, Codex, Copilot, and Gemini sessions",
   "scripts": {
     "tauri": "cargo tauri",
     "dev": "cargo tauri dev",
     "build": "cargo tauri build",
+    "test": "node --test test/version-consistency.test.js test/installation-docs.test.js",
     "test:provider-inventory": "node scripts/provider_inventory_guard.mjs",
     "test:ui-no-fake-data": "npm exec --yes --package playwright -- node scripts/ui_no_fake_data_runner.mjs"
   }

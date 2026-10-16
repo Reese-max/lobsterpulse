@@ -1,5 +1,12 @@
 # Spec: Prometheus Counter Rename `2026-Q3` (T-1 dual-emit shim)
 
+> **Current state: POSTPONED (2026-09-26; review 2026-10-31).** This is the
+> historical T-1 phase spec. The
+> [migration manifest](../../../../../docs/metrics/counter-migration.json) is the
+> current lifecycle contract. T-2 through T-5 remain blocked/postponed under
+> [issue #11](https://github.com/Reese-max/lobsterpulse/issues/11); the review
+> date is not a cutover date.
+
 > 對應 capability：`prometheus-counter-rename-2026-q3`（見 proposal.md Capabilities 段）。
 > Source of truth：R106 已 closure 的 `prometheus-counter-convention/spec.md`
 > Requirements + Scenarios（6 條對照表 + 護衛 test 設計）。本 spec 走 T-1 週
@@ -36,7 +43,8 @@ counter 的**舊名 + 新名**（共 12 row 增量 6 row，總 41 + 6 = 47）：
 
 T-1 週，`render_prometheus_body` 必須對 6 條 counter 同時 emit 舊名 + 新名，
 讓 Prometheus 抓取端有 4 週觀察期（T-2 ~ T-3）切換 scrape config。舊名 emit
-時 HELP comment 必須標 `# DEPRECATED: use {new_name}, scheduled removal week 4`，
+時 HELP comment 必須標 `DEPRECATED: use {new_name}` 與 manifest 的
+`POSTPONED` decision/review date，
 讓抓取端 operator 一眼能識別。
 
 #### Scenario
@@ -44,8 +52,8 @@ T-1 週，`render_prometheus_body` 必須對 6 條 counter 同時 emit 舊名 + 
 - **S-PCR2.1**: 6 條 counter 對應的 sample line（HELP/TYPE/sample 三件套）
   在 body 內**同時出現**舊名 + 新名，值同 source（從同 map 讀），R113
   dual-emit assertion 守
-- **S-PCR2.2**: 舊名 emit 的 HELP comment 含 `# DEPRECATED:` 標記，標明
-  scheduled removal = week 4
+- **S-PCR2.2**: 舊名 emit 的 HELP comment 含 `DEPRECATED`、`POSTPONED`
+  decision date 和 review date，不聲稱 review date 是 removal date。
 - **S-PCR2.3**: T-4 切換日後舊名 emit block 移除（render_prometheus_body
   只 emit 新名），R114+ owner follow-up
 

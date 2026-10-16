@@ -1,9 +1,15 @@
 # Design: Prometheus Counter Rename `2026-Q3` (T-1 dual-emit shim)
 
+> **Current decision: POSTPONED (2026-09-26; review 2026-10-31).** This
+> document records the historical T-1 implementation. The
+> [migration manifest](../../../docs/metrics/counter-migration.json) now owns
+> the lifecycle state and six pairs. The 2026-07-03 removal did not happen;
+> T-2 through T-5 require explicit owner evidence before cutover.
+
 ## Source of Truth
 
-R106 (2026-06-05) spec closure 的 `prometheus-counter-convention/design.md`
-「Counter rename 對照表」段是本 change 的 source of truth：
+The migration manifest is the current source of truth. R106 (2026-06-05)
+`prometheus-counter-convention/design.md` was the historical T-1 source:
 
 | # | 現名 | 目標 rename 名 |
 |---:|---|---|
@@ -67,16 +73,16 @@ const LP_METRICS: &[&str] = &[
 ### 2. `src-tauri/src/lib.rs` `render_prometheus_body` 6 條 counter dual-emit
 
 每條現有 counter emit block 之後加 1 個新 emit block（HELP/TYPE/sample 三件套），
-舊名加 `# DEPRECATED` comment 標 owner 切換日。
+舊名 HELP 保留 DEPRECATED 提示，現由 manifest 提供 POSTPONED decision/review date。
 
 範例（counter 1+2 聚合, 對應 `tokens_input`）：
 
 ```rust
 // T-1 dual-emit 階段：emit 舊名 + 新名
-// 舊名加 # DEPRECATED comment 標 owner 切換日（T-4, 預計 week 4 切換）
+// Current HELP embeds POSTPONED decision/review date; no removal date is set.
 out.push_str(
     "# HELP lobsterpulse_tokens_input Lifetime input tokens across all providers \
-     (DEPRECATED: use lobsterpulse_tokens_input_total, scheduled removal week 4)\n\
+     (DEPRECATED: use lobsterpulse_tokens_input_total; migration POSTPONED since 2026-09-26; review 2026-10-31)\n\
      # TYPE lobsterpulse_tokens_input counter\n"
 );
 out.push_str(&format!("lobsterpulse_tokens_input {tot_in}\n"));
@@ -133,7 +139,7 @@ for (legacy, total) in &dual_emit_pairs {
 
 ## 影響面盤點（T-1 週內不動的部分）
 
-### 不動（保留給 T-2 ~ T-5 接力）
+### Historical T-1 scope (T-2 ~ T-5 remain tracked in the manifest)
 
 - ❌ 35 個既有 `body.contains("lobsterpulse_tokens_input ...")` 等 test
   assertion：本輪 T-1 不動（T-4 切換日才改：新名接管，舊名 assertion 改為
@@ -150,7 +156,7 @@ for (legacy, total) in &dual_emit_pairs {
   護衛 chain 延伸
 - T-2 ~ T-5 後續 owner follow-up 開新 change 接力
 
-## 廣播計劃時程（沿用 R106 design.md T-0..T-5）
+## Historical broadcast plan (expired; no current cutover date)
 
 ```
 T-0  week  0: 開新 change「prometheus-counter-rename-2026-q3」承接 R106 spec
@@ -162,7 +168,8 @@ T-1  week  1: 寫 dual-emit shim — render_prometheus_body 同時 emit 舊名 +
 T-2  week  2: 廣播 alert / dashboard owner 跟進（issue / PR template / Discord 通知）
 T-3  week  3: monitoring window — 觀察 dual-emit 期間舊名是否有 alert / dashboard
                 仍未跟進（owner 主動聯繫 holdout）
-T-4  week  4: 切換日 — 移除舊名 emit、LP_METRICS const 拿掉舊 row、
+T-4  week  4: originally planned cutover — not executed; POSTPONED pending owner evidence.
+                Planned work: 移除舊名 emit、LP_METRICS const 拿掉舊 row、
                 # DEPRECATED comment 清掉、CHANGELOG 標「REMOVED: 舊 6 條 metric」
 T-5  week  5: post-mortem — 觀察 1 週確認 0 broken alert / 0 broken dashboard
                 （如果有 → 緊急 revert 對應 1 條 metric，列 R1XX+ follow-up）

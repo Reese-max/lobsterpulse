@@ -133,7 +133,7 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
             status = "LIVE_EMITTING"
         elif pid in idle and events.get(pid, 0) > 0:
             status = "STALE"
-        elif p["support_level"] == "hook_intake_quota_external":
+        elif p["scope"] == "openab_push":
             status = "EXTERNAL_DEPENDENCY"
         else:
             status = "NOT_MONITORED"
@@ -144,6 +144,7 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
                         "EXTERNAL_DEPENDENCY" if p["support_level"] == "hook_intake_quota_external" else
                         "NOT_MONITORED")
         provider_states[pid] = {
+            **p,
             "health_status": status,
             "quota_status": quota_status,
             "configured": configured.get(pid) if configured is not None else None,
@@ -155,6 +156,7 @@ def build_coverage_receipt(metrics_text: str, health: Dict[str, float],
         }
 
     return {
+        "schema_version": 2,
         "registry_version": registry["registry_version"],
         "baseline_id": registry["baseline_id"],
         "timestamp": timestamp,

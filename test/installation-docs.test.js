@@ -234,15 +234,27 @@ test("documentation does not make release or Owner distribution decisions", () =
   assert.doesNotMatch(combined, /git\s+tag\b|git\s+push\s+origin\b/);
 
   const workflowHasChecksumStep =
-    /\b(?:sha256sum|shasum|Get-FileHash|checksum)\b/i.test(RELEASE_WORKFLOW);
-  assert.equal(
-    workflowHasChecksumStep,
-    false,
-    "update this guard and the installation wording together if release.yml gains checksums"
-  );
-  assert.match(README, /release workflow 沒有產生 checksum manifest/);
-  assert.match(LANDING, /release workflow 目前沒有建立 checksum manifest/);
-  assert.doesNotMatch(combined, /(?:release|workflow)[^.\n]{0,120}(?:含|建立|產生)[^.\n]{0,40}SHA-256 checksum/i);
+    RELEASE_WORKFLOW.includes("python scripts/package_release.py");
+  assert.ok(workflowHasChecksumStep, "release workflow must use the tested archive/checksum packager");
+  assert.match(README, /zip\.sha256/);
+  assert.match(LANDING, /zip\.sha256/);
+  assert.match(README, /尚未發佈/);
+  assert.match(LANDING, /尚未發佈/);
+});
+
+test("release workflow validates tags before building and uploads archive checksums as a draft", () => {
+  const validation = workflowNamedStep(RELEASE_WORKFLOW, "Validate release tag and versions");
+  assert.match(validation, /GITHUB_REF_TYPE/);
+  assert.match(validation, /tag/);
+  assert.match(validation, /python scripts\/package_release\.py "\$GITHUB_REF_NAME"/);
+  assert.ok(RELEASE_WORKFLOW.indexOf("Validate release tag and versions") <
+    RELEASE_WORKFLOW.indexOf("- name: Build (no bundle)"));
+  assert.match(RELEASE_WORKFLOW, /python -m unittest scripts\/test_package_release\.py/);
+  const upload = workflowNamedStep(RELEASE_WORKFLOW, "Upload to GitHub Release");
+  assert.match(upload, /\.zip\s*\n/);
+  assert.match(upload, /\.zip\.sha256/);
+  assert.match(upload, /draft:\s*true/);
+  assert.match(upload, /fail_on_unmatched_files:\s*true/);
 });
 
 test("landing-page version follows the Tauri application version", () => {

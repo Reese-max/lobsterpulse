@@ -114,3 +114,42 @@ count above describe that run, not the current main branch.
 - The exact main-commit Build run [36483810384](https://github.com/Reese-max/lobsterpulse/actions/runs/36483810384) passed the hooks tests and no-bundle build on Linux, macOS, and Windows; the Linux job also passed the disposable-home packaged app + sidecar smoke.
 - The later Windows/macOS smoke candidate is PR #17, head `cb228cc88df4eda7b3d691fda1fbaea04f3a6340`, based on that main SHA. [Build run #65](https://github.com/Reese-max/lobsterpulse/actions/runs/36653638581) passed all three jobs. It checked out merge candidate `21317b3b5e424465f2094b8eb711655b65bb9012` (the PR head merged into `41e09eb`), not the PR head by itself. The packaged Windows and macOS smokes used synthetic sidecar events; they did not invoke Codex CLI.
 - Still unverified: real Codex CLI hook activation on Windows/macOS and MSI/NSIS/DMG installation. PR #17 also records the unresolved final pathname-replacement race and the need for a product conflict contract. Issue #3 remains open.
+
+## Local worktree verification (2026-10-16)
+
+Base: `e1adcdb66e2efe46c951619368ef2748bbfecdfa`; branch: `issue-loop/issue-3`.
+The structural installer fix already exists at this base. This change aligns
+startup reconciliation with that installer when an enabled provider has
+`hooks = true` and `codex_hooks = false`: every present flag is enabled through
+the existing `install_provider` path. The canonical flag in this fixture was
+already true. Configurations containing only true flags remain byte-identical,
+preserving their existing hook trust decision.
+
+The new regression was run before the implementation and exited 1:
+
+```text
+codex_startup_reconciles_false_alias_with_enabled_canonical_flag ... FAILED
+assertion failed: reconcile_enabled_codex(&provider).expect("repair false legacy flag")
+test result: FAILED. 0 passed; 1 failed
+```
+
+| Issue #3 acceptance criterion | Local evidence |
+| --- | --- |
+| Structural TOML parsing; absent/true/false flags | Existing installer fixtures plus startup regression; hooks suite grows from 44 to 46 passing tests |
+| Preserve unrelated keys, comments, layout; reject malformed/conflicting values | Existing malformed, duplicate, non-boolean, dotted, inline, comment/string and third-party-hook fixtures pass |
+| Track owned changes; install → reinstall → remove | Existing ownership fixtures and new startup roundtrip preserve user-owned canonical true and restore legacy false |
+| Enabled-provider startup/retry; already-true configurations | New false-alias regression enables both flags and installs five hooks; second startup is a no-op; true-only and both-true fixtures leave hooks/config/state untouched |
+| Effective flag before exercising the hook path | Config/domain coverage passes; no packaged runtime smoke was rerun locally |
+| H01/H02/H03/H05/I05/J05 on merged main; real CLI and installers | Still unverified; this Windows worktree receipt does not close the runtime or cross-platform acceptance gates |
+
+The exact Git Bash validation command exits 0:
+
+```bash
+cargo test --locked --manifest-path src-tauri/Cargo.toml -- --quiet && npm test && git diff --check
+```
+
+Results: Rust 610 passed, 0 failed, 5 existing live-environment diagnostics
+ignored; npm 8 passed, 0 failed. No coverage ratchet, CRAP, or mutation gate was
+introduced. No push, PR, merge, issue closure, real CLI profile change, or
+installer activation was performed. The machine-readable receipt is
+`.issue-loop-evidence.json` at the repository root.

@@ -149,7 +149,10 @@ fn codex_feature_needs_setup(config_toml: &Path) -> Result<bool, String> {
             })?);
         }
     }
-    Ok(!canonical.or(alias).unwrap_or(false))
+    // Match installation: every present hook flag must be enabled.
+    Ok(canonical == Some(false)
+        || alias == Some(false)
+        || (canonical.is_none() && alias.is_none()))
 }
 
 // Substring that uniquely identifies LobsterPulse-installed hooks. Matches
@@ -1807,6 +1810,60 @@ mod r37_silent_fail_surfacing_tests {
             .expect("valid removed hooks");
         assert_eq!(removed["hooks"]["FutureEvent"][0]["hooks"][0]["command"], "unrelated-hook");
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_startup_reconciles_false_alias_with_enabled_canonical_flag() {
+        let directory = tmp_settings_path("codex-startup-false-alias");
+        let hooks_path = directory.join("hooks.json");
+        let config_path = directory.join("config.toml");
+        write_raw(&hooks_path, br#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"lobster-pulse-hook"}]}]}}"#);
+        let original_config = b"# keep user settings\n[features]\nhooks = true # user-owned\ncodex_hooks = false # legacy\n";
+        write_raw(&config_path, original_config);
+        let mut provider = provider_with_path(&hooks_path);
+        provider.enabled = true;
+
+        assert!(reconcile_enabled_codex(&provider).expect("repair false legacy flag"));
+        let repaired = std::fs::read_to_string(&config_path).expect("read repaired config");
+        assert!(repaired.contains("hooks = true # user-owned"));
+        assert!(repaired.contains("codex_hooks = true # legacy"));
+        assert!(repaired.contains("# keep user settings"));
+        let hooks_after = std::fs::read(&hooks_path).expect("read repaired hooks");
+        let hooks: Value = serde_json::from_slice(&hooks_after).expect("valid installed hooks");
+        assert_eq!(marker_count(&hooks), 5);
+        assert!(!reconcile_enabled_codex(&provider).expect("second startup"));
+        assert_eq!(std::fs::read(&hooks_path).expect("read no-op hooks"), hooks_after);
+        assert_eq!(std::fs::read_to_string(&config_path).expect("read no-op config"), repaired);
+
+        remove_provider("codex", &provider).expect("remove repaired provider");
+        assert_eq!(std::fs::read(&config_path).expect("read restored config"), original_config);
+        assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn codex_startup_preserves_user_owned_enabled_configuration() {
+        for original_config in [
+            "[features]\nhooks = true\n",
+            "[features]\ncodex_hooks = true\n",
+            "[features]\nhooks = true\ncodex_hooks = true\n",
+        ] {
+            let directory = tmp_settings_path("codex-startup-enabled");
+            let hooks_path = directory.join("hooks.json");
+            let config_path = directory.join("config.toml");
+            let original_hooks = br#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"lobster-pulse-hook"}]}]}}"#;
+            write_raw(&hooks_path, original_hooks);
+            write_raw(&config_path, original_config.as_bytes());
+            let mut provider = provider_with_path(&hooks_path);
+            provider.enabled = true;
+
+            assert!(!reconcile_enabled_codex(&provider).expect("already enabled startup"));
+            assert_eq!(std::fs::read(&hooks_path).expect("read unchanged hooks"), original_hooks);
+            assert_eq!(std::fs::read_to_string(&config_path).expect("read unchanged config"), original_config);
+            assert!(!codex_flag_state_path(&config_path).expect("state path").exists());
+            assert!(!directory.join("lobsterpulse-codex-hooks.lock").exists());
+            let _ = std::fs::remove_dir_all(&directory);
+        }
     }
 
     #[test]

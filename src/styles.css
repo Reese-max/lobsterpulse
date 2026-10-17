@@ -1211,6 +1211,11 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 
 /* ─── Setup view ─── */
 .provider-list { display: flex; flex-direction: column; gap: 8px; }
+.provider-coverage { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,.15); font-size: 11px; line-height: 1.5; }
+.provider-coverage-title { font-weight: 700; margin-bottom: 5px; }
+.provider-coverage-summary { margin-bottom: 6px; }
+.provider-coverage-row { display: flex; justify-content: space-between; gap: 6px; padding: 2px 0; border-top: 1px solid rgba(255,255,255,.07); }
+.provider-coverage-row span:last-child { text-align: right; }
 /* 卡片化：對齊 OpenUsage 用量卡的幾何（12px 圓角＋淡邊框），但用主題 token
    而非寫死深色，淺色主題下才不會變一塊突兀的黑卡。 */
 .provider-item {

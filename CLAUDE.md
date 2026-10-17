@@ -29,7 +29,7 @@
 
 ## Build SOP（重要）
 
-**必須** `cargo tauri build --no-bundle`，不可純 `cargo build --release`（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。前置 `cargo install tauri-cli --locked`。
+**必須** `cargo tauri build --no-bundle`，不可純 `cargo build --release`（Tauri v2 release webview 會 fallback 到 devUrl 白屏）。本次本機 source build 實際驗證並建議重現的前置為 `cargo install tauri-cli --version 2.11.4 --locked`；既有 build / release CI 仍接受 `tauri-cli@^2.0`，不宣稱所有環境都已鎖在 2.11.4。
 
 釋放 exe lock：`python -c "import os; os.replace('exe-path', 'exe-path.bak')"`（cmd.exe del 在 MSYS2 下無效）。
 
@@ -100,6 +100,7 @@
 
 ## 典型問題與 SOP
 
+- **Codex runtime smoke（issue #3 gate）**：`./test/codex-runtime-smoke.sh` — disposable `$HOME`（含 `codex_hooks=false`）跑 packaged binary（Xvfb + dbus-run-session + `LOBSTERPULSE_HEADLESS_INSTALL=codex` headless install）→ 真 sidecar 打 SessionStart → 驗 `/metrics` `lobsterpulse_provider_sessions{provider="codex"} ≥1`。證據收 `docs/audits/issue-3-runtime-evidence-*.md`
 - **找不到 tray icon**：Win11 摺進「^」→ `ms-settings:taskbar` → 釘出來
 - **設定頁兩個同名**：tray registry 殭屍 → 清 `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\TrayNotify\IconStreams` + restart explorer
 - **webview 白屏**：用 `cargo tauri build --no-bundle`，不要純 `cargo build --release`

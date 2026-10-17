@@ -1,0 +1,15 @@
+{
+  "pr": 7,
+  "head": "bbc3268bf2535bb0a20ddd69bd2e859cf0ae7bdf",
+  "findings": [
+    {"severity":"high","file":"scripts/k0_measure.py","line":156,"issue":"When fetch_metrics fails, the new receipt reports MEASURED 0/13 and zero sessions instead of UNAVAILABLE; main does not propagate source availability."},
+    {"severity":"high","file":"scripts/k0_measure.py","line":102,"issue":"Quota coverage trusts file mtime from scan_quota_snapshots while the UI uses payload updated_at. Copying an old snapshot makes the receipt fresh and the UI stale; the new runtime smoke exercises this contradiction."},
+    {"severity":"med","file":"src/provider-coverage.js","line":25,"issue":"A fresh envelope with empty or failed runners counts as quota-observable. The external JSON trust boundary requires a successful runner before asserting coverage."},
+    {"severity":"med","file":"scripts/k0_measure.py","line":66,"issue":"macOS configuration is read from ~/.config instead of dirs::config_dir()'s ~/Library/Application Support, so normal packaged-app configuration is always unknown."},
+    {"severity":"med","file":"scripts/k0_target_baseline_check.py","line":106,"issue":"Historical registered IDs and archived initial scope IDs can be replaced without validation failing; only selected values and array lengths are pinned."},
+    {"severity":"med","file":"scripts/k0_target_baseline_check.py","line":55,"issue":"The receipt validator accepts unknown provider IDs, numerators inconsistent with provider_ids, and MEASURED/UNAVAILABLE state contradictions."},
+    {"severity":"med","file":"scripts/k0_target_baseline_check.py","line":120,"issue":"needs-human: future baseline versions have no independent immutable reference; after adding a later baseline its scope can be changed again under the same ID/version. The persistence/version approval contract must be chosen before extending the initial pinned history."}
+  ],
+  "fixed": true,
+  "summary": "Fixed six defects in source availability, quota freshness/runner validation, macOS config lookup, archived-baseline integrity and receipt consistency; reproduced 17 Python and one Node regression failures before the fixes, then passed 126 tests plus registry, inventory and syntax checks. needs-human: choose an immutable reference/approval contract for future baseline versions; OpenAB signal ownership, packaged WebView/runtime acceptance and the synthetic comprehension study remain unverified. Broad suites retain pre-existing chain-staleness/runtime-sync failures, and the worktree sentinel flags unrelated untracked .impeccable/hook.cache.json."
+}

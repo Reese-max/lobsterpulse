@@ -1,66 +1,50 @@
 {
   "pr": 10,
-  "head": "5e5cdfa9f5fb754a7075d70b05983e04eba92980",
+  "head": "86f0fa284e0837e6b877d7add07c1448a4fde88a",
   "findings": [
     {
       "severity": "med",
       "file": "docs/research/issue9_attention_replay.py",
-      "line": 117,
-      "issue": "fixed: UNKNOWN provider identity is allowed to deduplicate and auto-resolve WAITING events, although the documented policy requires known provider/session/correlation IDs."
-    },
-    {
-      "severity": "med",
-      "file": "docs/research/issue9_attention_replay.py",
-      "line": 131,
-      "issue": "fixed: The unknown-identity fallback (eventId, eventId) can collide with a legitimate session/correlation pair, merging and potentially auto-resolving evidence whose identity is unknown."
-    },
-    {
-      "severity": "med",
-      "file": "docs/research/issue9_attention_replay.py",
-      "line": 134,
-      "issue": "fixed: The dedupe key uses the classified why_now instead of reasonCode, so distinct errors such as AUTH_FAILED and TRANSPORT_FAILED collapse into one human-facing item contrary to the documented same-reason rule."
+      "line": 137,
+      "issue": "fixed: A deduplicated FRESH WAITING updates its item timestamp but not the recovery index. With reason A at 0, reason B at 1, A again at 300000 and RECOVERED at 300002, recovery checks expired B and misses eligible A, leaving both decisions open."
     },
     {
       "severity": "low",
       "file": "docs/research/issue9_attention_replay.py",
-      "line": 33,
-      "issue": "fixed: schemaVersion=true and schemaVersion=1.0 pass the integer v1 schema check and are retained as malformed raw evidence."
+      "line": 100,
+      "issue": "fixed: window_ms=True passes isinstance(..., int) and silently becomes a one-millisecond correlation window instead of rejecting a malformed configuration value."
     },
     {
       "severity": "med",
       "file": "docs/research/issue9_attention_replay.py",
-      "line": 168,
-      "issue": "fixed: Decision and clock timestamps are not validated before state mutation: ACK/RESOLVE accept nonnumeric or negative at_ms, SNOOZE accepts boolean deadlines, and advance_time can write fractional receipt timestamps."
+      "line": 97,
+      "issue": "needs-human: different positive window_ms values change correlation under the same policyVersion, but state and receipts do not record the window. Choose the immutable version/configuration contract before changing this API."
     },
     {
       "severity": "med",
       "file": "docs/research/issue9_attention_replay.py",
-      "line": 93,
-      "issue": "needs-human: window_ms can change correlation results while policyVersion remains identical and the window is absent from receipts. Choose a version-bound policy configuration or a versioned persisted configuration contract before changing this API."
+      "line": 179,
+      "issue": "needs-human: CRITICAL permits direct RESOLVE and permanently leaves the queue; the existing test explicitly expects this. Issue #9's proposal permits acknowledge only, while its acceptance text only forbids dismiss. Clarify audited manual resolution."
     },
     {
       "severity": "med",
       "file": "docs/research/issue9_attention_replay.py",
-      "line": 176,
-      "issue": "needs-human: CRITICAL can be RESOLVED and disappear permanently; the existing test explicitly expects this, while issue #9 says CRITICAL only allows acknowledge and its acceptance text only prohibits dismiss. Clarify whether audited manual resolution is permitted."
+      "line": 163,
+      "issue": "needs-human: ACKED BLOCKING items remain in queue(), whereas issue #9 describes persistence until ack/resolve. Decide whether ACK stops reminders, removes the decision from the queue, or both."
     },
     {
       "severity": "med",
       "file": "docs/research/issue9_attention_replay.py",
-      "line": 162,
-      "issue": "needs-human: queue() keeps ACKED BLOCKING items visible, while issue #9 describes BLOCKING as persistent until ack/resolve. Clarify whether ACK stops reminders or removes the item from the human queue before changing this documented behavior."
+      "line": 169,
+      "issue": "needs-human: nonnegative decision times can precede the source event or previous receipt (ERROR at 1000, ACK at 900, RESOLVE at 800); a backdated snooze can hide a current decision. Define item/clock ordering and clock-skew handling before adding a persisted time contract."
+    },
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 105,
+      "issue": "needs-human: equal-timestamp WAITING and RECOVERED events are ordered by eventId, so swapping arbitrary IDs changes whether the wait auto-resolves. Define simultaneous-event causality or a trusted source sequence before changing this correlation policy."
     }
   ],
   "fixed": false,
-  "summary": "Fixed five replay defects covering unknown identities, reason-specific deduplication, integer schema versions and timestamp validation; all five added regression tests failed before the fix, and the replay suite now passes 13/13 in Git Bash. needs-human: clarify the window/version contract, CRITICAL manual resolution and BLOCKING ACK queue semantics; fixed=false because these findings remain open. Collector tests passed 56/56, but the pre-existing Node suite has a local runtime-config drift failure (21/22 passed); packaged attention runtime verification remains deferred.",
-  "merged_main_record": {
-    "repo": "Reese-max/lobsterpulse",
-    "issue": 6,
-    "base_sha": "41e09eb922a37323c30878323bfea955712e2a55",
-    "candidate_sha": "2752b1b04b70169bccab5a5bef9fffae69c84bb1",
-    "reviewer": "fresh-issue-loop-reviewer",
-    "read_only": true,
-    "status": "pass",
-    "findings": []
-  }
+  "summary": "Fixed stale recovery indexing after reason-specific WAITING deduplication and boolean correlation-window validation; both regressions failed first, and all 150 selected tests, including 15 replay tests, pass in Git Bash (exit 0). needs-human: settle version/configuration binding, CRITICAL resolution, BLOCKING acknowledgement, decision-clock ordering and equal-timestamp causality; fixed=false because these findings remain open. The broader Node baseline has an unrelated local runtime-config drift failure; packaged runtime and real multi-agent acceptance remain deferred."
 }

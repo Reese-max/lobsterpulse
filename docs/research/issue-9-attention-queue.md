@@ -62,6 +62,8 @@ Receipt 是當時的判斷快照，不因 policy 改版而重算。純研究 spi
 - 同 provider/session/correlation/kind/reason/freshness 的 5 分鐘
   duplicate → 單一 human-facing item，raw evidence 完整可查；
   未知 session/correlation 不跨事件合併。
+- `FRESH WAITING` 去重後同步更新 recovery 索引，讓近期的等待證據仍可配對；
+  correlation window 必須是正整數毫秒，不接受布林值。
 - 不跨 provider/session 推測 shared root cause；目前沒有可信的全域 cause ID。
   跨來源 cascade 合併須等真實事件證明共同 identity 後另行設計，避免誤壓人類決策。
 - `COMPLETED` routine 預設不與 `BLOCKING` 同中斷等級；history 可查。
@@ -98,7 +100,8 @@ duplicates、8 個獨立 error、1 個 waiting/recovered pair（2 events）。
 item；輸入順序打亂後輸出完全一致。另測 source stale/unknown、
 `NOT_MONITORED`、`EXTERNAL_DEPENDENCY`、critical ack、snooze expiry、
 JSON roundtrip、跨 provider 不推測合併、未知身分不與合法 ID 撞 key、
-不同 reasonCode 不合併、schema version／時間型別驗證、content-bearing 欄位拒收與禁用
+不同 reasonCode 不合併、交錯原因的 waiting/recovery、時間窗邊界及型別、
+schema version／時間型別驗證、content-bearing 欄位拒收與禁用
 file/shell/network 的負向測試。
 這些是 synthetic 結果，不代表真實多 agent session 的壓縮率或可用性。
 

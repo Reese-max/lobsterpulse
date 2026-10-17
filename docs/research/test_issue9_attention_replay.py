@@ -107,6 +107,32 @@ class AttentionReplayTests(unittest.TestCase):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, "schema version"):
                 replay([dict(event("w", "WAITING", 1000), schemaVersion=version)])
 
+    def test_recovery_uses_the_latest_deduplicated_wait(self):
+        events = [event("a", "WAITING", 0, reason="AUTH_REQUIRED"),
+                  event("b", "WAITING", 1, reason="CAPACITY_REQUIRED"),
+                  event("a2", "WAITING", 300000, reason="AUTH_REQUIRED"),
+                  event("recovery", "RECOVERED", 300002)]
+        state = replay(events)
+        self.assertEqual([item["sourceEventIds"] for item in queue(state)], [["b"]])
+        self.assertEqual(state["items"][0]["state"], "AUTO_RESOLVED")
+        self.assertEqual(state["items"][0]["sourceEventIds"], ["a", "a2", "recovery"])
+        self.assertEqual(state["receipts"][-1]["disposition"], "FRESH_RECOVERY")
+        self.assertEqual(state, replay(list(reversed(events))))
+
+    def test_correlation_window_requires_a_positive_integer(self):
+        for invalid in (True, False, 0, -1, 1.0, None, "300000"):
+            with self.subTest(value=invalid), self.assertRaisesRegex(ValueError, "correlation window"):
+                replay([], window_ms=invalid)
+        for window_ms in (1, 300000):
+            for gap in (window_ms, window_ms + 1):
+                with self.subTest(window_ms=window_ms, gap=gap):
+                    waiting = replay([event("w", "WAITING", 0), event("r", "RECOVERED", gap)],
+                                     window_ms=window_ms)
+                    self.assertEqual(len(queue(waiting)), int(gap > window_ms))
+                    errors = replay([event("e1", "ERROR", 0), event("e2", "ERROR", gap)],
+                                    window_ms=window_ms)
+                    self.assertEqual(len(queue(errors)), 1 + int(gap > window_ms))
+
     def test_invalid_decision_times_leave_state_unchanged(self):
         for invalid in (-1, True, 1.5, None, "later"):
             for action in ("ACK", "RESOLVE", "SNOOZE"):

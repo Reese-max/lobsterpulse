@@ -97,8 +97,8 @@ def _receipt(state, item, from_state, disposition, at_ms, actor="system"):
 def replay(raw_events, policy_version=POLICY_VERSION, window_ms=WINDOW_MS):
     if not isinstance(policy_version, str) or not policy_version:
         raise ValueError("policy version is required")
-    if not isinstance(window_ms, int) or window_ms <= 0:
-        raise ValueError("correlation window must be positive")
+    if type(window_ms) is not int or window_ms <= 0:
+        raise ValueError("correlation window must be a positive integer")
     events = [validate_event(event) for event in raw_events]
     events.sort(key=lambda event: (event["observedAtMs"], event["eventId"]))
     seen = {}
@@ -137,6 +137,8 @@ def replay(raw_events, policy_version=POLICY_VERSION, window_ms=WINDOW_MS):
                 and event["observedAtMs"] - prior["lastSeenAtMs"] <= window_ms):
             prior["sourceEventIds"].append(event["eventId"])
             prior["lastSeenAtMs"] = event["observedAtMs"]
+            if event["kind"] == "WAITING" and event["sourceFreshness"] == "FRESH":
+                waiting[source_key] = prior
             _receipt(state, prior, "OPEN", "DEDUPED", event["observedAtMs"])
             continue
         item = {

@@ -220,3 +220,11 @@ def test_check_owner_m_wip_雙向_0_dirty_0_tuple_PASS(monkeypatch):
     assert "R184" in result.note and "雙向" in result.note, (
         f"note 應標 R184 雙向 closure, got: {result.note}"
     )
+
+
+def test_committed_wip_baseline_accepts_clean_checkout(monkeypatch):
+    """The committed default must accept a clean checkout without overriding the tuple."""
+    import r124_sentinel
+    monkeypatch.setattr(r124_sentinel, "_run_git", lambda args: "")
+    result = r124_sentinel.check_owner_m_wip()
+    assert result.passed, result

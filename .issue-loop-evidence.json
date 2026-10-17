@@ -1,20 +1,18 @@
 {
   "repo": "Reese-max/lobsterpulse",
-  "issue": 7,
-  "base_sha": "bbc3268bf2535bb0a20ddd69bd2e859cf0ae7bdf",
-  "red_proof": "Before implementation changes: `python -X utf8 -m pytest -q scripts/test_k0_target_baseline_check.py -k review` exited 1 with 17 failed, 8 deselected (outage 0 instead of null; macOS config None; stale/failed quota treated as fresh; rewritten archives and contradictory receipts accepted). `node --test scripts/test_provider_coverage.mjs` exited 1 with 1 failed, 4 passed: an empty quota envelope produced numerator 1 instead of 0. During fix review, `python -X utf8 -m pytest -q scripts/test_k0_target_baseline_check.py -k corrupt_primary` also reproduced the OpenX legacy fallback regression (1 failed); it is now green.",
-  "test_command": "python -X utf8 -m pytest -q scripts/test_k0_measure.py scripts/test_k0_target_baseline_check.py collector/tests && node --test scripts/test_provider_coverage.mjs test/quota-cards-lib.test.js && python -X utf8 scripts/k0_target_baseline_check.py && node scripts/provider_inventory_guard.mjs && node --check src/provider-coverage.js && node --check src/main.js && bash -n test/provider-coverage-runtime-smoke.sh && git diff --check",
+  "issue": 13,
+  "base_sha": "42243187f9ea93c067c56758cc290b2a90afdc58",
+  "red_proof": "Before changing r124_sentinel.py at admitted head 42243187f9ea93c067c56758cc290b2a90afdc58, Git Bash command `python -X utf8 -m pytest -q scripts/test_r124_sentinel.py::test_committed_wip_baseline_accepts_clean_checkout` exited 1: 1 failed in 0.23s. The new test failed at scripts/test_r124_sentinel.py:230 because CheckResult.passed was False with actual='tuple=4 owner-dirty=0 不一致'. The same new test is included unchanged in the green command.",
+  "test_command": "python -X utf8 -m pytest -q scripts/test_r124_sentinel.py scripts/test_k0_target_baseline_check.py && node scripts/provider_inventory_guard.mjs && python -X utf8 scripts/k0_target_baseline_check.py",
   "test_exit": 0,
-  "tests_passed": 126,
+  "tests_passed": 20,
   "tests_failed": 0,
-  "summary": "Fixed six review defects with regression-first evidence: preserve unknown metrics, validate successful quota payloads and updated_at consistently across Python/UI, find macOS configuration, pin initial historical baseline identities, and reject contradictory receipt evidence. Existing quota fixtures now contain successful timestamped payloads; all prior assertions remain. The Git Bash validation command passes 100 Python and 26 Node tests plus registry/inventory/syntax checks.",
+  "summary": "Restored the empty committed WIP baseline, preserving both existing dirty-file guards. The default-configuration regression went red to green; 20 scoped tests passed, provider inventory aligned, and all 5 K0 baseline checks passed. These checks validate the narrow sentinel repair, not issue #5 completion; review.fixed remains false because the high-severity needs-human acceptance gap is unresolved.",
   "not_done": [
-    "needs-human: later baseline versions can still reuse an ID/version after changing scope; selecting a durable immutable reference and approval contract is outside a safe self-review fix. The three baselines present at the reviewed head are now pinned.",
-    "Linux packaged-app smoke and visible WebView acceptance were not rerun on this Windows host; only smoke shell syntax and real Python/JavaScript calculations were verified. No Rust/build claim is made.",
-    "OpenAB signal ownership/backend-to-runner mappings and the synthetic 45/50-persona comprehension study remain unverified, as disclosed by PR #7.",
-    "Full script baseline before edits: 116 passed, 2 skipped, 2 failed in scripts/test_chain_staleness.py (hardcoded 17 Rust files versus 29; simulated future stale count 27/29). Those unrelated tests were not changed.",
-    "The full Node baseline has one unrelated failure in test/runtime-sync.test.js because runtime/config.template.json differs from the local runtime configuration; local configuration was not changed.",
-    "The full script worktree sentinel also fails on dirty review files and unrelated untracked .impeccable/hook.cache.json created during review. The cache is left untouched and excluded from this commit; no claim of a green full suite or clean untracked worktree is made.",
-    "No push, PR comment, branch change, merge or issue closure was performed."
+    "needs-human: Issue #5 still needs a versioned capability registry, distinct configured/live/session/quota and unavailable product states, registry-linked receipts with complete exclusions, immutable dated baselines, and cross-surface validation including the 13 advertised / 2 live / 4 excluded fixture. Registry/receipt schemas, state semantics, baseline policy and OpenAB ownership were not invented in this self-review.",
+    "Full Python suite `python -X utf8 -m pytest -q` exited 1 after the fix: 175 passed, 2 failed, 2 skipped. Both remaining failures are pre-existing scripts/test_chain_staleness.py cases: test_量測_回傳_17_個_test_檔 expects 17 files but finds 29; test_過期判定_stale_超過_threshold finds 28/29 stale files. The test module, production module and src-tauri/src tree have identical Git object IDs at admitted head and local main ced78980b1e687313b146155e83e7ab51f358b35. They were left unchanged.",
+    "Full Node suite `node --test test/*.test.js` exited 1: 21 passed, 1 failed. test/runtime-sync.test.js reports existing local-vs-repo runtime/config.template.json drift; its test and the runtime tree are identical at admitted head and local main. Neither local runtime data nor repository runtime files were changed.",
+    "Packaged-app runtime acceptance and live /metrics verification for issue #5 were not performed. No Rust build was run because Rust and product UI code were unchanged.",
+    "No push, PR comment, branch change, merge, issue closure, or deployment was performed."
   ]
 }

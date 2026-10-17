@@ -1,10 +1,20 @@
 {
-  "repo": "Reese-max/lobsterpulse",
-  "issue": 6,
-  "base_sha": "41e09eb922a37323c30878323bfea955712e2a55",
-  "candidate_sha": "2752b1b04b70169bccab5a5bef9fffae69c84bb1",
-  "reviewer": "fresh-issue-loop-reviewer",
-  "read_only": true,
-  "status": "pass",
-  "findings": []
+  "pr": 13,
+  "head": "42243187f9ea93c067c56758cc290b2a90afdc58",
+  "findings": [
+    {
+      "severity": "high",
+      "file": "README.md",
+      "line": 35,
+      "issue": "needs-human: Issue #5 acceptance is not implemented by these prose changes. There is no versioned capability registry, distinct product UI coverage states, registry-linked receipts with exclusions/reasons, immutable dated baselines, or cross-surface validator and 13/2/4 fixture. ProviderConfig still has only enabled/name/settings_path (src-tauri/src/config.rs:329), the UI still maps unavailable provider states to no events (src/main.js:1935), and KPI receipts lack registry version/exclusion metadata (scripts/k0_measure.py:288). The existing inventory and baseline guards pass without checking these claims. Confirm registry/receipt schemas, state precedence, baseline policy and OpenAB ownership before implementing the remaining acceptance; do not treat this PR as completing #5."
+    },
+    {
+      "severity": "med",
+      "file": "scripts/r124_sentinel.py",
+      "line": 87,
+      "issue": "fixed: The committed WIP tuple contained MISSION.md, README.md, docs/index.html and the absent .issue-loop-prompt.md. A clean checkout therefore failed check_owner_m_wip() with tuple=4 owner-dirty=0, and the existing WIP consistency test failed. Restored the empty committed baseline and added test_committed_wip_baseline_accepts_clean_checkout without replacing OWNER_M_WIP_FILES in the test; the new test failed before the fix and passes afterwards."
+    }
+  ],
+  "fixed": false,
+  "summary": "Fixed the clean-checkout WIP regression with a failing regression test and a Git Bash green check (20 passed). needs-human: issue #5 remains incomplete; registry/receipt schemas, UI status semantics, dated-baseline policy and OpenAB ownership require human decisions. Full Python validation retains two pre-existing chain-staleness failures, and the Node suite retains one existing local-runtime configuration drift failure."
 }

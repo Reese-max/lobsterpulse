@@ -152,6 +152,12 @@ quota 必須含成功的 runner，且內容的 `updated_at` 在新鮮度門檻�
 [`src/provider-capabilities.json`](src/provider-capabilities.json) 與
 [`docs/k0-baselines.json`](docs/k0-baselines.json)。
 
+> **覆蓋口徑聲明**（K0 量化用）：13 是註冊 provider 數，不等於「本地可觀測」數。
+> 其中 `irisx_bot` / `grokx` / `lpbot` / `mimo` 四個 OpenAB bot 為**永久非本機 scope**
+> （不寫本地 usage snapshot、OpenAB 端不可達，R182 決議移出 K0 量化），
+> 本機可達 scope 上限為 9。即時覆蓋率會隨 OpenAB 端 bot 上下線浮動，
+> 現況數值見 `MISSION.md` 的 K0 口徑表。
+
 ### 🤖 OpenAB 9 bot
 
 OpenAB process 直接 HTTP POST `/hook/{bot_id}`，bot_id 以 openab `config-*.toml` 為 source of truth：

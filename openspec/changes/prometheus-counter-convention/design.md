@@ -1,5 +1,11 @@
 # Design: Prometheus Counter Naming Convention (`_total` suffix)
 
+> **Historical plan, superseded by POSTPONED on 2026-09-26.** The
+> [migration manifest](../../../docs/metrics/counter-migration.json) records
+> the current six-pair contract and 2026-10-31 review. The former week-4
+> cutover did not occur. Examples of scrape/alert/dashboard consumers below
+> are scenarios, not an inventory of deployed external consumers.
+
 ## Counter rename 對照表（6 條 / 2026-06-05 盤點）
 
 > Source of truth：對照表本身 = spec 對齊（spec.md ADDED Requirements）
@@ -43,9 +49,9 @@
 
 ### 2. Prometheus 抓取端（owner 廣播）
 
-- 既有 `scrape_configs` 對 6 條 metric 的 `metric_relabel_configs` 過濾規則
-- 既有 recording rule 內 `rate(lobsterpulse_tokens_input[5m])` 等表達式
-- 既有 alert rule 內 alert 表達式（failure_count 超過閾值等）
+- 潛在 `scrape_configs` 對 6 條 metric 的 `metric_relabel_configs` 過濾規則
+- 潛在 recording rule 內 `rate(lobsterpulse_tokens_input[5m])` 等表達式
+- 潛在 alert rule 內 alert 表達式（failure_count 超過閾值等）
 
 ### 3. Grafana dashboard（owner 廣播）
 
@@ -59,7 +65,7 @@
 - README.md / CONTRIBUTING.md 標 6 條舊名 → 新名對照
 - docs/landing site（GitHub Pages）若有 metric 引用要同步
 
-## 廣播計劃時程（owner R107+ 真正 rename 前必走）
+## Historical broadcast plan (expired; owner evidence now required)
 
 ```
 T-0  week  0: 開新 change「prometheus-counter-rename-2026-q3」承接本 spec

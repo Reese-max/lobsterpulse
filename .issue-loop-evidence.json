@@ -1,0 +1,17 @@
+{
+  "repo": "Reese-max/lobsterpulse",
+  "issue": 19,
+  "base_sha": "69c1d24e7579ee92cccc01f6ecd26f1624bb26f7",
+  "red_proof": "At reviewed head 69c1d24e7579ee92cccc01f6ecd26f1624bb26f7, cargo test --locked --manifest-path src-tauri/Cargo.toml hooks_configurator exited 101 with E0425 at hooks_configurator.rs:2496 (replace_file_if_snapshot_unchanged_with undefined). Before integrating main, the new executable regression runner was run under Git Bash with node --test test/codex-snapshot-regression.test.cjs: exit 1, 0 passed, 1 failed; its assertion received Cargo exit 101 and the same E0425. After integrating main's already-merged PR #17 implementation, the same runner executed the exact Rust editor-save regression and passed. Logs: baseline-cargo.log, regression-red.log, regression-green.log, and final-validation.log in C:/Users/Administrator/AppData/Local/Temp/lobsterpulse-pr19-review-23e8fee31487402b89d2d72150d64893/.",
+  "test_command": "cargo test --locked --manifest-path src-tauri/Cargo.toml && node --test test/codex-snapshot-regression.test.cjs test/version-consistency.test.js test/installation-docs.test.js test/quota-cards-lib.test.js scripts/test_provider_coverage.mjs && git diff --check",
+  "test_exit": 0,
+  "tests_passed": 644,
+  "tests_failed": 0,
+  "summary": "Fixed both PR #19 findings with regression-first evidence. Integrated verified main e1adcdb66e2efe46c951619368ef2748bbfecdfa into the current PR branch to reuse merged PR #17's implementation and resolve the duplicate-test conflict; hooks_configurator.rs is byte-identical to that main. Replaced the Node source-regex check with a bounded Cargo invocation requiring successful execution of the exact Rust regression, so missing, ignored, or filtered-out tests cannot pass silently. The Git Bash validation command exited 0 with 608 Rust and 36 Node tests passing; the Node wrapper also reruns the one named Rust regression.",
+  "not_done": [
+    "Broader Node command node --test test/*.test.js scripts/test_provider_coverage.mjs exited 1: 35 passed, 1 failed in test/runtime-sync.test.js because runtime/config.template.json differs from the existing local runtime configuration. git diff --exit-code confirms that test and runtime/ are unchanged between the reviewed head, verified main, and current worktree. The local runtime configuration was not changed; this unrelated failure is outside the passing evidence command.",
+    "The Rust suite retains its 5 existing ignored tests; no test assertions or ignore settings were weakened.",
+    "Validation ran on Windows. Linux/macOS builds, installer packages, visible app acceptance, and real Codex CLI event activation were not rerun; issue #3 remains open for its remaining acceptance gates.",
+    "No push, PR comment, remote write, issue closure, or modification of any other branch was performed. Hosted CI has not run on this local candidate."
+  ]
+}

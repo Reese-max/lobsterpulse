@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "state": "POSTPONED",
+  "decision_date": "2026-09-26",
+  "owner": "Reese-max/lobsterpulse maintainers",
+  "owner_acknowledgement": "pending",
+  "evidence": [
+    "https://github.com/Reese-max/lobsterpulse/issues/11",
+    "src-tauri/src/lib.rs:LP_METRICS",
+    "src-tauri/src/lib.rs:render_prometheus_body",
+    "docs/metrics/consumer-inventory.md"
+  ],
+  "next_review_date": "2026-10-31",
+  "next_action": "Obtain an explicit inventory and approval from Prometheus, Grafana, and alert owners. Review by 2026-10-31; renew the postponement if evidence is still missing. The review date is not a removal date.",
+  "cutover_gate": "Never remove legacy series until owners supply a consumer inventory, updated query receipts, and a successful scrape and restart receipt.",
+  "pairs": [
+    {"legacy": "lobsterpulse_tokens_input", "canonical": "lobsterpulse_tokens_input_total"},
+    {"legacy": "lobsterpulse_tokens_output", "canonical": "lobsterpulse_tokens_output_total"},
+    {"legacy": "lobsterpulse_provider_tokens_input", "canonical": "lobsterpulse_provider_tokens_input_total"},
+    {"legacy": "lobsterpulse_provider_tokens_output", "canonical": "lobsterpulse_provider_tokens_output_total"},
+    {"legacy": "lobsterpulse_provider_failure_count", "canonical": "lobsterpulse_provider_failure_count_total"},
+    {"legacy": "lobsterpulse_provider_session_count", "canonical": "lobsterpulse_provider_session_count_total"}
+  ],
+  "phase_one": {
+    "status": "closed",
+    "scope": "T-1 dual emit implementation only",
+    "successor_tracking": "https://github.com/Reese-max/lobsterpulse/issues/11",
+    "required_successors": [
+      {"id": "T-2", "state": "blocked", "reason": "External owner inventory and broadcast receipt absent"},
+      {"id": "T-3", "state": "blocked", "reason": "Monitoring window and holdout receipt absent"},
+      {"id": "T-4", "state": "postponed", "reason": "Cutover gate has no consumer evidence"},
+      {"id": "T-5", "state": "blocked", "reason": "Post-cutover observation cannot start before T-4"}
+    ]
+  },
+  "consumers": {
+    "in_repo": [
+      {"path": "src-tauri/src/lib.rs", "kind": "exporter_and_contract_tests", "names": "legacy_and_canonical"},
+      {"path": "openspec/changes/prometheus-counter-rename-2026-q3/design.md", "kind": "illustrative_promql_only", "names": "legacy"},
+      {"path": "docs/metrics/consumer-inventory.md", "kind": "scoped_repository_inventory", "names": "legacy_and_canonical"}
+    ],
+    "in_repo_active_promql_rules_dashboards": [],
+    "external_status": "unknown_no_owner_inventory",
+    "external": []
+  }
+}

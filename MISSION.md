@@ -34,6 +34,13 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 
 ## 90 天成功指標（KPI）
 
+> **2026-09-26 現行口徑**：以下 R81 目標與 R182/R197 觀測為歷史紀錄，保留原分母與結果。
+> R182 把四個 OpenAB bot 視為完全不可本機觀測、因而宣稱「0 結構性差距」的推論已失效：
+> 四個 ID 皆可透過 `POST /hook/{provider}` 傳送事件；目前未確認的是 quota snapshot 來源。
+> 現行基線 `k0-2026-09-26` 對全部 13 個已註冊 active ID 分開衡量已設定、近 24h 有事件、
+> 非零 session、新鮮 quota。實測分子與完整排除理由以 `scripts/k0_measure.py` 的帶版本收據為準；
+> 來源中斷時標未知。歷史與現行基線保存在 `docs/k0-baselines.json`，scope 變更必須新增有日期的基線。
+
 > 90 天後（~2026-09-04）回頭驗收這 3 個數字。
 
 | KPI | 前值 (R81) | 90 天目標 | 量測方式 |
@@ -76,11 +83,19 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 - 中間補敘述 (R109/R111/R114/R119/R122/R127/R128/R130/R131) 全部歸檔 [`docs/kpi-history.md`](kpi-history.md), 恢復 MISSION 決策可讀性
 - 下個 M1 候選：R133+ 接力 K0 Quota 4 missing 補鏈路 (OpenAB scope) + R133+ 接力 K0-A1 emit 4/13 → 5/13 護衛 (本機 4 已達穩態, 5/13 需 cicx OpenAB 端) + R117 capsule-brief JS 配套等 owner M 收 + R133+ 接力護衛 過期契約審計 (護衛對應 spec 最後更新時間)
 
-### R182 補 (Path A 結構性降級決議: 4+5+4 永久非 scope) — R197 closure
+### 歷史紀錄：R182 補 (Path A 結構性降級決議: 4+5+4 永久非 scope) — R197 closure
+
+> 以下保留當時決議與數值，不作為現行 KPI 判定。其「四個 bot 無本機 hook 觀測」假設與
+> 「0 結構性差距」結論已由 2026-09-26 基線取代；沒有回算或改寫歷史結果。
 
 > **觸發**: MISSION 自身定義的強制升級條件過期 ~10 週沒人 fire, R182 觸發訊號鏈
 > 3 重鎖定 (AI Supervisor 方向 UNKNOWN 0/10 + 策略顧問 #1 行動 closure 路徑 +
 > MISSION 自身 2-週 lag 觸發條件過期 ~10 週)。R197 選 **Path A 降級** 1 輪 closure。
+
+> **「0 結構性差距」的口徑聲明**：下表所有「0 結構性差距」僅對**已宣告可達 scope**
+> 成立（本機 4 + OpenAB 5 = 9），不是對外宣稱的 13 provider。4 個永久非本機 scope 的
+> bot（irisx_bot/grokx/lpbot/mimo）已移出分母；若把 13 當分母，實際觀測覆蓋率仍以
+> 表列分子（如 2/13 emit）為準——「0 gap」不代表 13 provider 都在被監控。
 
 **K0 結構性降級口徑 (R182 決議, R197 落地)**:
 
@@ -105,7 +120,7 @@ LobsterPulse 必須能用 1 個膠囊 + 1 個 view 讓他 0 切換成本地知�
 永久 skip / MISSION R182 補欄 + 4 missing + 永久非 scope 標記不退)。
 
 **未選 Path B 原因**: 1 sprint 工作量 (~500 行 Rust + 9 handler + 護衛), owner M capacity
-未確認, 結構性風險 > 結構性收益 (Path A 已能 0 結構性差距達標, Path B 的 4 missing
+未確認, 結構性風險 > 結構性收益 (Path A 對已宣告可達 scope 9/13 已能 0 結構性差距達標——非對外宣稱的 13 provider 全數, Path B 的 4 missing
 unblock 收益不抵 sprint 級投入)。
 
 ### M1 補 (2026-07-05): otel-genai Phase 2/3 落地 closure

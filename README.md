@@ -17,6 +17,108 @@
 - 音效資料夾：`~/.config/lobsterpulse/sounds/`
 - runtime port 檔：`~/.lobsterpulse/port`
 
+> **注意**：上述執行檔只會在自行建置後出現；clone 本身不含執行檔。
+
+## 安裝（目前僅提供可驗證的原始碼建置）
+
+這個 repository 目前沒有可供安裝者下載的已發佈 bundle 或 installer。以下內容只描述
+如何由固定 commit 建置並核對產物；這是目前 repository 的事實狀態，不代替 Owner 的
+發行方式決策，也不建立原始碼限定的分發政策。本節不會建立 tag、release 或 installer。
+
+建置 release webview 時必須使用 `cargo tauri build --no-bundle`。不要以
+`cargo build --release` 代替，否則會跳過 Tauri 的 frontend embedding。
+
+### Windows 11 前置需求
+
+- Rust `1.77.2` 以上，使用 `stable-x86_64-pc-windows-msvc` toolchain。
+- Visual Studio Build Tools 2022 的 **Desktop development with C++**，包含 MSVC x64/x86
+  build tools 與 Windows 10/11 SDK。
+- Microsoft Edge WebView2 Runtime。
+- Tauri CLI `2.11.4`。這是本次本機 source build 實際驗證並建議重現的版本；
+  `--locked` 只要求使用該 crate 發佈時的 lockfile，必須同時指定 `--version 2.11.4`
+  才是固定 CLI 版本。既有 build / release CI 仍安裝 `tauri-cli@^2.0`，因此本文件不宣稱
+  repository 的所有環境都已鎖在 `2.11.4`。
+- Node.js 只用於執行 `npm test` 文件與版本護欄，不是這個靜態 frontend 的 build prerequisite。
+
+可先核對既有工具；缺少工具時請依
+[Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) 安裝，不要略過平台安全元件：
+
+```powershell
+rustc --version
+cargo --version
+cargo tauri --version
+node --version
+```
+
+若尚未安裝指定 CLI，使用精確版本：
+
+```powershell
+cargo install tauri-cli --version 2.11.4 --locked
+```
+
+從 repository root 建置；不要先切換到 `src-tauri`，下列產物路徑也都以 repository root
+為基準：
+
+```powershell
+cargo tauri build --no-bundle
+```
+
+Windows 產物：
+
+- `src-tauri\target\release\lobster-pulse.exe`（主程式）
+- `src-tauri\target\release\lobster-pulse-hook.exe`（hook sidecar）
+
+只核對檔案存在與 SHA-256，不需要啟動任何程式：
+
+```powershell
+$artifacts = @(
+  '.\src-tauri\target\release\lobster-pulse.exe',
+  '.\src-tauri\target\release\lobster-pulse-hook.exe'
+)
+$artifacts | ForEach-Object {
+  if (-not (Test-Path -LiteralPath $_ -PathType Leaf)) { throw "Missing artifact: $_" }
+}
+Get-FileHash -Algorithm SHA256 -LiteralPath $artifacts
+```
+
+目前 release workflow 沒有產生 checksum manifest；上面的 hash 是本機建置產物驗證，
+不能描述成已發佈 bundle 的 checksum。
+
+### macOS 前置需求與產物
+
+先安裝 Xcode Command Line Tools、Rust MSVC 以外的 macOS stable toolchain，以及相同的
+Tauri CLI 精確版本。以下命令均從 repository root 執行：
+
+```bash
+cargo install tauri-cli --version 2.11.4 --locked
+cargo tauri build --no-bundle
+test -x src-tauri/target/release/lobster-pulse
+test -x src-tauri/target/release/lobster-pulse-hook
+shasum -a 256 src-tauri/target/release/lobster-pulse \
+  src-tauri/target/release/lobster-pulse-hook
+```
+
+### Linux 前置需求與產物
+
+先依發行版安裝 Rust 與 Tauri v2 所列的 WebKitGTK／系統開發套件，再使用相同的 Tauri
+CLI 精確版本。以下命令均從 repository root 執行：
+
+```bash
+cargo install tauri-cli --version 2.11.4 --locked
+cargo tauri build --no-bundle
+test -x src-tauri/target/release/lobster-pulse
+test -x src-tauri/target/release/lobster-pulse-hook
+sha256sum src-tauri/target/release/lobster-pulse \
+  src-tauri/target/release/lobster-pulse-hook
+```
+
+主程式與 sidecar 必須保留在同一目錄。專案目前沒有 auto-update；切換到另一個 source
+revision 時，應一起替換兩個由同一次 build 產生的檔案。
+
+設定與資料位置依平台解析 home directory：app 設定為
+`~/.config/lobsterpulse/config.json`，音效為 `~/.config/lobsterpulse/sounds/`，runtime
+port 為 `~/.lobsterpulse/port`。
+
 ## 預設工作流
 
 這版不是照 upstream 原封不動保留，而是直接往你的使用習慣收斂：
@@ -30,7 +132,25 @@
 
 ## 監控清單（v5.1+）
 
-LobsterPulse v5.1 同時監控兩條路徑，共 **13 provider**（🤖 OpenAB 9 + 💻 本機 4）。
+> ℹ️「v5.1+」指上方監控清單的列表版本（與 provider 總數），**不是 App 主版本**。
+> App 主版本以 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
+> 為準（目前 `v0.5.4`），三者已對齊，護欄見 `test/version-consistency.test.js`。
+
+LobsterPulse v5.1 **註冊 13 個整合**（🤖 OpenAB 9 + 💻 本機 CLI 4）；
+每個 ID 都可接收對應 hook 事件。這不是「13 個正在監控」的即時宣稱。
+
+覆蓋數字分開顯示：**已註冊**（registry ID）、**已設定**（app config enabled）、
+**近 24h 有事件**（`/metrics` 事件計數與最近事件年齡）、**非零 session**
+（目前 `/metrics` session 數 > 0）、**新鮮 quota**（對應 snapshot < 24h）。
+quota 必須含成功的 runner，且內容的 `updated_at` 在新鮮度門檻內；複製檔案或更新 mtime 不會讓舊資料變新。
+請以設定頁「監控覆蓋」與 `python scripts/k0_measure.py` 的帶時間戳收據查看本機現況；
+資料來源中斷顯示「未知」，不推算成 0/13。每個數字保留 13 個已註冊 ID 的對照分母和排除原因。
+
+`irisx_bot` / `grokx` / `lpbot` / `mimo` 的 hook 可送到本機，
+但 quota snapshot 來源及 OpenAB owner 尚待確認；缺 quota 時顯示**外部來源待確認**，
+仍計入 13 個已註冊整合的缺口。契約與目前基線見
+[`src/provider-capabilities.json`](src/provider-capabilities.json) 與
+[`docs/k0-baselines.json`](docs/k0-baselines.json)。
 
 ### 🤖 OpenAB 9 bot
 
@@ -65,16 +185,19 @@ Source of truth：`src-tauri/src/config.rs::default_providers()`（line 356-449�
 
 ## Prometheus `/metrics` endpoint
 
-LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
+LobsterPulse 內 47 條 Prometheus metric 透過 port+100 exporter emit
 （預設 `http://127.0.0.1:19380/metrics`）。完整契約見
 [`openspec/changes/otel-provider-metrics-contract/`](openspec/changes/otel-provider-metrics-contract/)
-（41 條 7 段組織 + R102/R103 護衛 chain 守住 set 與 emit 對齊）。
+（原始 41 條、6 條相容別名；R102/R103 護衛 chain 守住 set 與 emit 對齊）。
 
-> ⚠️ **DEPRECATION 公告 (2026-06-05)**：6 條 counter-typed metric 將於
-> **2026-07-03** rename 為 `_total` 結尾（對齊 Prometheus naming convention）。
-> 抓取端 / alert / Grafana dashboard 對**現名**的引用將失效。完整對照表見
-> [CHANGELOG.md](CHANGELOG.md) v0.5.5 段，5 週廣播時程見
-> [`openspec/changes/prometheus-counter-convention/design.md`](openspec/changes/prometheus-counter-convention/design.md)。
+> **Counter migration: POSTPONED (decision 2026-09-26; review 2026-10-31).**
+> The 2026-07-03 removal did not happen. Use the six `_total` names for new
+> PromQL; all six legacy names remain dual-emitted with equal values. This adds
+> six metric families and, for the four per-provider pairs, up to four extra
+> series per provider. The review date is not a removal date. Legacy names stay
+> until monitoring owners supply a consumer inventory and cutover receipts.
+> The [migration manifest](docs/metrics/counter-migration.json) lists every pair,
+> the owner and evidence; `/metrics` HELP repeats the decision and review date.
 
 ## 主要檔案
 
@@ -90,40 +213,18 @@ LobsterPulse 內 41 條 Prometheus metric 透過 port+100 exporter emit
 - [scripts/bootstrap_git.ps1](scripts/bootstrap_git.ps1)
 - [REPO_SETUP.md](REPO_SETUP.md)
 
-## 執行
+## 建置摘要
 
-### 直接跑目前產物
+完整前置需求、各平台產物路徑、存在性檢查與 hash 命令都在上方「安裝」一節。所有 build
+命令由 repository root 執行，本節不另外提供 installer 或 release 流程。release webview
+驗證仍必須執行：
 
-```powershell
-.\src-tauri\target\release\lobster-pulse.exe
+```text
+cargo tauri build --no-bundle
 ```
 
-主程式與 sidecar 要放在同一層，因為主程式會找相鄰的 `lobster-pulse-hook.exe`。
-
-### 重新建置 release
-
-> ⚠️ **必用 `cargo tauri build`，不可純 `cargo build --release`**。
-> 純 cargo build --release 會跳過 frontend embed，release webview fallback
-> 到 devUrl（localhost:1420）→ 啟動白屏 / "Could not connect to localhost"。
-> 對齊 `CLAUDE.md`「Build SOP（重要）」段 + `build.sh` L10-12 註解。
-
-兩種變體：
-
-- **快速驗證**（只要 `.exe`，不打 installer）：
-
-  ```powershell
-  cd .\src-tauri
-  cargo tauri build --no-bundle
-  ```
-
-  前置：`cargo install tauri-cli --locked`（鎖版避免 Tauri CLI breaking change）。
-
-- **完整 installer**（要 `.msi` / `.deb` / `.AppImage` 等）：
-
-  ```powershell
-  cargo install tauri-cli --locked
-  cargo tauri build
-  ```
+這項 build 只建立二進位，不會啟動主程式或 sidecar，也不會改動真實的 CLI profile、hooks
+或自動啟動設定。
 
 ## 品牌資產
 
@@ -172,13 +273,14 @@ repo 內附了一個可以重生品牌圖示的腳本：
 
 ## 驗證狀態
 
-這版目前已驗證過：
+候選變更應執行下列 admission checks；build 成功本身不代表桌面 runtime 已驗收：
 
-- `cargo check`
+- `npm test`（版本與安裝文件護欄）
+- `cargo test --manifest-path src-tauri/Cargo.toml --locked`
 - `cargo tauri build --no-bundle`（release 二進位，frontend 已 embed）
-- `lobster-pulse.exe` 可成功啟動
+- 兩個平台對應產物的存在性與 SHA-256 檢查
 
 ## 已知保留項
 
-- `CLAUDE.md` 仍主要是 upstream 專案說明，這回合沒有一起重寫
-- docs 裡沒有掛你的實際 repo / release 下載連結，因為你還沒提供正式發佈位置
+- `CLAUDE.md` 仍主要是 upstream 專案說明；本次只釐清本機 source build 驗證使用的 CLI 版本與既有 CI 範圍
+- repository 目前沒有可下載的正式 bundle；本文件只證明 source build 路徑，不作 Owner 發行方式決策

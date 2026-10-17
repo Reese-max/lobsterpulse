@@ -138,6 +138,10 @@ echo "$METRICS" | grep -E 'lobsterpulse_provider_sessions[{]provider="codex"[}] 
   || { echo "$METRICS" | grep -i "codex"; fail "codex session not counted in /metrics"; }
 info "metrics: codex session counted"
 
+# Issue #5: same packaged app, disposable home and real /metrics endpoint.
+bash test/provider-coverage-runtime-smoke.sh "$HOME_DIR" "$PORT" \
+  || fail "provider coverage runtime receipt"
+
 # ── 6. receipt ────────────────────────────────────────────────
 echo "[smoke] --- config.toml after enable ---"; cat "$HOME_DIR/.codex/config.toml"
 echo "[smoke] --- /metrics codex lines ---"

@@ -5,20 +5,9 @@ import { dirname, resolve } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 const mainJs = readFileSync(resolve(root, "src", "main.js"), "utf8");
-
-const EXPECTED_OPENAB_BOTS = [
-  "cicx",
-  "gitx",
-  "giminix",
-  "codex_bot",
-  "openx",
-  "irisx_bot",
-  "grokx",
-  "lpbot",
-  "mimo",
-];
-
-const EXPECTED_LOCAL_PROVIDERS = ["claude", "codex", "copilot", "gemini"];
+const registry = JSON.parse(readFileSync(resolve(root, "src", "provider-capabilities.json"), "utf8"));
+const EXPECTED_OPENAB_BOTS = registry.providers.filter(p => p.scope === "openab_push").map(p => p.id);
+const EXPECTED_LOCAL_PROVIDERS = registry.providers.filter(p => p.scope === "local_cli").map(p => p.id);
 
 function fail(message) {
   console.error(`[provider-inventory-guard] ${message}`);

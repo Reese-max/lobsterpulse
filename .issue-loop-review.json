@@ -1,10 +1,20 @@
 {
-  "repo": "Reese-max/lobsterpulse",
-  "issue": 6,
-  "base_sha": "41e09eb922a37323c30878323bfea955712e2a55",
-  "candidate_sha": "2752b1b04b70169bccab5a5bef9fffae69c84bb1",
-  "reviewer": "fresh-issue-loop-reviewer",
-  "read_only": true,
-  "status": "pass",
-  "findings": []
+  "pr": 19,
+  "head": "69c1d24e7579ee92cccc01f6ecd26f1624bb26f7",
+  "findings": [
+    {
+      "severity": "high",
+      "file": "src-tauri/src/hooks_configurator.rs",
+      "line": 2496,
+      "issue": "The new regression calls replace_file_if_snapshot_unchanged_with, which is undefined at the reviewed head. cargo test --locked --manifest-path src-tauri/Cargo.toml hooks_configurator exits 101 with E0425, preventing the platform test suites from compiling. The prerequisite implementation and identical regression have already landed through PR #17; this branch must incorporate that main history instead of duplicating the implementation."
+    },
+    {
+      "severity": "med",
+      "file": "test/codex-snapshot-regression.test.cjs",
+      "line": 14,
+      "issue": "The Node test checks two source-name regexes without executing Rust or asserting editor-save preservation. Matching comments or an unused helper can satisfy it even when the Rust regression does not compile or its assertions fail. Run the exact Rust regression and require both a successful exit and confirmation that the named test actually passed."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed both findings by integrating verified main e1adcdb (including merged PR #17), retaining its existing Rust regression, and replacing source-name checks with execution of that exact test. Git Bash validation passed 608 Rust tests (5 existing ignored) and 36 Node tests with exit 0. The broader Node suite still has one unrelated local runtime-sync failure (35 passed, 1 failed), and real Codex CLI/installer acceptance remains unverified."
 }

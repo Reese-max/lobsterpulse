@@ -1,0 +1,18 @@
+{
+  "repo": "Reese-max/lobsterpulse",
+  "issue": 13,
+  "base_sha": "42243187f9ea93c067c56758cc290b2a90afdc58",
+  "red_proof": "Before changing r124_sentinel.py at admitted head 42243187f9ea93c067c56758cc290b2a90afdc58, Git Bash command `python -X utf8 -m pytest -q scripts/test_r124_sentinel.py::test_committed_wip_baseline_accepts_clean_checkout` exited 1: 1 failed in 0.23s. The new test failed at scripts/test_r124_sentinel.py:230 because CheckResult.passed was False with actual='tuple=4 owner-dirty=0 不一致'. The same new test is included unchanged in the green command.",
+  "test_command": "python -X utf8 -m pytest -q scripts/test_r124_sentinel.py scripts/test_k0_target_baseline_check.py && node scripts/provider_inventory_guard.mjs && python -X utf8 scripts/k0_target_baseline_check.py",
+  "test_exit": 0,
+  "tests_passed": 20,
+  "tests_failed": 0,
+  "summary": "Restored the empty committed WIP baseline, preserving both existing dirty-file guards. The default-configuration regression went red to green; 20 scoped tests passed, provider inventory aligned, and all 5 K0 baseline checks passed. These checks validate the narrow sentinel repair, not issue #5 completion; review.fixed remains false because the high-severity needs-human acceptance gap is unresolved.",
+  "not_done": [
+    "needs-human: Issue #5 still needs a versioned capability registry, distinct configured/live/session/quota and unavailable product states, registry-linked receipts with complete exclusions, immutable dated baselines, and cross-surface validation including the 13 advertised / 2 live / 4 excluded fixture. Registry/receipt schemas, state semantics, baseline policy and OpenAB ownership were not invented in this self-review.",
+    "Full Python suite `python -X utf8 -m pytest -q` exited 1 after the fix: 175 passed, 2 failed, 2 skipped. Both remaining failures are pre-existing scripts/test_chain_staleness.py cases: test_量測_回傳_17_個_test_檔 expects 17 files but finds 29; test_過期判定_stale_超過_threshold finds 28/29 stale files. The test module, production module and src-tauri/src tree have identical Git object IDs at admitted head and local main ced78980b1e687313b146155e83e7ab51f358b35. They were left unchanged.",
+    "Full Node suite `node --test test/*.test.js` exited 1: 21 passed, 1 failed. test/runtime-sync.test.js reports existing local-vs-repo runtime/config.template.json drift; its test and the runtime tree are identical at admitted head and local main. Neither local runtime data nor repository runtime files were changed.",
+    "Packaged-app runtime acceptance and live /metrics verification for issue #5 were not performed. No Rust build was run because Rust and product UI code were unchanged.",
+    "No push, PR comment, branch change, merge, issue closure, or deployment was performed."
+  ]
+}

@@ -1,20 +1,14 @@
 {
   "pr": 13,
-  "head": "42243187f9ea93c067c56758cc290b2a90afdc58",
+  "head": "c470ce37a4d204db5e8c25936726fcfd8be20873",
   "findings": [
     {
       "severity": "high",
       "file": "README.md",
-      "line": 35,
-      "issue": "needs-human: Issue #5 acceptance is not implemented by these prose changes. There is no versioned capability registry, distinct product UI coverage states, registry-linked receipts with exclusions/reasons, immutable dated baselines, or cross-surface validator and 13/2/4 fixture. ProviderConfig still has only enabled/name/settings_path (src-tauri/src/config.rs:329), the UI still maps unavailable provider states to no events (src/main.js:1935), and KPI receipts lack registry version/exclusion metadata (scripts/k0_measure.py:288). The existing inventory and baseline guards pass without checking these claims. Confirm registry/receipt schemas, state precedence, baseline policy and OpenAB ownership before implementing the remaining acceptance; do not treat this PR as completing #5."
-    },
-    {
-      "severity": "med",
-      "file": "scripts/r124_sentinel.py",
-      "line": 87,
-      "issue": "fixed: The committed WIP tuple contained MISSION.md, README.md, docs/index.html and the absent .issue-loop-prompt.md. A clean checkout therefore failed check_owner_m_wip() with tuple=4 owner-dirty=0, and the existing WIP consistency test failed. Restored the empty committed baseline and added test_committed_wip_baseline_accepts_clean_checkout without replacing OWNER_M_WIP_FILES in the test; the new test failed before the fix and passes afterwards."
+      "line": 155,
+      "issue": "fixed: The added coverage block revived the superseded R182 exclusions: it called irisx_bot/grokx/lpbot/mimo permanently unreachable and capped current scope at nine. All four are active in src/provider-capabilities.json, and the current dated baseline includes all 13 in both health and quota denominators; only their quota ownership is unconfirmed. This contradicted the preceding README paragraph, UI/KPI receipts and issue #5. Removed the stale block and extended the shared validator at scripts/k0_target_baseline_check.py:174 to reject both '本機可達 scope 上限為 9' and '本地可達上限 9', with regression-first evidence."
     }
   ],
-  "fixed": false,
-  "summary": "Fixed the clean-checkout WIP regression with a failing regression test and a Git Bash green check (20 passed). needs-human: issue #5 remains incomplete; registry/receipt schemas, UI status semantics, dated-baseline policy and OpenAB ownership require human decisions. Full Python validation retains two pre-existing chain-staleness failures, and the Node suite retains one existing local-runtime configuration drift failure."
+  "fixed": true,
+  "summary": "Fixed one high-severity regression: removed superseded nine-provider exclusions from README and made the shared guard reject both phrasings, with a red-to-green regression and 60 passing tests in the Git Bash verification command. Refreshed the stale review/evidence for c470ce37; the merged registry, UI states and KPI receipts already exist. Pre-change full suites retain two Python chain-staleness failures and one Node local-runtime drift failure; needs-human: OpenAB ownership confirmation and packaged-app/UI/metrics acceptance remain outstanding, so issue #5 completion is not claimed."
 }

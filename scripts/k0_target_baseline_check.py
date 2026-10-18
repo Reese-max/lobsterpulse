@@ -171,7 +171,7 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
             errors.append(f"{name}: registered count label missing or mismatched")
         if any(x not in content for x in ("已設定", "非零 session", "quota")):
             errors.append(f"{name}: distinct runtime coverage labels missing")
-        if "本地可達上限 9" in content or "0 結構性差距" in content:
+        if re.search(r"本[地機]可達(?:\s+scope)?\s*上限(?:為)?\s*9\b", content) or "0 結構性差距" in content:
             errors.append(f"{name}: obsolete nine-provider or zero-gap claim")
     if "2026-09-26 現行口徑" not in mission or "歷史紀錄：R182" not in mission:
         errors.append("MISSION must distinguish current and historical baselines")

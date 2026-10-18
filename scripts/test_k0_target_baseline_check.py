@@ -125,7 +125,12 @@ def test_historical_target_rewrite_and_receipt_mismatch_fail():
     assert any("denominator disagrees" in e for e in guard.validate_receipt(receipt, registry))
 
 
-def test_readme_mismatch_fails(tmp_path):
+@pytest.mark.parametrize("claim, error", [
+    ("註冊 12", "README: registered count"),
+    ("註冊 13（本地可達上限 9）", "README: obsolete nine-provider or zero-gap claim"),
+    ("註冊 13（本機可達 scope 上限為 9）", "README: obsolete nine-provider or zero-gap claim"),
+])
+def test_readme_mismatch_fails(tmp_path, claim, error):
     registry, baselines = current()
     files = ["README.md", "MISSION.md", "docs/index.html", "src/index.html",
              "src/main.js", "src/provider-coverage.js", "src-tauri/src/config.rs",
@@ -136,9 +141,9 @@ def test_readme_mismatch_fails(tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
     readme = tmp_path / "README.md"
-    readme.write_text(readme.read_text(encoding="utf-8").replace("註冊 13", "註冊 12"),
+    readme.write_text(readme.read_text(encoding="utf-8").replace("註冊 13", claim),
                       encoding="utf-8")
-    assert any("README: registered count" in e for e in guard.validate(registry, baselines, root=tmp_path))
+    assert any(error in e for e in guard.validate(registry, baselines, root=tmp_path))
 
 
 def test_review_metrics_outage_is_unknown(tmp_path, monkeypatch, capsys):

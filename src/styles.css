@@ -1078,6 +1078,21 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 .setting-group:has(#toggle-discord),
 .setting-group-col:has(#dc-token),
 .setting-group-col:has(#openab-restart-cmd) { display: none; }
+/* 只留額度（2026-10-20 使用者要求；開關＝main.js QUOTA_ONLY＋lib.rs SHOW_NON_QUOTA_FEATURES）：
+   工作階段狀態、提示條、等待／最近完成清單、助手與通知分頁、工作階段時間門檻全部藏起來。
+   DOM 與程式碼保留；!important 是因為這些元素的顯示由 JS 切 hidden／inline style 控制。 */
+html.quota-only #capsule-icons,
+html.quota-only #capsule-status,
+html.quota-only #capsule-time,
+html.quota-only #capsule-count,
+html.quota-only #capsule-error-dot,
+html.quota-only #capsule-brief,
+html.quota-only #lp-toast,
+html.quota-only #uv-waiting,
+html.quota-only #uv-recent,
+html.quota-only .settings-tab[data-tab="providers"],
+html.quota-only .settings-tab[data-tab="notify"],
+html.quota-only .setting-group-col:has(#idle-secs) { display: none !important; }
 /* 儲存回饋：設定都是改完即存，沒有這個使用者無從知道存了沒、有沒有失敗 */
 .settings-save-status {
   margin-left: auto; font-size: 11px; font-weight: 600; white-space: nowrap;

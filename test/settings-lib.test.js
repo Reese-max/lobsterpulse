@@ -1,6 +1,16 @@
 const { test } = require("node:test");
 const assert = require("node:assert");
-const { parseBoundedInt, RESET_KEYS, applyDefaults } = require("../src/settings-lib.js");
+const { parseBoundedInt, RESET_KEYS, resetKeysFor, applyDefaults } = require("../src/settings-lib.js");
+
+test("resetKeysFor：只留額度模式下一般頁連系統通知一起還原", () => {
+  assert.deepStrictEqual(resetKeysFor("general", false), ["pin_expanded"]);
+  assert.deepStrictEqual(resetKeysFor("general", true), ["pin_expanded", "system_notifications"]);
+  assert.deepStrictEqual(resetKeysFor("advanced", true), RESET_KEYS.advanced, "其他頁不受影響");
+  assert.deepStrictEqual(resetKeysFor("keys", true), [], "沒有還原清單的頁回空");
+  const appearance = { pin_expanded: true, system_notifications: true };
+  const changed = applyDefaults(appearance, { pin_expanded: false, system_notifications: false }, "general", resetKeysFor("general", true));
+  assert.deepStrictEqual(changed.sort(), ["pin_expanded", "system_notifications"]);
+});
 
 test("parseBoundedInt：範圍內的整數才算數，其餘回原因", () => {
   assert.deepStrictEqual(parseBoundedInt("300", 60, Infinity), { ok: true, value: 300, message: "" });

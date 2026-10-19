@@ -34,6 +34,13 @@ use tauri::{
 struct AppSessionManager(Mutex<SessionManager>);
 struct AppConfigState(Mutex<AppConfig>);
 
+/// 「只留額度」模式（2026-10-20 使用者要求：這個程式單純只做額度）。
+/// false 時系統匣只留顯示／設定／主題／設定檔／重新啟動／結束，不註冊 Bot 總覽與事件診斷
+/// 的快捷鍵，工作階段閒置與工具失敗不跳通知；額度相關的提醒（偏低、用量異常、日週報）照常。
+/// 工作階段監控、Bot 總覽、OpenAB 等程式碼全部保留，改回 true 即恢復——前端要同時把
+/// main.js 的 QUOTA_ONLY 改成 false。
+pub(crate) const SHOW_NON_QUOTA_FEATURES: bool = false;
+
 /// 系統匣的快速開關（勾選式選單項）。設定頁改了同一個值時要回頭更新勾選狀態。
 struct TrayQuickToggles {
     sound: CheckMenuItem<tauri::Wry>,
@@ -4532,7 +4539,13 @@ pub fn run() {
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;
                 let gs = app.global_shortcut();
-                for combo in ["CommandOrControl+Shift+L", "CommandOrControl+Shift+D", "CommandOrControl+Shift+E"] {
+                // D＝Bot 總覽、E＝事件診斷，只留額度模式下不註冊（也不佔用這兩組按鍵）
+                let combos: &[&str] = if SHOW_NON_QUOTA_FEATURES {
+                    &["CommandOrControl+Shift+L", "CommandOrControl+Shift+D", "CommandOrControl+Shift+E"]
+                } else {
+                    &["CommandOrControl+Shift+L"]
+                };
+                for &combo in combos {
                     if let Err(e) = gs.register(combo) {
                         log::warn!("register shortcut {combo} failed: {e}");
                     }
@@ -4810,22 +4823,26 @@ pub fn run() {
                 notify: quick_notify.clone(),
                 pin: quick_pin.clone(),
             });
-            let menu = MenuBuilder::new(app)
-                .item(&show)
-                .item(&dashboard)
-                .item(&settings)
-                .item(&events_log)
-                .separator()
-                .item(&quick_sound)
-                .item(&quick_notify)
-                .item(&quick_pin)
-                .separator()
-                .item(&toggle_theme)
-                .item(&openab_restart)
-                .item(&open_config)
-                .item(&restart)
-                .item(&quit)
-                .build()?;
+            // 只留額度模式（SHOW_NON_QUOTA_FEATURES=false）時，非額度的項目不放進選單；
+            // 項目本身照建，事件處理也保留，改回 true 就恢復原樣
+            let mut menu = MenuBuilder::new(app).item(&show);
+            if SHOW_NON_QUOTA_FEATURES {
+                menu = menu.item(&dashboard);
+            }
+            menu = menu.item(&settings);
+            if SHOW_NON_QUOTA_FEATURES {
+                menu = menu
+                    .item(&events_log)
+                    .separator()
+                    .item(&quick_sound)
+                    .item(&quick_notify)
+                    .item(&quick_pin);
+            }
+            menu = menu.separator().item(&toggle_theme);
+            if SHOW_NON_QUOTA_FEATURES {
+                menu = menu.item(&openab_restart);
+            }
+            let menu = menu.item(&open_config).item(&restart).item(&quit).build()?;
 
             let icon_bytes = include_bytes!("../icons/32x32.png");
             let icon = Image::from_bytes(icon_bytes)?;
@@ -13540,5 +13557,30 @@ mod quick_settings_tests {
         }
         assert!(quick_field_mut(&mut cfg, "theme").is_none(), "非快速開關不可經 set_quick_setting 改");
         assert!(quick_field_mut(&mut cfg, "telegram_bot_token").is_none());
+    }
+}
+
+#[cfg(test)]
+mod quota_only_mode_tests {
+    /// 「只留額度」開關分在前後端兩處（lib.rs SHOW_NON_QUOTA_FEATURES、main.js QUOTA_ONLY），
+    /// 只改一邊會變成介面藏了但後端還在推工作階段通知、或介面恢復但快捷鍵仍停用。
+    #[test]
+    fn frontend_and_backend_quota_only_flags_agree() {
+        let js = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/main.js"))
+            .expect("讀 main.js");
+        let line = js
+            .lines()
+            .find(|l| l.trim_start().starts_with("const QUOTA_ONLY ="))
+            .expect("main.js 要有 const QUOTA_ONLY = true|false;");
+        let frontend_quota_only = match line.split('=').nth(1).map(|v| v.trim().trim_end_matches(';').trim()) {
+            Some("true") => true,
+            Some("false") => false,
+            other => panic!("QUOTA_ONLY 只能寫成字面值 true／false，實際 {other:?}"),
+        };
+        assert_eq!(
+            frontend_quota_only,
+            !super::SHOW_NON_QUOTA_FEATURES,
+            "main.js QUOTA_ONLY 必須等於 !lib.rs SHOW_NON_QUOTA_FEATURES"
+        );
     }
 }

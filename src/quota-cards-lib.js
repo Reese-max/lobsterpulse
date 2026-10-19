@@ -73,9 +73,11 @@
       ].filter(Boolean);
       subtitle = raw.tier || "";
     } else if (sessB !== null || weekB !== null) {
+      // *_idle：窗還沒開始計時（agy 沒用過的窗，API 回的重置時間會一直往後推）→ 不顯示倒數
+      const idleNote = function (flag) { return flag === true ? "Not started" : null; };
       windows = [
-        sessB !== null ? { key: "session", label: sessLabel, remainPct: sessB, resetText: parseResetDuration(raw.h5_reset) } : null,
-        weekB !== null ? { key: "weekly", label: weekLabel, remainPct: weekB, resetText: parseResetDuration(raw.wk_reset) } : null,
+        sessB !== null ? { key: "session", label: sessLabel, remainPct: sessB, resetText: parseResetDuration(raw.h5_reset), resetNote: idleNote(raw.h5_idle) } : null,
+        weekB !== null ? { key: "weekly", label: weekLabel, remainPct: weekB, resetText: parseResetDuration(raw.wk_reset), resetNote: idleNote(raw.wk_idle) } : null,
       ].filter(Boolean);
       subtitle = raw.plan || "";
     }

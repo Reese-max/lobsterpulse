@@ -15,6 +15,40 @@
 use super::RunnerQuota;
 
 const OPENROUTER_CREDITS_API: &str = "https://openrouter.ai/api/v1/credits";
+/// 單把 key 的花費上限（limit／limit_remaining）。/credits 只回「帳號」餘額，
+/// 2026-10-19 實測 A 帳號剩 $269.67 但 key 上限 $100 只剩 $58.61、B 帳號剩 $9.18
+/// 但 key 上限 $5 只剩 $4.53——只看帳號餘額會高估這把 key 實際能花的錢。
+const OPENROUTER_KEY_API: &str = "https://openrouter.ai/api/v1/key";
+
+/// 一把 key 的實際可用額度。
+#[derive(Debug, Clone, PartialEq)]
+struct KeyBalance {
+    label: String,
+    /// 實際可花：min(帳號剩餘, key 上限剩餘)
+    left: f64,
+    /// 分母：有 key 上限時用上限，否則用帳號總額
+    total: f64,
+    account_left: f64,
+    account_total: f64,
+    key_limit: Option<f64>,
+    key_limit_remaining: Option<f64>,
+}
+
+/// 帳號餘額＋/key 回應 → 實際可用額度。/key 失敗或無上限（limit: null）時退回帳號值。
+fn effective_balance(label: String, account_left: f64, account_total: f64, key_body: Option<&serde_json::Value>) -> KeyBalance {
+    let d = key_body.and_then(|b| b.get("data"));
+    let key_limit = d.and_then(|d| d.get("limit")).and_then(|v| v.as_f64());
+    let key_limit_remaining = d
+        .and_then(|d| d.get("limit_remaining"))
+        .and_then(|v| v.as_f64())
+        .map(|v| v.max(0.0));
+    // limit=0 是「這把 key 不能花錢」，不是「沒設上限」——只有 null 才退回帳號值
+    let (left, total) = match (key_limit, key_limit_remaining) {
+        (Some(limit), Some(rem)) => (account_left.min(rem), limit.max(0.0)),
+        _ => (account_left, account_total),
+    };
+    KeyBalance { label, left, total, account_left, account_total, key_limit, key_limit_remaining }
+}
 
 /// 從 env 收集所有 `OPENROUTER_API_KEY*`，回 (顯示標籤, key)，按 var 名排序。
 /// `OPENROUTER_API_KEY_A` → 標籤 "A"；無後綴 → "main"。
@@ -45,7 +79,7 @@ async fn fetch_one(
     client: reqwest::Client,
     label: String,
     key: String,
-) -> Result<(String, f64, f64), String> {
+) -> Result<KeyBalance, String> {
     let resp = client
         .get(OPENROUTER_CREDITS_API)
         .bearer_auth(&key)
@@ -58,7 +92,12 @@ async fn fetch_one(
     }
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
     let (left, total) = parse_credits(&body).ok_or_else(|| format!("key {label}: 缺 credits 欄位"))?;
-    Ok((label, left, total))
+    // key 上限查不到不擋整把 key：退回帳號餘額（舊行為）
+    let key_body = match client.get(OPENROUTER_KEY_API).bearer_auth(&key).send().await {
+        Ok(r) if r.status().is_success() => r.json::<serde_json::Value>().await.ok(),
+        _ => None,
+    };
+    Ok(effective_balance(label, left, total, key_body.as_ref()))
 }
 
 /// 打全部帳號的 credits 端點並聚合成一張卡。
@@ -88,7 +127,7 @@ pub async fn fetch() -> RunnerQuota {
     for (l, k) in keys.iter().cloned() {
         set.spawn(fetch_one(client.clone(), l, k));
     }
-    let mut rows: Vec<(String, f64, f64)> = Vec::new();
+    let mut rows: Vec<KeyBalance> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     while let Some(joined) = set.join_next().await {
         match joined {
@@ -97,7 +136,7 @@ pub async fn fetch() -> RunnerQuota {
             Err(e) => errors.push(format!("join: {e}")),
         }
     }
-    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows.sort_by(|a, b| a.label.cmp(&b.label));
 
     if rows.is_empty() {
         // 全滅：優先回帶「API error」的訊息讓 retry_net 接手網路型失敗
@@ -115,7 +154,7 @@ pub async fn fetch() -> RunnerQuota {
     // 2026-07-17 使用者反饋：跨帳號加總 % 與「最低帳號」都是無效資訊（帳號額度
     // 大小差 60 倍），卡片改為 per-key 明細（前端據 raw.accounts 一把 key 一條
     // bar，右側顯示 $剩餘/$總額），這裡只留總剩餘美元當副標摘要。
-    let dollars_left: f64 = rows.iter().map(|(_, left, _)| left).sum();
+    let dollars_left: f64 = rows.iter().map(|r| r.left).sum();
     let plan = format!(
         "{} key{} · ${dollars_left:.0} left",
         rows.len(),
@@ -130,8 +169,12 @@ pub async fn fetch() -> RunnerQuota {
         "ok": true,
         "basis": "provider_api",
         "plan": plan,
-        "accounts": rows.iter().map(|(l, left, total)| serde_json::json!({
-            "key": l, "left_usd": left, "total_usd": total,
+        // left_usd／total_usd 改為「這把 key 實際可用」（route quota.py 依賴這兩個欄位名）；
+        // 帳號層與 key 上限另列，供前端註記
+        "accounts": rows.iter().map(|r| serde_json::json!({
+            "key": r.label, "left_usd": r.left, "total_usd": r.total,
+            "account_left_usd": r.account_left, "account_total_usd": r.account_total,
+            "key_limit_usd": r.key_limit, "key_limit_remaining_usd": r.key_limit_remaining,
         })).collect::<Vec<_>>(),
         "failed_keys": errors.len(),
         "ts": chrono::Utc::now().to_rfc3339(),
@@ -166,6 +209,45 @@ mod tests {
         let body = serde_json::json!({"data":{"total_credits":10,"total_usage":10.28470904}});
         let (left, _) = parse_credits(&body).expect("應解析成功");
         assert_eq!(left, 0.0, "透支帳號剩餘應 clamp 0");
+    }
+
+    #[test]
+    fn effective_balance_caps_by_key_limit() {
+        // 2026-10-19 本機 A 帳號實測：帳號剩 269.67，key 上限 100 剩 58.61
+        let key = serde_json::json!({"data":{"limit":100,"limit_remaining":58.60975963,"usage":41.39}});
+        let b = effective_balance("A".into(), 269.666, 610.0, Some(&key));
+        assert!((b.left - 58.60975963).abs() < 1e-9, "受 key 上限限制");
+        assert_eq!(b.total, 100.0, "分母改用 key 上限");
+        assert_eq!(b.account_left, 269.666);
+        assert_eq!(b.key_limit, Some(100.0));
+    }
+
+    #[test]
+    fn effective_balance_account_binding_when_lower_than_key_limit() {
+        // key 上限還有很多，但帳號快沒錢：以帳號餘額為準
+        let key = serde_json::json!({"data":{"limit":100,"limit_remaining":90.0}});
+        let b = effective_balance("X".into(), 5.0, 30.0, Some(&key));
+        assert_eq!(b.left, 5.0);
+        assert_eq!(b.total, 100.0);
+    }
+
+    #[test]
+    fn effective_balance_zero_limit_means_unusable_key() {
+        // limit=0 是「這把 key 不能花錢」，不可退回帳號餘額誤報為有額度（Codex 審查抓到）
+        let key = serde_json::json!({"data":{"limit":0,"limit_remaining":0}});
+        let b = effective_balance("Z".into(), 269.0, 610.0, Some(&key));
+        assert_eq!((b.left, b.total), (0.0, 0.0));
+    }
+
+    #[test]
+    fn effective_balance_falls_back_to_account_without_limit() {
+        // C/D/E 實測：limit 為 null；/key 失敗也一樣退回帳號值
+        let key = serde_json::json!({"data":{"limit":null,"limit_remaining":null,"usage":1.0}});
+        let b = effective_balance("C".into(), 10.92, 30.0, Some(&key));
+        assert_eq!((b.left, b.total), (10.92, 30.0));
+        assert_eq!(b.key_limit, None);
+        let b = effective_balance("D".into(), 9.69, 10.0, None);
+        assert_eq!((b.left, b.total), (9.69, 10.0));
     }
 
     #[test]

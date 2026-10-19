@@ -79,10 +79,16 @@ fn parse_copilot_quota(
     Option<String>,
     serde_json::Value,
 ) {
-    let plan = body
-        .get("copilot_plan")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    // copilot_plan 對 Free 與 Pro 都回 "individual"，看不出是免費版；
+    // access_type_sku 才分得出來（2026-10-19 本機實測 free_limited_copilot）。
+    let sku = body.get("access_type_sku").and_then(|v| v.as_str()).unwrap_or("");
+    let plan = if sku.starts_with("free") {
+        Some("Free".to_string())
+    } else {
+        body.get("copilot_plan")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    };
     let snapshots = body.get("quota_snapshots");
     let mut buckets = Vec::new();
     for (key, label) in [
@@ -339,6 +345,21 @@ mod tests {
         });
         let (_, buckets, _, _) = parse_copilot_quota(&body);
         assert_eq!(buckets, vec![("Chat", 95), ("Completions", 100)]);
+    }
+
+    #[test]
+    fn parse_copilot_quota_free_sku_shows_free_plan() {
+        // 2026-10-19 本機實測：copilot_plan 仍是 "individual"，sku 才看得出是免費版
+        let body = serde_json::json!({
+            "copilot_plan": "individual",
+            "access_type_sku": "free_limited_copilot",
+            "quota_snapshots": { "chat": { "percent_remaining": 100.0, "unlimited": false, "has_quota": true } }
+        });
+        let (plan, _, _, _) = parse_copilot_quota(&body);
+        assert_eq!(plan.as_deref(), Some("Free"));
+        // 付費 sku 照舊用 copilot_plan
+        let paid = serde_json::json!({ "copilot_plan": "individual", "access_type_sku": "monthly_subscriber" });
+        assert_eq!(parse_copilot_quota(&paid).0.as_deref(), Some("individual"));
     }
 
     #[test]

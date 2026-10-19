@@ -207,7 +207,18 @@ fn classify_windows(
 }
 
 /// 逐模型收集額度：主 rate_limit＝目前模型，additional_rate_limits[] 各自獨立（如 Spark）。
-fn collect_models(body: &serde_json::Value, model: &str, now: u64) -> Vec<serde_json::Value> {
+/// 主 `rate_limit` 是整個帳號共用的額度（rollout 標 limit_id=codex），不屬於任何
+/// 單一模型——舊版掛在 config 預設模型名下，卡片顯示成「gpt-6.1-sol · Weekly」誤導
+/// 成模型專屬。只有出現模型專屬的 additional_rate_limits 時才需要逐列區分，
+/// 這時主額度標「All models」；沒有時回空，卡片直接用頂層 Session/Weekly。
+fn collect_models(body: &serde_json::Value, _model: &str, now: u64) -> Vec<serde_json::Value> {
+    let has_additional = body
+        .get("additional_rate_limits")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty());
+    if !has_additional {
+        return Vec::new();
+    }
     let mut models = Vec::new();
     let mut push = |name: &str, rate_limit: &serde_json::Value| {
         let (session, weekly) = classify_windows(rate_limit, now);
@@ -224,7 +235,7 @@ fn collect_models(body: &serde_json::Value, model: &str, now: u64) -> Vec<serde_
     };
 
     if let Some(rate_limit) = body.get("rate_limit") {
-        push(model, rate_limit);
+        push("All models", rate_limit);
     }
     if let Some(additional) = body.get("additional_rate_limits").and_then(|v| v.as_array()) {
         for limit in additional {
@@ -544,9 +555,22 @@ mod tests {
 
         let models = collect_models(&body, "gpt-5.4", 1_000);
         assert_eq!(models.len(), 2);
+        assert_eq!(models[0]["name"], "All models", "主額度是帳號共用，不掛 config 模型名");
         assert_eq!(models[1]["name"], "gpt-5.3-codex-spark");
         assert_eq!(models[1]["h5_remaining"], 60);
         assert_eq!(models[1]["wk_remaining"], 90);
+    }
+
+    #[test]
+    fn collect_models_without_additional_limits_is_empty() {
+        // 2026-10-19 實測形狀：只有主額度（週窗），additional_rate_limits 為 null
+        let body = serde_json::json!({
+            "rate_limit": { "primary_window": {
+                "limit_window_seconds": 604_800, "used_percent": 37.0, "reset_after_seconds": 60,
+            }},
+            "additional_rate_limits": null
+        });
+        assert!(collect_models(&body, "gpt-6.1-sol", 1_000).is_empty(), "卡片改用頂層 Weekly，不出模型列");
     }
 
     #[test]

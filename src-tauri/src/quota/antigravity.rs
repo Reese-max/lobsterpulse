@@ -103,13 +103,48 @@ fn read_cached_token(home: &Path) -> Option<String> {
     v.get("access_token").and_then(|t| t.as_str()).map(String::from)
 }
 
-fn write_cached_token(home: &Path, token: &str, expiry_epoch: u64) {
-    let v = serde_json::json!({ "access_token": token, "expiry_epoch": expiry_epoch });
+fn write_cached_token(home: &Path, token: &str, refresh_token: Option<&str>, expiry_epoch: u64) {
+    let mut obj = serde_json::json!({
+        "access_token": token,
+        "expiry_epoch": expiry_epoch,
+    });
+    if let Some(rt) = refresh_token {
+        obj["refresh_token"] = serde_json::Value::String(rt.to_string());
+    }
     let path = cache_path(home);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, v.to_string());
+    let _ = std::fs::write(path, obj.to_string());
+}
+
+fn read_cached_refresh_token(home: &Path) -> Option<String> {
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(cache_path(home)).ok()?).ok()?;
+    v.get("refresh_token").and_then(|t| t.as_str()).map(String::from)
+}
+
+/// 讀本機 Windows .gemini 目錄中的 token 檔
+fn read_local_file_token(home: &Path) -> Option<serde_json::Value> {
+    let p = home.join(".gemini").join("antigravity-cli").join("antigravity-oauth-token");
+    let content = std::fs::read_to_string(p).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// WSL2 Ubuntu 內部 token 檔 fallback（本機 agy 跑在 WSL 時可用）
+fn read_wsl_token() -> Option<serde_json::Value> {
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args(["-d", "Ubuntu", "-u", "root", "--", "cat", "/root/.gemini/antigravity-cli/antigravity-oauth-token"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&out.stdout).ok()
 }
 
 /// 從單一 QuotaSummary group 的 buckets[] 抽指定 bucketId 的 (remaining_pct, reset_text)。
@@ -161,38 +196,56 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         .build()
         .unwrap_or_default();
 
-    // token 來源：cache（未過期）→ Credential Manager → 過期則 refresh
+    // token 來源：cache（未過期）→ 多來源 probe（Credential Manager / 本機檔 / WSL / 舊 cache）→ 過期則 refresh
     let mut token = read_cached_token(home);
     if token.is_none() {
-        let Some(blob) = read_credential_blob("gemini:antigravity") else {
+        let mut creds: Option<(Option<String>, Option<String>, Option<String>)> = None;
+
+        // 1. Windows Credential Manager
+        if let Some(blob) = read_credential_blob("gemini:antigravity") {
+            if let Some(keyring) = parse_keyring_blob(&blob) {
+                creds = Some(extract_tokens(&keyring));
+            }
+        }
+        // 2. 本機 Windows .gemini 目錄 token 檔
+        if creds.is_none() {
+            if let Some(v) = read_local_file_token(home) {
+                creds = Some(extract_tokens(&v));
+            }
+        }
+        // 3. WSL2 Ubuntu 內部 token 檔
+        if creds.is_none() {
+            if let Some(v) = read_wsl_token() {
+                creds = Some(extract_tokens(&v));
+            }
+        }
+        // 4. 舊 cache 的 refresh_token
+        if creds.is_none() {
+            if let Some(rt) = read_cached_refresh_token(home) {
+                creds = Some((None, Some(rt), None));
+            }
+        }
+
+        let Some((access, refresh, expiry)) = creds else {
             return RunnerQuota {
                 name,
                 label,
                 color,
                 ok: false,
-                text: "⚠ Credential Manager 無 gemini:antigravity（agy 未登入）".to_string(),
+                text: "⚠ 未找到 Antigravity 憑證（agy 未登入）".to_string(),
                 raw: None,
             };
         };
-        let Some(keyring) = parse_keyring_blob(&blob) else {
-            return RunnerQuota {
-                name,
-                label,
-                color,
-                ok: false,
-                text: "⚠ keyring blob 解析失敗".to_string(),
-                raw: None,
-            };
-        };
-        let (access, refresh, expiry) = extract_tokens(&keyring);
+
         let expired = expiry
             .as_deref()
             .and_then(iso_to_epoch)
             .map(|e| e <= now_secs() + 60)
             .unwrap_or(true); // 沒 expiry 資訊當過期處理（Google token 效期僅 1h）
-        if !expired {
+
+        if !expired && access.is_some() {
             token = access;
-        } else if let Some(rt) = refresh {
+        } else if let Some(rt) = refresh.as_ref() {
             // refresh 並 cache（Google 回 expires_in 秒）
             let resp = client
                 .post("https://oauth2.googleapis.com/token")
@@ -209,7 +262,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
                     if let Ok(v) = r.json::<serde_json::Value>().await {
                         if let Some(t) = v.get("access_token").and_then(|t| t.as_str()) {
                             let ttl = v.get("expires_in").and_then(|e| e.as_u64()).unwrap_or(3600);
-                            write_cached_token(home, t, now_secs() + ttl);
+                            write_cached_token(home, t, Some(rt.as_str()), now_secs() + ttl);
                             token = Some(t.to_string());
                         }
                     }
@@ -365,5 +418,35 @@ mod tests {
         assert_eq!(models[0]["h5_remaining"], 80);
         assert_eq!(models[1]["name"], "Flash");
         assert_eq!(models[1]["wk_remaining"], 10);
+    }
+
+    #[test]
+    fn extract_tokens_from_agy_oauth_file() {
+        let json_str = r#"{
+            "token": {
+                "access_token": "ya29.test",
+                "token_type": "Bearer",
+                "refresh_token": "1//test_refresh",
+                "expiry": "2099-01-01T00:00:00Z"
+            },
+            "auth_method": "consumer"
+        }"#;
+        let v: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        let (a, r, e) = extract_tokens(&v);
+        assert_eq!(a.as_deref(), Some("ya29.test"));
+        assert_eq!(r.as_deref(), Some("1//test_refresh"));
+        assert_eq!(e.as_deref(), Some("2099-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn write_and_read_cached_token_preserves_refresh_token() {
+        let dir = std::env::temp_dir().join(format!("lp_agy_test_{}", now_secs()));
+        let _ = std::fs::create_dir_all(&dir);
+        write_cached_token(&dir, "ya29.cache_test", Some("1//rf_test"), now_secs() + 3600);
+
+        assert_eq!(read_cached_token(&dir).as_deref(), Some("ya29.cache_test"));
+        assert_eq!(read_cached_refresh_token(&dir).as_deref(), Some("1//rf_test"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

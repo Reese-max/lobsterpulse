@@ -2702,18 +2702,12 @@ fn rebuild_and_relaunch(_app: tauri::AppHandle) -> Result<(), String> {
     std::fs::write(&bat, bat_content).map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-        std::process::Command::new("cmd.exe")
-            .args([
-                "/c",
-                "start",
-                "",
-                "cmd.exe",
-                "/k",
-                bat.to_str().unwrap_or(""),
-            ])
-            .creation_flags(CREATE_NEW_CONSOLE)
+        // 交給 explorer 執行 bat（同系統匣「重新啟動」）：原本 cmd /c start cmd /k 兩層 cmd
+        // 都繼承本程序的 handle，整段 cargo build 期間握著 19280 的監聽 socket，最後 start
+        // 起來的新程序也跟著繼承 → 19280 變孤兒、新程序退到 19281。explorer 由 shell 建立
+        // 新的 cmd 視窗，不繼承任何 handle；bat 失敗時有 pause，成功就關窗並啟動新版。
+        std::process::Command::new("explorer.exe")
+            .arg(&bat)
             .spawn()
             .map_err(|e| format!("spawn bat: {e}"))?;
     }

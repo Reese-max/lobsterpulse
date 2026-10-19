@@ -959,7 +959,7 @@ fn get_claude_daily_stats() -> Option<serde_json::Value> {
 #[tauri::command]
 fn list_api_keys() -> Vec<api_keys::ApiKeyEntry> {
     let aliases = config::load_config().api_key_aliases;
-    let mut out = api_keys::collect(std::env::vars());
+    let mut out = api_keys::collect(api_keys::current_keys());
     for entry in &mut out {
         entry.alias = aliases
             .get(&entry.name)
@@ -1017,6 +1017,13 @@ fn copy_api_key(app: tauri::AppHandle, name: String) -> Result<(), String> {
 #[tauri::command]
 fn reveal_api_key(name: String) -> Result<String, String> {
     api_keys::value_of(&name)
+}
+
+/// 金鑰有效性：逐把打該供應商的唯讀端點（列模型／查 key），不產生費用。
+/// 回傳只有名稱與判定，值不進前端；同一個值 10 分鐘內不重打。
+#[tauri::command]
+async fn check_api_keys() -> Vec<api_keys::KeyCheck> {
+    api_keys::check_all().await
 }
 
 /// 面板用：各 provider 今日已記錄的用量（provider → tokens）。
@@ -1083,10 +1090,12 @@ pub fn fmt_tokens(v: u64) -> String {
 /// Usage 面板卡片清單：偵測本機實際安裝的 AI CLI（沒安裝的不顯示）。
 #[tauri::command]
 fn detect_installed_clis() -> Vec<quota::InstalledCli> {
-    let has_minimax = ["MINIMAX_API_KEY", "MINIMAX_DIRECT_KEY"]
+    let keys = api_keys::live_vars();
+    let has_minimax = keys
         .iter()
-        .any(|k| std::env::var(k).map(|v| !v.trim().is_empty()).unwrap_or(false));
-    let has_openrouter = std::env::vars()
+        .any(|(k, v)| (k == "MINIMAX_API_KEY" || k == "MINIMAX_DIRECT_KEY") && !v.trim().is_empty());
+    let has_openrouter = keys
+        .iter()
         .any(|(k, v)| k.starts_with("OPENROUTER_API_KEY") && !v.trim().is_empty());
     quota::detect_installed_clis_with_roots(
         dirs::home_dir().as_deref(),
@@ -4840,6 +4849,7 @@ pub fn run() {
             set_api_key_alias,
             copy_api_key,
             reveal_api_key,
+            check_api_keys,
             detect_installed_clis,
             remove_all_sessions,
             timeline_snapshot_24h,

@@ -51,6 +51,8 @@ windows-sys = { version = "0.61", features = [
   # 前景鎖繞道：AttachThreadInput + GetCurrentThreadId（0.61 都在 System_Threading）
   "Win32_System_Threading",
   "Win32_Storage_FileSystem",
+  # 金鑰分頁即時讀 HKCU／HKLM Environment（程序環境是啟動時的快照，不會跟著更新）
+  "Win32_System_Registry",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

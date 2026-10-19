@@ -33,6 +33,28 @@ test("claude 形狀 -> full 卡（tier 副標）", () => {
   assert.strictEqual(c.pct, 61);
 });
 
+test("agy 未開始計時的窗 -> resetNote，不給滾動倒數；模型列也帶得到", () => {
+  const c = normalizeRunnerCard({
+    name: "agy", label: "Antigravity", ok: true,
+    raw: {
+      h5_remaining: 100, h5_reset: null, h5_idle: true,
+      wk_remaining: 96, wk_reset: "75h12m", wk_idle: false,
+      plan: "Google AI Pro",
+      models: [
+        { name: "Gemini Models", h5_remaining: 100, h5_reset: null, h5_idle: true, wk_remaining: 96, wk_reset: "75h12m", wk_idle: false },
+        { name: "Claude and GPT models", h5_remaining: 100, h5_reset: null, h5_idle: true, wk_remaining: 100, wk_reset: null, wk_idle: true },
+      ],
+    },
+  });
+  assert.strictEqual(c.subtitle, "Google AI Pro");
+  assert.strictEqual(c.windows[0].resetNote, "Not started");
+  assert.strictEqual(c.windows[0].resetText, null);
+  assert.strictEqual(c.windows[1].resetNote, null, "已開始的窗不加註記");
+  assert.strictEqual(c.windows[1].resetText, "3d 3h");
+  assert.strictEqual(c.models.length, 2);
+  assert.strictEqual(c.models[1].windows[1].resetNote, "Not started");
+});
+
 test("codex 形狀 -> full 卡（plan 副標）", () => {
   const c = normalizeRunnerCard({
     name: "codex", label: "🟢 OpenAI Codex CLI", ok: true,
@@ -241,4 +263,29 @@ test("providerUsageUrl / keyManageUrl 對應正確且未知的回 null", () => {
   assert.strictEqual(keyManageUrl("GROQ_API_KEY_3"), "https://console.groq.com/keys");
   assert.strictEqual(keyManageUrl("KAGGLE_API_TOKEN"), null, "沒對照的不要亂給連結");
   assert.strictEqual(keyManageUrl(undefined), null);
+});
+
+test("apiKeyStatusTag：有效／無效／被擋各自分色，unchecked 與 expired 不畫", () => {
+  const { apiKeyStatusTag } = require("../src/quota-cards-lib.js");
+  assert.strictEqual(apiKeyStatusTag({ status: "valid", detail: "" }).cls, "apikey-ok");
+  const bad = apiKeyStatusTag({ status: "invalid", detail: "HTTP 401：供應商不認這把金鑰" });
+  assert.strictEqual(bad.cls, "apikey-bad");
+  assert.strictEqual(bad.title, "HTTP 401：供應商不認這把金鑰", "tooltip 帶後端說明");
+  assert.strictEqual(apiKeyStatusTag({ status: "blocked", detail: "x" }).cls, "apikey-warn", "被擋網路不是紅色");
+  assert.strictEqual(apiKeyStatusTag({ status: "unchecked", detail: "" }), null);
+  assert.strictEqual(apiKeyStatusTag({ status: "expired", detail: "" }), null, "過期由到期日標籤負責，不重複");
+  assert.strictEqual(apiKeyStatusTag(undefined), null);
+});
+
+test("apiKeyExpiryTag：過期標紅、未過期標日期、非 JWT 不畫", () => {
+  const { apiKeyExpiryTag } = require("../src/quota-cards-lib.js");
+  const exp = Date.UTC(2026, 9, 26, 4, 0, 0) / 1000; // 10/26 中午（UTC+8）
+  const future = apiKeyExpiryTag(exp, exp - 3600);
+  assert.strictEqual(future.cls, "apikey-used");
+  assert.match(future.text, /^到期 10\/26$/);
+  const past = apiKeyExpiryTag(exp, exp + 1);
+  assert.strictEqual(past.cls, "apikey-bad");
+  assert.match(past.text, /已過期 10\/26/);
+  assert.strictEqual(apiKeyExpiryTag(null, 0), null);
+  assert.strictEqual(apiKeyExpiryTag(undefined, 0), null);
 });

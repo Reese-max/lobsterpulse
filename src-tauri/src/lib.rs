@@ -4785,12 +4785,17 @@ pub fn run() {
 
             // Prometheus /metrics exporter — 獨立 std::thread + 自建 runtime，
             // 不依賴 hook_server 的 rt（那個已 std::mem::forget）。
-            // 只留額度模式不開（它另建一整個多執行緒 runtime；watchdog 看的是 hook server 的 /healthz）
+            // 只留額度模式改用單執行緒 runtime：這裡只是 accept 迴圈，閒置不吃 CPU；
+            // 端點照開，packaged smoke test 靠它確認 hook 事件有送到 app。
             let handle_metrics = app.handle().clone();
             let metrics_port = if port > 0 { port + 100 } else { 19380 };
-            if SHOW_NON_QUOTA_FEATURES {
             std::thread::spawn(move || {
-                let rt = match tokio::runtime::Runtime::new() {
+                let rt = if SHOW_NON_QUOTA_FEATURES {
+                    tokio::runtime::Runtime::new()
+                } else {
+                    tokio::runtime::Builder::new_current_thread().enable_all().build()
+                };
+                let rt = match rt {
                     Ok(r) => r,
                     Err(e) => {
                         log::warn!("metrics runtime create failed: {e}");
@@ -4846,7 +4851,6 @@ pub fn run() {
                     }
                 });
             });
-            }
 
             // System tray
             let show = MenuItemBuilder::with_id("show", "顯示 / 隱藏  ·  Ctrl+Shift+L").build(app)?;

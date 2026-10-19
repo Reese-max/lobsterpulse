@@ -60,7 +60,7 @@
       "openx": "openx-waiting.mp3"
     },
     "remove_threshold_secs": 1800,
-    "sound_enabled": true,
+    "sound_enabled": false,
     "sound_name": "",
     "stale_threshold_secs": 600,
     "system_notifications": true,

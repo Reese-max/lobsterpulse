@@ -1070,11 +1070,37 @@ body.has-bg .quota-runner { background-color: rgba(30,30,36,0.55) !important; ba
 .settings-tab:hover::after { opacity: 1; }
 /* 未使用功能顯示層隱藏（2026-07-23 實測 config：Discord 自動化從未設定、
    Telegram 無 token、OpenAB 重啟指令空值、規則引擎僅預設種入規則且已停用）。
-   DOM 與 JS 綁定保留（拔 DOM 會讓無 null 防護的 init 炸掉），要復用時刪此區塊即可。 */
+   DOM 與 JS 綁定保留（拔 DOM 會讓無 null 防護的 init 炸掉），要復用時刪此區塊即可。
+   2026-10-19 設定重新分組：Discord 推播從（隱藏的）自動化頁搬到「通知」頁，跟著維持隱藏。 */
 .settings-tab[data-tab="automation"],
 .settings-tab[data-tab="rules"],
 .setting-group-col:has(#tg-token),
+.setting-group:has(#toggle-discord),
+.setting-group-col:has(#dc-token),
 .setting-group-col:has(#openab-restart-cmd) { display: none; }
+/* 儲存回饋：設定都是改完即存，沒有這個使用者無從知道存了沒、有沒有失敗 */
+.settings-save-status {
+  margin-left: auto; font-size: 11px; font-weight: 600; white-space: nowrap;
+  opacity: 0; transition: opacity .2s ease;
+}
+.settings-save-status.show { opacity: 1; }
+.settings-save-status.ok { color: #3fb950; }
+.settings-save-status.error { color: #f85149; }
+/* 數字超出範圍：標紅且不存，title 說明允許範圍 */
+#view-settings input.input-invalid,
+#view-settings input.input-invalid:focus {
+  border-color: #f85149;
+  box-shadow: 0 0 0 2px rgba(248, 81, 73, 0.3);
+}
+.settings-panel-note { margin-bottom: -4px; }
+.settings-reset-row {
+  display: flex; justify-content: flex-end;
+  margin-top: 4px; padding-top: 10px;
+  border-top: 0.5px solid var(--border);
+}
+.settings-reset { color: var(--text-dim); }
+/* 兩段式確認：第一下變紅提示，3 秒內再按才真的還原 */
+.settings-reset.confirming { color: #f85149; border-color: #f85149; }
 .settings-tab-panel { display: none; }
 .settings-tab-panel.active {
   display: flex; flex-direction: column; gap: 14px;

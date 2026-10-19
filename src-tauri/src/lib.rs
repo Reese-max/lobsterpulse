@@ -26,13 +26,118 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use tauri::{
     image::Image,
-    menu::{MenuBuilder, MenuItemBuilder},
+    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
 
 struct AppSessionManager(Mutex<SessionManager>);
 struct AppConfigState(Mutex<AppConfig>);
+
+/// 系統匣的快速開關（勾選式選單項）。設定頁改了同一個值時要回頭更新勾選狀態。
+struct TrayQuickToggles {
+    sound: CheckMenuItem<tauri::Wry>,
+    notify: CheckMenuItem<tauri::Wry>,
+    pin: CheckMenuItem<tauri::Wry>,
+}
+
+/// 快速開關欄位：系統匣與設定頁都能切。這三個只走逐欄位寫入（set_quick_setting／系統匣），
+/// 整份存檔（save_app_config）一律沿用後端現值——前端手上的整份設定可能是舊的，
+/// 晚到的整份存檔不可把系統匣剛切的值蓋回去。
+const QUICK_FIELDS: [&str; 3] = ["sound_enabled", "system_notifications", "pin_expanded"];
+
+fn quick_field_mut<'a>(cfg: &'a mut AppConfig, name: &str) -> Option<&'a mut bool> {
+    match name {
+        "sound_enabled" => Some(&mut cfg.appearance.sound_enabled),
+        "system_notifications" => Some(&mut cfg.appearance.system_notifications),
+        "pin_expanded" => Some(&mut cfg.appearance.pin_expanded),
+        _ => None,
+    }
+}
+
+/// 系統匣快速開關 id → 翻轉對應設定，回傳新值；不認得的 id 回 None。
+fn toggle_quick_setting(cfg: &mut AppConfig, id: &str) -> Option<bool> {
+    let name = match id {
+        "quick_sound" => "sound_enabled",
+        "quick_notify" => "system_notifications",
+        "quick_pin" => "pin_expanded",
+        _ => return None,
+    };
+    let field = quick_field_mut(cfg, name)?;
+    *field = !*field;
+    Some(*field)
+}
+
+/// 整份存檔時沿用後端現值的欄位：這些只經專用指令改——快速開關（QUICK_FIELDS）、
+/// 規則（toggle_rule／add_rule）、金鑰備註（set_api_key_alias）。前端手上的整份設定
+/// 不會跟著那些指令更新，整份存檔若照單全收，就會把它們蓋回舊值（備註「存了又不見」）。
+fn preserve_backend_owned(incoming: &mut AppConfig, current: &AppConfig) {
+    let mut current = current.clone();
+    for name in QUICK_FIELDS {
+        if let (Some(dst), Some(src)) = (quick_field_mut(incoming, name), quick_field_mut(&mut current, name)) {
+            *dst = *src;
+        }
+    }
+    incoming.rules = current.rules;
+    incoming.api_key_aliases = current.api_key_aliases;
+}
+
+/// 勾選狀態一律以設定為準（Windows 點下去會先自己翻一次，這裡再對齊）。
+fn sync_tray_toggles(app: &tauri::AppHandle, cfg: &AppConfig) {
+    if let Some(t) = app.try_state::<TrayQuickToggles>() {
+        let _ = t.sound.set_checked(cfg.appearance.sound_enabled);
+        let _ = t.notify.set_checked(cfg.appearance.system_notifications);
+        let _ = t.pin.set_checked(cfg.appearance.pin_expanded);
+    }
+}
+
+/// 「重啟 OpenAB」的確認文字。重啟指令空白時這個按鈕其實只會停止 OpenAB、
+/// 不會再啟動（2026-10-19 實測本機設定就是空白），一定要先講清楚。
+fn openab_restart_confirm_text(restart_cmd: &str) -> String {
+    let cmd = restart_cmd.trim();
+    if cmd.is_empty() {
+        "目前沒有設定重啟指令：這個動作只會「停止」OpenAB，不會自動重新啟動。\n\n確定要停止 OpenAB 嗎？".to_string()
+    } else {
+        format!("會先停止 OpenAB，再執行重啟指令：\n{cmd}\n\n確定要重啟 OpenAB 嗎？")
+    }
+}
+
+const QUIT_CONFIRM_TEXT: &str =
+    "結束後就不會再監控額度與工作階段，直到下次手動開啟或重新登入。\n\n確定要結束額度監控嗎？";
+
+/// 系統匣的危險動作先問一次。系統匣沒有 webview 可掛對話框，用原生 MessageBox；
+/// 放在獨立執行緒，不卡住事件迴圈。預設按鈕是「否」，誤按 Enter 不會執行。
+fn confirm_then(title: &'static str, text: String, action: impl FnOnce() + Send + 'static) {
+    std::thread::spawn(move || {
+        if native_confirm(title, &text) {
+            action();
+        }
+    });
+}
+
+#[cfg(windows)]
+fn native_confirm(title: &str, text: &str) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (title_w, text_w) = (wide(title), wide(text));
+    // SAFETY: 兩個字串都以 NUL 結尾且活到呼叫結束；系統匣沒有父視窗所以傳 null
+    let answer = unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND,
+        )
+    };
+    answer == IDYES
+}
+
+#[cfg(not(windows))]
+fn native_confirm(_title: &str, _text: &str) -> bool {
+    true
+}
 static LOCAL_USAGE_RUNNERS_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 #[derive(serde::Deserialize)]
@@ -297,9 +402,40 @@ fn save_app_config(
     config_state: tauri::State<AppConfigState>,
     new_config: AppConfig,
 ) -> Result<(), String> {
+    // 讀現值、合併、寫檔、提交都在同一把鎖裡，系統匣的切換不會夾在中間被吃掉
+    let mut cfg = config_state.0.lock().unwrap();
+    let mut new_config = new_config;
+    preserve_backend_owned(&mut new_config, &cfg);
     save_config(&new_config)?;
-    *config_state.0.lock().unwrap() = new_config;
+    *cfg = new_config;
     Ok(())
+}
+
+/// 設定頁切換快速開關（提示音效／系統通知／固定展開）：逐欄位寫入，後寫者勝。
+#[tauri::command]
+fn set_quick_setting(
+    app: tauri::AppHandle,
+    config_state: tauri::State<AppConfigState>,
+    name: String,
+    value: bool,
+) -> Result<(), String> {
+    let snapshot = {
+        let mut cfg = config_state.0.lock().unwrap();
+        let mut next = cfg.clone();
+        *quick_field_mut(&mut next, &name).ok_or_else(|| format!("不是快速開關：{name}"))? = value;
+        save_config(&next)?;
+        *cfg = next;
+        cfg.clone()
+    };
+    // 鎖放開後才碰系統匣：選單項目的操作會等主執行緒，持鎖呼叫可能和系統匣點擊互卡
+    sync_tray_toggles(&app, &snapshot);
+    Ok(())
+}
+
+/// 設定頁「還原這一頁的預設值」用：預設值只有後端這一份，前端不另抄。
+#[tauri::command]
+fn get_default_appearance() -> config::AppearanceConfig {
+    config::AppearanceConfig::default()
 }
 
 // R115 規則引擎：4 條 Tauri command 給前端設定頁 Rules section 用。
@@ -971,21 +1107,28 @@ fn list_api_keys() -> Vec<api_keys::ApiKeyEntry> {
 
 /// 設定／清除金鑰備註。空字串＝清除。只寫名稱對名稱，不碰金鑰值。
 #[tauri::command]
-fn set_api_key_alias(name: String, alias: String) -> Result<(), String> {
+fn set_api_key_alias(
+    config_state: tauri::State<AppConfigState>,
+    name: String,
+    alias: String,
+) -> Result<(), String> {
     // 沿用 value_of 的白名單：不可讓前端用任意字串在 config 裡塞鍵值
     if !api_keys::is_ai_key_name(&name) {
         return Err("不是可備註的 API key 名稱".into());
     }
-    let mut cfg = config::load_config();
+    // 改的是記憶體中的設定（原本只讀寫檔案、記憶體沒跟著變，下一次整份存檔就把備註蓋掉）
+    let mut cfg = config_state.0.lock().unwrap();
+    let mut next = cfg.clone();
     let alias = alias.trim();
     if alias.is_empty() {
-        cfg.api_key_aliases.remove(&name);
+        next.api_key_aliases.remove(&name);
     } else {
         // 上限 60 字：備註是掃讀用的短標籤，不是備忘錄
         let alias: String = alias.chars().take(60).collect();
-        cfg.api_key_aliases.insert(name.clone(), alias);
+        next.api_key_aliases.insert(name.clone(), alias);
     }
-    config::save_config(&cfg)?;
+    config::save_config(&next)?;
+    *cfg = next;
     log::info!("[api_keys] 已更新 {name} 的備註");
     Ok(())
 }
@@ -2559,18 +2702,12 @@ fn rebuild_and_relaunch(_app: tauri::AppHandle) -> Result<(), String> {
     std::fs::write(&bat, bat_content).map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-        std::process::Command::new("cmd.exe")
-            .args([
-                "/c",
-                "start",
-                "",
-                "cmd.exe",
-                "/k",
-                bat.to_str().unwrap_or(""),
-            ])
-            .creation_flags(CREATE_NEW_CONSOLE)
+        // 交給 explorer 執行 bat（同系統匣「重新啟動」）：原本 cmd /c start cmd /k 兩層 cmd
+        // 都繼承本程序的 handle，整段 cargo build 期間握著 19280 的監聽 socket，最後 start
+        // 起來的新程序也跟著繼承 → 19280 變孤兒、新程序退到 19281。explorer 由 shell 建立
+        // 新的 cmd 視窗，不繼承任何 handle；bat 失敗時有 pause，成功就關窗並啟動新版。
+        std::process::Command::new("explorer.exe")
+            .arg(&bat)
             .spawn()
             .map_err(|e| format!("spawn bat: {e}"))?;
     }
@@ -2648,6 +2785,7 @@ fn open_help_page() -> Result<(), String> {
 /// 讀取 ~/.lobsterpulse/web-config/appearance.json 合併進 config.appearance，persist
 #[tauri::command]
 fn import_appearance_json(
+    app: tauri::AppHandle,
     config_state: tauri::State<AppConfigState>,
 ) -> Result<serde_json::Value, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
@@ -2677,6 +2815,9 @@ fn import_appearance_json(
         cfg.appearance = serde_json::from_value(app_val).map_err(|e| format!("merge: {e}"))?;
         crate::config::save_config(&cfg).map_err(|e| e.to_string())?;
     }
+    // 匯入可能改到快速開關（音效／通知／固定展開都在 appearance 裡）；鎖放開後才對齊系統匣
+    let snapshot = config_state.0.lock().unwrap().clone();
+    sync_tray_toggles(&app, &snapshot);
     Ok(serde_json::json!({ "ok": true, "source": path.display().to_string() }))
 }
 
@@ -4573,6 +4714,9 @@ pub fn run() {
                             Ok(())
                         })();
                         if ok.is_ok() {
+                            // 同上：快速開關可能被外部調整器改到，鎖放開後對齊系統匣勾選
+                            let snapshot = handle_app_watch.state::<AppConfigState>().0.lock().unwrap().clone();
+                            sync_tray_toggles(&handle_app_watch, &snapshot);
                             let _ = handle_app_watch.emit("appearance-synced", ());
                             log::info!("configurator live sync applied: {}", path.display());
                         }
@@ -4648,15 +4792,33 @@ pub fn run() {
             let settings = MenuItemBuilder::with_id("settings", "開啟設定").build(app)?;
             let events_log = MenuItemBuilder::with_id("events_log", "事件診斷  ·  Ctrl+Shift+E").build(app)?;
             let toggle_theme = MenuItemBuilder::with_id("toggle_theme", "切換明暗主題").build(app)?;
-            let openab_restart = MenuItemBuilder::with_id("openab_restart", "重啟 OpenAB").build(app)?;
+            let openab_restart = MenuItemBuilder::with_id("openab_restart", "重啟 OpenAB…").build(app)?;
             let open_config = MenuItemBuilder::with_id("open_config", "開啟設定檔").build(app)?;
             let restart = MenuItemBuilder::with_id("restart", "重新啟動").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "結束額度監控").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "結束額度監控…").build(app)?;
+            // 快速開關：不必開設定頁就能切（勾選狀態以設定為準，見 sync_tray_toggles）
+            let (sound_on, notify_on, pin_on) = {
+                let cfg = app.state::<AppConfigState>();
+                let cfg = cfg.0.lock().unwrap();
+                (cfg.appearance.sound_enabled, cfg.appearance.system_notifications, cfg.appearance.pin_expanded)
+            };
+            let quick_sound = CheckMenuItemBuilder::with_id("quick_sound", "提示音效").checked(sound_on).build(app)?;
+            let quick_notify = CheckMenuItemBuilder::with_id("quick_notify", "系統通知").checked(notify_on).build(app)?;
+            let quick_pin = CheckMenuItemBuilder::with_id("quick_pin", "固定展開").checked(pin_on).build(app)?;
+            app.manage(TrayQuickToggles {
+                sound: quick_sound.clone(),
+                notify: quick_notify.clone(),
+                pin: quick_pin.clone(),
+            });
             let menu = MenuBuilder::new(app)
                 .item(&show)
                 .item(&dashboard)
                 .item(&settings)
                 .item(&events_log)
+                .separator()
+                .item(&quick_sound)
+                .item(&quick_notify)
+                .item(&quick_pin)
                 .separator()
                 .item(&toggle_theme)
                 .item(&openab_restart)
@@ -4751,27 +4913,62 @@ pub fn run() {
                             let _ = w.emit("open-events-log", ());
                         }
                     }
+                    id @ ("quick_sound" | "quick_notify" | "quick_pin") => {
+                        let cfg_state = app.state::<AppConfigState>();
+                        // 先在副本上改、寫進設定檔成功才提交：寫檔失敗時不可留下「重開就消失」的假狀態
+                        let (snapshot, result) = {
+                            let mut cfg = cfg_state.0.lock().unwrap();
+                            let mut next = cfg.clone();
+                            toggle_quick_setting(&mut next, id);
+                            let result = save_config(&next);
+                            if result.is_ok() {
+                                *cfg = next;
+                            }
+                            (cfg.clone(), result)
+                        };
+                        // 鎖放開後才對齊勾選與通知前端（失敗時對齊回未變更的值：Windows 點下去已先翻了勾選）
+                        sync_tray_toggles(app, &snapshot);
+                        if let Some(w) = app.get_webview_window("main") {
+                            match result {
+                                // 事件直接帶新值，前端同步寫入畫面與記憶體
+                                Ok(()) => {
+                                    let _ = w.emit("config-changed", serde_json::json!({
+                                        "sound_enabled": snapshot.appearance.sound_enabled,
+                                        "system_notifications": snapshot.appearance.system_notifications,
+                                        "pin_expanded": snapshot.appearance.pin_expanded,
+                                    }));
+                                }
+                                Err(e) => {
+                                    log::warn!("tray {id}: save config failed: {e}");
+                                    let _ = w.emit("config-save-failed", e);
+                                }
+                            }
+                        }
+                    }
                     "openab_restart" => {
                         let cfg_state = app.state::<AppConfigState>();
                         let restart_cmd = cfg_state.0.lock().unwrap().appearance.openab_restart_command.clone();
-                        if let Err(e) = std::process::Command::new("powershell.exe")
-                            .args([
-                                "-NoProfile",
-                                "-Command",
-                                "Stop-Process -Name openab -Force -ErrorAction SilentlyContinue",
-                            ])
-                            .output()
-                        {
-                            log::warn!("openab_restart: stop powershell failed: {e}");
-                        }
-                        if !restart_cmd.trim().is_empty() {
+                        let text = openab_restart_confirm_text(&restart_cmd);
+                        confirm_then("重啟 OpenAB", text, move || {
                             if let Err(e) = std::process::Command::new("powershell.exe")
-                                .args(["-NoProfile", "-Command", &restart_cmd])
-                                .spawn()
+                                .args([
+                                    "-NoProfile",
+                                    "-Command",
+                                    "Stop-Process -Name openab -Force -ErrorAction SilentlyContinue",
+                                ])
+                                .output()
                             {
-                                log::warn!("openab_restart: spawn `{}` failed: {e}", restart_cmd);
+                                log::warn!("openab_restart: stop powershell failed: {e}");
                             }
-                        }
+                            if !restart_cmd.trim().is_empty() {
+                                if let Err(e) = std::process::Command::new("powershell.exe")
+                                    .args(["-NoProfile", "-Command", &restart_cmd])
+                                    .spawn()
+                                {
+                                    log::warn!("openab_restart: spawn `{}` failed: {e}", restart_cmd);
+                                }
+                            }
+                        });
                     }
                     "toggle_theme" => {
                         if let Some(w) = app.get_webview_window("main") {
@@ -4792,16 +4989,30 @@ pub fn run() {
                     }
                     "restart" => {
                         if let Ok(exe) = std::env::current_exe() {
-                            if let Err(e) = std::process::Command::new(exe).spawn() {
-                                log::warn!("restart: spawn self failed: {e}");
+                            // 直接 spawn 自己，新程序會繼承這邊的 handle——包括 19280 的監聽 socket
+                            // （2026-10-19 實測：舊程序退出後 socket 仍被新程序握著卻沒人 accept，
+                            // healthz 全數逾時、port 堆滿 CloseWait；mio 的 NO_HANDLE_INHERIT 在本機無效）。
+                            // Windows 改交給 explorer 啟動：新程序由 shell 建立，不繼承這邊任何 handle。
+                            let mut cmd = if cfg!(windows) {
+                                let mut c = std::process::Command::new("explorer.exe");
+                                c.arg(&exe);
+                                c
+                            } else {
+                                std::process::Command::new(&exe)
+                            };
+                            if let Err(e) = cmd.spawn() {
+                                log::warn!("restart: relaunch failed: {e}");
                             }
                         }
                         hook_server::remove_port_file();
                         app.exit(0);
                     }
                     "quit" => {
-                        hook_server::remove_port_file();
-                        app.exit(0);
+                        let app = app.clone();
+                        confirm_then("結束額度監控", QUIT_CONFIRM_TEXT.to_string(), move || {
+                            hook_server::remove_port_file();
+                            app.exit(0);
+                        });
                     }
                     _ => {}
                 })
@@ -4816,6 +5027,8 @@ pub fn run() {
             remove_session,
             get_config,
             save_app_config,
+            get_default_appearance,
+            set_quick_setting,
             detect_installed_providers,
             check_provider_setup,
             install_provider_hooks,
@@ -13235,5 +13448,97 @@ mod r131_plugin_registry_tests {
              (4 desktop plugin: single_instance / autostart / notification / global_shortcut),\
              實際 {plugin_count}。可能 plugin 被搬到 fn 外、被 conditional 蓋掉或被註解。"
         );
+    }
+}
+
+#[cfg(test)]
+mod settings_ux_tests {
+    use super::*;
+
+    fn cfg_from(json: &str) -> AppConfig {
+        serde_json::from_str(json).expect("AppConfig 每個欄位都有 serde default")
+    }
+
+    #[test]
+    fn tray_quick_toggles_flip_only_their_own_setting() {
+        let mut cfg = cfg_from(r#"{"appearance":{"sound_enabled":false,"system_notifications":true,"pin_expanded":false}}"#);
+        assert_eq!(toggle_quick_setting(&mut cfg, "quick_sound"), Some(true));
+        assert!(cfg.appearance.sound_enabled);
+        assert!(cfg.appearance.system_notifications, "其他開關不動");
+        assert_eq!(toggle_quick_setting(&mut cfg, "quick_notify"), Some(false));
+        assert_eq!(toggle_quick_setting(&mut cfg, "quick_pin"), Some(true));
+        assert_eq!(toggle_quick_setting(&mut cfg, "quick_pin"), Some(false), "再按一次切回來");
+        assert_eq!(toggle_quick_setting(&mut cfg, "quit"), None, "不認得的 id 不動設定");
+    }
+
+    #[test]
+    fn openab_restart_confirm_warns_when_it_would_only_stop() {
+        let empty = openab_restart_confirm_text("   ");
+        assert!(empty.contains("只會「停止」"), "空白指令＝只停不啟，必須講明: {empty}");
+        let with_cmd = openab_restart_confirm_text(r#"schtasks /run /tn "OpenAB-CICX""#);
+        assert!(with_cmd.contains(r#"schtasks /run /tn "OpenAB-CICX""#), "要讓使用者看到會執行什麼");
+        assert!(!with_cmd.contains("只會「停止」"));
+    }
+
+    /// 前端 settings-lib.js 的 RESET_KEYS 每個鍵都必須真的存在於後端預設值，
+    /// 否則「還原預設值」會默默跳過那一項（兩邊各改各的時這條會擋下來）。
+    #[test]
+    fn reset_keys_exist_in_backend_default_appearance() {
+        let js = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/settings-lib.js"))
+            .expect("讀 settings-lib.js");
+        let start = js.find("const RESET_KEYS = {").expect("RESET_KEYS 區塊");
+        let end = start + js[start..].find("};").expect("RESET_KEYS 結尾");
+        let block = &js[start..end];
+        let defaults = serde_json::to_value(config::AppearanceConfig::default()).unwrap();
+        let mut count = 0;
+        for quoted in block.split('"').skip(1).step_by(2) {
+            count += 1;
+            assert!(defaults.get(quoted).is_some(), "RESET_KEYS 的 {quoted} 不在 AppearanceConfig 預設值裡");
+        }
+        assert!(count >= 20, "應該抓到全部的鍵，實際 {count}");
+        // 金鑰／token／指令不可出現在還原清單
+        for forbidden in ["telegram_bot_token", "telegram_chat_id", "openab_restart_command", "discord", "usage_runners"] {
+            assert!(!block.contains(&format!("\"{forbidden}\"")), "{forbidden} 不該被還原");
+        }
+    }
+}
+
+#[cfg(test)]
+mod quick_settings_tests {
+    use super::*;
+
+    #[test]
+    fn full_save_keeps_backend_owned_fields() {
+        // 前端手上的整份設定是舊的：系統匣剛把音效打開、固定展開關掉；金鑰備註剛加了一筆；
+        // 規則剛被停用。整份存檔不可把這些蓋回去
+        let current: AppConfig = serde_json::from_str(r#"{
+            "appearance":{"sound_enabled":true,"system_notifications":false,"pin_expanded":false,"theme":"dark"},
+            "api_key_aliases":{"GROQ_API_KEY":"工作帳號"},
+            "rules":[]
+        }"#).unwrap();
+        let mut incoming: AppConfig = serde_json::from_str(r#"{
+            "appearance":{"sound_enabled":false,"system_notifications":true,"pin_expanded":true,"theme":"light"},
+            "api_key_aliases":{},
+            "rules_enabled":true
+        }"#).unwrap();
+        assert!(!incoming.rules.is_empty(), "前提：舊副本帶著預設種入的規則");
+        preserve_backend_owned(&mut incoming, &current);
+        assert!(incoming.appearance.sound_enabled);
+        assert!(!incoming.appearance.system_notifications);
+        assert!(!incoming.appearance.pin_expanded);
+        assert_eq!(incoming.api_key_aliases.get("GROQ_API_KEY").map(String::as_str), Some("工作帳號"), "備註不可被蓋掉");
+        assert!(incoming.rules.is_empty(), "規則沿用後端現值");
+        assert_eq!(incoming.appearance.theme, "light", "其他欄位照常用前端送來的值");
+        assert!(incoming.rules_enabled, "規則總開關仍由整份存檔設定");
+    }
+
+    #[test]
+    fn quick_field_names_are_a_closed_set() {
+        let mut cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        for name in QUICK_FIELDS {
+            assert!(quick_field_mut(&mut cfg, name).is_some(), "{name}");
+        }
+        assert!(quick_field_mut(&mut cfg, "theme").is_none(), "非快速開關不可經 set_quick_setting 改");
+        assert!(quick_field_mut(&mut cfg, "telegram_bot_token").is_none());
     }
 }

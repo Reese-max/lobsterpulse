@@ -15,6 +15,7 @@ mod telemetry;
 #[cfg(windows)]
 mod terminal;
 mod timeline;
+mod token_dashboard;
 
 use chrono::{DateTime, Utc};
 use config::{detect_providers, load_config, save_config, AppConfig};
@@ -5113,6 +5114,7 @@ pub fn run() {
             focus_provider_terminal,
             open_app_config,
             open_url,
+            token_dashboard::open_token_dashboard,
             get_server_port,
             read_usage_snapshots,
             resize_window,

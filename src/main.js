@@ -770,6 +770,38 @@ async function init() {
   // view-expanded 的 DOM/渲染碼保留 dormant——拆掉會踩無 null 防護的 init。
   $("btn-usage-settings")?.addEventListener("click", () => $("btn-settings").click());
 
+  // Token 戰情室：它常駐很吃 CPU，所以按下才啟動；閒置 15 分鐘或 LobsterPulse 結束時由後端關掉。
+  // 結果訊息暫時蓋掉 footer 的倒數文字（倒數每秒重寫，不能直接寫在它上面）。
+  let footerMsgTimer = null;
+  const flashFooterMsg = (text, isError) => {
+    const msg = $("uv-footer-msg");
+    const countdown = $("uv-next-update");
+    if (!msg) return;
+    msg.textContent = text;
+    msg.classList.toggle("error", !!isError);
+    msg.classList.remove("hidden");
+    countdown?.classList.add("hidden");
+    clearTimeout(footerMsgTimer);
+    footerMsgTimer = setTimeout(() => {
+      msg.classList.add("hidden");
+      countdown?.classList.remove("hidden");
+    }, 5000);
+  };
+  $("btn-token-dashboard")?.addEventListener("click", async () => {
+    const btn = $("btn-token-dashboard");
+    if (btn.classList.contains("busy")) return;
+    btn.classList.add("busy");
+    flashFooterMsg("正在開啟 Token 戰情室…");
+    try {
+      const result = await invoke("open_token_dashboard");
+      flashFooterMsg(result === "started" ? "Token 戰情室已啟動" : "已開啟 Token 戰情室");
+    } catch (e) {
+      flashFooterMsg(String(e), true);
+    } finally {
+      btn.classList.remove("busy");
+    }
+  });
+
   $("btn-hide").addEventListener("click", () => {
     invoke("hide_window").catch(() => {});
   });

@@ -156,6 +156,10 @@
   border-radius: 8px;
 }
 .uv-footer .icon-btn:hover { color: #fff; background: rgba(28, 36, 44, 0.92); }
+.uv-footer .icon-btn.busy { opacity: 0.5; cursor: progress; }
+#uv-next-update.hidden, #uv-footer-msg.hidden { display: none; }
+#uv-footer-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#uv-footer-msg.error { color: #ff8a80; }
 
 /* 淺色主題最低限度適配：卡片維持深色（OpenUsage 樣式本體），僅外框透明度微調 */
 body.light .uv-card { background: rgba(30, 38, 48, 0.88); }

@@ -87,11 +87,15 @@ pub(crate) fn output_with_timeout(
 /// Drop 時關掉 job 就整群結束（taskkill /T 依父 PID 追，父程序先退出的孤兒追不到）。
 /// spawn 與放進 job 之間有極短空窗，這期間衍生的程序不會被追蹤（gh／wsl 不會這麼快衍生）。
 #[cfg(windows)]
-struct KillOnCloseJob(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct KillOnCloseJob(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: Job handle 是核心物件 handle，可在任一執行緒使用與關閉；這個型別只在 Drop 關它一次
+#[cfg(windows)]
+unsafe impl Send for KillOnCloseJob {}
 
 #[cfg(windows)]
 impl KillOnCloseJob {
-    fn attach(child: &std::process::Child) -> Option<Self> {
+    pub(crate) fn attach(child: &std::process::Child) -> Option<Self> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,

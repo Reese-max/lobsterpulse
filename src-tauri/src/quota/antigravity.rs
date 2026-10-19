@@ -145,7 +145,8 @@ fn read_wsl_token() -> Option<serde_json::Value> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let out = cmd.output().ok()?;
+    // 原本 output() 沒有逾時，WSL 卡住時整個 agy 查詢跟著卡死；冷啟動 WSL 要幾秒，給 15 秒
+    let out = super::output_with_timeout(cmd, std::time::Duration::from_secs(15))?;
     if !out.status.success() {
         return None;
     }
@@ -281,9 +282,9 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
                 creds = Some(extract_tokens(&v));
             }
         }
-        // 3. WSL2 Ubuntu 內部 token 檔
+        // 3. WSL2 Ubuntu 內部 token 檔（同步子程序，丟到 blocking 執行緒，不佔 async worker）
         if creds.is_none() {
-            if let Some(v) = read_wsl_token() {
+            if let Some(v) = tokio::task::spawn_blocking(read_wsl_token).await.ok().flatten() {
                 creds = Some(extract_tokens(&v));
             }
         }

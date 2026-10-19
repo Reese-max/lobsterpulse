@@ -57,7 +57,8 @@ fn gh_auth_token() -> Option<String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let out = cmd.output().ok()?;
+    // 10 秒到就殺掉 gh（基線 ~0.8s；編譯尖峰下 5s 會誤殺，見 fetch 的註解）
+    let out = super::output_with_timeout(cmd, std::time::Duration::from_secs(10))?;
     if !out.status.success() {
         return None;
     }
@@ -155,10 +156,10 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     // 會佔住 tokio worker，gh 若卡住（credential manager 互動等）整個 snapshot
     // 永久卡死。spawn_blocking 隔離 + 10s 逾時（基線 ~0.8s，但本機 24/7 跑
     // 自動化，2026-07-17 實測編譯尖峰下 5s 會誤殺）；逾時非網路型錯誤，不觸發 retry_net。
-    // ponytail: 逾時只放棄等待，卡死的 gh 子進程不會被殺——若 gh 永久掛住，每個
-    // TTL 週期會漏一條 blocking 執行緒；真發生時改為顯式 kill 子進程。
+    // gh 子程序本身由 output_with_timeout 在 10 秒時殺掉並回收（2026-10-20 起），
+    // 這層 12 秒只是保險，不再有「卡死的 gh 每個 TTL 漏一條執行緒」的問題。
     let cred = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(12),
         tokio::task::spawn_blocking(read_credentials),
     )
     .await;

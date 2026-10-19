@@ -18,6 +18,53 @@ pub mod openrouter;
 
 use serde::{Deserialize, Serialize};
 
+/// 跑一個短命子程序（`gh auth token`、`wsl.exe cat ...`）拿輸出，超過時限就殺掉並回收。
+/// std 的 `output()` 沒有逾時；外層包 tokio timeout 只是放棄等待，卡住的子程序和佔著的
+/// blocking 執行緒會一直留著（2026-10-20 稽核）。
+/// 逾時時不等讀取執行緒：被殺的程序若有孫程序還握著管線，等下去又會卡住，交給它自己收尾。
+pub(crate) fn output_with_timeout(
+    mut cmd: std::process::Command,
+    timeout: std::time::Duration,
+) -> Option<std::process::Output> {
+    use std::io::Read;
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let mut stderr = child.stderr.take()?;
+    // 另開執行緒讀管線：輸出若塞滿管線緩衝，子程序會卡在寫入、永遠不結束
+    let out_reader = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = stdout.read_to_end(&mut b);
+        b
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = stderr.read_to_end(&mut b);
+        b
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Some(std::process::Output {
+                    status,
+                    stdout: out_reader.join().unwrap_or_default(),
+                    stderr: err_reader.join().unwrap_or_default(),
+                });
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 /// 單一 runner 的即時額度資料（對應前端 `runners[]` 結構）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunnerQuota {
@@ -143,5 +190,33 @@ mod detect_tests {
         assert_eq!(got[0].id, "openrouter");
         assert_eq!(got[0].label, "OpenRouter");
         std::fs::remove_dir_all(&tmp).ok();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod output_with_timeout_tests {
+    use super::output_with_timeout;
+    use std::time::{Duration, Instant};
+
+    fn cmd(args: &[&str]) -> std::process::Command {
+        let mut c = std::process::Command::new("cmd.exe");
+        c.args(args);
+        c
+    }
+
+    #[test]
+    fn returns_output_when_child_finishes_in_time() {
+        let out = output_with_timeout(cmd(&["/c", "echo lp-ok"]), Duration::from_secs(5)).expect("應該拿到輸出");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "lp-ok");
+    }
+
+    #[test]
+    fn kills_and_returns_none_when_child_hangs() {
+        let started = Instant::now();
+        // ping 約 10 秒；300ms 就該放棄，而且不能被還握著管線的 ping 拖住
+        let out = output_with_timeout(cmd(&["/c", "ping -n 11 127.0.0.1 >nul"]), Duration::from_millis(300));
+        assert!(out.is_none());
+        assert!(started.elapsed() < Duration::from_secs(3), "逾時後要立刻返回，實際 {:?}", started.elapsed());
     }
 }

@@ -237,6 +237,10 @@ fn scan_quota_low(threshold: u8) -> Vec<(String, u8, String)> {
     let Ok(v): Result<serde_json::Value, _> = serde_json::from_str(&data) else {
         return vec![];
     };
+    // runner 停擺時檔案裡是舊百分比：拿它發「剩 N%」提醒會報錯時間點的數字
+    if !crate::quota_history::usage_snapshot_is_fresh(&v, now_secs().max(0) as u64) {
+        return vec![];
+    }
     let Some(runners) = v.get("runners").and_then(|r| r.as_array()) else {
         return vec![];
     };
@@ -748,7 +752,9 @@ fn tick_inner(
     // 本地時區當天 == summary_hour 時就推一次，每日 1 次（last_summary_date 擋重複）。
     // dedup marker 在「決定要 fire」時立即設，避免純 toast 模式（無 Discord send 成功路徑）
     // 下被 15s tick 反覆重發。
-    if cfg.daily_summary_enabled {
+    // 日／週報的內容是工作階段統計（自 LP 啟動以來的 session 數與 token），不是額度：
+    // 只留額度模式不發（hook 也已移除，數字只會是 0）
+    if cfg.daily_summary_enabled && crate::SHOW_NON_QUOTA_FEATURES {
         let now_local = chrono::Local::now();
         let today = now_local.format("%Y-%m-%d").to_string();
         let should_fire = {
@@ -799,7 +805,8 @@ fn tick_inner(
                 ));
             }
             let title = format!("每日摘要 · {today}");
-            if toast_active {
+            // 只有真的要送 Discord 時才說「已送出」（原本 Discord 沒開也照樣跳這句）
+            if toast_active && discord_active {
                 if let Some(a) = &notify.app {
                     send_toast(a, &title, "今日 quota 日報已送出");
                 }
@@ -826,7 +833,7 @@ fn tick_inner(
     }
 
     // ─── Rule 5: weekly_summary — 週一 summary_hour 推 top 3 provider ───
-    if cfg.weekly_summary_enabled {
+    if cfg.weekly_summary_enabled && crate::SHOW_NON_QUOTA_FEATURES {
         use chrono::Datelike;
         let now_local = chrono::Local::now();
         let iso = now_local.iso_week();
@@ -880,7 +887,7 @@ fn tick_inner(
                 }
             }
             let title = format!("週摘要 · {wkey}");
-            if toast_active {
+            if toast_active && discord_active {
                 if let Some(a) = &notify.app {
                     send_toast(a, &title, "本週 quota 週報已送出");
                 }

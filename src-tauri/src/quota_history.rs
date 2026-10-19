@@ -11,6 +11,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const KEEP_DAYS: u64 = 30;
 static QUOTA_HISTORY_IO_LOCK: Mutex<()> = Mutex::new(());
 
+/// usage-local.json 由 runner loop 每 60 秒重寫；超過 5 分鐘沒更新＝runner 卡住或沒在跑。
+/// 這時的百分比是舊的：不可拿來發額度提醒、也不可配上「現在」的時間寫進歷史。
+pub(crate) const USAGE_SNAPSHOT_MAX_AGE_SECS: u64 = 300;
+
+/// snapshot 的 updated_at 是否在容許範圍內（時間戳在未來超過 60 秒也視為不可信）。
+pub(crate) fn usage_snapshot_is_fresh(snapshot: &serde_json::Value, now: u64) -> bool {
+    snapshot
+        .get("updated_at")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|t| now.saturating_sub(t) <= USAGE_SNAPSHOT_MAX_AGE_SECS && t <= now + 60)
+}
+
 fn csv_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     Some(home.join(".lobsterpulse").join("quota-history.csv"))
@@ -31,6 +43,17 @@ pub fn snapshot_once() -> Result<usize, String> {
     let Some(runners) = v.get("runners").and_then(|x| x.as_array()) else {
         return Ok(0);
     };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 舊資料配上現在的時間寫進去，趨勢圖會把「卡住的值」畫成平線（2026-10-20 稽核）
+    if !usage_snapshot_is_fresh(&v, now) {
+        log::warn!(
+            "[quota_history] usage-local.json 超過 {USAGE_SNAPSHOT_MAX_AGE_SECS} 秒沒更新，本輪不寫歷史"
+        );
+        return Ok(0);
+    }
 
     let Some(path) = csv_path() else {
         return Err("no path".into());
@@ -38,10 +61,6 @@ pub fn snapshot_once() -> Result<usize, String> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
 
     let mut f = OpenOptions::new()
         .create(true)
@@ -287,6 +306,17 @@ fn extract_min_percent(text: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usage_snapshot_freshness_rejects_stale_and_future_timestamps() {
+        let now = 1_800_000_000u64;
+        let snap = |t: u64| serde_json::json!({ "updated_at": t, "runners": [] });
+        assert!(usage_snapshot_is_fresh(&snap(now - 30), now));
+        assert!(usage_snapshot_is_fresh(&snap(now - USAGE_SNAPSHOT_MAX_AGE_SECS), now), "邊界值算新鮮");
+        assert!(!usage_snapshot_is_fresh(&snap(now - USAGE_SNAPSHOT_MAX_AGE_SECS - 1), now), "runner 停擺的舊資料");
+        assert!(!usage_snapshot_is_fresh(&snap(now + 3600), now), "時鐘錯亂的未來時間");
+        assert!(!usage_snapshot_is_fresh(&serde_json::json!({ "runners": [] }), now), "缺 updated_at");
+    }
     use std::fs::File;
     use std::io::Read;
 

@@ -29,13 +29,21 @@ struct CodexTokens {
 }
 
 /// 解析 JWT payload 拿 `exp` claim（不驗簽，只讀 base64 payload）
-fn jwt_exp(token: &str) -> Option<u64> {
+pub(crate) fn jwt_exp(token: &str) -> Option<u64> {
     let json = decode_jwt_payload(token)?;
     json.get("exp").and_then(|v| v.as_u64())
 }
 
+/// ChatGPT 登入的 access_token（Codex CLI 會自動刷新 auth.json）。
+/// 金鑰分頁用它取代環境變數裡過期的 OPENAI_ACCESS_TOKEN；API key 模式回 None。
+pub(crate) fn chatgpt_access_token(home: &Path) -> Option<String> {
+    let data = std::fs::read_to_string(home.join(".codex").join("auth.json")).ok()?;
+    let auth: CodexAuth = serde_json::from_str(&data).ok()?;
+    auth.tokens?.access_token.filter(|t| !t.trim().is_empty())
+}
+
 /// 解析 JWT payload 為 serde_json::Value（不驗簽，只讀 base64 payload）
-fn decode_jwt_payload(token: &str) -> Option<serde_json::Value> {
+pub(crate) fn decode_jwt_payload(token: &str) -> Option<serde_json::Value> {
     let payload_b64 = token.split('.').nth(1)?;
     let mut b64 = payload_b64.replace('-', "+").replace('_', "/");
     match b64.len() % 4 {

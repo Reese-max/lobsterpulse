@@ -774,16 +774,22 @@ async function init() {
   // ── 🔑 金鑰一鍵複製 ────────────────────────────────────────
   // 值永遠不主動進畫面：清單只有名稱與遮罩，複製是後端直接寫剪貼簿。
   // 唯一會把值送進 webview 的是「按住顯示」，且放開就消失。
+  // 世代號：一進來就領號，之後每個 await 回來都核對——比較慢回來的舊請求
+  // （舊清單、舊有效性結果）不可蓋掉新的
+  let apiKeyRenderSeq = 0;
   async function renderApiKeys() {
     const box = document.getElementById("apikey-list");
     if (!box) return;
+    const seq = ++apiKeyRenderSeq;
     let keys = [];
     try {
       keys = (await invoke("list_api_keys")) || [];
     } catch (e) {
+      if (seq !== apiKeyRenderSeq) return;
       box.innerHTML = `<div class="setting-sub-label">讀取失敗：${esc(String(e))}</div>`;
       return;
     }
+    if (seq !== apiKeyRenderSeq) return;
     if (keys.length === 0) {
       box.innerHTML = `<div class="setting-sub-label">找不到 AI 服務的環境變數金鑰</div>`;
       return;
@@ -806,10 +812,20 @@ async function init() {
         const link = manageUrl
           ? `<button class="apikey-link" data-open-url="${esc(manageUrl)}" title="開啟官方金鑰頁：${esc(manageUrl)}">↗</button>`
           : "";
+        // 值不是取自環境變數時要講：OPENAI_ACCESS_TOKEN 改用 Codex 自己會刷新的那份
+        const src = k.source === "codex"
+          ? `<span class="apikey-tag apikey-used" title="取自 ~/.codex/auth.json，Codex CLI 會自動刷新；環境變數裡那份已較舊">Codex 自動更新</span>`
+          : "";
+        const exp = window.QuotaCards.apiKeyExpiryTag(k.expires_at, Date.now() / 1000);
+        const expTag = exp
+          ? `<span class="apikey-tag ${exp.cls}" title="token 到期時間">${esc(exp.text)}</span>`
+          : "";
+        // 有效性標籤先放「…」，checkApiKeys 回來再填；查不了的家會被藏起來
+        const status = `<span class="apikey-tag apikey-status" data-status-for="${esc(k.name)}" title="檢查中">…</span>`;
         return `<div class="apikey-row">
           <div class="apikey-ident">
             <span class="apikey-name">${esc(k.name)}</span>
-            ${alias}${dup}${used}${link}
+            ${alias}${status}${expTag}${src}${dup}${used}${link}
           </div>
           <span class="apikey-mask" data-mask="${esc(k.masked)}">${esc(k.masked)}</span>
           <button class="icon-btn apikey-eye" data-reveal="${esc(k.name)}" title="按住顯示">👁</button>
@@ -817,6 +833,30 @@ async function init() {
         </div>`;
       })
       .join("");
+    checkApiKeys(box, seq);
+  }
+
+  // 有效性：每次打開分頁都問後端（後端依值快取 10 分鐘，值換了才真的重打）。
+  // 等待期間清單若被重畫，只讓最新那次的結果落地——舊請求可能是對舊值查的。
+  async function checkApiKeys(box, seq) {
+    let checks = [];
+    try {
+      checks = (await invoke("check_api_keys")) || [];
+    } catch (e) {
+      console.warn("[api-keys] 有效性檢查失敗", e);
+    }
+    if (seq !== apiKeyRenderSeq) return;
+    const byName = new Map(checks.map((c) => [c.name, c]));
+    for (const el of box.querySelectorAll("[data-status-for]")) {
+      const tag = window.QuotaCards.apiKeyStatusTag(byName.get(el.dataset.statusFor));
+      if (!tag) {
+        el.remove();
+        continue;
+      }
+      el.textContent = tag.text;
+      el.className = `apikey-tag apikey-status ${tag.cls}`;
+      el.title = tag.title;
+    }
   }
 
   // 金鑰列的官方頁連結（↗）

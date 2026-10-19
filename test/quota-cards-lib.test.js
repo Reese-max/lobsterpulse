@@ -264,3 +264,28 @@ test("providerUsageUrl / keyManageUrl 對應正確且未知的回 null", () => {
   assert.strictEqual(keyManageUrl("KAGGLE_API_TOKEN"), null, "沒對照的不要亂給連結");
   assert.strictEqual(keyManageUrl(undefined), null);
 });
+
+test("apiKeyStatusTag：有效／無效／被擋各自分色，unchecked 與 expired 不畫", () => {
+  const { apiKeyStatusTag } = require("../src/quota-cards-lib.js");
+  assert.strictEqual(apiKeyStatusTag({ status: "valid", detail: "" }).cls, "apikey-ok");
+  const bad = apiKeyStatusTag({ status: "invalid", detail: "HTTP 401：供應商不認這把金鑰" });
+  assert.strictEqual(bad.cls, "apikey-bad");
+  assert.strictEqual(bad.title, "HTTP 401：供應商不認這把金鑰", "tooltip 帶後端說明");
+  assert.strictEqual(apiKeyStatusTag({ status: "blocked", detail: "x" }).cls, "apikey-warn", "被擋網路不是紅色");
+  assert.strictEqual(apiKeyStatusTag({ status: "unchecked", detail: "" }), null);
+  assert.strictEqual(apiKeyStatusTag({ status: "expired", detail: "" }), null, "過期由到期日標籤負責，不重複");
+  assert.strictEqual(apiKeyStatusTag(undefined), null);
+});
+
+test("apiKeyExpiryTag：過期標紅、未過期標日期、非 JWT 不畫", () => {
+  const { apiKeyExpiryTag } = require("../src/quota-cards-lib.js");
+  const exp = Date.UTC(2026, 9, 26, 4, 0, 0) / 1000; // 10/26 中午（UTC+8）
+  const future = apiKeyExpiryTag(exp, exp - 3600);
+  assert.strictEqual(future.cls, "apikey-used");
+  assert.match(future.text, /^到期 10\/26$/);
+  const past = apiKeyExpiryTag(exp, exp + 1);
+  assert.strictEqual(past.cls, "apikey-bad");
+  assert.match(past.text, /已過期 10\/26/);
+  assert.strictEqual(apiKeyExpiryTag(null, 0), null);
+  assert.strictEqual(apiKeyExpiryTag(undefined, 0), null);
+});

@@ -1517,6 +1517,12 @@ body.has-bg #view-events-log {
 /* 重複＝要注意（同一把金鑰兩個名字）；使用中＝資訊性 */
 .apikey-dup { color: #e5a23d; background: rgba(229, 162, 61, 0.12); }
 .apikey-used { color: var(--text-dim); background: var(--hover); }
+/* 有效性：有效＝綠、無效／過期＝紅、網路被擋／檢查失敗＝黃（不一定是金鑰的錯）。
+   .apikey-status（檢查中的「…」）要放在顏色類之前，否則同權重時會蓋掉顏色 */
+.apikey-status { color: var(--text-dim); }
+.apikey-ok { color: #3fb950; background: rgba(63, 185, 80, 0.12); }
+.apikey-bad { color: #f85149; background: rgba(248, 81, 73, 0.12); }
+.apikey-warn { color: #e5a23d; background: rgba(229, 162, 61, 0.12); }
 .apikey-mask {
   font-size: 12px; font-family: ui-monospace, Consolas, monospace; color: var(--text-dim);
   max-width: 200px; overflow-wrap: anywhere; text-align: right;

@@ -211,10 +211,35 @@
     return null;
   }
 
+  // 金鑰有效性（後端 check_api_keys）→ 標籤。expired 交給到期日標籤畫，
+  // unchecked（這家沒有唯讀端點可查）不畫，免得一排灰字。
+  const KEY_STATUS = {
+    valid: { text: "✓ 有效", cls: "apikey-ok" },
+    invalid: { text: "✗ 無效", cls: "apikey-bad" },
+    blocked: { text: "⚠ 網路被擋", cls: "apikey-warn" },
+    error: { text: "? 檢查失敗", cls: "apikey-warn" },
+  };
+  function apiKeyStatusTag(check) {
+    const t = check && KEY_STATUS[check.status];
+    if (!t) return null;
+    return { text: t.text, cls: t.cls, title: check.detail || t.text };
+  }
+
+  // JWT 形狀的 token 才有到期日（epoch 秒）：過期標紅，未過期只標日期
+  function apiKeyExpiryTag(expiresAt, nowSec) {
+    if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return null;
+    const d = new Date(expiresAt * 1000);
+    const md = `${d.getMonth() + 1}/${d.getDate()}`;
+    return expiresAt <= nowSec
+      ? { text: `✗ 已過期 ${md}`, cls: "apikey-bad" }
+      : { text: `到期 ${md}`, cls: "apikey-used" };
+  }
+
   const api = {
     parseResetDuration, normalizeRunnerCard, normalizeCodexModelUsage,
     recentCompletions, waitingSessions, statsFreshness,
     PROVIDER_LINKS, providerUsageUrl, keyManageUrl,
+    apiKeyStatusTag, apiKeyExpiryTag,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.QuotaCards = api;

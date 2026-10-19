@@ -50,10 +50,11 @@ fn effective_balance(label: String, account_left: f64, account_total: f64, key_b
     KeyBalance { label, left, total, account_left, account_total, key_limit, key_limit_remaining }
 }
 
-/// 從 env 收集所有 `OPENROUTER_API_KEY*`，回 (顯示標籤, key)，按 var 名排序。
-/// `OPENROUTER_API_KEY_A` → 標籤 "A"；無後綴 → "main"。
+/// 從環境變數收集所有 `OPENROUTER_API_KEY*`（即時讀，見 `api_keys::live_entries`），
+/// 回 (顯示標籤, key)，按 var 名排序。`OPENROUTER_API_KEY_A` → 標籤 "A"；無後綴 → "main"。
 fn read_credentials() -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = std::env::vars()
+    let mut out: Vec<(String, String)> = crate::api_keys::live_vars()
+        .into_iter()
         .filter(|(k, v)| k.starts_with("OPENROUTER_API_KEY") && !v.trim().is_empty())
         .map(|(k, v)| {
             let suffix = k

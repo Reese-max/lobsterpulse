@@ -34,6 +34,26 @@ use tauri::{
 struct AppSessionManager(Mutex<SessionManager>);
 struct AppConfigState(Mutex<AppConfig>);
 
+/// 主視窗現在是否顯示。系統匣常駐大多時間是隱藏的：背景的滑鼠偵測（每 50ms）與前端的
+/// 計時器據此停工（2026-10-20 稽核：隱藏時照跑）。所有顯示／隱藏都走 set_main_visible。
+static MAIN_VISIBLE: AtomicBool = AtomicBool::new(true);
+
+/// 顯示或隱藏視窗；是主視窗才記下狀態、通知前端（前端據此暫停／恢復計時器）。
+/// hide_window 會對所有視窗呼叫，非 main 的只隱藏、不可改寫主視窗的狀態。
+fn set_main_visible(w: &tauri::WebviewWindow, visible: bool) {
+    let result = if visible { w.show() } else { w.hide() };
+    if result.is_ok() && w.label() == "main" {
+        MAIN_VISIBLE.store(visible, Ordering::Relaxed);
+        let _ = w.emit("main-visibility", visible);
+    }
+}
+
+/// 前端註冊 main-visibility 監聽後主動問一次：隱藏事件可能早於監聽、或 WebView 在隱藏中重新載入。
+#[tauri::command]
+fn is_main_visible() -> bool {
+    MAIN_VISIBLE.load(Ordering::Relaxed)
+}
+
 /// 「只留額度」模式（2026-10-20 使用者要求：這個程式單純只做額度）。
 /// false 時系統匣只留顯示／設定／主題／設定檔／重新啟動／結束，不註冊 Bot 總覽與事件診斷
 /// 的快捷鍵，工作階段閒置與工具失敗不跳通知；額度相關的提醒（偏低、用量異常、日週報）照常。
@@ -2834,7 +2854,7 @@ fn import_appearance_json(
 #[tauri::command]
 fn hide_window(app: tauri::AppHandle) {
     for (_, w) in app.webview_windows() {
-        let _ = w.hide();
+        set_main_visible(&w, false);
     }
 }
 
@@ -4187,7 +4207,7 @@ pub fn run() {
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
+                set_main_visible(&window, true);
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }
@@ -4214,17 +4234,17 @@ pub fn run() {
                     if let Some(w) = app.get_webview_window("main") {
                         if s.contains("KeyL") {
                             if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
+                                set_main_visible(&w, false);
                             } else {
-                                let _ = w.show();
+                                set_main_visible(&w, true);
                                 let _ = w.set_focus();
                             }
                         } else if s.contains("KeyD") {
-                            let _ = w.show();
+                            set_main_visible(&w, true);
                             let _ = w.set_focus();
                             let _ = w.emit("open-dashboard", ());
                         } else if s.contains("KeyE") {
-                            let _ = w.show();
+                            set_main_visible(&w, true);
                             let _ = w.set_focus();
                             let _ = w.emit("open-events-log", ());
                         }
@@ -4320,6 +4340,9 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize::new(startup_capsule_w, 46.0)));
 
+                // 以視窗實際狀態初始化（tauri.conf visible=true，但不寫死假設）
+                MAIN_VISIBLE.store(window.is_visible().unwrap_or(true), Ordering::Relaxed);
+
                 // Cursor position polling
                 let win = window.clone();
                 let was_inside = Arc::new(AtomicBool::new(false));
@@ -4328,6 +4351,16 @@ pub fn run() {
                 std::thread::spawn(move || {
                     loop {
                         std::thread::sleep(std::time::Duration::from_millis(50));
+                        // 每輪要對主執行緒問三次（游標、位置、大小）。視窗隱藏時沒有東西可懸停；
+                        // 固定展開時懸停也不會收合——這兩種情況放慢到每 0.5 秒看一次狀態就好
+                        let pinned = win
+                            .try_state::<AppConfigState>()
+                            .and_then(|c| c.0.lock().ok().map(|c| c.appearance.pin_expanded))
+                            .unwrap_or(false);
+                        if !MAIN_VISIBLE.load(Ordering::Relaxed) || pinned {
+                            std::thread::sleep(std::time::Duration::from_millis(450));
+                            continue;
+                        }
                         let inside = (|| {
                             let cursor = win.cursor_position().ok()?;
                             let pos = win.outer_position().ok()?;
@@ -4443,14 +4476,23 @@ pub fn run() {
             // 失敗 fail-closed：log error + span 停用（global tracer 維持
             // noop），不 silent fallback 假裝有 export，也不擋 app 啟動
             //（監控 app 本體功能不依賴 OTel 外送）。
-            match telemetry::init_otel_sdk() {
-                Ok(endpoint) => info!("OTel SDK initialized, OTLP endpoint {endpoint}"),
-                Err(e) => log::error!("OTel SDK init failed (gen_ai spans disabled): {e}"),
+            // 只留額度模式：OTel 只服務工作階段的 gen_ai span，不初始化（它會自建 runtime 常駐）
+            if SHOW_NON_QUOTA_FEATURES {
+                match telemetry::init_otel_sdk() {
+                    Ok(endpoint) => info!("OTel SDK initialized, OTLP endpoint {endpoint}"),
+                    Err(e) => log::error!("OTel SDK init failed (gen_ai spans disabled): {e}"),
+                }
             }
 
             // Hook server
             let handle = app.handle().clone();
-            let rt = tokio::runtime::Builder::new_multi_thread()
+            // 預設 worker 數＝CPU 核心數；只留額度模式下這裡只撐 watchdog 的 /healthz 與 port 檔，
+            // 2 條就夠（2026-10-20 實測整個程序 99 條執行緒）
+            let mut rt_builder = tokio::runtime::Builder::new_multi_thread();
+            if !SHOW_NON_QUOTA_FEATURES {
+                rt_builder.worker_threads(2);
+            }
+            let rt = rt_builder
                 .enable_all()
                 .build()
                 .expect("Failed to create tokio runtime");
@@ -4651,7 +4693,8 @@ pub fn run() {
                         toast_enabled,
                     },
                 );
-                if discord_on {
+                // 只留額度模式：Discord 指令（!lp kill/status…）與 OpenAB 事件轉發都不是額度功能
+                if discord_on && SHOW_NON_QUOTA_FEATURES {
                     // Discord 指令 polling —— `!lp quota/status/kill/pause/resume/trend/...`
                     let cfg_state = handle_auto.state::<AppConfigState>();
                     auto_rules::poll_discord_commands(
@@ -4680,7 +4723,9 @@ pub fn run() {
             });
 
             // Staleness checker — 讀 config 裡的可調 thresholds
+            // 只留額度模式不跑：它每 10 秒整理工作階段並通知前端重畫，額度用不到
             let handle2 = app.handle().clone();
+            if SHOW_NON_QUOTA_FEATURES {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(10));
                 let (idle, stale, remove) = {
@@ -4696,6 +4741,7 @@ pub fn run() {
                 mgr.0.lock().unwrap().check_staleness(idle, stale, remove);
                 let _ = handle2.emit("session-update", ());
             });
+            }
 
             // #8 Configurator live sync — 每 2s poll `web-config/appearance.json` mtime，
             // 變化就 import + emit "appearance-synced" 給 main.js 重新套用
@@ -4739,10 +4785,17 @@ pub fn run() {
 
             // Prometheus /metrics exporter — 獨立 std::thread + 自建 runtime，
             // 不依賴 hook_server 的 rt（那個已 std::mem::forget）。
+            // 只留額度模式改用單執行緒 runtime：這裡只是 accept 迴圈，閒置不吃 CPU；
+            // 端點照開，packaged smoke test 靠它確認 hook 事件有送到 app。
             let handle_metrics = app.handle().clone();
             let metrics_port = if port > 0 { port + 100 } else { 19380 };
             std::thread::spawn(move || {
-                let rt = match tokio::runtime::Runtime::new() {
+                let rt = if SHOW_NON_QUOTA_FEATURES {
+                    tokio::runtime::Runtime::new()
+                } else {
+                    tokio::runtime::Builder::new_current_thread().enable_all().build()
+                };
+                let rt = match rt {
                     Ok(r) => r,
                     Err(e) => {
                         log::warn!("metrics runtime create failed: {e}");
@@ -4864,7 +4917,7 @@ pub fn run() {
                         let app = tray.app_handle();
                         if let Some(w) = app.get_webview_window("main") {
                             if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
+                                set_main_visible(&w, false);
                             } else {
                                 // 叫回來時置中螢幕頂端，避免膠囊跑到螢幕外
                                 if let Ok(Some(monitor)) = w.current_monitor() {
@@ -4877,7 +4930,7 @@ pub fn run() {
                                         tauri::LogicalPosition::new(x, y),
                                     ));
                                 }
-                                let _ = w.show();
+                                set_main_visible(&w, true);
                                 let _ = w.set_always_on_top(true);
                                 let _ = w.set_focus();
                             }
@@ -4888,7 +4941,7 @@ pub fn run() {
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
+                                set_main_visible(&w, false);
                             } else {
                                 if let Ok(Some(monitor)) = w.current_monitor() {
                                     let scale = monitor.scale_factor();
@@ -4900,7 +4953,7 @@ pub fn run() {
                                         tauri::LogicalPosition::new(x, y),
                                     ));
                                 }
-                                let _ = w.show();
+                                set_main_visible(&w, true);
                                 let _ = w.set_always_on_top(true);
                                 let _ = w.set_focus();
                             }
@@ -4908,7 +4961,7 @@ pub fn run() {
                     }
                     "settings" => {
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
+                            set_main_visible(&w, true);
                             let _ = w.set_always_on_top(true);
                             let _ = w.set_focus();
                             let _ = w.emit("open-settings", ());
@@ -4916,7 +4969,7 @@ pub fn run() {
                     }
                     "dashboard" => {
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
+                            set_main_visible(&w, true);
                             let _ = w.set_always_on_top(true);
                             let _ = w.set_focus();
                             let _ = w.emit("open-dashboard", ());
@@ -4924,7 +4977,7 @@ pub fn run() {
                     }
                     "events_log" => {
                         if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
+                            set_main_visible(&w, true);
                             let _ = w.set_always_on_top(true);
                             let _ = w.set_focus();
                             let _ = w.emit("open-events-log", ());
@@ -5045,6 +5098,7 @@ pub fn run() {
             get_config,
             save_app_config,
             get_default_appearance,
+            is_main_visible,
             set_quick_setting,
             detect_installed_providers,
             check_provider_setup,

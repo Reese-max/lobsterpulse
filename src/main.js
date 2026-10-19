@@ -531,10 +531,37 @@ async function init() {
   });
   invoke("plugin:event|listen", { event: "cursor-left", target: { kind: "Any" }, handler: collapseCallbackId }).catch(() => {});
 
-  setInterval(() => {
+  // 滑鼠離開就收合（每 200ms 看一次）；視窗隱藏時暫停，見下方 main-visibility
+  const hoverTick = () => {
     if ((currentView !== "expanded" && currentView !== "usage") || appConfig.appearance.pin_expanded) return;
     if (!document.getElementById("app").matches(":hover")) showView("capsule");
-  }, 200);
+  };
+  let hoverTimer = setInterval(hoverTick, 200);
+  let mainVisible = true; // 由 applyVisibility 維護（後端 main-visibility／is_main_visible）
+
+  // 主視窗顯示／隱藏（後端 set_main_visible 送來）：隱藏時暫停畫面相關的計時器與背景影片，
+  // 顯示時恢復並立刻刷新（2026-10-20 稽核：原本視窗收在系統匣時也照跑）
+  const applyVisibility = (visible) => {
+    mainVisible = visible;
+    const video = $("bg-video");
+    if (visible) {
+      if (!hoverTimer) hoverTimer = setInterval(hoverTick, 200);
+      if (currentView === "usage") window.UsageView?.start();
+      if (video && appConfig.appearance.background_type === "video") video.play().catch(() => {});
+    } else {
+      clearInterval(hoverTimer);
+      hoverTimer = null;
+      window.UsageView?.stop();
+      if (video) video.pause();
+    }
+  };
+  const visibilityCb = window.__TAURI_INTERNALS__.transformCallback((evt) => applyVisibility(!!(evt && evt.payload)));
+  invoke("plugin:event|listen", { event: "main-visibility", target: { kind: "Any" }, handler: visibilityCb }).catch(() => {});
+  // 註冊後主動問一次：隱藏事件可能早於監聽，或 WebView 在隱藏中重新載入。
+  // 拿不到布林值（舊版後端、測試替身）就維持原狀，不可誤停計時器
+  invoke("is_main_visible")
+    .then((v) => { if (typeof v === "boolean" && !v) applyVisibility(false); })
+    .catch(() => {});
 
   // Listen for tray → Open Settings
   const openSettingsCb = window.__TAURI_INTERNALS__.transformCallback(async () => {
@@ -1406,10 +1433,16 @@ async function init() {
     refreshQuotas();
   });
 
+  // 只留額度模式：每秒的工作階段輪詢（含最近失敗、長任務 Telegram）與每 15 秒的舊額度列
+  // 只服務已隱藏的畫面（膠囊狀態、Bot 總覽、舊展開面板…），只在真的切到那些畫面時才跑；
+  // 平常停在膠囊／額度面板／設定頁時什麼都不做。額度面板有自己的更新（usage-view.js）
+  const NON_QUOTA_VIEWS = new Set(["dashboard", "expanded", "events", "timeline"]);
+  // 一般模式照舊（視窗收起來時工作階段通知照樣要推）；只留額度模式還要視窗看得到才跑
+  const needsSessionPolling = () => !QUOTA_ONLY || (mainVisible && NON_QUOTA_VIEWS.has(currentView));
   refreshState();
-  setInterval(refreshState, 1000);
+  setInterval(() => { if (needsSessionPolling()) refreshState(); }, 1000);
   refreshQuotas();
-  setInterval(refreshQuotas, 15000);
+  setInterval(() => { if (needsSessionPolling()) refreshQuotas(); }, 15000);
 }
 
 // ─── Bot quota runner filter ───

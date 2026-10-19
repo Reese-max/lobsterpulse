@@ -147,6 +147,11 @@ where
     (before, after, result)
 }
 
+/// 首選 port 綁不到時的重試：10 次 × 200ms ≈ 2 秒（交接時舊 handle 釋放通常在 1 秒內）。
+const FIRST_CHOICE_PORT: u16 = 19280;
+const FIRST_CHOICE_ATTEMPTS: u32 = 10;
+const FIRST_CHOICE_RETRY_MS: u64 = 200;
+
 pub struct HookServer {
     port: u16,
 }
@@ -170,23 +175,32 @@ impl HookServer {
         let (tx, rx) = mpsc::unbounded_channel();
 
         for candidate_port in 19280..=19289u16 {
-            match TcpListener::bind(format!("127.0.0.1:{candidate_port}")).await {
-                Ok(listener) => {
-                    self.port = candidate_port;
-                    write_port_file(candidate_port);
-                    info!("LobsterPulse server listening on port {candidate_port}");
+            // 首選 port 被佔用時先等一下再退而求其次：系統匣「重新啟動」交接時，舊程序與
+            // explorer 中介可能還握著 19280 幾百毫秒（2026-10-19）。直接跳到 19281 雖然 hook
+            // 照樣能用（hook 讀 port 檔），但寫死 19280 的外部工具會連不到。
+            let attempts = if candidate_port == FIRST_CHOICE_PORT { FIRST_CHOICE_ATTEMPTS } else { 1 };
+            for attempt in 1..=attempts {
+                match TcpListener::bind(format!("127.0.0.1:{candidate_port}")).await {
+                    Ok(listener) => {
+                        self.port = candidate_port;
+                        write_port_file(candidate_port);
+                        info!("LobsterPulse server listening on port {candidate_port}");
 
-                    let tx = Arc::new(tx);
-                    // R65: 把 process-level default metrics 注入 accept_loop, 每個
-                    // handle_client spawn 都 clone Arc (cheap) — production 行為
-                    // 等同原本 4 個 static AtomicU64, 沒改 K15/K16 lifetime aggregate
-                    // 語意, 但 unit test 可換成自己 new_metrics() 隔離平行噪音。
-                    let metrics = default_metrics();
-                    tokio::spawn(accept_loop(listener, tx, metrics));
+                        let tx = Arc::new(tx);
+                        // R65: 把 process-level default metrics 注入 accept_loop, 每個
+                        // handle_client spawn 都 clone Arc (cheap) — production 行為
+                        // 等同原本 4 個 static AtomicU64, 沒改 K15/K16 lifetime aggregate
+                        // 語意, 但 unit test 可換成自己 new_metrics() 隔離平行噪音。
+                        let metrics = default_metrics();
+                        tokio::spawn(accept_loop(listener, tx, metrics));
 
-                    return Ok(rx);
+                        return Ok(rx);
+                    }
+                    Err(_) if attempt < attempts => {
+                        tokio::time::sleep(std::time::Duration::from_millis(FIRST_CHOICE_RETRY_MS)).await;
+                    }
+                    Err(_) => {}
                 }
-                Err(_) => continue,
             }
         }
 

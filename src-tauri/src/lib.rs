@@ -4995,8 +4995,19 @@ pub fn run() {
                     }
                     "restart" => {
                         if let Ok(exe) = std::env::current_exe() {
-                            if let Err(e) = std::process::Command::new(exe).spawn() {
-                                log::warn!("restart: spawn self failed: {e}");
+                            // 直接 spawn 自己，新程序會繼承這邊的 handle——包括 19280 的監聽 socket
+                            // （2026-10-19 實測：舊程序退出後 socket 仍被新程序握著卻沒人 accept，
+                            // healthz 全數逾時、port 堆滿 CloseWait；mio 的 NO_HANDLE_INHERIT 在本機無效）。
+                            // Windows 改交給 explorer 啟動：新程序由 shell 建立，不繼承這邊任何 handle。
+                            let mut cmd = if cfg!(windows) {
+                                let mut c = std::process::Command::new("explorer.exe");
+                                c.arg(&exe);
+                                c
+                            } else {
+                                std::process::Command::new(&exe)
+                            };
+                            if let Err(e) = cmd.spawn() {
+                                log::warn!("restart: relaunch failed: {e}");
                             }
                         }
                         hook_server::remove_port_file();

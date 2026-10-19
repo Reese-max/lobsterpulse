@@ -386,7 +386,8 @@ fn tick_inner(
     }
 
     // ─── Rule 2: session_idle ─── 發起確認 + polling
-    if cfg.session_idle_enabled {
+    // 規則 2、確認輪詢、規則 3 都是工作階段監控，只留額度模式整段不跑（不只擋通知）
+    if cfg.session_idle_enabled && crate::SHOW_NON_QUOTA_FEATURES {
         // 掃描閒置超標的 session
         let idle_sessions: Vec<(String, String, i64)> = {
             let m = mgr.lock().unwrap();
@@ -464,8 +465,7 @@ fn tick_inner(
                 sid_short8,
                 cfg.confirm_timeout_secs / 60,
             );
-            // 工作階段閒置不是額度功能：只留額度模式下不跳 Windows 通知（Discord 照設定）
-            if toast_active && crate::SHOW_NON_QUOTA_FEATURES {
+            if toast_active {
                 if let Some(a) = &notify.app {
                     send_toast(
                         a,
@@ -540,7 +540,7 @@ fn tick_inner(
     }
 
     // ─── Pending confirms 輪詢（獨立於 session_idle 開關，讓 !lp kill 也共用）───
-    {
+    if crate::SHOW_NON_QUOTA_FEATURES {
         let to_process: Vec<PendingConfirm> = state.lock().unwrap().pending_confirms.clone();
         let mut resolved_ids: Vec<String> = Vec::new();
         for p in &to_process {
@@ -632,7 +632,7 @@ fn tick_inner(
     }
 
     // ─── Rule 3: hook_failure_burst ───
-    if cfg.hook_failure_burst_enabled {
+    if cfg.hook_failure_burst_enabled && crate::SHOW_NON_QUOTA_FEATURES {
         // 一次掃描：算每 provider 次數 + 挑最後一筆（帶 tool + error）
         let (bursts, last_fail): (ProviderBurstCounts, LastFailureByProvider) = {
             let m = mgr.lock().unwrap();
@@ -707,8 +707,7 @@ fn tick_inner(
                     );
                 }
             }
-            // 工具連續失敗不是額度功能：只留額度模式下不跳 Windows 通知（Discord 照設定）
-            if toast_active && crate::SHOW_NON_QUOTA_FEATURES {
+            if toast_active {
                 if let Some(a) = &notify.app {
                     send_toast(a, &title, &desc);
                 }

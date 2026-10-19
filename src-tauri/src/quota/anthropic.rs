@@ -498,7 +498,14 @@ fn runner_rate_limits(snapshot: &serde_json::Value, now: u64) -> Option<(RateLim
         return None;
     }
     let int = |k: &str| raw.get(k).and_then(|v| v.as_i64());
-    let text = |k: &str| raw.get(k).and_then(|v| v.as_str()).unwrap_or("N/A").to_string();
+    // runner 的倒數是它寫檔那一刻算的（最多舊 150 秒）：換回絕對時間再依現在重算，
+    // 不然倒數會原地不動、看起來像重置點往後延
+    let text = |k: &str| {
+        let s = raw.get(k).and_then(|v| v.as_str()).unwrap_or("N/A");
+        parse_countdown_secs(s)
+            .map(|secs| fmt_countdown(updated + secs))
+            .unwrap_or_else(|| s.to_string())
+    };
     let limits = RateLimits {
         h5_remaining: Some(int("session_5h_remaining")?),
         h5_used: int("session_5h_used"),
@@ -511,12 +518,30 @@ fn runner_rate_limits(snapshot: &serde_json::Value, now: u64) -> Option<(RateLim
     Some((limits, tier))
 }
 
+/// fmt_countdown 產生的「2h24m」／「45m」換回秒數；其他字串（N/A、resetting...）回 None。
+fn parse_countdown_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (h, rest) = match s.split_once('h') {
+        Some((h, rest)) => (h.parse::<u64>().ok()?, rest),
+        None => (0, s),
+    };
+    let m = rest.strip_suffix('m')?.parse::<u64>().ok()?;
+    Some(h * 3600 + m * 60)
+}
+
 /// 方案顯示名：runner 給 "Pro"／"Max"，憑證給 "pro"／"max"，統一成 "Claude Pro"／"Claude Max"。
-fn tier_label(tier: &str) -> &'static str {
-    if tier.to_ascii_lowercase().contains("max") {
-        "Claude Max"
+/// 認不得的方案（Team、Enterprise…）照原名顯示，不可硬標成 Pro。
+fn tier_label(tier: &str) -> String {
+    let t = tier.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.contains("max") {
+        "Claude Max".to_string()
+    } else if lower == "pro" || lower == "claude pro" || lower.is_empty() {
+        "Claude Pro".to_string()
+    } else if lower.starts_with("claude ") {
+        t.to_string()
     } else {
-        "Claude Pro"
+        format!("Claude {t}")
     }
 }
 
@@ -561,7 +586,7 @@ fn build_quota(home: &Path, limits: RateLimits, tier: &str, source: &str, status
         // runner＝沿用外部 runner 剛打過的結果；api＝本程序自己探測
         "source": source,
         "status_code": status_code,
-        "rate_headers_found": limits.h5_remaining.is_some(),
+        "rate_headers_found": limits.h5_remaining.is_some() || limits.d7_remaining.is_some(),
         // 視窗名寫實際長度：不給的話面板會顯示泛稱的 Session/Weekly，
         // 跟膠囊的 5h/7d 對不起來（面板走 live API 這條，跟膠囊不同源）
         "session_label": "5h",
@@ -654,9 +679,9 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             let header_u64 = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
             let h5u = header_f64("anthropic-ratelimit-unified-5h-utilization");
             let d7u = header_f64("anthropic-ratelimit-unified-7d-utilization");
-            // 非 2xx 又沒有額度 header＝這次查詢失敗，不可回成功（原本一律 ok:true，面板只見「--」）。
-            // 非 2xx 但帶了 header（例如 429 仍附額度）就照用，status_code 記在 raw 裡
-            if !status.is_success() && h5u.is_none() {
+            // 非 2xx 又沒有任何額度 header＝這次查詢失敗，不可回成功（原本一律 ok:true，面板只見「--」）。
+            // 非 2xx 但帶了 5h 或 7d header（例如 429 仍附額度）就照用，status_code 記在 raw 裡
+            if !status.is_success() && h5u.is_none() && d7u.is_none() {
                 return fail(format!("⚠ API error: HTTP {}", status.as_u16()));
             }
             let limits = RateLimits {
@@ -894,7 +919,7 @@ mod tests {
         let (limits, tier) = runner_rate_limits(&runner_snapshot(now - 30, true, true), now).expect("新鮮且成功要沿用");
         assert_eq!(limits.h5_remaining, Some(56));
         assert_eq!(limits.d7_remaining, Some(80));
-        assert_eq!(limits.h5_reset, "2h24m");
+        // 倒數依 runner 時間戳重算，另見 runner_countdown_is_recomputed_from_its_timestamp
         assert_eq!(tier.as_deref(), Some("Pro"));
         assert!(runner_rate_limits(&runner_snapshot(now - RUNNER_REUSE_SECS - 1, true, true), now).is_none(), "太舊就自己探測");
         assert!(runner_rate_limits(&runner_snapshot(now - 30, false, true), now).is_none(), "runner 失敗不沿用");
@@ -904,10 +929,24 @@ mod tests {
     }
 
     #[test]
+    fn runner_countdown_is_recomputed_from_its_timestamp() {
+        assert_eq!(parse_countdown_secs("2h24m"), Some(2 * 3600 + 24 * 60));
+        assert_eq!(parse_countdown_secs("45m"), Some(45 * 60));
+        assert_eq!(parse_countdown_secs("N/A"), None);
+        assert_eq!(parse_countdown_secs("resetting..."), None);
+        // runner 寫檔時 2h24m，現在過了 2 分鐘：重置點不動 → 倒數要變短（約 2h22m）
+        let now = now_epoch_secs();
+        let (limits, _) = runner_rate_limits(&runner_snapshot(now - 120, true, true), now).unwrap();
+        assert!(limits.h5_reset == "2h22m" || limits.h5_reset == "2h21m", "實際 {}", limits.h5_reset);
+    }
+
+    #[test]
     fn tier_label_normalizes_runner_and_credential_names() {
         assert_eq!(tier_label("Pro"), "Claude Pro");
         assert_eq!(tier_label("max"), "Claude Max");
         assert_eq!(tier_label("Max 20x"), "Claude Max");
         assert_eq!(tier_label("pro"), "Claude Pro");
+        assert_eq!(tier_label("Team"), "Claude Team", "認不得的方案照原名，不可硬標 Pro");
+        assert_eq!(tier_label("Claude Enterprise"), "Claude Enterprise");
     }
 }

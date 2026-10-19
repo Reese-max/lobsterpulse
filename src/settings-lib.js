@@ -36,10 +36,16 @@
     ],
   };
 
+  // 這一頁「還原預設值」實際要動的鍵。只留額度模式下「系統通知」搬到了一般頁
+  // （通知頁整頁隱藏），所以一般頁要連它一起還原。
+  function resetKeysFor(tab, quotaOnly) {
+    const keys = RESET_KEYS[tab] || [];
+    return quotaOnly && tab === "general" ? [...keys, "system_notifications"] : keys;
+  }
+
   // 把 defaults 裡屬於這一頁的鍵複製進 appearance（深拷貝，避免和預設物件共用參照）。
-  // 回傳實際有變動的鍵；defaults 缺的鍵不碰。
-  function applyDefaults(appearance, defaults, tab) {
-    const keys = RESET_KEYS[tab];
+  // 回傳實際有變動的鍵；defaults 缺的鍵不碰。keys 省略時用 RESET_KEYS[tab]。
+  function applyDefaults(appearance, defaults, tab, keys = RESET_KEYS[tab]) {
     if (!keys || !appearance || !defaults) return [];
     const changed = [];
     for (const k of keys) {
@@ -51,7 +57,7 @@
     return changed;
   }
 
-  const api = { parseBoundedInt, RESET_KEYS, applyDefaults };
+  const api = { parseBoundedInt, RESET_KEYS, resetKeysFor, applyDefaults };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.SettingsLib = api;
 })(typeof window !== "undefined" ? window : globalThis);

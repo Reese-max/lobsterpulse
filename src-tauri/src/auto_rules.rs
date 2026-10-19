@@ -460,7 +460,8 @@ fn tick_inner(
                 sid_short8,
                 cfg.confirm_timeout_secs / 60,
             );
-            if toast_active {
+            // 工作階段閒置不是額度功能：只留額度模式下不跳 Windows 通知（Discord 照設定）
+            if toast_active && crate::SHOW_NON_QUOTA_FEATURES {
                 if let Some(a) = &notify.app {
                     send_toast(
                         a,
@@ -702,7 +703,8 @@ fn tick_inner(
                     );
                 }
             }
-            if toast_active {
+            // 工具連續失敗不是額度功能：只留額度模式下不跳 Windows 通知（Discord 照設定）
+            if toast_active && crate::SHOW_NON_QUOTA_FEATURES {
                 if let Some(a) = &notify.app {
                     send_toast(a, &title, &desc);
                 }

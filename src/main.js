@@ -2,6 +2,13 @@ function invoke(cmd, args = {}) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
+// 「只留額度」模式（2026-10-20 使用者要求：這個程式單純只做額度）。畫面只留額度相關；
+// 工作階段狀態、完成／等待提示、Bot 總覽、事件診斷等的程式碼全部保留，改回 false 即恢復——
+// 後端要同時把 lib.rs 的 SHOW_NON_QUOTA_FEATURES 改成 true。要隱藏的元素集中在
+// styles.css 的「只留額度」區塊（掛在 <html class="quota-only">）。
+const QUOTA_ONLY = true;
+document.documentElement.classList.toggle("quota-only", QUOTA_ONLY);
+
 // ─── Provider Icons (inline SVG) ───
 const PROVIDER_ICONS = {
   claude: `<svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>`,
@@ -443,6 +450,7 @@ async function init() {
   applyTheme(appConfig.appearance.theme || "dark");
   ensureAutomationDefaults();
   populateSettingsFromConfig();
+  applyQuotaOnlyLayout();
 
   // First launch → open settings automatically
   const firstLaunch = !appConfig.setup_done;
@@ -609,7 +617,9 @@ async function init() {
     invoke("plugin:event|listen", { event: "cursor-left", target: { kind: "Any" }, handler: cb2 }).catch(() => {});
 
     // Listen for task-completed → play sound + optional Windows toast
+    // 只留額度模式：任務完成／等待不是額度功能，不響、不跳通知、不出提示條
     const soundCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
+      if (QUOTA_ONLY) return;
       const provider = (evt && evt.payload) || "unknown";
       const label = PROVIDER_LABEL?.[provider] || provider;
       if (appConfig.appearance.sound_enabled) playProviderSound(provider, "completion");
@@ -626,6 +636,7 @@ async function init() {
 
     // Listen for task-waiting → play sound + optional Windows toast
     const waitingCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
+      if (QUOTA_ONLY) return;
       const provider = (evt && evt.payload) || "unknown";
       const label = PROVIDER_LABEL?.[provider] || provider;
       if (appConfig.appearance.sound_enabled) playProviderSound(provider, "waiting");
@@ -842,7 +853,7 @@ async function init() {
     btn.addEventListener("click", async () => {
       const tab = btn.dataset.reset;
       if (!btn.classList.contains("confirming")) {
-        const n = (window.SettingsLib.RESET_KEYS[tab] || []).length;
+        const n = window.SettingsLib.resetKeysFor(tab, QUOTA_ONLY).length;
         btn.classList.add("confirming");
         btn.textContent = `再按一次：還原這頁 ${n} 項設定`;
         armTimer = setTimeout(disarm, 3000);
@@ -855,7 +866,8 @@ async function init() {
       // 先留一份原值：存檔失敗要整個退回，不能讓沒存成的預設值留在記憶體裡，
       // 等下一次別的設定存檔時被一起寫進去
       const before = JSON.parse(JSON.stringify(appConfig.appearance));
-      const changed = window.SettingsLib.applyDefaults(appConfig.appearance, defaults, tab);
+      const changed = window.SettingsLib.applyDefaults(
+        appConfig.appearance, defaults, tab, window.SettingsLib.resetKeysFor(tab, QUOTA_ONLY));
       const refresh = async () => {
         populateSettingsFromConfig();
         applyAllAppearance();
@@ -1495,9 +1507,10 @@ async function checkRecentFailures() {
       dot.classList.remove("hidden");
       dot.textContent = failures.length > 9 ? "9+" : String(failures.length);
       // 新失敗 → 彈 toast（不看 system_notifications 設定，失敗永遠推）
+      // 只留額度模式：工具失敗不是額度功能，不推（事件診斷頁也已隱藏）
       const latest = failures[failures.length - 1];
       const latestTs = new Date(latest.timestamp).getTime();
-      if (latestTs > lastFailureNotifiedAt) {
+      if (latestTs > lastFailureNotifiedAt && !QUOTA_ONLY) {
         lastFailureNotifiedAt = latestTs;
         const label = PROVIDER_LABEL[latest.provider] || latest.provider;
         systemNotify(`${label} ❌ 工具失敗`, `${latest.tool_name || "tool"} — 檢查事件診斷`, {
@@ -2838,6 +2851,23 @@ function populateSettingsFromConfig() {
   setVal("rule-dedup", aa.dedup_window_secs);
   setChk("toggle-rule-summary", aa.daily_summary_enabled ?? true);
   setVal("rule-summary-hour", aa.daily_summary_hour ?? 9);
+}
+
+// 只留額度模式下 CSS 做不到的兩件事：
+// 1. 「系統通知」開關搬到「一般」頁：通知頁整頁隱藏了，但這個開關現在管的是額度偏低／
+//    用量異常的提醒（工作階段相關的通知都已停掉），不能跟著消失
+// 2. 設定頁預設停在「一般」：原本預設的「助手」頁已隱藏
+function applyQuotaOnlyLayout() {
+  if (!QUOTA_ONLY) return;
+  const notifyRow = $("toggle-notify")?.closest(".setting-group");
+  const general = document.querySelector('.settings-tab-panel[data-panel="general"]');
+  if (notifyRow && general) {
+    general.insertBefore(notifyRow, general.querySelector(".settings-reset-row"));
+    const sub = notifyRow.querySelector(".setting-sub-label");
+    if (sub) sub.textContent = "額度偏低或用量異常時跳 Windows 通知";
+  }
+  document.querySelectorAll(".settings-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === "general"));
+  document.querySelectorAll(".settings-tab-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === "general"));
 }
 
 // 外觀類設定全部重新套用（主題、色彩、尺寸、字型、透明度、背景）

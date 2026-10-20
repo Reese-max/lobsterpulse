@@ -13520,25 +13520,29 @@ mod r131_plugin_registry_tests {
     }
 
     #[test]
-    fn open_url_rejects_characters_that_could_break_out_of_quotes() {
-        // Windows 上網址整段包在引號裡交給 explorer，這些字元可能跳出引號 → 必須擋
+    fn plain_url_rejects_characters_that_could_break_out_of_quotes() {
+        // Windows 上網址整段包在引號裡交給 explorer，這些字元可能跳出引號 → 必須擋。
+        // 直接測 is_plain_url：萬一它退化，測試也不會真的開出 explorer
         for bad in [
             "https://example.com/\" C:\\Windows",
             "https://example.com/a b",
+            "https://example.com/a\tb",
             "https://example.com\\share",
+            "https://example.com/x\\",
             "https://example.com/\n",
+            "https://example.com/\0",
+            "https://example.com/a^b|c",
+            "https://example.com/<x>`{y}",
             "https://例子.tw/",
         ] {
-            assert!(
-                crate::open_url(bad.to_string()).is_err(),
-                "含特殊字元必須被拒：{bad:?}"
-            );
+            assert!(!crate::is_plain_url(bad), "含特殊字元必須被拒：{bad:?}");
         }
         // 前端實際會開的連結形態都要放行
         for good in [
             "https://claude.ai/settings/usage",
             "https://platform.minimax.io/user-center/basic-information/interface-key",
             "https://example.com/p?a=1&b=%E4%BE%8B#frag",
+            "https://example.com/a,b;c='d'(e)*+!$@[f]~",
         ] {
             assert!(crate::is_plain_url(good), "應放行：{good}");
         }

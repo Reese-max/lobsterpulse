@@ -13,8 +13,8 @@
 
 - 主程式執行檔：`src-tauri/target/release/lobster-pulse.exe`
 - hook sidecar：`src-tauri/target/release/lobster-pulse-hook.exe`
-- app 設定檔：`~/.config/lobsterpulse/config.json`
-- 音效資料夾：`~/.config/lobsterpulse/sounds/`
+- Windows app 設定檔：`%APPDATA%\lobsterpulse\config.json`
+- Windows 音效資料夾：`%APPDATA%\lobsterpulse\sounds\`
 - runtime port 檔：`~/.lobsterpulse/port`
 
 > **注意**：上述執行檔只會在自行建置後出現；clone 本身不含執行檔。
@@ -81,8 +81,8 @@ $artifacts | ForEach-Object {
 Get-FileHash -Algorithm SHA256 -LiteralPath $artifacts
 ```
 
-目前 release workflow 沒有產生 checksum manifest；上面的 hash 是本機建置產物驗證，
-不能描述成已發佈 bundle 的 checksum。
+release workflow 會為每個雙執行檔 ZIP 產生同名的 `.zip.sha256` manifest，並只建立 draft。
+可攜式版本尚未發佈；上面的 hash 只驗證本機建置產物，不能當成公開下載的驗收。
 
 ### macOS 前置需求與產物
 
@@ -115,9 +115,24 @@ sha256sum src-tauri/target/release/lobster-pulse \
 主程式與 sidecar 必須保留在同一目錄。專案目前沒有 auto-update；切換到另一個 source
 revision 時，應一起替換兩個由同一次 build 產生的檔案。
 
-設定與資料位置依平台解析 home directory：app 設定為
-`~/.config/lobsterpulse/config.json`，音效為 `~/.config/lobsterpulse/sounds/`，runtime
-port 為 `~/.lobsterpulse/port`。
+設定路徑依 `dirs::config_dir()` 解析；Windows 為 `%APPDATA%\lobsterpulse\config.json`，
+macOS 為 `~/Library/Application Support/lobsterpulse/config.json`，Linux 為
+`${XDG_CONFIG_HOME:-~/.config}/lobsterpulse/config.json`。音效在同層的 `sounds/`；runtime
+port 為使用者 home 下的 `~/.lobsterpulse/port`。
+
+### 更新、回復與待完成的發行驗收
+
+更新前先從系統匣結束程式，備份上述設定目錄，保留上一個 source revision 的主程式與
+sidecar。每次把同一次 build 的兩個檔案一起放到固定目錄，再啟動主程式；不要混用版本。
+若需回復，先結束程式，再換回原目錄中的兩個檔案與相容設定備份。移動安裝目錄後，
+既有 hook 的絕對路徑也必須透過程式重新設定。
+
+App 版本的唯一基準是 `src-tauri/tauri.conf.json` 的 `version`；`package.json`、
+`src-tauri/Cargo.toml` 與 `src-tauri/Cargo.lock` 必須鏡映同一個值。
+release workflow 在建置前拒絕分支 dispatch、錯誤 tag 與版本不一致；預備發行 tag 必須
+是 `v` 加上該 App 版本。這不代表已取得 Owner 的分發授權或已公開發佈。
+完整的 checksum 核對、Windows 鍵盤操作與未完成驗收見
+[Issue #6 發行準備清單](docs/audits/issue-6-release-readiness.md)。
 
 ## 預設工作流
 
@@ -133,8 +148,8 @@ port 為 `~/.lobsterpulse/port`。
 ## 監控清單（v5.1+）
 
 > ℹ️「v5.1+」指上方監控清單的列表版本（與 provider 總數），**不是 App 主版本**。
-> App 主版本以 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`
-> 為準（目前 `v0.5.4`），三者已對齊，護欄見 `test/version-consistency.test.js`。
+> App 主版本以 `src-tauri/tauri.conf.json` 為準（目前 `v0.5.4`）；其他 manifest
+> 與 lockfile 必須一致，護欄見 `test/version-consistency.test.js` 與 `scripts/test_package_release.py`。
 
 LobsterPulse v5.1 **註冊 13 個整合**（🤖 OpenAB 9 + 💻 本機 CLI 4）；
 每個 ID 都可接收對應 hook 事件。這不是「13 個正在監控」的即時宣稱。
@@ -276,6 +291,7 @@ repo 內附了一個可以重生品牌圖示的腳本：
 候選變更應執行下列 admission checks；build 成功本身不代表桌面 runtime 已驗收：
 
 - `npm test`（版本與安裝文件護欄）
+- `python -m unittest scripts/test_package_release.py`（Python 3.11+；版本、CHANGELOG 段落、ZIP 與 checksum）
 - `cargo test --manifest-path src-tauri/Cargo.toml --locked`
 - `cargo tauri build --no-bundle`（release 二進位，frontend 已 embed）
 - 兩個平台對應產物的存在性與 SHA-256 檢查

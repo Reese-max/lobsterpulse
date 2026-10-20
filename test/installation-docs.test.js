@@ -1,6 +1,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const ROOT = path.resolve(__dirname, "..");
@@ -255,3 +257,44 @@ test("landing-page version follows the Tauri application version", () => {
     "installation section must display the Tauri application version"
   );
 });
+
+test(
+  "release notes use the CHANGELOG section that matches the tag",
+  { skip: process.platform === "win32" && "runs the workflow step with a POSIX bash" },
+  () => {
+    const lines = RELEASE_WORKFLOW.split(/\r?\n/);
+    const step = lines.findIndex((line) => line.includes("name: Extract changelog section"));
+    const run = lines.findIndex((line, i) => i > step && /^\s+run: \|$/.test(line));
+    assert.ok(step >= 0 && run > step, "release.yml must keep the changelog extraction step");
+    const indent = lines[run + 1].match(/^ */)[0].length;
+    const body = [];
+    for (const line of lines.slice(run + 1)) {
+      if (line.trim() && line.match(/^ */)[0].length < indent) break;
+      body.push(line.slice(indent));
+    }
+    const script = body.join("\n").replace("${{ github.ref_name }}", "$GITHUB_REF_NAME");
+    const notesFor = (tag, changelog) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "release-notes-"));
+      try {
+        fs.writeFileSync(path.join(dir, "CHANGELOG.md"), changelog);
+        execFileSync("bash", ["-c", script], {
+          cwd: dir,
+          env: { ...process.env, GITHUB_REF_NAME: tag },
+        });
+        return fs.readFileSync(path.join(dir, "release-notes.md"), "utf8");
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    const tag = "v" + TAURI_CONFIG.version;
+    const notes = notesFor(tag, fs.readFileSync(path.join(ROOT, "CHANGELOG.md"), "utf8"));
+    assert.ok(notes.startsWith("## " + tag + " "), notes.slice(0, 200));
+    assert.doesNotMatch(notes, /\n## /, "notes must stop at the next CHANGELOG section");
+
+    const fixture = "# Changelog\r\n\r\n## [v1.2.0]\r\n- bracketed\r\n\r\n## v1.2 · older\r\n- prefix only\r\n";
+    assert.match(notesFor("v1.2.0", fixture), /^## \[v1\.2\.0\]\n- bracketed\n/);
+    assert.match(notesFor("v1.2", fixture), /^## v1\.2 · older\n- prefix only\n/);
+    assert.match(notesFor("v9.9.9", fixture), /were not found in CHANGELOG\.md/);
+  }
+);

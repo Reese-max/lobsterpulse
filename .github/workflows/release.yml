@@ -104,7 +104,8 @@ jobs:
           fi
           mv "$ZIP_NAME" "$GITHUB_WORKSPACE/"
 
-      # Extract the section for this tag from CHANGELOG.md so the draft
+      # Extract the section for this tag from CHANGELOG.md (heading
+      # "## v0.5.4 · …" or "## [v0.5.4]", up to the next "## ") so the draft
       # release body is populated automatically. Runs on every matrix
       # job; softprops tolerates the repeat and keeps the body stable.
       - name: Extract changelog section
@@ -114,9 +115,11 @@ jobs:
           TAG="${{ github.ref_name }}"
           if [[ -f CHANGELOG.md ]]; then
             awk -v tag="$TAG" '
-              /^## \[/ {
+              { sub(/\r$/, "") }
+              /^## / {
                 if (section) exit
-                if ($0 ~ ("\\[" tag "\\]")) { section = 1; print; next }
+                ver = $2; sub(/^\[/, "", ver); sub(/\]$/, "", ver)
+                if (ver == tag) { section = 1; print; next }
               }
               section { print }
             ' CHANGELOG.md > release-notes.md

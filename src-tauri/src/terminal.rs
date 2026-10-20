@@ -30,6 +30,25 @@ pub fn peer_terminal_pids(peer_port: u16, server_port: u16) -> Vec<u32> {
 /// 從 TCP table 找「local port = peer 的 ephemeral port、remote port = 本
 /// server port」的連線 owner PID（= lobster-pulse-hook.exe，socket 還開著所以必在）。
 fn pid_of_loopback_peer(peer_port: u16, server_port: u16) -> Option<u32> {
+    tcp_rows()?
+        .into_iter()
+        .find(|r| r.local_port == peer_port && r.remote_port == server_port)
+        .map(|r| r.pid)
+}
+
+/// IPv4 TCP table 的一列（MIB_TCPROW_OWNER_PID，port 已轉成主機位元組序）。
+pub(crate) struct TcpRow {
+    pub state: u32,
+    pub local_port: u16,
+    pub remote_port: u16,
+    pub pid: u32,
+}
+
+/// MIB_TCP_STATE_ESTAB
+pub(crate) const TCP_STATE_ESTABLISHED: u32 = 5;
+
+/// 讀整張 IPv4 TCP table（含 owner PID）。讀不到回 None。
+pub(crate) fn tcp_rows() -> Option<Vec<TcpRow>> {
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, TCP_TABLE_OWNER_PID_ALL,
     };
@@ -64,6 +83,7 @@ fn pid_of_loopback_peer(peer_port: u16, server_port: u16) -> Option<u32> {
             }
             // layout: dwNumEntries: u32, 接著 N 筆 MIB_TCPROW_OWNER_PID（6 × u32）
             let n = u32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
+            let mut rows = Vec::with_capacity(n);
             for i in 0..n {
                 let off = 4 + i * 24;
                 if off + 24 > buf.len() {
@@ -72,13 +92,14 @@ fn pid_of_loopback_peer(peer_port: u16, server_port: u16) -> Option<u32> {
                 let f = |j: usize| {
                     u32::from_ne_bytes(buf[off + j * 4..off + j * 4 + 4].try_into().unwrap())
                 };
-                let local_port = u16::from_be((f(2) & 0xFFFF) as u16);
-                let remote_port = u16::from_be((f(4) & 0xFFFF) as u16);
-                if local_port == peer_port && remote_port == server_port {
-                    return Some(f(5));
-                }
+                rows.push(TcpRow {
+                    state: f(0),
+                    local_port: u16::from_be((f(2) & 0xFFFF) as u16),
+                    remote_port: u16::from_be((f(4) & 0xFFFF) as u16),
+                    pid: f(5),
+                });
             }
-            return None; // table 讀成功但沒找到 → 不用重試
+            return Some(rows);
         }
     }
     None

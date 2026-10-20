@@ -106,12 +106,12 @@
       "settings_path": null
     },
     "claude": {
-      "enabled": true,
+      "enabled": false,
       "name": "💻 Claude Code（本機）",
       "settings_path": "~/.claude/settings.json"
     },
     "codex": {
-      "enabled": true,
+      "enabled": false,
       "name": "💻 Codex CLI（本機）",
       "settings_path": "~/.codex/hooks.json"
     },
@@ -121,12 +121,12 @@
       "settings_path": null
     },
     "copilot": {
-      "enabled": true,
+      "enabled": false,
       "name": "💻 Copilot CLI（本機）",
       "settings_path": "~/.copilot/config.json"
     },
     "gemini": {
-      "enabled": true,
+      "enabled": false,
       "name": "💻 Gemini CLI（本機）",
       "settings_path": "~/.gemini/settings.json"
     },

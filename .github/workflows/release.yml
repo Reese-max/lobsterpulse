@@ -88,7 +88,11 @@ jobs:
             libjavascriptcoregtk-4.1-dev
 
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        # Pin both the action and the binstall it installs; @main pulls whatever
+        # is on the branch and the action otherwise installs the latest release.
+        uses: cargo-bins/cargo-binstall@v1.25.2
+        with:
+          version: 1.25.2
 
       - name: Install Tauri CLI
         run: cargo binstall -y tauri-cli@^2.0

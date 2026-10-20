@@ -1,10 +1,14 @@
 {
-  "repo": "Reese-max/lobsterpulse",
-  "issue": 6,
-  "base_sha": "41e09eb922a37323c30878323bfea955712e2a55",
-  "candidate_sha": "2752b1b04b70169bccab5a5bef9fffae69c84bb1",
-  "reviewer": "fresh-issue-loop-reviewer",
-  "read_only": true,
-  "status": "pass",
-  "findings": []
+  "pr": 10,
+  "head": "18ef417bc59c048187ea00fac7f7fd0337f63605",
+  "findings": [
+    {
+      "severity": "med",
+      "file": "docs/research/issue9_attention_replay.py",
+      "line": 94,
+      "issue": "fixed: Receipt evidenceHash bound only eventId/payloadHash, not the normalized raw metadata used for classification. With the same ID and payload hash, changing COMPLETED to ERROR or FRESH to UNKNOWN changed queue membership and severity while producing the identical CLASSIFIED evidenceHash. The digest now includes complete normalized source events; stored receipts are not rewritten."
+    }
+  ],
+  "fixed": true,
+  "summary": "Fixed the new medium-severity audit defect by binding receipt evidenceHash to complete normalized source metadata; the regression failed in eight metadata subcases before the two-line fix, and all 207 selected tests pass in Git Bash (exit 0). The broader Python suite still exposes two unrelated chain-staleness baseline failures and, before commit, its dirty-worktree sentinel; prior needs-human questions about CRITICAL resolution, BLOCKING acknowledgement, decision-clock ordering and equal-timestamp causality remain deferred. This is synthetic-only research, not packaged-runtime acceptance or issue #9 closure."
 }

@@ -794,7 +794,7 @@ async function init() {
     flashFooterMsg("正在開啟 Token 戰情室…");
     try {
       const result = await invoke("open_token_dashboard");
-      flashFooterMsg(result === "started" ? "Token 戰情室已啟動" : "已開啟 Token 戰情室");
+      flashFooterMsg(result === "started" ? "Token 戰情室啟動中，已在瀏覽器開啟" : "已在瀏覽器開啟 Token 戰情室");
     } catch (e) {
       flashFooterMsg(String(e), true);
     } finally {

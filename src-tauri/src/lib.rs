@@ -166,6 +166,32 @@ fn native_confirm(title: &str, text: &str) -> bool {
 fn native_confirm(_title: &str, _text: &str) -> bool {
     true
 }
+
+/// 系統匣動作失敗時告知（同樣沒有 webview 可顯示）；獨立執行緒，不卡住事件迴圈
+fn alert(title: &'static str, text: String) {
+    std::thread::spawn(move || native_alert(title, &text));
+}
+
+#[cfg(windows)]
+fn native_alert(title: &str, text: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_TOPMOST,
+    };
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (title_w, text_w) = (wide(title), wide(text));
+    // SAFETY: 同 native_confirm
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn native_alert(_title: &str, _text: &str) {}
 static LOCAL_USAGE_RUNNERS_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 #[derive(serde::Deserialize)]
@@ -4855,6 +4881,7 @@ pub fn run() {
 
             // System tray
             let show = MenuItemBuilder::with_id("show", "顯示 / 隱藏  ·  Ctrl+Shift+L").build(app)?;
+            let token_dash = MenuItemBuilder::with_id("token_dashboard", "Token 戰情室").build(app)?;
             let dashboard = MenuItemBuilder::with_id("dashboard", "Bot 總覽  ·  Ctrl+Shift+D").build(app)?;
             let settings = MenuItemBuilder::with_id("settings", "開啟設定").build(app)?;
             let events_log = MenuItemBuilder::with_id("events_log", "事件診斷  ·  Ctrl+Shift+E").build(app)?;
@@ -4880,6 +4907,10 @@ pub fn run() {
             // 只留額度模式（SHOW_NON_QUOTA_FEATURES=false）時，非額度的項目不放進選單；
             // 項目本身照建，事件處理也保留，改回 true 就恢復原樣
             let mut menu = MenuBuilder::new(app).item(&show);
+            // 看板只有 Windows 版（見 token_dashboard.rs）
+            if cfg!(windows) {
+                menu = menu.item(&token_dash);
+            }
             if SHOW_NON_QUOTA_FEATURES {
                 menu = menu.item(&dashboard);
             }
@@ -4959,6 +4990,14 @@ pub fn run() {
                                 let _ = w.set_focus();
                             }
                         }
+                    }
+                    "token_dashboard" => {
+                        tauri::async_runtime::spawn(async {
+                            if let Err(e) = token_dashboard::open_token_dashboard().await {
+                                log::warn!("tray token_dashboard: {e}");
+                                alert("Token 戰情室", e);
+                            }
+                        });
                     }
                     "settings" => {
                         if let Some(w) = app.get_webview_window("main") {
@@ -5088,6 +5127,9 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Token 戰情室：守 http://127.0.0.1:3003，有人開才啟動看板
+            tauri::async_runtime::spawn(token_dashboard::listen_on_startup());
 
             info!("LobsterPulse ready on port {port}");
             Ok(())

@@ -138,22 +138,11 @@ fn dashboard_url() -> String {
 }
 
 fn open_browser() -> Result<(), String> {
-    #[cfg(windows)]
-    let mut cmd = {
-        use std::os::windows::process::CommandExt;
-        // explorer 自己解析命令列：沒加引號、又含 `?…&` 的網址會被默默丟掉、瀏覽器不會開
-        // （2026-10-20 實測）。std 只替含空白的參數加引號，所以這裡整段自己包。網址是常數。
-        let mut c = Command::new("explorer");
-        c.raw_arg(format!("\"{}\"", dashboard_url()));
-        c
-    };
-    #[cfg(not(windows))]
-    let mut cmd = {
-        let mut c = Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
-        c.arg(dashboard_url());
-        c
-    };
-    cmd.spawn().map(|_| ()).map_err(|e| format!("開瀏覽器失敗：{e}"))
+    // 網址是常數，不含 `"`
+    crate::browser_command(&dashboard_url())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("開瀏覽器失敗：{e}"))
 }
 
 /// 讓系統挑一個本機空 port 給看板。放掉到看板綁上之間有短暫空窗，

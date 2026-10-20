@@ -107,6 +107,20 @@ class AttentionReplayTests(unittest.TestCase):
             with self.subTest(version=version), self.assertRaisesRegex(ValueError, "schema version"):
                 replay([dict(event("w", "WAITING", 1000), schemaVersion=version)])
 
+    def test_receipt_hash_binds_all_raw_event_metadata(self):
+        raw = event("same", "COMPLETED", 1000)
+        original = replay([raw])["receipts"][0]["evidenceHash"]
+        changes = {
+            "eventId": "other", "providerId": "codex", "sessionId": "s2",
+            "correlationId": "c2", "sourceContractVersion": "synthetic-v2",
+            "kind": "ERROR", "sourceFreshness": "UNKNOWN",
+            "reasonCode": "AUTH_REQUIRED", "observedAtMs": 1001, "payloadHash": "f" * 64,
+        }
+        for field, value in changes.items():
+            with self.subTest(field=field):
+                changed = replay([dict(raw, **{field: value})])["receipts"][0]["evidenceHash"]
+                self.assertNotEqual(original, changed)
+
     def test_recovery_uses_the_latest_deduplicated_wait(self):
         events = [event("a", "WAITING", 0, reason="AUTH_REQUIRED"),
                   event("b", "WAITING", 1, reason="CAPACITY_REQUIRED"),

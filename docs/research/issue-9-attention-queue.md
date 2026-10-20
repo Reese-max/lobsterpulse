@@ -54,6 +54,9 @@ token、credential。`payloadHash` 只是 synthetic evidence 參照，不包含 
 
 Receipt 是當時的判斷快照，不因 policy 改版而重算。純研究 spike 目前把 state
 序列化成 JSON 做 restart 模型測試；尚未實作 app 持久化或端到端 UI。
+新 receipt 的 `evidenceHash` 涵蓋 policy version、window、依 `sourceEventIds`
+排序的完整正規化 raw events 與 disposition，包含影響分類的 kind、freshness、
+reason 與來源 identity；不能只用 `payloadHash` 代替 metadata。既存 receipt 不重算。
 
 ## 2. 規則
 
@@ -104,7 +107,7 @@ item；輸入順序打亂後輸出完全一致。另測 source stale/unknown、
 `NOT_MONITORED`、`EXTERNAL_DEPENDENCY`、critical ack、snooze expiry、
 JSON roundtrip、跨 provider 不推測合併、未知身分不與合法 ID 撞 key、
 不同 reasonCode 不合併、交錯原因的 waiting/recovery、時間窗邊界及型別、
-schema version／時間型別驗證、content-bearing 欄位拒收與禁用
+schema version／時間型別驗證、raw metadata 變更會改變 evidence hash、content-bearing 欄位拒收與禁用
 file/shell/network 的負向測試。
 這些是 synthetic 結果，不代表真實多 agent session 的壓縮率或可用性。
 

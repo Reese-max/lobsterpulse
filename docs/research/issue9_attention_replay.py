@@ -79,7 +79,7 @@ def _classification(event):
 
 def _receipt(state, item, from_state, disposition, at_ms, actor="system"):
     event_ids = list(item["sourceEventIds"])
-    payloads = {event["eventId"]: event["payloadHash"] for event in state["rawEvents"]}
+    events = {event["eventId"]: event for event in state["rawEvents"]}
     state["receipts"].append({
         "schemaVersion": SCHEMA_VERSION,
         "itemId": item["itemId"],
@@ -92,7 +92,7 @@ def _receipt(state, item, from_state, disposition, at_ms, actor="system"):
         "actor": actor,
         "atMs": at_ms,
         "evidenceHash": _digest([state["policyVersion"], state["windowMs"],
-                                 [(id_, payloads[id_]) for id_ in event_ids], disposition]),
+                                 [events[id_] for id_ in event_ids], disposition]),
     })
 
 

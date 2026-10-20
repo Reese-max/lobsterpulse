@@ -222,6 +222,16 @@ fn merge_groups(into: &mut Vec<serde_json::Value>, body: &serde_json::Value) {
     }
 }
 
+/// 兩個 QuotaSummary 端點都失敗時的卡片文字。沒有任何端點回 HTTP 回應、只有連線層
+/// 錯誤時寫成「API error」，讓 lib.rs 的 retry_net 原地重試一次（VPN 首發連線會
+/// 間歇逾時）；有端點回了 HTTP（401/403，或 200 但內容壞掉）時照舊顯示狀態碼。
+fn quota_failure_text(last_code: u16, got_response: bool, transport_error: Option<&str>) -> String {
+    match transport_error {
+        Some(error) if !got_response => format!("⚠ API error: {error}"),
+        _ => format!("⚠ QuotaSummary 失敗（{last_code}）"),
+    }
+}
+
 /// loadCodeAssist 回應 → 方案顯示名：付費方案（如 Google AI Pro）優先，否則目前方案。
 fn parse_tier_name(body: &serde_json::Value) -> Option<String> {
     ["paidTier", "currentTier"].iter().find_map(|k| {
@@ -354,6 +364,8 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     let mut groups: Vec<serde_json::Value> = Vec::new();
     let mut any_ok = false;
     let mut last_code = 0u16;
+    let mut got_response = false;
+    let mut transport_error: Option<String> = None;
     for url in QUOTA_ENDPOINTS {
         let resp = client
             .post(url)
@@ -365,14 +377,18 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             .await;
         match resp {
             Ok(r) if r.status().is_success() => {
+                got_response = true;
                 // 200 但 JSON 壞掉不算成功：兩端點都這樣時要照舊回報失敗，不可顯示空卡
                 if let Ok(b) = r.json::<serde_json::Value>().await {
                     merge_groups(&mut groups, &b);
                     any_ok = true;
                 }
             }
-            Ok(r) => last_code = r.status().as_u16(),
-            Err(_) => continue,
+            Ok(r) => {
+                got_response = true;
+                last_code = r.status().as_u16();
+            }
+            Err(e) => transport_error = Some(e.to_string()),
         }
     }
     let body = serde_json::json!({ "groups": groups });
@@ -382,7 +398,7 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
             label,
             color,
             ok: false,
-            text: format!("⚠ QuotaSummary 失敗（{last_code}）"),
+            text: quota_failure_text(last_code, got_response, transport_error.as_deref()),
             raw: Some(serde_json::json!({
                 "ok": false, "basis": "provider_api",
                 "status_code": last_code, "ts": chrono::Utc::now().to_rfc3339(),
@@ -492,6 +508,21 @@ mod tests {
         assert_eq!(find_bucket(&group, "gemini-weekly").map(|b| b.0), Some(50));
         assert!(find_bucket(&group, "3p-5h").is_none(), "缺 remainingFraction 不腦補");
         assert!(find_bucket(&group, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn quota_failure_text_marks_only_transport_errors_for_retry() {
+        // lib.rs 的 retry_net 只在文字含「API error」時重試一次
+        let transport = quota_failure_text(0, false, Some("operation timed out"));
+        assert!(transport.contains("API error"), "{transport}");
+        assert!(transport.contains("operation timed out"), "{transport}");
+
+        let http = quota_failure_text(403, true, Some("operation timed out"));
+        assert_eq!(http, "⚠ QuotaSummary 失敗（403）", "有 HTTP 狀態就不重試");
+        // 一端點 200 但 JSON 壞掉、另一端點連線失敗：last_code 仍是 0，但已有 HTTP 回應
+        let bad_body = quota_failure_text(0, true, Some("operation timed out"));
+        assert_eq!(bad_body, "⚠ QuotaSummary 失敗（0）", "有 HTTP 回應就不當成純連線錯誤");
+        assert_eq!(quota_failure_text(0, true, None), "⚠ QuotaSummary 失敗（0）");
     }
 
     fn iso_in(secs: u64) -> String {

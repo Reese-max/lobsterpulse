@@ -85,6 +85,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Test portable release packaging
+        run: python -m unittest scripts/test_package_release.py
+
       - name: Validate provider capability and K0 receipts
         if: matrix.platform == 'ubuntu-22.04'
         run: |

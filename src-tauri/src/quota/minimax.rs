@@ -16,11 +16,11 @@ use super::RunnerQuota;
 
 const MINIMAX_REMAINS_API: &str = "https://api.minimax.io/v1/token_plan/remains";
 
-/// 從 env 拿 MiniMax key。優先序：MINIMAX_API_KEY > MINIMAX_DIRECT_KEY。
-/// 0 bytes / whitespace-only 視同「未設定」。
+/// 從環境變數拿 MiniMax key（即時讀，見 `api_keys::live_entries`）。
+/// 優先序：MINIMAX_API_KEY > MINIMAX_DIRECT_KEY。0 bytes / whitespace-only 視同「未設定」。
 fn read_credentials() -> Result<String, String> {
     for key in ["MINIMAX_API_KEY", "MINIMAX_DIRECT_KEY"] {
-        if let Ok(v) = std::env::var(key) {
+        if let Some(v) = crate::api_keys::live_var(key) {
             let trimmed = v.trim();
             if !trimmed.is_empty() {
                 return Ok(trimmed.to_string());

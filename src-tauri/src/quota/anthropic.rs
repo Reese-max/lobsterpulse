@@ -455,11 +455,189 @@ pub fn daily_stats(home: &Path) -> Option<serde_json::Value> {
     ))
 }
 
-/// 呼叫 Anthropic API 取 rate limit headers
+/// 5h／7d 額度（剩餘、已用、重置倒數）——API header 與外部 runner 兩種來源共用的形狀
+#[derive(Debug, Clone, PartialEq)]
+struct RateLimits {
+    h5_remaining: Option<i64>,
+    h5_used: Option<i64>,
+    h5_reset: String,
+    d7_remaining: Option<i64>,
+    d7_used: Option<i64>,
+    d7_reset: String,
+}
+
+/// 外部 runner（~/.lobsterpulse/scripts/get-claude-full.js，runner loop 每 60 秒）打的是同一支
+/// Messages API；它的結果夠新就直接用，不再自己送一次——每次探測都是真的生成請求，
+/// 兩條路線各打各的一天約兩千次（2026-10-20 稽核）。150 秒＝容許 runner 慢一輪多。
+const RUNNER_REUSE_SECS: u64 = 150;
+
+fn now_epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// 從 usage-local.json 取 runner 的 Claude 額度：檔案要夠新、runner 回報成功且真的拿到
+/// rate-limit header，才回 (額度, 方案名)；任何一項不符就回 None（呼叫端自己探測）。
+fn runner_rate_limits(snapshot: &serde_json::Value, now: u64) -> Option<(RateLimits, Option<String>)> {
+    let updated = snapshot.get("updated_at")?.as_u64()?;
+    if now.saturating_sub(updated) > RUNNER_REUSE_SECS || updated > now + 60 {
+        return None;
+    }
+    let runner = snapshot
+        .get("runners")?
+        .as_array()?
+        .iter()
+        .find(|r| r.get("name").and_then(|n| n.as_str()) == Some("claude"))?;
+    if runner.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let raw = runner.get("raw")?;
+    if raw.get("rate_headers_found").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let int = |k: &str| raw.get(k).and_then(|v| v.as_i64());
+    // runner 的倒數是它寫檔那一刻算的（最多舊 150 秒）：換回絕對時間再依現在重算，
+    // 不然倒數會原地不動、看起來像重置點往後延
+    let text = |k: &str| {
+        let s = raw.get(k).and_then(|v| v.as_str()).unwrap_or("N/A");
+        parse_countdown_secs(s)
+            .map(|secs| fmt_countdown(updated + secs))
+            .unwrap_or_else(|| s.to_string())
+    };
+    let limits = RateLimits {
+        h5_remaining: Some(int("session_5h_remaining")?),
+        h5_used: int("session_5h_used"),
+        h5_reset: text("session_5h_reset"),
+        d7_remaining: int("week_7d_remaining"),
+        d7_used: int("week_7d_used"),
+        d7_reset: text("week_7d_reset"),
+    };
+    let tier = raw.get("tier").and_then(|v| v.as_str()).map(String::from);
+    Some((limits, tier))
+}
+
+/// fmt_countdown 產生的「2h24m」／「45m」換回秒數；其他字串（N/A、resetting...）回 None。
+fn parse_countdown_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (h, rest) = match s.split_once('h') {
+        Some((h, rest)) => (h.parse::<u64>().ok()?, rest),
+        None => (0, s),
+    };
+    let m = rest.strip_suffix('m')?.parse::<u64>().ok()?;
+    Some(h * 3600 + m * 60)
+}
+
+/// 方案顯示名：runner 給 "Pro"／"Max"，憑證給 "pro"／"max"，統一成 "Claude Pro"／"Claude Max"。
+/// 認不得的方案（Team、Enterprise…）照原名顯示，不可硬標成 Pro。
+fn tier_label(tier: &str) -> String {
+    let t = tier.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.contains("max") {
+        "Claude Max".to_string()
+    } else if lower == "pro" || lower == "claude pro" || lower.is_empty() {
+        "Claude Pro".to_string()
+    } else if lower.starts_with("claude ") {
+        t.to_string()
+    } else {
+        format!("Claude {t}")
+    }
+}
+
+/// 兩種來源都走這裡組成同一個形狀的結果（面板只認一種格式）。
+fn build_quota(home: &Path, limits: RateLimits, tier: &str, source: &str, status_code: Option<u16>) -> RunnerQuota {
+    let stats = read_stats(home);
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    // dailyModelTokens 在 stats-cache 裡是另一個結構，先用 dailyActivity 簡化
+    let today_activity = stats
+        .daily_activity
+        .as_ref()
+        .and_then(|v| v.iter().find(|d| d.date == today));
+
+    let h5_str = limits.h5_remaining.map(|v| format!("{v}%")).unwrap_or_else(|| "--".to_string());
+    let d7_str = limits.d7_remaining.map(|v| format!("{v}%")).unwrap_or_else(|| "--".to_string());
+
+    // stats-cache 已停更數月（實測凍結在 2026-05-24），dailyModelTokens
+    // 對今天永遠是 0——優先吃 LIVE_DAILY（即時 JSONL 掃描，與膠囊同源），
+    // 日期吻合才用；掃描未完成（剛啟動）或跨日空窗則退回 stats-cache 值。
+    let live_today = crate::LIVE_DAILY
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|d| d.date == today)
+        .map(|d| d.today);
+    let today_tokens = fmt_tokens(live_today.unwrap_or_else(|| {
+        stats
+            .daily_model_tokens
+            .as_deref()
+            .map(|dmt| sum_tokens_for(dmt, |d| d == today))
+            .unwrap_or(0)
+    }));
+    let today_msgs = today_activity.and_then(|a| a.message_count).unwrap_or(0);
+    let total_sessions = stats.total_sessions.unwrap_or(0);
+    let total_messages = stats.total_messages.unwrap_or(0);
+
+    let text = format!("⏱ 5h {h5_str} · 7d {d7_str}\n🔥 {today_tokens} · msgs {today_msgs}");
+
+    let raw = serde_json::json!({
+        "ok": true,
+        "basis": "provider_api",
+        // runner＝沿用外部 runner 剛打過的結果；api＝本程序自己探測
+        "source": source,
+        "status_code": status_code,
+        "rate_headers_found": limits.h5_remaining.is_some() || limits.d7_remaining.is_some(),
+        // 視窗名寫實際長度：不給的話面板會顯示泛稱的 Session/Weekly，
+        // 跟膠囊的 5h/7d 對不起來（面板走 live API 這條，跟膠囊不同源）
+        "session_label": "5h",
+        "weekly_label": "7d",
+        "session_5h_remaining": limits.h5_remaining,
+        "session_5h_used": limits.h5_used,
+        "session_5h_reset": limits.h5_reset,
+        "week_7d_remaining": limits.d7_remaining,
+        "week_7d_used": limits.d7_used,
+        "week_7d_reset": limits.d7_reset,
+        "today_messages": today_msgs,
+        "today_sessions": today_activity.and_then(|a| a.session_count).unwrap_or(0),
+        "today_tokens": today_tokens,
+        "total_sessions": total_sessions.to_string(),
+        "total_messages": total_messages.to_string(),
+        "tier": tier_label(tier),
+        "ts": chrono::Utc::now().to_rfc3339(),
+    });
+
+    RunnerQuota {
+        name: "claude".to_string(),
+        label: "🤖 Claude Code".to_string(),
+        color: "#d97757".to_string(),
+        ok: true,
+        text,
+        raw: Some(raw),
+    }
+}
+
+/// 呼叫 Anthropic API 取 rate limit headers（外部 runner 剛打過就直接沿用）
 pub async fn fetch(home: &Path) -> RunnerQuota {
     let label = "🤖 Claude Code".to_string();
     let color = "#d97757".to_string();
     let name = "claude".to_string();
+    let fail = |text: String| RunnerQuota {
+        name: name.clone(),
+        label: label.clone(),
+        color: color.clone(),
+        ok: false,
+        text,
+        raw: None,
+    };
+
+    let snapshot_path = home.join(".lobsterpulse").join("usage-local.json");
+    let reused = std::fs::read_to_string(&snapshot_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| runner_rate_limits(&v, now_epoch_secs()));
+    if let Some((limits, tier)) = reused {
+        return build_quota(home, limits, tier.as_deref().unwrap_or("pro"), "runner", None);
+    }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -468,39 +646,12 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     let credentials = match read_credentials(home) {
         Ok(credentials) => match refresh_credentials_if_due(home, &client, credentials).await {
             Ok(credentials) => credentials,
-            Err(e) => {
-                return RunnerQuota {
-                    name,
-                    label,
-                    color,
-                    ok: false,
-                    text: format!("⚠ {e}"),
-                    raw: None,
-                };
-            }
+            Err(e) => return fail(format!("⚠ {e}")),
         },
-        Err(e) => {
-            return RunnerQuota {
-                name,
-                label,
-                color,
-                ok: false,
-                text: format!("⚠ {e}"),
-                raw: None,
-            };
-        }
+        Err(e) => return fail(format!("⚠ {e}")),
     };
     let token = credentials.access_token;
     let tier = credentials.tier;
-
-    let stats = read_stats(home);
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-
-    // dailyModelTokens 在 stats-cache 裡是另一個結構，先用 dailyActivity 簡化
-    let today_activity = stats
-        .daily_activity
-        .as_ref()
-        .and_then(|v| v.iter().find(|d| d.date == today));
 
     // 打 API 取 rate limit headers
     let body = serde_json::json!({
@@ -508,25 +659,13 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         "max_tokens": 1,
         "messages": [{"role": "user", "content": "1"}]
     });
-
+    let auth = match claude_oauth_authorization_value(&token) {
+        Ok(v) => v,
+        Err(e) => return fail(format!("⚠ {e}")),
+    };
     let resp = client
         .post(ANTHROPIC_API)
-        .header(
-            AUTHORIZATION,
-            match claude_oauth_authorization_value(&token) {
-                Ok(v) => v,
-                Err(e) => {
-                    return RunnerQuota {
-                        name,
-                        label,
-                        color,
-                        ok: false,
-                        text: format!("⚠ {e}"),
-                        raw: None,
-                    };
-                }
-            },
-        )
+        .header(AUTHORIZATION, auth)
         .header("anthropic-version", "2023-06-01")
         .json(&body)
         .send()
@@ -534,101 +673,32 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 
     match resp {
         Ok(r) => {
+            let status = r.status();
             let headers = r.headers();
-            let h5u = headers
-                .get("anthropic-ratelimit-unified-5h-utilization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<f64>().ok());
-            let h5r = headers
-                .get("anthropic-ratelimit-unified-5h-reset")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok());
-            let d7u = headers
-                .get("anthropic-ratelimit-unified-7d-utilization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<f64>().ok());
-            let d7r = headers
-                .get("anthropic-ratelimit-unified-7d-reset")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok());
-
-            let h5_remaining = h5u.map(|v| ((1.0 - v) * 100.0).round() as i64);
-            let h5_used = h5u.map(|v| (v * 100.0).round() as i64);
-            let d7_remaining = d7u.map(|v| ((1.0 - v) * 100.0).round() as i64);
-            let d7_used = d7u.map(|v| (v * 100.0).round() as i64);
-
-            let h5_str = h5_remaining
-                .map(|v| format!("{v}%"))
-                .unwrap_or_else(|| "--".to_string());
-            let d7_str = d7_remaining
-                .map(|v| format!("{v}%"))
-                .unwrap_or_else(|| "--".to_string());
-            let h5_reset_str = h5r.map(fmt_countdown).unwrap_or_else(|| "N/A".to_string());
-            let d7_reset_str = d7r.map(fmt_countdown).unwrap_or_else(|| "N/A".to_string());
-
-            // stats-cache 已停更數月（實測凍結在 2026-05-24），dailyModelTokens
-            // 對今天永遠是 0——優先吃 LIVE_DAILY（即時 JSONL 掃描，與膠囊同源），
-            // 日期吻合才用；掃描未完成（剛啟動）或跨日空窗則退回 stats-cache 值。
-            let live_today = crate::LIVE_DAILY
-                .lock()
-                .unwrap()
-                .as_ref()
-                .filter(|d| d.date == today)
-                .map(|d| d.today);
-            let today_tokens = fmt_tokens(live_today.unwrap_or_else(|| {
-                stats
-                    .daily_model_tokens
-                    .as_deref()
-                    .map(|dmt| sum_tokens_for(dmt, |d| d == today))
-                    .unwrap_or(0)
-            }));
-            let today_msgs = today_activity.and_then(|a| a.message_count).unwrap_or(0);
-            let total_sessions = stats.total_sessions.unwrap_or(0);
-            let total_messages = stats.total_messages.unwrap_or(0);
-
-            let text =
-                format!("⏱ 5h {h5_str} · 7d {d7_str}\n🔥 {today_tokens} · msgs {today_msgs}");
-
-            let raw = serde_json::json!({
-                "ok": true,
-                "basis": "provider_api",
-                "rate_headers_found": h5u.is_some(),
-                // 視窗名寫實際長度：不給的話面板會顯示泛稱的 Session/Weekly，
-                // 跟膠囊的 5h/7d 對不起來（面板走 live API 這條，跟膠囊不同源）
-                "session_label": "5h",
-                "weekly_label": "7d",
-                "session_5h_remaining": h5_remaining,
-                "session_5h_used": h5_used,
-                "session_5h_reset": h5_reset_str,
-                "week_7d_remaining": d7_remaining,
-                "week_7d_used": d7_used,
-                "week_7d_reset": d7_reset_str,
-                "today_messages": today_msgs,
-                "today_sessions": today_activity.and_then(|a| a.session_count).unwrap_or(0),
-                "today_tokens": today_tokens,
-                "total_sessions": total_sessions.to_string(),
-                "total_messages": total_messages.to_string(),
-                "tier": if tier == "max" { "Claude Max" } else { "Claude Pro" },
-                "ts": chrono::Utc::now().to_rfc3339(),
-            });
-
-            RunnerQuota {
-                name,
-                label,
-                color,
-                ok: true,
-                text,
-                raw: Some(raw),
+            let header_f64 = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<f64>().ok());
+            let header_u64 = |k: &str| headers.get(k).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+            let h5u = header_f64("anthropic-ratelimit-unified-5h-utilization");
+            let d7u = header_f64("anthropic-ratelimit-unified-7d-utilization");
+            // 非 2xx 又沒有任何額度 header＝這次查詢失敗，不可回成功（原本一律 ok:true，面板只見「--」）。
+            // 非 2xx 但帶了 5h 或 7d header（例如 429 仍附額度）就照用，status_code 記在 raw 裡
+            if !status.is_success() && h5u.is_none() && d7u.is_none() {
+                return fail(format!("⚠ API error: HTTP {}", status.as_u16()));
             }
+            let limits = RateLimits {
+                h5_remaining: h5u.map(|v| ((1.0 - v) * 100.0).round() as i64),
+                h5_used: h5u.map(|v| (v * 100.0).round() as i64),
+                h5_reset: header_u64("anthropic-ratelimit-unified-5h-reset")
+                    .map(fmt_countdown)
+                    .unwrap_or_else(|| "N/A".to_string()),
+                d7_remaining: d7u.map(|v| ((1.0 - v) * 100.0).round() as i64),
+                d7_used: d7u.map(|v| (v * 100.0).round() as i64),
+                d7_reset: header_u64("anthropic-ratelimit-unified-7d-reset")
+                    .map(fmt_countdown)
+                    .unwrap_or_else(|| "N/A".to_string()),
+            };
+            build_quota(home, limits, &tier, "api", Some(status.as_u16()))
         }
-        Err(e) => RunnerQuota {
-            name,
-            label,
-            color,
-            ok: false,
-            text: format!("⚠ API error: {e}"),
-            raw: None,
-        },
+        Err(e) => fail(format!("⚠ API error: {e}")),
     }
 }
 
@@ -826,5 +896,57 @@ mod tests {
         assert_eq!(on_disk["otherProvider"]["enabled"], true);
         assert_eq!(backup["claudeAiOauth"]["accessToken"], "old-access");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn runner_snapshot(updated_at: u64, ok: bool, headers: bool) -> serde_json::Value {
+        serde_json::json!({
+            "updated_at": updated_at,
+            "runners": [
+                {"name": "codex", "ok": true, "raw": {}},
+                {"name": "claude", "ok": ok, "raw": {
+                    "rate_headers_found": headers,
+                    "session_5h_remaining": 56, "session_5h_used": 44, "session_5h_reset": "2h24m",
+                    "week_7d_remaining": 80, "week_7d_used": 20, "week_7d_reset": "139h24m",
+                    "tier": "Pro"
+                }}
+            ]
+        })
+    }
+
+    #[test]
+    fn runner_rate_limits_reuses_only_fresh_successful_results() {
+        let now = 1_800_000_000;
+        let (limits, tier) = runner_rate_limits(&runner_snapshot(now - 30, true, true), now).expect("新鮮且成功要沿用");
+        assert_eq!(limits.h5_remaining, Some(56));
+        assert_eq!(limits.d7_remaining, Some(80));
+        // 倒數依 runner 時間戳重算，另見 runner_countdown_is_recomputed_from_its_timestamp
+        assert_eq!(tier.as_deref(), Some("Pro"));
+        assert!(runner_rate_limits(&runner_snapshot(now - RUNNER_REUSE_SECS - 1, true, true), now).is_none(), "太舊就自己探測");
+        assert!(runner_rate_limits(&runner_snapshot(now - 30, false, true), now).is_none(), "runner 失敗不沿用");
+        assert!(runner_rate_limits(&runner_snapshot(now - 30, true, false), now).is_none(), "沒拿到 header 不沿用");
+        assert!(runner_rate_limits(&runner_snapshot(now + 3600, true, true), now).is_none(), "時間戳在未來（時鐘錯）不沿用");
+        assert!(runner_rate_limits(&serde_json::json!({"updated_at": now, "runners": []}), now).is_none());
+    }
+
+    #[test]
+    fn runner_countdown_is_recomputed_from_its_timestamp() {
+        assert_eq!(parse_countdown_secs("2h24m"), Some(2 * 3600 + 24 * 60));
+        assert_eq!(parse_countdown_secs("45m"), Some(45 * 60));
+        assert_eq!(parse_countdown_secs("N/A"), None);
+        assert_eq!(parse_countdown_secs("resetting..."), None);
+        // runner 寫檔時 2h24m，現在過了 2 分鐘：重置點不動 → 倒數要變短（約 2h22m）
+        let now = now_epoch_secs();
+        let (limits, _) = runner_rate_limits(&runner_snapshot(now - 120, true, true), now).unwrap();
+        assert!(limits.h5_reset == "2h22m" || limits.h5_reset == "2h21m", "實際 {}", limits.h5_reset);
+    }
+
+    #[test]
+    fn tier_label_normalizes_runner_and_credential_names() {
+        assert_eq!(tier_label("Pro"), "Claude Pro");
+        assert_eq!(tier_label("max"), "Claude Max");
+        assert_eq!(tier_label("Max 20x"), "Claude Max");
+        assert_eq!(tier_label("pro"), "Claude Pro");
+        assert_eq!(tier_label("Team"), "Claude Team", "認不得的方案照原名，不可硬標 Pro");
+        assert_eq!(tier_label("Claude Enterprise"), "Claude Enterprise");
     }
 }

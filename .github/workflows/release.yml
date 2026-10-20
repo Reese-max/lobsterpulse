@@ -2,14 +2,14 @@ name: Release
 
 # Tag-triggered release: builds all 3 platforms, zips the two binaries
 # (lobster-pulse + lobster-pulse-hook sidecar), and attaches each platform's
-# zip to a GitHub Release. The Release is created as a draft so you can
+# zip and SHA-256 manifest to a GitHub Release. The Release is a draft so you can
 # review and publish manually.
 #
 # Trigger by pushing a tag matching v*:
-#   git tag v0.2.0
-#   git push origin v0.2.0
+#   git tag v0.5.4
+#   git push origin v0.5.4
 #
-# Manual dispatch is also allowed (uses the workflow's own git ref as tag).
+# Manual dispatch must select an existing tag matching tauri.conf.json.
 
 on:
   push:
@@ -46,6 +46,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Validate release tag and versions
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            echo "::error::Select an existing version tag for a release; branch dispatch is not allowed."
+            exit 1
+          fi
+          python scripts/package_release.py "$GITHUB_REF_NAME"
+          python -m unittest scripts/test_package_release.py
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -73,7 +88,11 @@ jobs:
             libjavascriptcoregtk-4.1-dev
 
       - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+        # Pin both the action and the binstall it installs; @main pulls whatever
+        # is on the branch and the action otherwise installs the latest release.
+        uses: cargo-bins/cargo-binstall@v1.25.2
+        with:
+          version: 1.25.2
 
       - name: Install Tauri CLI
         run: cargo binstall -y tauri-cli@^2.0
@@ -87,7 +106,7 @@ jobs:
             cargo tauri build --no-bundle
           fi
 
-      - name: Package zip
+      - name: Package zip and SHA-256
         shell: bash
         run: |
           if [[ -n "${{ matrix.rust-target }}" ]]; then
@@ -95,28 +114,25 @@ jobs:
           else
             BUILD_DIR="src-tauri/target/release"
           fi
-          cd "$BUILD_DIR"
-          ZIP_NAME="lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            7z a -tzip "$ZIP_NAME" lobster-pulse.exe lobster-pulse-hook.exe
-          else
-            zip "$ZIP_NAME" lobster-pulse lobster-pulse-hook
-          fi
-          mv "$ZIP_NAME" "$GITHUB_WORKSPACE/"
+          python scripts/package_release.py "$GITHUB_REF_NAME" \
+            --platform "${{ matrix.name }}" --build-dir "$BUILD_DIR"
 
-      # Extract the section for this tag from CHANGELOG.md so the draft
+      # Extract the section for this tag from CHANGELOG.md (heading
+      # "## v0.5.4 · …" or "## [v0.5.4]", up to the next "## ") so the draft
       # release body is populated automatically. Runs on every matrix
       # job; softprops tolerates the repeat and keeps the body stable.
       - name: Extract changelog section
         id: changelog
         shell: bash
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="$GITHUB_REF_NAME"
           if [[ -f CHANGELOG.md ]]; then
             awk -v tag="$TAG" '
-              /^## \[/ {
+              { sub(/\r$/, "") }
+              /^## / {
                 if (section) exit
-                if ($0 ~ ("\\[" tag "\\]")) { section = 1; print; next }
+                ver = $2; sub(/^\[/, "", ver); sub(/\]$/, "", ver)
+                if (ver == tag) { section = 1; print; next }
               }
               section { print }
             ' CHANGELOG.md > release-notes.md
@@ -124,10 +140,24 @@ jobs:
           if [[ ! -s release-notes.md ]]; then
             echo "_Release notes for $TAG were not found in CHANGELOG.md — falling back to auto-generated notes._" > release-notes.md
           fi
+          printf '\nSource commit: `%s` (tag `%s`).\n' "$GITHUB_SHA" "$TAG" >> release-notes.md
+          cat >> release-notes.md <<'NOTES'
+
+          These portable binaries are unsigned. Windows SmartScreen may warn or block launch;
+          this build does not establish publisher trust. Do not disable Windows protection.
+          Verify the matching .zip.sha256 before extracting; hashes check integrity, not signing.
+          Keep lobster-pulse and lobster-pulse-hook together in the same directory.
+          Clean Windows download/launch/sidecar/quit/relaunch and disposable-config smoke
+          must be recorded before publishing this draft. CI build success is not that receipt.
+          See docs/audits/issue-6-release-readiness.md for the acceptance checklist.
+          NOTES
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip
+          files: |
+            lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip
+            lobster-pulse-${{ github.ref_name }}-${{ matrix.name }}.zip.sha256
+          fail_on_unmatched_files: true
           draft: true
           body_path: release-notes.md

@@ -34,7 +34,7 @@ token、credential。`payloadHash` 只是 synthetic evidence 參照，不包含 
 ```jsonc
 { "schemaVersion": 1, "itemId": "ai_...", "providerId": "claude",
   "sessionId": "UNKNOWN", "correlationId": "UNKNOWN",
-  "policyVersion": "issue9-synthetic-v1",
+  "policyVersion": "issue9-synthetic-v1", "windowMs": 300000,
   "severity": "INFO | NEEDS_DECISION | BLOCKING | CRITICAL",
   "whyNow": "<deterministic reason code>", "sourceFreshness": "UNKNOWN",
   "sourceEventIds": ["ae_..."],
@@ -46,6 +46,7 @@ token、credential。`payloadHash` 只是 synthetic evidence 參照，不包含 
 
 ```jsonc
 { "schemaVersion": 1, "itemId": "ai_...", "policyVersion": "issue9-synthetic-v1",
+  "windowMs": 300000,
   "sourceEventIds": ["ae_..."], "fromState": "OPEN", "toState": "AUTO_RESOLVED",
   "disposition": "FRESH_RECOVERY", "actor": "system", "atMs": 2000,
   "evidenceHash": "<sha256 hex>" }
@@ -79,6 +80,8 @@ Receipt 是當時的判斷快照，不因 policy 改版而重算。純研究 spi
   不啟動 shell/network write——只限 allowlisted telemetry。
 - 相同 raw events + policy version → correlation/severity deterministic。
 - Policy 改版 → 新 version；舊 receipt 保留當時判斷，不 rewrite history。
+- 有效 `windowMs` 與 `policyVersion` 一起寫入 state、每個 item 與每張 receipt
+  （並納入 `evidenceHash` 輸入），同一 version 下不同 window 的 replay 結果仍可稽核區分。
 - no-cloud mode 完整可用；關閉 queue 時既有 monitoring/metrics 不回歸。
 
 ### 固定 synthetic replay receipt

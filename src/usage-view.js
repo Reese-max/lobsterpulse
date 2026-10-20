@@ -138,7 +138,10 @@
     const name = runner.name || "";
     const label = (runner.label || name).replace(/^[^\w]*\s/, ""); // 去掉開頭 emoji
     // per-key 明細卡（如 openrouter）沒有標準 % 欄位，副標直接取 raw.plan
-    const subtitle = (card.kind !== "none" && card.subtitle) || (runner.raw && runner.raw.plan) || "";
+    const baseSubtitle = (card.kind !== "none" && card.subtitle) || (runner.raw && runner.raw.plan) || "";
+    // 目前預設模型（Codex）放副標：額度是帳號共用的，不該掛在額度列名上
+    const model = runner.raw && typeof runner.raw.model === "string" ? runner.raw.model.trim() : "";
+    const subtitle = model ? (baseSubtitle ? `${baseSubtitle} · ${model}` : model) : baseSubtitle;
     const plan = subtitle ? `<span class="uv-plan">${esc(subtitle)}</span>` : "";
     const basis = renderQuotaBasis(card.basis, "uv-basis");
     // 官方額度頁連結：面板數字只是快照，要看細帳／改方案還是得去官網
@@ -168,11 +171,13 @@
       body = accounts
         .map((a) => {
           const pct = a.total_usd > 0 ? Math.round((a.left_usd / a.total_usd) * 100) : 0;
-          return barRow(`Key ${a.key}`, pct, null, barColor, `${fmtUsd(a.left_usd)} / ${fmtUsd(a.total_usd)}`);
+          // left/total 是這把 key 實際可花的（帳號餘額與 key 上限取小）；有上限時標明分母是上限
+          const capped = typeof a.key_limit_usd === "number" ? " key 上限" : "";
+          return barRow(`Key ${a.key}`, pct, null, barColor, `${fmtUsd(a.left_usd)} / ${fmtUsd(a.total_usd)}${capped}`);
         })
         .join("");
     } else if (quotaWindows.length > 0) {
-      body = quotaWindows.map((w) => barRow(w.label, w.remainPct, w.resetText, barColor)).join("");
+      body = quotaWindows.map((w) => barRow(w.label, w.remainPct, w.resetText, barColor, w.resetNote)).join("");
     } else {
       // 無配額 %：保留骨架列，對齊 OpenUsage 的 No data 樣式
       body = barRow("Session", null, null) + barRow("Weekly", null, null);

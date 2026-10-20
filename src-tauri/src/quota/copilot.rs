@@ -57,7 +57,8 @@ fn gh_auth_token() -> Option<String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let out = cmd.output().ok()?;
+    // 10 秒到就殺掉 gh（基線 ~0.8s；編譯尖峰下 5s 會誤殺，見 fetch 的註解）
+    let out = super::output_with_timeout(cmd, std::time::Duration::from_secs(10))?;
     if !out.status.success() {
         return None;
     }
@@ -79,10 +80,16 @@ fn parse_copilot_quota(
     Option<String>,
     serde_json::Value,
 ) {
-    let plan = body
-        .get("copilot_plan")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    // copilot_plan 對 Free 與 Pro 都回 "individual"，看不出是免費版；
+    // access_type_sku 才分得出來（2026-10-19 本機實測 free_limited_copilot）。
+    let sku = body.get("access_type_sku").and_then(|v| v.as_str()).unwrap_or("");
+    let plan = if sku.starts_with("free") {
+        Some("Free".to_string())
+    } else {
+        body.get("copilot_plan")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    };
     let snapshots = body.get("quota_snapshots");
     let mut buckets = Vec::new();
     for (key, label) in [
@@ -149,10 +156,10 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     // 會佔住 tokio worker，gh 若卡住（credential manager 互動等）整個 snapshot
     // 永久卡死。spawn_blocking 隔離 + 10s 逾時（基線 ~0.8s，但本機 24/7 跑
     // 自動化，2026-07-17 實測編譯尖峰下 5s 會誤殺）；逾時非網路型錯誤，不觸發 retry_net。
-    // ponytail: 逾時只放棄等待，卡死的 gh 子進程不會被殺——若 gh 永久掛住，每個
-    // TTL 週期會漏一條 blocking 執行緒；真發生時改為顯式 kill 子進程。
+    // gh 子程序本身由 output_with_timeout 在 10 秒時殺掉並回收（2026-10-20 起），
+    // 這層 12 秒只是保險，不再有「卡死的 gh 每個 TTL 漏一條執行緒」的問題。
     let cred = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
+        std::time::Duration::from_secs(12),
         tokio::task::spawn_blocking(read_credentials),
     )
     .await;
@@ -339,6 +346,21 @@ mod tests {
         });
         let (_, buckets, _, _) = parse_copilot_quota(&body);
         assert_eq!(buckets, vec![("Chat", 95), ("Completions", 100)]);
+    }
+
+    #[test]
+    fn parse_copilot_quota_free_sku_shows_free_plan() {
+        // 2026-10-19 本機實測：copilot_plan 仍是 "individual"，sku 才看得出是免費版
+        let body = serde_json::json!({
+            "copilot_plan": "individual",
+            "access_type_sku": "free_limited_copilot",
+            "quota_snapshots": { "chat": { "percent_remaining": 100.0, "unlimited": false, "has_quota": true } }
+        });
+        let (plan, _, _, _) = parse_copilot_quota(&body);
+        assert_eq!(plan.as_deref(), Some("Free"));
+        // 付費 sku 照舊用 copilot_plan
+        let paid = serde_json::json!({ "copilot_plan": "individual", "access_type_sku": "monthly_subscriber" });
+        assert_eq!(parse_copilot_quota(&paid).0.as_deref(), Some("individual"));
     }
 
     #[test]

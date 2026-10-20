@@ -87,10 +87,12 @@ def _receipt(state, item, from_state, disposition, at_ms, actor="system"):
         "policyVersion": state["policyVersion"],
         "fromState": from_state,
         "toState": item["state"],
+        "windowMs": state["windowMs"],
         "disposition": disposition,
         "actor": actor,
         "atMs": at_ms,
-        "evidenceHash": _digest([state["policyVersion"], [(id_, payloads[id_]) for id_ in event_ids], disposition]),
+        "evidenceHash": _digest([state["policyVersion"], state["windowMs"],
+                                 [(id_, payloads[id_]) for id_ in event_ids], disposition]),
     })
 
 
@@ -112,7 +114,7 @@ def replay(raw_events, policy_version=POLICY_VERSION, window_ms=WINDOW_MS):
         seen[event["eventId"]] = event
         distinct.append(event)
     state = {"schemaVersion": SCHEMA_VERSION, "policyVersion": policy_version,
-             "rawEvents": distinct, "items": [], "receipts": []}
+             "windowMs": window_ms, "rawEvents": distinct, "items": [], "receipts": []}
     waiting = {}
     dedupe = {}
     for event in distinct:
@@ -149,6 +151,7 @@ def replay(raw_events, policy_version=POLICY_VERSION, window_ms=WINDOW_MS):
             "severity": severity, "whyNow": why_now,
             "sourceFreshness": event["sourceFreshness"],
             "sourceEventIds": [event["eventId"]], "policyVersion": policy_version,
+            "windowMs": window_ms,
             "state": "OPEN", "snoozeUntilMs": None,
             "createdAtMs": event["observedAtMs"], "lastSeenAtMs": event["observedAtMs"],
         }
@@ -219,7 +222,8 @@ def main():
     events = json.loads(args.fixture.read_text(encoding="utf-8")) if args.fixture else synthetic_demo()
     state = replay(events)
     print(json.dumps({
-        "policyVersion": state["policyVersion"], "rawEventCount": len(state["rawEvents"]),
+        "policyVersion": state["policyVersion"], "windowMs": state["windowMs"],
+        "rawEventCount": len(state["rawEvents"]),
         "itemCount": len(state["items"]), "humanQueueCount": len(queue(state)),
         "autoResolvedCount": sum(item["state"] == "AUTO_RESOLVED" for item in state["items"]),
         "queueReasons": [item["whyNow"] for item in queue(state)],

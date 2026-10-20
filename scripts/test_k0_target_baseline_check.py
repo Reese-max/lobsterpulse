@@ -1,5 +1,6 @@
 """Regression fixtures for the current K0 capability and denominator contract."""
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -21,6 +22,13 @@ def current():
 
 def empty_quota(registry):
     return {p["id"]: {"state": "missing"} for p in registry["providers"]}
+
+
+def pin_baseline(monkeypatch, baseline):
+    protected = {k: v for k, v in baseline.items() if k not in ("status", "note")}
+    fingerprint = hashlib.sha256(json.dumps(
+        protected, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    monkeypatch.setitem(guard.BASELINE_FINGERPRINTS, baseline["id"], fingerprint)
 
 
 def test_current_13_registry_and_public_claims_agree():
@@ -68,7 +76,7 @@ def test_stale_snapshot_is_visible_but_not_quota_observable():
     assert receipt["dimensions"]["quota_observable"]["numerator"] == 0
 
 
-def test_scope_change_requires_new_dated_baseline_and_preserves_history():
+def test_scope_change_requires_new_dated_baseline_and_preserves_history(monkeypatch):
     registry, baselines = current()
     registry = copy.deepcopy(registry)
     baselines = copy.deepcopy(baselines)
@@ -82,6 +90,7 @@ def test_scope_change_requires_new_dated_baseline_and_preserves_history():
     new_baseline["health_scope_ids"].remove("mimo")
     new_baseline["quota_scope_ids"].remove("mimo")
     baselines["baselines"].append(new_baseline)
+    pin_baseline(monkeypatch, new_baseline)
     assert guard.validate(registry, baselines) == []
     receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
                                              empty_quota(registry), None, registry=registry)
@@ -252,7 +261,7 @@ def test_review_openx_falls_back_after_corrupt_primary(tmp_path, monkeypatch):
     (0, "registered_ids"), (1, "registered_ids"),
     (2, "registered_ids"), (2, "health_scope_ids"), (2, "quota_scope_ids"),
 ])
-def test_review_archived_provider_ids_cannot_be_rewritten(index, field):
+def test_review_archived_provider_ids_cannot_be_rewritten(index, field, monkeypatch):
     registry, baselines = current()
     registry["providers"][-1]["lifecycle"] = "deprecated"
     registry.update(registry_version="2026-09-27.1", baseline_id="k0-2026-09-27")
@@ -263,6 +272,7 @@ def test_review_archived_provider_ids_cannot_be_rewritten(index, field):
     next_baseline["health_scope_ids"].remove("mimo")
     next_baseline["quota_scope_ids"].remove("mimo")
     baselines["baselines"].append(next_baseline)
+    pin_baseline(monkeypatch, next_baseline)
     assert guard.validate(registry, baselines) == []
     baselines["baselines"][index][field] = ["mimo"] * 13
     assert guard.validate(registry, baselines), "historical provider identities were rewritten"
@@ -280,3 +290,156 @@ def test_review_receipt_rejects_contradictory_evidence(dimension, changes):
                                              empty_quota(registry), None)
     receipt["dimensions"][dimension].update(changes)
     assert guard.validate_receipt(receipt, registry)
+
+
+@pytest.mark.parametrize("scenario", ["current", "disabled", "stale", "deprecated", "four_exclusions"])
+def test_openab_health_labels_match_product_ui(scenario):
+    registry, _ = current()
+    configured = dict.fromkeys(measure.KNOWN_PROVIDERS, True)
+    if scenario == "disabled":
+        configured["gitx"] = False
+    if scenario in ("deprecated", "four_exclusions"):
+        for provider in registry["providers"]:
+            if provider["id"] in ({"mimo"} if scenario == "deprecated" else guard.ORIGINAL_EXCLUSIONS):
+                provider["lifecycle"] = "deprecated"
+    now = 1_790_000_000
+    ages = {"codex_bot": 10, "cicx": 20}
+    if scenario == "stale":
+        ages["gitx"] = 90_000
+    metrics = "".join(
+        f'lobsterpulse_provider_events_total{{provider="{pid}"}} 1\n'
+        f'lobsterpulse_provider_idle_seconds{{provider="{pid}"}} {age}\n'
+        for pid, age in ages.items())
+    receipt = measure.build_coverage_receipt(metrics, measure.parse_provider_sessions(metrics),
+                                             empty_quota(registry), configured, registry=registry)
+    state = {"provider_totals": {
+        pid: {"events_total": 1, "last_event_at": now - age} for pid, age in ages.items()},
+        "sessions": []}
+    ui = subprocess.run(["node", "-e", """
+const { build } = require('./src/provider-coverage.js');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify(build(input.registry, input.config, input.state, {}, {}, input.now)));
+"""], input=json.dumps({"registry": registry, "config": {"providers": {
+        pid: {"enabled": enabled} for pid, enabled in configured.items()}}, "state": state, "now": now}),
+        text=True, capture_output=True, check=True, cwd=guard.ROOT)
+    coverage = json.loads(ui.stdout)
+    for row in coverage["rows"]:
+        if row["id"] in measure.OPENAB_BOT:
+            assert receipt["providers"][row["id"]]["health_status"] == row["healthStatus"], row["id"]
+    assert receipt["dimensions"]["live_emitting"]["numerator"] == 2
+    assert receipt["dimensions"]["live_emitting"]["denominator"] == coverage["dimensions"]["liveEmitting"]["denominator"]
+    assert receipt["dimensions"]["live_emitting"]["gap_to_registered"] == 11
+
+
+def test_receipt_keeps_capability_snapshot_when_registry_scope_changes():
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry)
+    assert receipt["schema_version"] == 2
+    for provider in registry["providers"]:
+        for field, value in provider.items():
+            assert receipt["providers"][provider["id"]].get(field) == value, field
+    archived = copy.deepcopy(receipt)
+    historical_registry = copy.deepcopy(registry)
+    registry.update(registry_version="2026-10-16.1", baseline_id="k0-2026-10-16")
+    registry["providers"][-1].update(lifecycle="out_of_scope", owner="new owner")
+    measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                    empty_quota(registry), None, registry=registry)
+    assert receipt == archived, "historical evidence was recalculated or aliased to the current registry"
+    assert guard.validate_receipt(receipt, historical_registry) == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("owner", "unrelated owner"), ("scope", "local_cli"), ("lifecycle", "out_of_scope"),
+    ("platform_scope", "different host"), ("required_signal", "different signal"),
+    ("freshness_seconds", 999999), ("quota_signal", "other.json"),
+    ("quota_freshness_seconds", 999999), ("support_level", "hook_intake_quota_external"),
+])
+def test_receipt_validator_rejects_capability_drift(field, value):
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry)
+    receipt["providers"]["cicx"][field] = value
+    assert any("cicx" in error and field in error for error in guard.validate_receipt(receipt, registry))
+
+
+@pytest.mark.parametrize("missing", ["owner", "freshness_seconds", "quota_freshness_seconds"])
+def test_receipt_validator_requires_capability_evidence(missing):
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry)
+    receipt["providers"]["cicx"].pop(missing, None)
+    assert guard.validate_receipt(receipt, registry)
+
+
+@pytest.mark.parametrize("providers", [None, [], {}, {"fake": {}}, {"cicx": None}])
+def test_receipt_validator_requires_complete_provider_evidence(providers):
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry)
+    receipt["providers"] = providers
+    assert guard.validate_receipt(receipt, registry)
+
+
+def test_every_later_scope_baseline_is_pinned_and_remains_immutable(monkeypatch):
+    registry, baselines = current()
+    for date, retired in (("2026-09-27", "mimo"), ("2026-09-28", "lpbot")):
+        registry.update(registry_version=f"{date}.1", baseline_id=f"k0-{date}")
+        next(p for p in registry["providers"] if p["id"] == retired)["lifecycle"] = "deprecated"
+        previous = baselines["baselines"][-1]
+        previous["status"] = "historical"
+        baseline = copy.deepcopy(previous)
+        baseline.update(id=registry["baseline_id"], status="current", effective_date=date)
+        for field in ("health_scope_ids", "quota_scope_ids"):
+            baseline[field].remove(retired)
+        baselines["baselines"].append(baseline)
+        assert any("fingerprint" in error for error in guard.validate(registry, baselines)), \
+            "new baselines must not bypass immutable-history protection"
+        pin_baseline(monkeypatch, baseline)
+        assert guard.validate(registry, baselines) == []
+    baselines["baselines"][-2]["health_scope_ids"] = ["made_up_provider"]
+    assert "k0-2026-09-27: immutable baseline was rewritten" in guard.validate(registry, baselines)
+
+
+def test_historical_receipt_without_capability_snapshot_is_not_rewritten():
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry,
+                                             timestamp="2026-09-26T00:00:00+0000")
+    receipt.pop("schema_version", None)
+    for provider in registry["providers"]:
+        for field in provider:
+            receipt["providers"][provider["id"]].pop(field, None)
+        if provider["scope"] == "openab_push" and provider["support_level"] == "hook_and_quota_reader":
+            receipt["providers"][provider["id"]]["health_status"] = "NOT_MONITORED"
+    archived = copy.deepcopy(receipt)
+    assert guard.validate_receipt(receipt, registry) == []
+    assert receipt == archived
+
+
+@pytest.mark.parametrize("version", [None, True, 3, "2"])
+def test_receipt_validator_rejects_unknown_schema_version(version):
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry)
+    receipt["schema_version"] = version
+    assert any("schema version" in error for error in guard.validate_receipt(receipt, registry))
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_cli_validates_supplied_receipt_and_rejects_registry_drift(tmp_path, wrapped):
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry)
+    path = tmp_path / "receipt.json"
+    command = [sys.executable, str(guard.ROOT / "scripts/k0_target_baseline_check.py"),
+               "--receipt", str(path)]
+    path.write_text(json.dumps({"coverage_receipt": receipt} if wrapped else receipt), encoding="utf-8")
+    original = path.read_bytes()
+    assert subprocess.run(command, capture_output=True, text=True, cwd=guard.ROOT).returncode == 0
+    assert path.read_bytes() == original
+    receipt["providers"]["cicx"]["owner"] = "wrong owner"
+    path.write_text(json.dumps({"coverage_receipt": receipt} if wrapped else receipt), encoding="utf-8")
+    invalid = subprocess.run(command, capture_output=True, text=True, cwd=guard.ROOT)
+    assert invalid.returncode == 1
+    assert "cicx: owner disagrees with registry" in invalid.stdout

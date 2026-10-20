@@ -291,7 +291,7 @@ repo 內附了一個可以重生品牌圖示的腳本：
 候選變更應執行下列 admission checks；build 成功本身不代表桌面 runtime 已驗收：
 
 - `npm test`（版本與安裝文件護欄）
-- `python -m unittest scripts/test_package_release.py`（Python 3.11+；版本、ZIP 與 checksum）
+- `python -m unittest scripts/test_package_release.py`（Python 3.11+；版本、CHANGELOG 段落、ZIP 與 checksum）
 - `cargo test --manifest-path src-tauri/Cargo.toml --locked`
 - `cargo tauri build --no-bundle`（release 二進位，frontend 已 embed）
 - 兩個平台對應產物的存在性與 SHA-256 檢查

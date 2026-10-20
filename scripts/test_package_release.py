@@ -25,6 +25,9 @@ class ReleasePackageTest(unittest.TestCase):
             'version = 3\n[[package]]\nname = "lobster-pulse"\nversion = "0.5.4"\n',
             encoding="utf-8",
         )
+        (self.root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## v0.5.4 · 2026-04-17 — fixture\n- notes\n", encoding="utf-8"
+        )
         self.build = self.root / "build with spaces"
         self.build.mkdir()
         self.output = self.root / "output"
@@ -53,6 +56,18 @@ class ReleasePackageTest(unittest.TestCase):
                 validate_version(self.root, "v0.5.4")
             file.write_text(original, encoding="utf-8")
 
+    def test_tag_without_changelog_section_is_rejected(self):
+        changelog = self.root / "CHANGELOG.md"
+        for text in ("# Changelog\n", "### v0.5.4 · nested\n", "## v0.5.40 · other\n", "## v0.5.4-rc1\n",
+                     "## v0.5.4　· awk does not split on U+3000\n"):
+            changelog.write_text(text, encoding="utf-8")
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, "CHANGELOG"):
+                validate_version(self.root, "v0.5.4")
+
+    def test_bracketed_changelog_heading_is_accepted(self):
+        (self.root / "CHANGELOG.md").write_text("## [v0.5.4] - 2026-04-17\n", encoding="utf-8")
+        self.assertEqual(validate_version(self.root, "v0.5.4"), "0.5.4")
+
     def test_portable_archives_have_only_sibling_binaries_and_valid_checksum(self):
         for platform in ("windows", "linux", "macos-arm64", "macos-x64"):
             suffix = ".exe" if platform == "windows" else ""
@@ -80,6 +95,14 @@ class ReleasePackageTest(unittest.TestCase):
             self.binaries(".exe")
             (self.build / missing).unlink()
             with self.subTest(missing=missing), self.assertRaises(FileNotFoundError):
+                package_release(self.root, "v0.5.4", "windows", self.build, self.output)
+            self.assertFalse(self.output.exists())
+
+    def test_empty_binary_fails_before_creating_output(self):
+        for empty in ("lobster-pulse.exe", "lobster-pulse-hook.exe"):
+            self.binaries(".exe")
+            (self.build / empty).write_bytes(b"")
+            with self.subTest(empty=empty), self.assertRaisesRegex(ValueError, "empty"):
                 package_release(self.root, "v0.5.4", "windows", self.build, self.output)
             self.assertFalse(self.output.exists())
 

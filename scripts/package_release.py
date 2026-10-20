@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 import tomllib
 import zipfile
 from pathlib import Path
@@ -23,7 +24,19 @@ def validate_version(root, tag):
         raise ValueError(f"App versions must match tauri.conf.json version {version}: {versions}")
     if tag != f"v{version}":
         raise ValueError(f"Release tag must be v{version}, matching the app version; got {tag!r}")
+    if not has_changelog_section(root, tag):
+        raise ValueError(f"CHANGELOG.md has no '## {tag} · …' or '## [{tag}]' section for the release notes")
     return version
+
+
+def has_changelog_section(root, tag):
+    # Same heading rule as the release notes step in release.yml. awk splits
+    # lines on "\n" and fields on spaces/tabs only, so avoid str.split().
+    for line in (root / "CHANGELOG.md").read_text(encoding="utf-8").split("\n"):
+        words = re.split(r"[ \t]+", line)
+        if line.startswith("## ") and len(words) > 1 and words[1].removeprefix("[").removesuffix("]") == tag:
+            return True
+    return False
 
 
 def package_release(root, tag, platform, build_dir, output_dir):
@@ -33,6 +46,8 @@ def package_release(root, tag, platform, build_dir, output_dir):
     for binary in binaries:
         if not binary.is_file():
             raise FileNotFoundError(f"Missing required binary: {binary}")
+        if binary.stat().st_size == 0:
+            raise ValueError(f"Required binary is empty: {binary}")
     output_dir.mkdir(parents=True, exist_ok=True)
     archive = output_dir / f"lobster-pulse-{tag}-{platform}.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
@@ -59,7 +74,7 @@ def main():
             for artifact in package_release(root, args.tag, args.platform, args.build_dir, args.output_dir):
                 print(artifact)
         else:
-            print(f"Validated {args.tag}: all app versions match tauri.conf.json")
+            print(f"Validated {args.tag}: all app versions match tauri.conf.json and CHANGELOG.md has its section")
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, f"Release validation failed: {error}\n")
 

@@ -18,7 +18,7 @@ python -m unittest scripts/test_package_release.py
 python scripts/package_release.py v0.5.4
 ```
 
-最後一個命令只檢查版本，不會建置、打包或發佈。Owner 核准分發與版本後，才可對既有
+最後一個命令只檢查版本與 CHANGELOG 段落，不會建置、打包或發佈。Owner 核准分發與版本後，才可對既有
 `v0.5.4` tag 執行 release workflow；在分支上手動 dispatch 會在 build 前失敗。
 workflow 沿用四個平台的 Tauri build，只建立可供審查的 draft。
 

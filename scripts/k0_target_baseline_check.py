@@ -5,6 +5,7 @@ The R81 and R182/R197 rows in MISSION.md are archival receipts. Current scope is
 defined by the dated baseline and versioned provider registry, never by a
 retroactive rewrite of those rows.
 """
+import argparse
 import json
 import hashlib
 import re
@@ -39,12 +40,31 @@ def read_json(path: Path):
 
 def validate_receipt(receipt: dict, registry: dict) -> list[str]:
     errors = []
+    schema_version = receipt.get("schema_version", 1)
+    if type(schema_version) is not int or schema_version not in (1, 2):
+        errors.append("unsupported receipt schema version")
     if receipt.get("registry_version") != registry.get("registry_version"):
         errors.append("receipt registry version differs from canonical registry")
     if receipt.get("baseline_id") != registry.get("baseline_id"):
         errors.append("receipt baseline differs from canonical registry")
     if not receipt.get("timestamp"):
         errors.append("receipt timestamp missing")
+    provider_rows = receipt.get("providers")
+    if not isinstance(provider_rows, dict):
+        errors.append("receipt provider capability evidence missing")
+        provider_rows = {}
+    if set(provider_rows) != {p["id"] for p in registry["providers"]}:
+        errors.append("receipt provider IDs disagree with registry")
+    for provider in registry["providers"]:
+        row = provider_rows.get(provider["id"])
+        if not isinstance(row, dict):
+            errors.append(f"{provider['id']}: provider capability evidence missing")
+            continue
+        # Legacy receipts remain read-only; never enrich them from today's registry.
+        if schema_version == 2:
+            for field in REQUIRED_FIELDS:
+                if row.get(field) != provider.get(field):
+                    errors.append(f"{provider['id']}: {field} disagrees with registry")
     dimensions = receipt.get("dimensions", {})
     registered = len(registry["providers"])
     scoped = [p for p in registry["providers"] if p["lifecycle"] == "active"]
@@ -111,6 +131,8 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
     by_id = {b.get("id"): b for b in baseline_rows}
     if len(by_id) != len(baseline_rows):
         errors.append("duplicate baseline IDs")
+    for baseline_id in by_id.keys() - BASELINE_FINGERPRINTS.keys():
+        errors.append(f"{baseline_id}: immutable baseline fingerprint missing")
     for baseline_id, fingerprint in BASELINE_FINGERPRINTS.items():
         protected = {k: v for k, v in by_id.get(baseline_id, {}).items()
                      if k not in ("status", "note")}
@@ -208,9 +230,16 @@ def validate(registry: dict, baselines: dict, *, root: Path = ROOT) -> list[str]
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--receipt", type=Path, help="validate an existing coverage receipt without rewriting it")
+    args = parser.parse_args()
     try:
-        errors = validate(read_json(REGISTRY), read_json(BASELINES))
-    except (OSError, ValueError) as exc:
+        registry = read_json(REGISTRY)
+        errors = validate(registry, read_json(BASELINES))
+        if args.receipt:
+            payload = read_json(args.receipt)
+            errors.extend(validate_receipt(payload.get("coverage_receipt", payload), registry))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         print(f"[K0 coverage] required registry/baseline unavailable: {exc}")
         return 2
     if errors:

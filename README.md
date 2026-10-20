@@ -160,12 +160,20 @@ LobsterPulse v5.1 **註冊 13 個整合**（🤖 OpenAB 9 + 💻 本機 CLI 4）
 quota 必須含成功的 runner，且內容的 `updated_at` 在新鮮度門檻內；複製檔案或更新 mtime 不會讓舊資料變新。
 請以設定頁「監控覆蓋」與 `python scripts/k0_measure.py` 的帶時間戳收據查看本機現況；
 資料來源中斷顯示「未知」，不推算成 0/13。每個數字保留 13 個已註冊 ID 的對照分母和排除原因。
+新版 KPI receipt（`schema_version: 2`）的每筆 provider 同時保存該版本的 lifecycle、scope、owner、訊號契約與新鮮度門檻，
+驗證器會拒絕缺漏或不符 registry 的資料；歷史收據不會因後續範圍變更而重算。
+舊格式收據保留原狀驗證，不補寫目前的能力資料；驗證歷史收據時須使用當時的 registry。
+`python scripts/k0_target_baseline_check.py --receipt .harness-k0.json` 可唯讀驗證本機量測報告或單份 receipt。
+已啟用的 OpenAB provider 尚無事件時，UI 與 KPI 一致顯示**外部來源待確認**；有過期事件則顯示**過期**。
 
 `irisx_bot` / `grokx` / `lpbot` / `mimo` 的 hook 可送到本機，
 但 quota snapshot 來源及 OpenAB owner 尚待確認；缺 quota 時顯示**外部來源待確認**，
 仍計入 13 個已註冊整合的缺口。契約與目前基線見
 [`src/provider-capabilities.json`](src/provider-capabilities.json) 與
 [`docs/k0-baselines.json`](docs/k0-baselines.json)。
+範圍變更須新增較晚日期的 baseline 與 registry version，將前一份標為 historical，
+並在 `scripts/k0_target_baseline_check.py::BASELINE_FINGERPRINTS` 登錄新基線指紋；
+每份基線的身分、日期、範圍及結果都受保護，只有 status 與說明文字可變更。
 
 ### 🤖 OpenAB 9 bot
 

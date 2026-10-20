@@ -757,18 +757,39 @@ fn open_url(url: String) -> Result<(), String> {
         log::warn!("[open_url] 拒絕非 https 連結");
         return Err("只允許 https:// 連結".into());
     }
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
-    };
-    std::process::Command::new(opener)
-        .arg(url)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    if !is_plain_url(&url) {
+        log::warn!("[open_url] 拒絕含特殊字元的連結");
+        return Err("連結含不允許的字元".into());
+    }
+    browser_command(&url).spawn().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// 網址只收 RFC 3986 允許的 ASCII 字元。Windows 上整段用引號包給 explorer，
+/// 夾帶 `"`、`\`、空白或控制字元就可能跳出引號、多塞參數給 explorer。
+fn is_plain_url(url: &str) -> bool {
+    url.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=%".contains(&b))
+}
+
+/// 用系統預設瀏覽器開網址的指令。呼叫端要先確定網址裡沒有 `"`（見 is_plain_url）。
+pub(crate) fn browser_command(url: &str) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // explorer 自己解析命令列：沒加引號、又含 `?…&` 的網址會被默默丟掉、瀏覽器不會開
+        // （2026-10-20 實測）。std 只替含空白的參數加引號，所以這裡整段自己包。
+        let mut c = std::process::Command::new("explorer");
+        c.raw_arg(format!("\"{url}\""));
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c =
+            std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" });
+        c.arg(url);
+        c
+    }
 }
 
 #[tauri::command]
@@ -13496,6 +13517,46 @@ mod r131_plugin_registry_tests {
                 "非 https 必須被拒：{bad}"
             );
         }
+    }
+
+    #[test]
+    fn plain_url_rejects_characters_that_could_break_out_of_quotes() {
+        // Windows 上網址整段包在引號裡交給 explorer，這些字元可能跳出引號 → 必須擋。
+        // 直接測 is_plain_url：萬一它退化，測試也不會真的開出 explorer
+        for bad in [
+            "https://example.com/\" C:\\Windows",
+            "https://example.com/a b",
+            "https://example.com/a\tb",
+            "https://example.com\\share",
+            "https://example.com/x\\",
+            "https://example.com/\n",
+            "https://example.com/\0",
+            "https://example.com/a^b|c",
+            "https://example.com/<x>`{y}",
+            "https://例子.tw/",
+        ] {
+            assert!(!crate::is_plain_url(bad), "含特殊字元必須被拒：{bad:?}");
+        }
+        // 前端實際會開的連結形態都要放行
+        for good in [
+            "https://claude.ai/settings/usage",
+            "https://platform.minimax.io/user-center/basic-information/interface-key",
+            "https://example.com/p?a=1&b=%E4%BE%8B#frag",
+            "https://example.com/a,b;c='d'(e)*+!$@[f]~",
+        ] {
+            assert!(crate::is_plain_url(good), "應放行：{good}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn browser_command_quotes_the_whole_url_for_explorer() {
+        // explorer 收到沒加引號、含 ?…& 的網址會默默丟掉、瀏覽器不會開（2026-10-20 實測）
+        let url = "https://example.com/p?a=1&b=2";
+        let cmd = crate::browser_command(url);
+        assert_eq!(cmd.get_program(), "explorer");
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, [std::ffi::OsStr::new("\"https://example.com/p?a=1&b=2\"")]);
     }
 
     #[test]

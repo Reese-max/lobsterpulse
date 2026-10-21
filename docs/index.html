@@ -109,7 +109,7 @@
         <span>LPBOT</span>
         <span>MIMO</span>
       </div>
-      <p class="providers-footnote">已註冊 13 個整合（本機 CLI hook sidecar + OpenAB HTTP <code>POST /hook/{provider}</code>）。已設定、近 24h 有事件、非零 session、新鮮 quota 是不同的本機實測數字；請查看 app 設定頁的監控覆蓋收據。IRISX_BOT / GROKX / LPBOT / MIMO 可送 hook，quota 來源尚待 OpenAB owner 確認。</p>
+      <p class="providers-footnote">已註冊 13 個整合（本機 CLI hook sidecar + OpenAB HTTP <code>POST /hook/{provider}</code>），這不是「13 個正在監控」。已設定、近 24h 有事件、非零 session、新鮮 quota 是不同的本機實測數字；資料來源中斷時顯示「未知」。請查看 app 設定頁的監控覆蓋收據。IRISX_BOT / GROKX / LPBOT / MIMO 可送 hook，quota 來源尚待 OpenAB owner 確認。</p>
     </div>
   </section>
 
@@ -228,8 +228,9 @@ Get-FileHash -Algorithm SHA256 -LiteralPath @(
   '.\src-tauri\target\release\lobster-pulse-hook.exe'
 )</code></pre>
           <p class="download-note">
-            主程式與 sidecar 必須保留在同一目錄。這些 hash 只驗證本機 build；
-            release workflow 目前沒有建立 checksum manifest。
+            主程式與 sidecar 必須保留在同一目錄。這些 hash 只驗證本機 build；release workflow
+            會為每個 ZIP 建立同名 <code>.zip.sha256</code>，只建立 draft，可攜式版本尚未發佈。
+            App 版本以 <code>src-tauri/tauri.conf.json</code> 為唯一基準。
           </p>
         </article>
 
@@ -289,7 +290,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked</code></pre>
           <pre><code>source build != published release
 build pass != runtime pass</code></pre>
           <p class="install-note">
-            這份文件不要求 tag、push、release、installer、簽章或 Owner 的分發模式決策。
+            Owner 的分發模式與乾淨 Windows 驗收仍待完成；更新與回復必須一起替換兩個執行檔。
+            Windows 設定在 <code>%APPDATA%\lobsterpulse\config.json</code>，音效在同層
+            <code>sounds/</code>；更新前先結束程式並備份設定。
+            <a href="https://github.com/Reese-max/lobsterpulse/blob/main/docs/audits/issue-6-release-readiness.md">發行準備與驗收清單</a>
           </p>
         </div>
       </div>

@@ -63,7 +63,11 @@
       <div id="uv-recent"></div>
       <div class="uv-footer">
         <span id="uv-next-update">Next update in 60s</span>
+        <span id="uv-footer-msg" class="hidden"></span>
         <span class="uv-footer-btns">
+          <button id="btn-token-dashboard" class="icon-btn" title="Token 戰情室（用到才啟動、閒置 15 分鐘自動關閉；也可直接開 127.0.0.1:3003）">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 16v-4M11 16V8M15 16v-6M19 16V6"/></svg>
+          </button>
           <button id="btn-usage-settings" class="icon-btn" title="設定">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
           </button>
@@ -182,6 +186,7 @@
     <div id="view-settings" class="hidden">
       <div class="settings-header">
         <span class="settings-title">設定</span>
+        <span id="settings-save-status" class="settings-save-status" role="status" aria-live="polite"></span>
         <button id="btn-close-settings" class="icon-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -189,11 +194,13 @@
       <div class="settings-main">
         <nav class="settings-rail">
           <button class="settings-tab active" data-tab="providers" aria-label="助手"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></button>
-          <button class="settings-tab" data-tab="sounds" aria-label="音效"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 3 9 3 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 6a9 9 0 010 12"/></svg></button>
+          <button class="settings-tab" data-tab="general" aria-label="一般"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg></button>
           <button class="settings-tab" data-tab="appearance" aria-label="外觀"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 000 18c1 0 1.4-.8 1-1.6-.5-.9.1-1.9 1.1-1.9H16a5 5 0 000-10"/><circle cx="8.5" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="15.5" cy="10" r="1" fill="currentColor" stroke="none"/></svg></button>
+          <button class="settings-tab" data-tab="notify" aria-label="通知"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></button>
           <button class="settings-tab" data-tab="runners" aria-label="執行器"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4.5" width="19" height="15" rx="2"/><polyline points="7 9.5 10 12 7 14.5"/><line x1="12.5" y1="14.5" x2="17" y2="14.5"/></svg></button>
-          <button class="settings-tab" data-tab="automation" aria-label="自動化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></button>
+          <button class="settings-tab" data-tab="automation" aria-label="自動化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><polyline points="12 7.5 12 12 15 14"/></svg></button>
           <button class="settings-tab" data-tab="rules" aria-label="規則"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 4 14 11 14 10 22 20 10 13 10 13 2"/></svg></button>
+          <button class="settings-tab" data-tab="advanced" aria-label="進階"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 00-5.4 5.4L3.5 17.5a1.8 1.8 0 002.6 2.6l5.8-5.8a4 4 0 005.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/></svg></button>
           <button class="settings-tab" data-tab="keys" aria-label="金鑰"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3"/><path d="M17 6l3 3"/></svg></button>
         </nav>
         <div class="settings-body">
@@ -201,73 +208,30 @@
           <div id="provider-list" class="provider-list"></div>
           <div id="provider-coverage" class="provider-coverage" aria-live="polite">覆蓋資料載入中…</div>
         </div>
-        <div class="settings-tab-panel" data-panel="sounds">
+        <div class="settings-tab-panel" data-panel="general">
           <div class="setting-group">
-            <div><div class="setting-main-label">提示音效</div><div class="setting-sub-label">在完成與等待你處理時播放提示音</div></div>
-            <label class="toggle"><input type="checkbox" id="toggle-sound" /><span class="toggle-slider"></span></label>
+            <div><div class="setting-main-label">開機自動啟動</div><div class="setting-sub-label">登入 Windows 後自動在背景啟動</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-autostart" /><span class="toggle-slider"></span></label>
           </div>
-          <div id="sound-picker" class="setting-group-col hidden">
-            <div class="sound-header">
-              <label class="setting-label">完成時</label>
-              <button id="btn-open-sounds" class="icon-btn" title="開啟音效資料夾">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-                </svg>
-              </button>
+          <div class="setting-group">
+            <div><div class="setting-main-label">固定展開</div><div class="setting-sub-label">不用滑鼠停留也保持展開</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-pin" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">📖 使用說明</label>
+            <div class="threshold-row">
+              <div style="flex:1"><button id="btn-open-help" class="mini-btn">📚 功能手冊 + 網頁配置教學</button></div>
             </div>
-            <div id="provider-sounds-list"></div>
-            <div class="sound-header"><label class="setting-label">等待你處理時</label></div>
-            <div id="provider-waiting-sounds-list"></div>
+            <span class="threshold-label">完整功能說明與網頁設定教學</span>
+          </div>
+          <div class="settings-reset-row">
+            <button class="mini-btn settings-reset" data-reset="general" title="把這一頁的設定還原成預設值（金鑰、token、指令不會被清掉）">↺ 還原這一頁的預設值</button>
           </div>
         </div>
         <div class="settings-tab-panel" data-panel="appearance">
           <div class="setting-group">
             <div><div class="setting-main-label">淺色主題</div><div class="setting-sub-label">切換成淺色配色</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-theme" /><span class="toggle-slider"></span></label>
-          </div>
-          <div class="setting-group">
-            <div><div class="setting-main-label">固定展開</div><div class="setting-sub-label">不用滑鼠停留也保持展開</div></div>
-            <label class="toggle"><input type="checkbox" id="toggle-pin" /><span class="toggle-slider"></span></label>
-          </div>
-          <div class="setting-group">
-            <div><div class="setting-main-label">開機自動啟動</div><div class="setting-sub-label">登入 Windows 後自動在背景啟動</div></div>
-            <label class="toggle"><input type="checkbox" id="toggle-autostart" /><span class="toggle-slider"></span></label>
-          </div>
-          <div class="setting-group">
-            <div><div class="setting-main-label">系統通知</div><div class="setting-sub-label">任務完成或等待你處理時跳 Windows 通知</div></div>
-            <div style="display:flex;gap:6px;align-items:center">
-              <button id="btn-test-toast" class="mini-btn" title="現在彈一個測試 toast">🧪 測試</button>
-              <label class="toggle"><input type="checkbox" id="toggle-notify" /><span class="toggle-slider"></span></label>
-            </div>
-          </div>
-          <div class="setting-group-col">
-            <label class="setting-label">工作階段時間門檻（秒）</label>
-            <div class="threshold-row">
-              <div><span class="threshold-label">閒置</span><input type="number" id="idle-secs" min="10" step="10"></div>
-              <div><span class="threshold-label">過舊</span><input type="number" id="stale-secs" min="60" step="60"></div>
-              <div><span class="threshold-label">移除</span><input type="number" id="remove-secs" min="300" step="60"></div>
-            </div>
-          </div>
-          <div class="setting-group-col">
-            <label class="setting-label">視窗寬度（px，140-600）</label>
-            <div class="threshold-row">
-              <div><span class="threshold-label">Capsule</span><input type="number" id="capsule-width" min="140" max="600" step="10"></div>
-              <div><span class="threshold-label">Expanded</span><input type="number" id="expanded-width" min="140" max="600" step="10"></div>
-            </div>
-          </div>
-          <div class="setting-group-col">
-            <label class="setting-label">Telegram 推播（長任務）</label>
-            <input type="text" id="tg-token" placeholder="Bot token" class="text-input">
-            <input type="text" id="tg-chat" placeholder="Chat ID" class="text-input">
-            <div class="threshold-row">
-              <div><span class="threshold-label">門檻秒數</span><input type="number" id="tg-threshold" min="60" step="60"></div>
-              <div><span class="threshold-label">&nbsp;</span><button id="tg-test" class="mini-btn">🧪 測試發送</button></div>
-            </div>
-            <span id="tg-test-result" class="threshold-label"></span>
-          </div>
-          <div class="setting-group-col">
-            <label class="setting-label">OpenAB 重啟指令（系統匣按鈕觸發）</label>
-            <input type="text" id="openab-restart-cmd" placeholder='e.g. schtasks /run /tn "OpenAB-CICX"' class="text-input">
           </div>
           <div class="setting-group-col">
             <label class="setting-label">重點色</label>
@@ -331,12 +295,61 @@
             </div>
             <span class="threshold-label">大畫面 live preview / 匯出 appearance.json</span>
           </div>
-          <div class="setting-group-col">
-            <label class="setting-label">📖 使用說明</label>
-            <div class="threshold-row">
-              <div style="flex:1"><button id="btn-open-help" class="mini-btn">📚 功能手冊 + 網頁配置教學</button></div>
+          <div class="settings-reset-row">
+            <button class="mini-btn settings-reset" data-reset="appearance" title="把這一頁的設定還原成預設值（金鑰、token、指令不會被清掉）">↺ 還原這一頁的預設值</button>
+          </div>
+        </div>
+        <div class="settings-tab-panel" data-panel="notify">
+          <div class="setting-group">
+            <div><div class="setting-main-label">系統通知</div><div class="setting-sub-label">任務完成或等待你處理時跳 Windows 通知</div></div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button id="btn-test-toast" class="mini-btn" title="現在彈一個測試 toast">🧪 測試</button>
+              <label class="toggle"><input type="checkbox" id="toggle-notify" /><span class="toggle-slider"></span></label>
             </div>
-            <span class="threshold-label">完整功能說明與網頁設定教學</span>
+          </div>
+          <div class="setting-group">
+            <div><div class="setting-main-label">提示音效</div><div class="setting-sub-label">在完成與等待你處理時播放提示音</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-sound" /><span class="toggle-slider"></span></label>
+          </div>
+          <div id="sound-picker" class="setting-group-col hidden">
+            <div class="sound-header">
+              <label class="setting-label">完成時</label>
+              <button id="btn-open-sounds" class="icon-btn" title="開啟音效資料夾">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
+                </svg>
+              </button>
+            </div>
+            <div id="provider-sounds-list"></div>
+            <div class="sound-header"><label class="setting-label">等待你處理時</label></div>
+            <div id="provider-waiting-sounds-list"></div>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">Telegram 推播（長任務）</label>
+            <input type="password" id="tg-token" placeholder="Bot token" class="text-input" autocomplete="off">
+            <input type="text" id="tg-chat" placeholder="Chat ID" class="text-input">
+            <div class="threshold-row">
+              <div><span class="threshold-label">門檻秒數</span><input type="number" id="tg-threshold" min="60" step="60"></div>
+              <div><span class="threshold-label">&nbsp;</span><button id="tg-test" class="mini-btn">🧪 測試發送</button></div>
+            </div>
+            <span id="tg-test-result" class="threshold-label"></span>
+          </div>
+          <div class="setting-group">
+            <div><div class="setting-main-label">Discord 推播</div><div class="setting-sub-label">啟用後所有自動通知走這個 Discord 頻道</div></div>
+            <label class="toggle"><input type="checkbox" id="toggle-discord" /><span class="toggle-slider"></span></label>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">Bot Token（輸入後會自動遮蔽）</label>
+            <input type="password" id="dc-token" placeholder="MTxxxxx..." class="text-input">
+            <label class="setting-label">Channel ID</label>
+            <input type="text" id="dc-channel" placeholder="1494779722314285179" class="text-input">
+            <div class="threshold-row">
+              <div><span class="threshold-label">&nbsp;</span><button id="dc-test" class="mini-btn">🧪 測試發送</button></div>
+              <div><span id="dc-test-result" class="threshold-label"></span></div>
+            </div>
+          </div>
+          <div class="settings-reset-row">
+            <button class="mini-btn settings-reset" data-reset="notify" title="把這一頁的設定還原成預設值（金鑰、token、指令不會被清掉）">↺ 還原這一頁的預設值</button>
           </div>
         </div>
 
@@ -373,21 +386,7 @@
 
         <!-- 🔔 自動化 Tab —— Discord bot + auto-action 三條規則 -->
         <div class="settings-tab-panel" data-panel="automation">
-          <div class="setting-group">
-            <div><div class="setting-main-label">Discord 推播</div><div class="setting-sub-label">啟用後所有自動通知走這個 Discord 頻道</div></div>
-            <label class="toggle"><input type="checkbox" id="toggle-discord" /><span class="toggle-slider"></span></label>
-          </div>
-          <div class="setting-group-col">
-            <label class="setting-label">Bot Token（輸入後會自動遮蔽）</label>
-            <input type="password" id="dc-token" placeholder="MTxxxxx..." class="text-input">
-            <label class="setting-label">Channel ID</label>
-            <input type="text" id="dc-channel" placeholder="1494779722314285179" class="text-input">
-            <div class="threshold-row">
-              <div><span class="threshold-label">&nbsp;</span><button id="dc-test" class="mini-btn">🧪 測試發送</button></div>
-              <div><span id="dc-test-result" class="threshold-label"></span></div>
-            </div>
-          </div>
-
+          <div class="setting-sub-label settings-panel-note">自動通知送往「通知」分頁設定的 Discord 頻道。</div>
           <div class="setting-group">
             <div><div class="setting-main-label">規則 1：額度低於門檻</div><div class="setting-sub-label">任一項目額度剩餘低於 N% 時發 Discord 通知</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-rule-quota" /><span class="toggle-slider"></span></label>
@@ -397,9 +396,8 @@
               <div><span class="threshold-label">門檻 %</span><input type="number" id="rule-quota-pct" min="1" max="100" step="1"></div>
             </div>
           </div>
-
           <div class="setting-group">
-            <div><div class="setting-main-label">規則 2：工作階段閒置提問</div><div class="setting-sub-label">閒置 N 分鐘後發 Discord 詢問是否結束</div></div>
+            <div><div class="setting-main-label">規則 2：工作階段閒置提問</div><div class="setting-sub-label">閒置超過下方秒數後發 Discord 詢問是否結束</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-rule-idle" /><span class="toggle-slider"></span></label>
           </div>
           <div class="setting-group-col">
@@ -408,7 +406,6 @@
               <div><span class="threshold-label">確認 timeout 秒</span><input type="number" id="rule-confirm-secs" min="60" step="60"></div>
             </div>
           </div>
-
           <div class="setting-group">
             <div><div class="setting-main-label">規則 3：失敗爆發</div><div class="setting-sub-label">一段時間內失敗達 N 次，發通知並自動重啟 OpenAB</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-rule-burst" /><span class="toggle-slider"></span></label>
@@ -420,7 +417,6 @@
               <div><span class="threshold-label">去重秒</span><input type="number" id="rule-dedup" min="60" step="60"></div>
             </div>
           </div>
-
           <div class="setting-group">
             <div><div class="setting-main-label">規則 4：每日摘要</div><div class="setting-sub-label">每天指定時刻推昨日的工作階段、用量、失敗次數</div></div>
             <label class="toggle"><input type="checkbox" id="toggle-rule-summary" /><span class="toggle-slider"></span></label>
@@ -430,7 +426,30 @@
               <div><span class="threshold-label">推播時刻（0-23 整點）</span><input type="number" id="rule-summary-hour" min="0" max="23" step="1"></div>
             </div>
           </div>
-
+        </div>
+        <div class="settings-tab-panel" data-panel="advanced">
+          <div class="setting-group-col">
+            <label class="setting-label">工作階段時間門檻（秒）</label>
+            <div class="threshold-row">
+              <div><span class="threshold-label">閒置</span><input type="number" id="idle-secs" min="10" step="10"></div>
+              <div><span class="threshold-label">過舊</span><input type="number" id="stale-secs" min="60" step="60"></div>
+              <div><span class="threshold-label">移除</span><input type="number" id="remove-secs" min="300" step="60"></div>
+            </div>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">視窗寬度（px，140-600）</label>
+            <div class="threshold-row">
+              <div><span class="threshold-label">Capsule</span><input type="number" id="capsule-width" min="140" max="600" step="10"></div>
+              <div><span class="threshold-label">Expanded</span><input type="number" id="expanded-width" min="140" max="600" step="10"></div>
+            </div>
+          </div>
+          <div class="setting-group-col">
+            <label class="setting-label">OpenAB 重啟指令（系統匣按鈕觸發）</label>
+            <input type="text" id="openab-restart-cmd" placeholder='e.g. schtasks /run /tn "OpenAB-CICX"' class="text-input">
+          </div>
+          <div class="settings-reset-row">
+            <button class="mini-btn settings-reset" data-reset="advanced" title="把這一頁的設定還原成預設值（金鑰、token、指令不會被清掉）">↺ 還原這一頁的預設值</button>
+          </div>
         </div>
 
         <!-- 規則分頁：事件命中時跳系統通知 -->
@@ -497,7 +516,7 @@
         <!-- 金鑰分頁：環境變數 API key 一鍵複製 -->
         <div class="settings-tab-panel" data-panel="keys">
           <div class="setting-sub-label" style="margin-bottom:10px">
-            讀自環境變數，本程式不儲存任何金鑰。複製由後端直接寫入剪貼簿，<b>30 秒後自動清除</b>。
+            即時讀取環境變數（改了不必重開），本程式不儲存任何金鑰。複製由後端直接寫入剪貼簿，<b>30 秒後自動清除</b>。有效性只查各家的唯讀端點，不產生費用。
           </div>
           <div id="apikey-list" class="apikey-list"></div>
         </div>
@@ -506,6 +525,7 @@
     </div>
   </div>
   <script src="quota-cards-lib.js"></script>
+  <script src="settings-lib.js"></script>
   <script src="provider-coverage.js"></script>
   <script src="main.js"></script>
   <script src="usage-view.js"></script>

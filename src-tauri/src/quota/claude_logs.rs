@@ -17,8 +17,13 @@ use crate::pricing::{PricingCatalog, TokenUsage};
 use chrono::{DateTime, Local, Utc};
 use std::path::{Path, PathBuf};
 
-/// 單行事件抽出的日期、模型與可靠分離的 token。
-fn parse_priced_usage_line(line: &[u8]) -> Option<(String, String, TokenUsage)> {
+/// 單行事件抽出的日期、模型、可靠分離的 token 與去重鍵。
+///
+/// 去重鍵＝`message.id` + `requestId`：Claude Code 把同一次 API 回應的每個
+/// content block（thinking／text／tool_use）各寫成一行，每行帶**同一份** usage。
+/// 2026-10-19 實測 78 則訊息有 66 則重複 2–4 行，逐行加總把用量灌大 2.2–2.5 倍
+/// （ccusage 同樣以這組鍵去重）。缺任一欄位的舊格式行回 None，照常計入。
+fn parse_priced_usage_line(line: &[u8]) -> Option<(String, String, TokenUsage, Option<String>)> {
     if !contains_usage(line) {
         return None;
     }
@@ -68,14 +73,21 @@ fn parse_priced_usage_line(line: &[u8]) -> Option<(String, String, TokenUsage)> 
     if usage.total() == 0 {
         return None;
     }
-    Some((date, model, usage))
+    let dedup_key = match (
+        message.get("id").and_then(|x| x.as_str()),
+        v.get("requestId").and_then(|x| x.as_str()),
+    ) {
+        (Some(id), Some(req)) if !id.is_empty() && !req.is_empty() => Some(format!("{id}:{req}")),
+        _ => None,
+    };
+    Some((date, model, usage, dedup_key))
 }
 
 /// 相容既有 token 統計 API；成本掃描使用上面的完整資料。
 /// 生產路徑已全面改走 parse_priced_usage_line，這裡只剩測試對照用 → 不編進 release。
 #[cfg(test)]
 pub fn parse_usage_line(line: &[u8]) -> Option<(String, u64)> {
-    parse_priced_usage_line(line).map(|(date, _, usage)| (date, usage.total()))
+    parse_priced_usage_line(line).map(|(date, _, usage, _)| (date, usage.total()))
 }
 
 /// 便宜的前置過濾：memchr 級別的 byte 搜尋，避免對每行都跑 serde。
@@ -123,11 +135,14 @@ impl DailyUsage {
 }
 
 /// 從檔尾往回掃，累加 `>= stop_date` 的行；讀到更早的日期即停（append-only 假設）。
+/// `seen` 跨檔共用：同一則回應的重複行（含續接 session 複製過來的歷史）只算一次。
+/// 往回掃會先遇到最後寫入的那行，若各行 usage 有差也取到最完整的值。
 fn scan_tail(
     path: &Path,
     stop_date: &str,
     acc: &mut std::collections::HashMap<String, DailyUsage>,
     catalog: &PricingCatalog,
+    seen: &mut std::collections::HashSet<String>,
 ) {
     use std::io::{Read, Seek, SeekFrom};
     const CHUNK: u64 = 1 << 20;
@@ -158,7 +173,7 @@ fn scan_tail(
         let mut in_range = false;
         let mut saw_line = false; // 本區塊有無任何 usage 行（全是雜訊時不可判定越過 cutoff）
         for line in parts.iter().rev() {
-            let Some((date, model, usage)) = parse_priced_usage_line(line) else {
+            let Some((date, model, usage, dedup_key)) = parse_priced_usage_line(line) else {
                 continue;
             };
             saw_line = true;
@@ -166,6 +181,11 @@ fn scan_tail(
                 continue;
             }
             in_range = true;
+            if let Some(key) = dedup_key {
+                if !seen.insert(key) {
+                    continue;
+                }
+            }
 
             let tokens = usage.total();
             let estimated = catalog.estimate_usd(&model, usage);
@@ -229,8 +249,9 @@ fn scan_recent_usage(
 
     let catalog = PricingCatalog::load(home);
     let mut acc = std::collections::HashMap::new();
+    let mut seen = std::collections::HashSet::new();
     for p in &files {
-        scan_tail(p, &stop_date, &mut acc, &catalog);
+        scan_tail(p, &stop_date, &mut acc, &catalog, &mut seen);
     }
     (acc, today)
 }
@@ -323,7 +344,8 @@ mod tests {
         let (date, tokens) = parse_usage_line(line).expect("應解析成功");
         assert_eq!(tokens, 10, "四種 token 都要加總");
 
-        let (_, model, usage) = parse_priced_usage_line(line).expect("應解析成本欄位");
+        let (_, model, usage, key) = parse_priced_usage_line(line).expect("應解析成本欄位");
+        assert!(key.is_none(), "缺 message.id/requestId 的行不給去重鍵（照常計入）");
         assert_eq!(model, "claude-sonnet-4-20250514");
         assert_eq!(usage.input, 1);
         assert_eq!(usage.output, 2);
@@ -381,7 +403,7 @@ mod tests {
         let yest = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
         let mut acc = std::collections::HashMap::new();
         let catalog = PricingCatalog::load(&dir);
-        scan_tail(&path, &yest, &mut acc, &catalog);
+        scan_tail(&path, &yest, &mut acc, &catalog, &mut Default::default());
         assert_eq!(
             acc.get(&today).map(|d| d.tokens).unwrap_or(0),
             70,
@@ -505,12 +527,59 @@ mod tests {
         let yest = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
         let mut acc = std::collections::HashMap::new();
         let catalog = PricingCatalog::load(&dir);
-        scan_tail(&path, &yest, &mut acc, &catalog);
+        scan_tail(&path, &yest, &mut acc, &catalog, &mut Default::default());
         assert_eq!(
             acc.get(&today).map(|d| d.tokens).unwrap_or(0),
             15,
             "亂序舊行之前的合法行不得被截斷漏算"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同一次 API 回應（同 message.id + requestId）被拆成多行、每行帶同一份 usage，
+    /// 只能算一次；跨檔（續接 session 複製歷史）也只算一次；缺鍵的行照常計入。
+    #[test]
+    fn scan_tail_dedups_same_message_across_lines_and_files() {
+        let dir = std::env::temp_dir().join(format!("lp-claudelogs-dedup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ts = Local::now().with_timezone(&Utc).to_rfc3339();
+        let mk = |id: &str, req: &str, tok: u64| {
+            format!(
+                r#"{{"timestamp":"{ts}","requestId":"{req}","message":{{"id":"{id}","usage":{{"output_tokens":{tok}}}}}}}"#
+            )
+        };
+        let no_key = format!(r#"{{"timestamp":"{ts}","message":{{"usage":{{"output_tokens":7}}}}}}"#);
+        let a = dir.join("a.jsonl");
+        let b = dir.join("b.jsonl");
+        // a：msg1 拆三行（thinking/text/tool_use）、msg2 一行、無鍵行一行
+        std::fs::write(
+            &a,
+            [mk("msg1", "req1", 100), mk("msg1", "req1", 100), mk("msg1", "req1", 100), mk("msg2", "req2", 50), no_key]
+                .join("\n"),
+        )
+        .unwrap();
+        // b：續接 session 複製了 msg1，外加新訊息 msg3
+        std::fs::write(&b, [mk("msg1", "req1", 100), mk("msg3", "req3", 25)].join("\n")).unwrap();
+
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let yest = prev_day(&today);
+        let catalog = PricingCatalog::load(&dir);
+        let mut acc = std::collections::HashMap::new();
+        let mut seen = std::collections::HashSet::new();
+        scan_tail(&a, &yest, &mut acc, &catalog, &mut seen);
+        scan_tail(&b, &yest, &mut acc, &catalog, &mut seen);
+        assert_eq!(
+            acc.get(&today).map(|d| d.tokens).unwrap_or(0),
+            100 + 50 + 7 + 25,
+            "msg1 只算一次（含跨檔）、無鍵行照算"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_priced_usage_line_builds_dedup_key() {
+        let line = br#"{"timestamp":"2026-07-20T00:00:00Z","requestId":"req_9","message":{"id":"msg_1","usage":{"output_tokens":3}}}"#;
+        let (_, _, _, key) = parse_priced_usage_line(line).expect("應解析成功");
+        assert_eq!(key.as_deref(), Some("msg_1:req_9"));
     }
 }

@@ -2,6 +2,13 @@ function invoke(cmd, args = {}) {
   return window.__TAURI_INTERNALS__.invoke(cmd, args);
 }
 
+// 「只留額度」模式（2026-10-20 使用者要求：這個程式單純只做額度）。畫面只留額度相關；
+// 工作階段狀態、完成／等待提示、Bot 總覽、事件診斷等的程式碼全部保留，改回 false 即恢復——
+// 後端要同時把 lib.rs 的 SHOW_NON_QUOTA_FEATURES 改成 true。要隱藏的元素集中在
+// styles.css 的「只留額度」區塊（掛在 <html class="quota-only">）。
+const QUOTA_ONLY = true;
+document.documentElement.classList.toggle("quota-only", QUOTA_ONLY);
+
 // ─── Provider Icons (inline SVG) ───
 const PROVIDER_ICONS = {
   claude: `<svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg>`,
@@ -441,10 +448,9 @@ async function init() {
   // 載完 config 後立刻套用使用者偏好寬度（capsule 起始視圖）
   try { await invoke("resize_window", { width: currentW(), height: 46 }); } catch (e) {}
   applyTheme(appConfig.appearance.theme || "dark");
-  $("toggle-sound").checked = appConfig.appearance.sound_enabled;
-  $("toggle-pin").checked = appConfig.appearance.pin_expanded;
-  $("toggle-theme").checked = (appConfig.appearance.theme || "dark") === "light";
-  if (appConfig.appearance.sound_enabled) $("sound-picker").classList.remove("hidden");
+  ensureAutomationDefaults();
+  populateSettingsFromConfig();
+  applyQuotaOnlyLayout();
 
   // First launch → open settings automatically
   const firstLaunch = !appConfig.setup_done;
@@ -525,10 +531,37 @@ async function init() {
   });
   invoke("plugin:event|listen", { event: "cursor-left", target: { kind: "Any" }, handler: collapseCallbackId }).catch(() => {});
 
-  setInterval(() => {
+  // 滑鼠離開就收合（每 200ms 看一次）；視窗隱藏時暫停，見下方 main-visibility
+  const hoverTick = () => {
     if ((currentView !== "expanded" && currentView !== "usage") || appConfig.appearance.pin_expanded) return;
     if (!document.getElementById("app").matches(":hover")) showView("capsule");
-  }, 200);
+  };
+  let hoverTimer = setInterval(hoverTick, 200);
+  let mainVisible = true; // 由 applyVisibility 維護（後端 main-visibility／is_main_visible）
+
+  // 主視窗顯示／隱藏（後端 set_main_visible 送來）：隱藏時暫停畫面相關的計時器與背景影片，
+  // 顯示時恢復並立刻刷新（2026-10-20 稽核：原本視窗收在系統匣時也照跑）
+  const applyVisibility = (visible) => {
+    mainVisible = visible;
+    const video = $("bg-video");
+    if (visible) {
+      if (!hoverTimer) hoverTimer = setInterval(hoverTick, 200);
+      if (currentView === "usage") window.UsageView?.start();
+      if (video && appConfig.appearance.background_type === "video") video.play().catch(() => {});
+    } else {
+      clearInterval(hoverTimer);
+      hoverTimer = null;
+      window.UsageView?.stop();
+      if (video) video.pause();
+    }
+  };
+  const visibilityCb = window.__TAURI_INTERNALS__.transformCallback((evt) => applyVisibility(!!(evt && evt.payload)));
+  invoke("plugin:event|listen", { event: "main-visibility", target: { kind: "Any" }, handler: visibilityCb }).catch(() => {});
+  // 註冊後主動問一次：隱藏事件可能早於監聽，或 WebView 在隱藏中重新載入。
+  // 拿不到布林值（舊版後端、測試替身）就維持原狀，不可誤停計時器
+  invoke("is_main_visible")
+    .then((v) => { if (typeof v === "boolean" && !v) applyVisibility(false); })
+    .catch(() => {});
 
   // Listen for tray → Open Settings
   const openSettingsCb = window.__TAURI_INTERNALS__.transformCallback(async () => {
@@ -543,20 +576,31 @@ async function init() {
   const appearanceSyncedCb = window.__TAURI_INTERNALS__.transformCallback(async () => {
     try {
       appConfig = await invoke("get_config");
-      applyAccentColor(appConfig.appearance.accent_color);
-      applyTextSize(appConfig.appearance.text_size);
-      applyFontFamily(appConfig.appearance.font_family);
-      applyBgOpacity(appConfig.appearance.bg_opacity);
-      applyBackground(
-        appConfig.appearance.background_type,
-        appConfig.appearance.background_path,
-        appConfig.appearance.background_blur,
-        appConfig.appearance.background_image_opacity
-      );
-      applyTheme(appConfig.appearance.theme || "dark");
+      ensureAutomationDefaults();
+      applyAllAppearance();
+      populateSettingsFromConfig();
     } catch (e) { console.error("appearance-synced:", e); }
   });
   invoke("plugin:event|listen", { event: "appearance-synced", target: { kind: "Any" }, handler: appearanceSyncedCb }).catch(() => {});
+
+  // 系統匣快速開關（提示音效／系統通知／固定展開）已在後端存檔 → 事件直接帶新值，
+  // 同步寫進前端的 appConfig（不再 await get_config，縮短「前端拿舊值存檔把它蓋回去」的空檔）
+  const configChangedCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
+    const quick = evt && evt.payload;
+    if (!quick || typeof quick !== "object") return;
+    for (const k of ["sound_enabled", "system_notifications", "pin_expanded"]) {
+      if (typeof quick[k] === "boolean") appConfig.appearance[k] = quick[k];
+    }
+    populateSettingsFromConfig();
+    applyPinState();
+    fitWindow();
+  });
+  invoke("plugin:event|listen", { event: "config-changed", target: { kind: "Any" }, handler: configChangedCb }).catch(() => {});
+  // 系統匣切換但設定檔寫不進去：後端已把勾選還原，這裡告訴使用者
+  const configSaveFailedCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
+    showSaveStatus(`⚠ 系統匣切換未儲存：${String(evt && evt.payload || "").slice(0, 60)}`, "error");
+  });
+  invoke("plugin:event|listen", { event: "config-save-failed", target: { kind: "Any" }, handler: configSaveFailedCb }).catch(() => {});
 
   // Tray → Bot Dashboard
   const openDashboardCb = window.__TAURI_INTERNALS__.transformCallback(() => {
@@ -600,7 +644,9 @@ async function init() {
     invoke("plugin:event|listen", { event: "cursor-left", target: { kind: "Any" }, handler: cb2 }).catch(() => {});
 
     // Listen for task-completed → play sound + optional Windows toast
+    // 只留額度模式：任務完成／等待不是額度功能，不響、不跳通知、不出提示條
     const soundCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
+      if (QUOTA_ONLY) return;
       const provider = (evt && evt.payload) || "unknown";
       const label = PROVIDER_LABEL?.[provider] || provider;
       if (appConfig.appearance.sound_enabled) playProviderSound(provider, "completion");
@@ -617,6 +663,7 @@ async function init() {
 
     // Listen for task-waiting → play sound + optional Windows toast
     const waitingCb = window.__TAURI_INTERNALS__.transformCallback((evt) => {
+      if (QUOTA_ONLY) return;
       const provider = (evt && evt.payload) || "unknown";
       const label = PROVIDER_LABEL?.[provider] || provider;
       if (appConfig.appearance.sound_enabled) playProviderSound(provider, "waiting");
@@ -632,12 +679,17 @@ async function init() {
   }, 2000);
 
   // Pin
-  $("btn-pin").addEventListener("click", () => {
-    appConfig.appearance.pin_expanded = !appConfig.appearance.pin_expanded;
-    $("toggle-pin").checked = appConfig.appearance.pin_expanded;
-    $("btn-pin").classList.toggle("active", appConfig.appearance.pin_expanded);
-    if (!appConfig.appearance.pin_expanded && (currentView === "expanded" || currentView === "usage")) showView("capsule");
-    saveConfig();
+  $("btn-pin").addEventListener("click", async () => {
+    const on = !appConfig.appearance.pin_expanded;
+    appConfig.appearance.pin_expanded = on;
+    $("toggle-pin").checked = on;
+    $("btn-pin").classList.toggle("active", on);
+    if (!on && (currentView === "expanded" || currentView === "usage")) showView("capsule");
+    if (!(await setQuickSetting("pin_expanded", on))) {
+      appConfig.appearance.pin_expanded = !on;
+      $("toggle-pin").checked = !on;
+      $("btn-pin").classList.toggle("active", !on);
+    }
   });
 
   // Settings
@@ -653,11 +705,11 @@ async function init() {
     showView(appConfig.appearance.pin_expanded ? "usage" : "capsule");
   });
 
-  $("toggle-pin").addEventListener("change", (e) => {
-    appConfig.appearance.pin_expanded = e.target.checked;
-    $("btn-pin").classList.toggle("active", appConfig.appearance.pin_expanded);
-    if (!appConfig.appearance.pin_expanded) showView("capsule"); else showView("usage");
-    saveConfig();
+  $("toggle-pin").addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    if (!(await setQuickSetting("pin_expanded", on))) { e.target.checked = !on; return; }
+    $("btn-pin").classList.toggle("active", on);
+    if (!on) showView("capsule"); else showView("usage");
   });
 
   $("toggle-theme").addEventListener("change", (e) => {
@@ -674,21 +726,20 @@ async function init() {
     if (!ok) e.target.checked = !e.target.checked; // revert on failure
   });
 
-  $("toggle-notify").checked = !!appConfig.appearance.system_notifications;
   $("btn-test-toast")?.addEventListener("click", async () => {
     try { await invoke("test_toast"); } catch (e) { alert("toast 失敗: " + e); }
   });
-  $("toggle-notify").addEventListener("change", (e) => {
-    appConfig.appearance.system_notifications = e.target.checked;
-    saveConfig();
-    if (e.target.checked) systemNotify("額度監控", "系統通知已啟用");
+  $("toggle-notify").addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    if (!(await setQuickSetting("system_notifications", on))) { e.target.checked = !on; return; }
+    if (on) systemNotify("額度監控", "系統通知已啟用");
   });
 
-  $("toggle-sound").addEventListener("change", (e) => {
-    appConfig.appearance.sound_enabled = e.target.checked;
-    $("sound-picker").classList.toggle("hidden", !e.target.checked);
+  $("toggle-sound").addEventListener("change", async (e) => {
+    const on = e.target.checked;
+    if (!(await setQuickSetting("sound_enabled", on))) { e.target.checked = !on; return; }
+    $("sound-picker").classList.toggle("hidden", !on);
     fitWindow();
-    saveConfig();
   });
 
   await renderProviderSounds();
@@ -718,6 +769,38 @@ async function init() {
   // footer 📋 按鈕已拆、膠囊徽章與 dashboard 卡片跳轉改導向 usage 面板。
   // view-expanded 的 DOM/渲染碼保留 dormant——拆掉會踩無 null 防護的 init。
   $("btn-usage-settings")?.addEventListener("click", () => $("btn-settings").click());
+
+  // Token 戰情室：它常駐很吃 CPU，所以按下才啟動；閒置 15 分鐘或 LobsterPulse 結束時由後端關掉。
+  // 結果訊息暫時蓋掉 footer 的倒數文字（倒數每秒重寫，不能直接寫在它上面）。
+  let footerMsgTimer = null;
+  const flashFooterMsg = (text, isError) => {
+    const msg = $("uv-footer-msg");
+    const countdown = $("uv-next-update");
+    if (!msg) return;
+    msg.textContent = text;
+    msg.classList.toggle("error", !!isError);
+    msg.classList.remove("hidden");
+    countdown?.classList.add("hidden");
+    clearTimeout(footerMsgTimer);
+    footerMsgTimer = setTimeout(() => {
+      msg.classList.add("hidden");
+      countdown?.classList.remove("hidden");
+    }, 5000);
+  };
+  $("btn-token-dashboard")?.addEventListener("click", async () => {
+    const btn = $("btn-token-dashboard");
+    if (btn.classList.contains("busy")) return;
+    btn.classList.add("busy");
+    flashFooterMsg("正在開啟 Token 戰情室…");
+    try {
+      const result = await invoke("open_token_dashboard");
+      flashFooterMsg(result === "started" ? "Token 戰情室啟動中，已在瀏覽器開啟" : "已在瀏覽器開啟 Token 戰情室");
+    } catch (e) {
+      flashFooterMsg(String(e), true);
+    } finally {
+      btn.classList.remove("busy");
+    }
+  });
 
   $("btn-hide").addEventListener("click", () => {
     invoke("hide_window").catch(() => {});
@@ -819,19 +902,76 @@ async function init() {
     });
   });
 
+  // 還原這一頁的預設值：兩段式確認（第一下只提示，3 秒內再按才動手），
+  // 不用 confirm()——webview 的原生對話框會卡住整個視窗。
+  // 預設值來自後端 AppearanceConfig::default()，不在前端另抄一份。
+  document.querySelectorAll(".settings-reset").forEach(btn => {
+    const label = btn.textContent;
+    let armTimer = null;
+    const disarm = () => { clearTimeout(armTimer); btn.classList.remove("confirming"); btn.textContent = label; };
+    btn.addEventListener("click", async () => {
+      const tab = btn.dataset.reset;
+      if (!btn.classList.contains("confirming")) {
+        const n = window.SettingsLib.resetKeysFor(tab, QUOTA_ONLY).length;
+        btn.classList.add("confirming");
+        btn.textContent = `再按一次：還原這頁 ${n} 項設定`;
+        armTimer = setTimeout(disarm, 3000);
+        return;
+      }
+      disarm();
+      let defaults = null;
+      try { defaults = await invoke("get_default_appearance"); } catch (e) { console.warn("[settings] 讀預設值失敗", e); }
+      if (!defaults) { showSaveStatus("⚠ 讀不到預設值，沒有還原", "error"); return; }
+      // 先留一份原值：存檔失敗要整個退回，不能讓沒存成的預設值留在記憶體裡，
+      // 等下一次別的設定存檔時被一起寫進去
+      const before = JSON.parse(JSON.stringify(appConfig.appearance));
+      const changed = window.SettingsLib.applyDefaults(
+        appConfig.appearance, defaults, tab, window.SettingsLib.resetKeysFor(tab, QUOTA_ONLY));
+      const refresh = async () => {
+        populateSettingsFromConfig();
+        applyAllAppearance();
+        applyPinState();
+        if (tab === "notify") { await renderProviderSounds(); await renderProviderSounds("waiting"); }
+        fitWindow();
+      };
+      // 一般欄位走整份存檔（後端會沿用快速開關現值），快速開關逐欄位寫
+      if (!(await saveConfig())) {
+        appConfig.appearance = before;
+        await refresh();
+        return; // saveConfig 已顯示錯誤，不可再蓋成「已還原」
+      }
+      let quickFailed = false;
+      for (const k of changed.filter((k) => QUICK_KEYS.includes(k))) {
+        if (!(await setQuickSetting(k, appConfig.appearance[k]))) {
+          appConfig.appearance[k] = before[k];
+          quickFailed = true;
+        }
+      }
+      await refresh();
+      if (quickFailed) return; // setQuickSetting 已顯示錯誤
+      showSaveStatus(changed.length ? `✓ 已還原 ${changed.length} 項` : "✓ 這頁本來就是預設值", "ok");
+    });
+  });
+
   // ── 🔑 金鑰一鍵複製 ────────────────────────────────────────
   // 值永遠不主動進畫面：清單只有名稱與遮罩，複製是後端直接寫剪貼簿。
   // 唯一會把值送進 webview 的是「按住顯示」，且放開就消失。
+  // 世代號：一進來就領號，之後每個 await 回來都核對——比較慢回來的舊請求
+  // （舊清單、舊有效性結果）不可蓋掉新的
+  let apiKeyRenderSeq = 0;
   async function renderApiKeys() {
     const box = document.getElementById("apikey-list");
     if (!box) return;
+    const seq = ++apiKeyRenderSeq;
     let keys = [];
     try {
       keys = (await invoke("list_api_keys")) || [];
     } catch (e) {
+      if (seq !== apiKeyRenderSeq) return;
       box.innerHTML = `<div class="setting-sub-label">讀取失敗：${esc(String(e))}</div>`;
       return;
     }
+    if (seq !== apiKeyRenderSeq) return;
     if (keys.length === 0) {
       box.innerHTML = `<div class="setting-sub-label">找不到 AI 服務的環境變數金鑰</div>`;
       return;
@@ -854,10 +994,20 @@ async function init() {
         const link = manageUrl
           ? `<button class="apikey-link" data-open-url="${esc(manageUrl)}" title="開啟官方金鑰頁：${esc(manageUrl)}">↗</button>`
           : "";
+        // 值不是取自環境變數時要講：OPENAI_ACCESS_TOKEN 改用 Codex 自己會刷新的那份
+        const src = k.source === "codex"
+          ? `<span class="apikey-tag apikey-used" title="取自 ~/.codex/auth.json，Codex CLI 會自動刷新；環境變數裡那份已較舊">Codex 自動更新</span>`
+          : "";
+        const exp = window.QuotaCards.apiKeyExpiryTag(k.expires_at, Date.now() / 1000);
+        const expTag = exp
+          ? `<span class="apikey-tag ${exp.cls}" title="token 到期時間">${esc(exp.text)}</span>`
+          : "";
+        // 有效性標籤先放「…」，checkApiKeys 回來再填；查不了的家會被藏起來
+        const status = `<span class="apikey-tag apikey-status" data-status-for="${esc(k.name)}" title="檢查中">…</span>`;
         return `<div class="apikey-row">
           <div class="apikey-ident">
             <span class="apikey-name">${esc(k.name)}</span>
-            ${alias}${dup}${used}${link}
+            ${alias}${status}${expTag}${src}${dup}${used}${link}
           </div>
           <span class="apikey-mask" data-mask="${esc(k.masked)}">${esc(k.masked)}</span>
           <button class="icon-btn apikey-eye" data-reveal="${esc(k.name)}" title="按住顯示">👁</button>
@@ -865,6 +1015,30 @@ async function init() {
         </div>`;
       })
       .join("");
+    checkApiKeys(box, seq);
+  }
+
+  // 有效性：每次打開分頁都問後端（後端依值快取 10 分鐘，值換了才真的重打）。
+  // 等待期間清單若被重畫，只讓最新那次的結果落地——舊請求可能是對舊值查的。
+  async function checkApiKeys(box, seq) {
+    let checks = [];
+    try {
+      checks = (await invoke("check_api_keys")) || [];
+    } catch (e) {
+      console.warn("[api-keys] 有效性檢查失敗", e);
+    }
+    if (seq !== apiKeyRenderSeq) return;
+    const byName = new Map(checks.map((c) => [c.name, c]));
+    for (const el of box.querySelectorAll("[data-status-for]")) {
+      const tag = window.QuotaCards.apiKeyStatusTag(byName.get(el.dataset.statusFor));
+      if (!tag) {
+        el.remove();
+        continue;
+      }
+      el.textContent = tag.text;
+      el.className = `apikey-tag apikey-status ${tag.cls}`;
+      el.title = tag.title;
+    }
   }
 
   // 金鑰列的官方頁連結（↗）
@@ -966,28 +1140,19 @@ async function init() {
       })
     : null;
 
-  // 初始化 3 個 threshold input
-  $("idle-secs").value = appConfig.appearance.idle_threshold_secs ?? 30;
-  $("stale-secs").value = appConfig.appearance.stale_threshold_secs ?? 600;
-  $("remove-secs").value = appConfig.appearance.remove_threshold_secs ?? 1800;
-  $("tg-token").value = appConfig.appearance.telegram_bot_token ?? "";
-  $("tg-chat").value = appConfig.appearance.telegram_chat_id ?? "";
-  $("tg-threshold").value = appConfig.appearance.telegram_notify_threshold_secs ?? 600;
-
+  // 數字欄位：值在 populateSettingsFromConfig 填，這裡只綁定；不合法（readBoundedInt）就不存
   const bindNumInput = (id, key) => $(id).addEventListener("change", (e) => {
-    const n = parseInt(e.target.value, 10);
-    if (!isNaN(n)) { appConfig.appearance[key] = n; saveConfig(); }
+    const n = readBoundedInt(e.target);
+    if (n !== null) { appConfig.appearance[key] = n; saveConfig(); }
   });
   bindNumInput("idle-secs", "idle_threshold_secs");
   bindNumInput("stale-secs", "stale_threshold_secs");
   bindNumInput("remove-secs", "remove_threshold_secs");
   bindNumInput("tg-threshold", "telegram_notify_threshold_secs");
-  // 視窗寬度（修改後立即 resize + persist）
-  $("capsule-width").value = appConfig.appearance.capsule_width ?? DEFAULT_CAPSULE_W;
-  $("expanded-width").value = appConfig.appearance.expanded_width ?? DEFAULT_EXPANDED_W;
+  // 視窗寬度（修改後立即 resize + persist；範圍 140–600 寫在 input 的 min/max）
   const bindWidthInput = (id, key) => $(id).addEventListener("change", (e) => {
-    const n = parseInt(e.target.value, 10);
-    if (!isNaN(n) && n >= 140 && n <= 600) {
+    const n = readBoundedInt(e.target);
+    if (n !== null) {
       appConfig.appearance[key] = n;
       saveConfig();
       fitWindow();
@@ -1010,17 +1175,14 @@ async function init() {
     appConfig.appearance.background_blur,
     appConfig.appearance.background_image_opacity
   );
+  // 背景欄位的值同樣在 populateSettingsFromConfig 填
   if (bgType) {
-    bgType.value = appConfig.appearance.background_type || "none";
     bgType.addEventListener("change", e => { appConfig.appearance.background_type = e.target.value; refreshBg(); saveConfig(); });
   }
   if (bgPath) {
-    bgPath.value = appConfig.appearance.background_path || "";
     bgPath.addEventListener("change", e => { appConfig.appearance.background_path = e.target.value; refreshBg(); saveConfig(); });
   }
   if (bgBlur) {
-    const v = appConfig.appearance.background_blur || 0;
-    bgBlur.value = v; if (bgBlurVal) bgBlurVal.textContent = v + " px";
     bgBlur.addEventListener("input", e => {
       const n = parseInt(e.target.value, 10);
       appConfig.appearance.background_blur = n;
@@ -1029,8 +1191,6 @@ async function init() {
     });
   }
   if (bgImgOp) {
-    const v = appConfig.appearance.background_image_opacity || 60;
-    bgImgOp.value = v; if (bgImgOpVal) bgImgOpVal.textContent = v + "%";
     bgImgOp.addEventListener("input", e => {
       const n = parseInt(e.target.value, 10);
       appConfig.appearance.background_image_opacity = n;
@@ -1076,11 +1236,9 @@ async function init() {
       if (result && result.ok) {
         // reload config + re-apply visuals
         appConfig = await invoke("get_config");
-        applyAccentColor(appConfig.appearance.accent_color);
-        applyTextSize(appConfig.appearance.text_size);
-        applyFontFamily(appConfig.appearance.font_family);
-        applyBgOpacity(appConfig.appearance.bg_opacity);
-        applyTheme(appConfig.appearance.theme);
+        ensureAutomationDefaults();
+        applyAllAppearance();
+        populateSettingsFromConfig();
         fitWindow();
         importBtn.textContent = "✓ 已匯入";
         setTimeout(() => importBtn.textContent = "⬆ 匯入 JSON", 1800);
@@ -1091,7 +1249,6 @@ async function init() {
   // 自訂 accent hex（即時套 + persist；清空時回預設 color dot）
   const accentInput = $("accent-custom");
   if (accentInput) {
-    accentInput.value = appConfig.appearance.accent_custom_hex || "#d980ff";
     accentInput.addEventListener("input", (e) => {
       const v = e.target.value;
       appConfig.appearance.accent_custom_hex = v;
@@ -1103,7 +1260,6 @@ async function init() {
   // 字型 family 下拉
   const ff = $("font-family-select");
   if (ff) {
-    ff.value = appConfig.appearance.font_family || "";
     ff.addEventListener("change", (e) => {
       appConfig.appearance.font_family = e.target.value;
       applyFontFamily(e.target.value);
@@ -1115,9 +1271,6 @@ async function init() {
   const bgOp = $("bg-opacity");
   const bgOpVal = $("bg-opacity-val");
   if (bgOp) {
-    const cur = appConfig.appearance.bg_opacity || 100;
-    bgOp.value = cur;
-    if (bgOpVal) bgOpVal.textContent = cur;
     bgOp.addEventListener("input", (e) => {
       const v = parseInt(e.target.value, 10);
       appConfig.appearance.bg_opacity = v;
@@ -1134,7 +1287,6 @@ async function init() {
   bindTextInput("tg-chat", "telegram_chat_id");
 
   // openab_restart_command 文字欄位
-  $("openab-restart-cmd").value = appConfig.appearance.openab_restart_command ?? "";
   bindTextInput("openab-restart-cmd", "openab_restart_command");
 
   // Telegram 測試發送
@@ -1149,33 +1301,8 @@ async function init() {
     }
   });
 
-  // ─── 🔔 自動化 Tab：Discord + 3 條 auto-action 規則 ───
-  // 保底 default（若 config 舊版無此欄位）
-  appConfig.appearance.discord = appConfig.appearance.discord || { bot_token: "", channel_id: "", enabled: false };
-  appConfig.appearance.auto_actions = appConfig.appearance.auto_actions || {
-    quota_low_enabled: true, quota_low_threshold_pct: 5,
-    session_idle_enabled: true, session_idle_trigger_secs: 1800, confirm_timeout_secs: 600,
-    hook_failure_burst_enabled: true, failure_window_secs: 600, failure_count_threshold: 3,
-    dedup_window_secs: 300,
-    daily_summary_enabled: true, daily_summary_hour: 9,
-  };
-  const dc = appConfig.appearance.discord;
-  const aa = appConfig.appearance.auto_actions;
-  $("toggle-discord").checked = dc.enabled;
-  $("dc-token").value = dc.bot_token || "";
-  $("dc-channel").value = dc.channel_id || "";
-  $("toggle-rule-quota").checked = aa.quota_low_enabled;
-  $("rule-quota-pct").value = aa.quota_low_threshold_pct;
-  $("toggle-rule-idle").checked = aa.session_idle_enabled;
-  $("rule-idle-secs").value = aa.session_idle_trigger_secs;
-  $("rule-confirm-secs").value = aa.confirm_timeout_secs;
-  $("toggle-rule-burst").checked = aa.hook_failure_burst_enabled;
-  $("rule-burst-window").value = aa.failure_window_secs;
-  $("rule-burst-count").value = aa.failure_count_threshold;
-  $("rule-dedup").value = aa.dedup_window_secs;
-  $("toggle-rule-summary").checked = aa.daily_summary_enabled ?? true;
-  $("rule-summary-hour").value = aa.daily_summary_hour ?? 9;
-
+  // ─── 🔔 自動化 Tab：Discord（在「通知」頁）+ auto-action 規則 ───
+  // 保底 default 與欄位填值移到 ensureAutomationDefaults／populateSettingsFromConfig
   const bindDiscord = (id, field) => $(id).addEventListener("change", (e) => {
     appConfig.appearance.discord[field] = (typeof e.target.checked === "boolean" && e.target.type === "checkbox")
       ? e.target.checked : e.target.value;
@@ -1187,7 +1314,11 @@ async function init() {
   const bindAuto = (id, field, isBool, isNum) => $(id).addEventListener("change", (e) => {
     let v = e.target.value;
     if (isBool) v = e.target.checked;
-    else if (isNum) v = parseInt(v, 10) || 0;
+    else if (isNum) {
+      // 原本 parseInt(v)||0：清空或打錯就存成 0（觸發次數 0＝每次都觸發）
+      v = readBoundedInt(e.target);
+      if (v === null) return;
+    }
     appConfig.appearance.auto_actions[field] = v;
     saveConfig();
   });
@@ -1334,10 +1465,16 @@ async function init() {
     refreshQuotas();
   });
 
+  // 只留額度模式：每秒的工作階段輪詢（含最近失敗、長任務 Telegram）與每 15 秒的舊額度列
+  // 只服務已隱藏的畫面（膠囊狀態、Bot 總覽、舊展開面板…），只在真的切到那些畫面時才跑；
+  // 平常停在膠囊／額度面板／設定頁時什麼都不做。額度面板有自己的更新（usage-view.js）
+  const NON_QUOTA_VIEWS = new Set(["dashboard", "expanded", "events", "timeline"]);
+  // 一般模式照舊（視窗收起來時工作階段通知照樣要推）；只留額度模式還要視窗看得到才跑
+  const needsSessionPolling = () => !QUOTA_ONLY || (mainVisible && NON_QUOTA_VIEWS.has(currentView));
   refreshState();
-  setInterval(refreshState, 1000);
+  setInterval(() => { if (needsSessionPolling()) refreshState(); }, 1000);
   refreshQuotas();
-  setInterval(refreshQuotas, 15000);
+  setInterval(() => { if (needsSessionPolling()) refreshQuotas(); }, 15000);
 }
 
 // ─── Bot quota runner filter ───
@@ -1435,9 +1572,10 @@ async function checkRecentFailures() {
       dot.classList.remove("hidden");
       dot.textContent = failures.length > 9 ? "9+" : String(failures.length);
       // 新失敗 → 彈 toast（不看 system_notifications 設定，失敗永遠推）
+      // 只留額度模式：工具失敗不是額度功能，不推（事件診斷頁也已隱藏）
       const latest = failures[failures.length - 1];
       const latestTs = new Date(latest.timestamp).getTime();
-      if (latestTs > lastFailureNotifiedAt) {
+      if (latestTs > lastFailureNotifiedAt && !QUOTA_ONLY) {
         lastFailureNotifiedAt = latestTs;
         const label = PROVIDER_LABEL[latest.provider] || latest.provider;
         systemNotify(`${label} ❌ 工具失敗`, `${latest.tool_name || "tool"} — 檢查事件診斷`, {
@@ -2668,8 +2806,153 @@ document.addEventListener("click", () => {
 });
 
 // ─── Config save ───
+// 設定都是改完即存；以前失敗會被默默吞掉，畫面也沒有任何「存了」的回饋
+let saveStatusTimer = null;
+function showSaveStatus(text, kind) {
+  const el = $("settings-save-status");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `settings-save-status show ${kind}`;
+  clearTimeout(saveStatusTimer);
+  if (kind === "ok") saveStatusTimer = setTimeout(() => el.classList.remove("show"), 1500);
+}
+// 回傳是否真的寫進設定檔：呼叫端要據此決定能不能說「完成」
 async function saveConfig() {
-  try { await invoke("save_app_config", { newConfig: appConfig }); } catch (e) {}
+  try {
+    await invoke("save_app_config", { newConfig: appConfig });
+    showSaveStatus("✓ 已儲存", "ok");
+    return true;
+  } catch (e) {
+    console.warn("[settings] 儲存失敗", e);
+    showSaveStatus(`⚠ 儲存失敗：${String(e).slice(0, 60)}`, "error");
+    return false;
+  }
+}
+
+// 快速開關（提示音效／系統通知／固定展開，系統匣也能切）不走整份存檔：逐欄位交給後端，
+// 後寫者勝；整份存檔時後端一律沿用這三個的現值，前端手上的舊副本蓋不回去。
+const QUICK_KEYS = ["sound_enabled", "system_notifications", "pin_expanded"];
+async function setQuickSetting(name, value) {
+  try {
+    await invoke("set_quick_setting", { name, value });
+    appConfig.appearance[name] = value;
+    showSaveStatus("✓ 已儲存", "ok");
+    return true;
+  } catch (e) {
+    console.warn("[settings] 快速開關儲存失敗", e);
+    showSaveStatus(`⚠ 儲存失敗：${String(e).slice(0, 60)}`, "error");
+    return false;
+  }
+}
+
+// 數字欄位：依 input 的 min／max 驗證。不合法就標紅、tooltip 說明範圍、回 null（呼叫端不存）
+function readBoundedInt(input) {
+  const min = input.min === "" ? -Infinity : Number(input.min);
+  const max = input.max === "" ? Infinity : Number(input.max);
+  const r = window.SettingsLib.parseBoundedInt(input.value, min, max);
+  input.classList.toggle("input-invalid", !r.ok);
+  input.title = r.message;
+  if (!r.ok) showSaveStatus(`⚠ 未儲存：${r.message}`, "error");
+  return r.ok ? r.value : null;
+}
+
+// 舊版 config 可能沒有 discord／auto_actions，補上保底值（與後端 Default 對齊）
+function ensureAutomationDefaults() {
+  const a = appConfig.appearance;
+  a.discord = a.discord || { bot_token: "", channel_id: "", enabled: false };
+  a.auto_actions = a.auto_actions || {
+    quota_low_enabled: true, quota_low_threshold_pct: 5,
+    session_idle_enabled: true, session_idle_trigger_secs: 1800, confirm_timeout_secs: 600,
+    hook_failure_burst_enabled: true, failure_window_secs: 600, failure_count_threshold: 3,
+    dedup_window_secs: 300,
+    daily_summary_enabled: true, daily_summary_hour: 9,
+  };
+}
+
+// 設定頁所有欄位的值從 appConfig 一次填好。啟動、還原預設值、系統匣快速開關、
+// 外部調整器同步都走這裡，不再各自散落一份（散落時改了 A 處忘了 B 處就不同步）
+function populateSettingsFromConfig() {
+  const a = appConfig.appearance;
+  const setVal = (id, v) => { const el = $(id); if (el) { el.value = v; el.classList.remove("input-invalid"); el.title = ""; } };
+  const setChk = (id, v) => { const el = $(id); if (el) el.checked = !!v; };
+  const setText = (id, v) => { const el = $(id); if (el) el.textContent = v; };
+  setChk("toggle-sound", a.sound_enabled);
+  $("sound-picker")?.classList.toggle("hidden", !a.sound_enabled);
+  setChk("toggle-pin", a.pin_expanded);
+  setChk("toggle-theme", (a.theme || "dark") === "light");
+  setChk("toggle-notify", a.system_notifications);
+  setVal("idle-secs", a.idle_threshold_secs ?? 30);
+  setVal("stale-secs", a.stale_threshold_secs ?? 600);
+  setVal("remove-secs", a.remove_threshold_secs ?? 1800);
+  setVal("tg-token", a.telegram_bot_token ?? "");
+  setVal("tg-chat", a.telegram_chat_id ?? "");
+  setVal("tg-threshold", a.telegram_notify_threshold_secs ?? 600);
+  setVal("capsule-width", a.capsule_width ?? DEFAULT_CAPSULE_W);
+  setVal("expanded-width", a.expanded_width ?? DEFAULT_EXPANDED_W);
+  setVal("openab-restart-cmd", a.openab_restart_command ?? "");
+  setVal("background-type", a.background_type || "none");
+  setVal("background-path", a.background_path || "");
+  setVal("bg-blur", a.background_blur || 0);
+  setText("bg-blur-val", (a.background_blur || 0) + " px");
+  setVal("bg-image-opacity", a.background_image_opacity || 60);
+  setText("bg-image-opacity-val", (a.background_image_opacity || 60) + "%");
+  setVal("accent-custom", a.accent_custom_hex || "#d980ff");
+  setVal("font-family-select", a.font_family || "");
+  setVal("bg-opacity", a.bg_opacity || 100);
+  setText("bg-opacity-val", a.bg_opacity || 100);
+  const dc = a.discord || {};
+  setChk("toggle-discord", dc.enabled);
+  setVal("dc-token", dc.bot_token || "");
+  setVal("dc-channel", dc.channel_id || "");
+  const aa = a.auto_actions || {};
+  setChk("toggle-rule-quota", aa.quota_low_enabled);
+  setVal("rule-quota-pct", aa.quota_low_threshold_pct);
+  setChk("toggle-rule-idle", aa.session_idle_enabled);
+  setVal("rule-idle-secs", aa.session_idle_trigger_secs);
+  setVal("rule-confirm-secs", aa.confirm_timeout_secs);
+  setChk("toggle-rule-burst", aa.hook_failure_burst_enabled);
+  setVal("rule-burst-window", aa.failure_window_secs);
+  setVal("rule-burst-count", aa.failure_count_threshold);
+  setVal("rule-dedup", aa.dedup_window_secs);
+  setChk("toggle-rule-summary", aa.daily_summary_enabled ?? true);
+  setVal("rule-summary-hour", aa.daily_summary_hour ?? 9);
+}
+
+// 只留額度模式下 CSS 做不到的兩件事：
+// 1. 「系統通知」開關搬到「一般」頁：通知頁整頁隱藏了，但這個開關現在管的是額度偏低／
+//    用量異常的提醒（工作階段相關的通知都已停掉），不能跟著消失
+// 2. 設定頁預設停在「一般」：原本預設的「助手」頁已隱藏
+function applyQuotaOnlyLayout() {
+  if (!QUOTA_ONLY) return;
+  const notifyRow = $("toggle-notify")?.closest(".setting-group");
+  const general = document.querySelector('.settings-tab-panel[data-panel="general"]');
+  if (notifyRow && general) {
+    general.insertBefore(notifyRow, general.querySelector(".settings-reset-row"));
+    const sub = notifyRow.querySelector(".setting-sub-label");
+    if (sub) sub.textContent = "額度偏低或用量異常時跳 Windows 通知";
+  }
+  document.querySelectorAll(".settings-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === "general"));
+  document.querySelectorAll(".settings-tab-panel").forEach(p => p.classList.toggle("active", p.dataset.panel === "general"));
+}
+
+// 外觀類設定全部重新套用（主題、色彩、尺寸、字型、透明度、背景）
+function applyAllAppearance() {
+  const a = appConfig.appearance;
+  applyAccentColor(a.accent_color);
+  applyTextSize(a.text_size);
+  applyFontFamily(a.font_family);
+  applyBgOpacity(a.bg_opacity);
+  applyBackground(a.background_type, a.background_path, a.background_blur, a.background_image_opacity);
+  applyTheme(a.theme || "dark");
+}
+
+// 固定展開的狀態套到畫面；人在設定頁時不換頁（系統匣切換時不可把人拉走）
+function applyPinState() {
+  const pinned = !!appConfig.appearance.pin_expanded;
+  $("btn-pin")?.classList.toggle("active", pinned);
+  if (currentView === "settings") return;
+  if (!pinned && (currentView === "expanded" || currentView === "usage")) showView("capsule");
+  else if (pinned && currentView === "capsule") showView("usage");
 }
 
 // ─── State ───

@@ -113,6 +113,22 @@ test("單一 remaining_pct -> simple 卡", () => {
   assert.strictEqual(c.pct, 55);
 });
 
+test("agy Gemini 共用池保留百分比與重設，Argon 個別耗盡不覆蓋 Flash", () => {
+  for (const remaining of [98, 0]) {
+    const c = normalizeRunnerCard({ name: "agy", ok: true, raw: {
+      basis: "provider_api", models: [
+        { name: "Claude and GPT models", h5_remaining: 95, wk_remaining: 47 },
+        { name: "Gemini Models（Flash）", remaining_pct: remaining, quota_label: "共用池", quota_reset: "4h30m" },
+        { name: "Gemini 4 Argon（個人額度）", wk_remaining: 0, wk_reset: "70h0m" },
+      ],
+    }});
+    assert.strictEqual(c.models.length, 3);
+    assert.strictEqual(c.models[0].windows[0].remainPct, 95);
+    assert.deepStrictEqual(c.models[1].windows, [{ key: "quota", label: "共用池", remainPct: remaining, resetText: "4h 30m" }]);
+    assert.strictEqual(c.models[2].windows[0].remainPct, 0);
+  }
+});
+
 test("無 raw / 無合法欄位 -> none", () => {
   assert.strictEqual(normalizeRunnerCard({ name: "x", ok: true }).kind, "none");
   assert.strictEqual(normalizeRunnerCard({ name: "x", ok: true, raw: { foo: 1, h5_remaining: 999 } }).kind, "none");

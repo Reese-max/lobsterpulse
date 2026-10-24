@@ -335,6 +335,23 @@ fn collect_models(body: &serde_json::Value) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// Summary 缺少 Gemini 時，讀 Flash 的池水位；不推定為 5h／weekly 或其他模型的個別額度。
+fn gemini_pool(body: &serde_json::Value, now: u64) -> Option<serde_json::Value> {
+    let bucket = body.get("buckets")?.as_array()?.iter().find(|bucket| {
+        bucket.get("modelId").and_then(|v| v.as_str()) == Some("gemini-3.8-flash-tiered")
+    })?;
+    let fraction = bucket.get("remainingFraction")?.as_f64()?;
+    if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+        return None;
+    }
+    let reset = bucket.get("resetTime").and_then(|v| v.as_str()).and_then(iso_to_epoch);
+    Some(serde_json::json!({
+        "name": "Gemini Models（Flash）", "remaining_pct": (fraction * 100.0).round() as i64,
+        "quota_label": "共用池", "quota_reset": reset.map(|at| fmt_countdown_at(at, now)),
+        "source": "retrieveUserQuota",
+    }))
+}
+
 pub async fn fetch(home: &Path) -> RunnerQuota {
     let label = "Antigravity".to_string();
     let color = "#f59e0b".to_string();
@@ -494,6 +511,23 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     let claude_5h = find_first("3p-5h");
     let claude_weekly = find_first("3p-weekly");
     let mut models = collect_models(&body);
+    if session.is_none() && weekly.is_none() {
+        for endpoint in QUOTA_ENDPOINTS {
+            let response = client.post(endpoint.replace("retrieveUserQuotaSummary", "retrieveUserQuota"))
+                .bearer_auth(&token).header("User-Agent", "antigravity")
+                .json(&serde_json::json!({})).send().await;
+            if let Ok(response) = response {
+                if response.status().is_success() {
+                    if let Ok(body) = response.json::<serde_json::Value>().await {
+                        if let Some(pool) = gemini_pool(&body, now_secs()) {
+                            models.push(pool);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
     let route_limits =
         std::fs::read_to_string(home.join("route-usage").join("agy-model-limits.json"))
             .ok()
@@ -532,6 +566,9 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         fmt(&claude_5h),
         fmt(&claude_weekly)
     );
+    if let Some(pool) = models.iter().find(|model| model["source"] == "retrieveUserQuota") {
+        text.push_str(&format!("\nGemini Flash 共用池 {}%", pool["remaining_pct"]));
+    }
     for model in &route_limits {
         let name = model["name"].as_str().unwrap_or("Argon");
         let reset = model["wk_reset"].as_str().unwrap_or("--");
@@ -569,6 +606,27 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gemini_pool_keeps_zero_and_reset_without_mixing_third_party_or_individual_limits() {
+        for (fraction, expected) in [(0.9799333, 98), (0.0, 0), (1.0, 100)] {
+            let body = serde_json::json!({"buckets": [
+                {"modelId":"claude-opus-5-5-high","remainingFraction":0.47},
+                {"modelId":"gemini-4-argon","remainingFraction":0},
+                {"modelId":"gemini-3.8-flash-tiered","remainingFraction":fraction,"resetTime":"2026-10-25T02:00:00Z"}
+            ]});
+            let pool = gemini_pool(&body, iso_to_epoch("2026-10-25T01:00:00Z").unwrap()).unwrap();
+            assert_eq!(pool["remaining_pct"], expected);
+            assert_eq!(pool["quota_reset"], "1h0m");
+            assert_eq!(pool["name"], "Gemini Models（Flash）");
+            assert!(pool.get("h5_remaining").is_none() && pool.get("wk_remaining").is_none());
+        }
+        for fraction in [serde_json::Value::Null, serde_json::json!(-0.1), serde_json::json!(1.1), serde_json::json!("0")] {
+            assert!(gemini_pool(&serde_json::json!({"buckets":[{"modelId":"gemini-3.8-flash-tiered","remainingFraction":fraction}]}), 0).is_none());
+        }
+        assert!(gemini_pool(&serde_json::json!({"buckets":[{"modelId":"gemini-4-argon","remainingFraction":0}]}), 0).is_none());
+        assert!(gemini_pool(&serde_json::json!({}), 0).is_none());
+    }
 
     #[test]
     fn route_model_name_formats_family() {

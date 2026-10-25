@@ -85,12 +85,54 @@ fn iso_to_epoch(s: &str) -> Option<u64> {
 }
 
 fn fmt_countdown(epoch_secs: u64) -> String {
-    let now = now_secs();
+    fmt_countdown_at(epoch_secs, now_secs())
+}
+
+fn fmt_countdown_at(epoch_secs: u64, now: u64) -> String {
     if epoch_secs <= now {
         return "expired".to_string();
     }
     let delta = epoch_secs - now;
     format!("{}h{}m", delta / 3600, (delta % 3600) / 60)
+}
+
+fn route_model_name(family: &str) -> String {
+    let words = family.split('-').map(|part| {
+        let mut chars = part.chars();
+        chars
+            .next()
+            .map(|first| first.to_uppercase().to_string() + chars.as_str())
+            .unwrap_or_default()
+    });
+    format!("{}（個人額度）", words.collect::<Vec<_>>().join(" "))
+}
+
+fn route_agy_models(content: &str, now: u64) -> Vec<serde_json::Value> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return Vec::new();
+    };
+    value
+        .get("models")
+        .and_then(|v| v.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(family, item)| {
+            if item.get("state")?.as_str()? != "exhausted" {
+                return None;
+            }
+            let reset_at = iso_to_epoch(item.get("reset_at")?.as_str()?)?;
+            if reset_at <= now {
+                return None;
+            }
+            let observed_at = item.get("observed_at")?.as_str()?;
+            Some(serde_json::json!({
+                "name": route_model_name(family), "h5_remaining": null,
+                "h5_reset": null, "h5_idle": null, "wk_remaining": 0,
+                "wk_reset": fmt_countdown_at(reset_at, now), "wk_idle": false,
+                "source": "route-agy-429", "observed_at": observed_at
+            }))
+        })
+        .collect()
 }
 
 /// refresh 後 token 的本地 cache（不回寫 Credential Manager）
@@ -105,7 +147,9 @@ fn read_cached_token(home: &Path) -> Option<String> {
     if exp <= now_secs() + 60 {
         return None;
     }
-    v.get("access_token").and_then(|t| t.as_str()).map(String::from)
+    v.get("access_token")
+        .and_then(|t| t.as_str())
+        .map(String::from)
 }
 
 fn write_cached_token(home: &Path, token: &str, refresh_token: Option<&str>, expiry_epoch: u64) {
@@ -126,12 +170,17 @@ fn write_cached_token(home: &Path, token: &str, refresh_token: Option<&str>, exp
 fn read_cached_refresh_token(home: &Path) -> Option<String> {
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(cache_path(home)).ok()?).ok()?;
-    v.get("refresh_token").and_then(|t| t.as_str()).map(String::from)
+    v.get("refresh_token")
+        .and_then(|t| t.as_str())
+        .map(String::from)
 }
 
 /// 讀本機 Windows .gemini 目錄中的 token 檔
 fn read_local_file_token(home: &Path) -> Option<serde_json::Value> {
-    let p = home.join(".gemini").join("antigravity-cli").join("antigravity-oauth-token");
+    let p = home
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
     let content = std::fs::read_to_string(p).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -139,7 +188,15 @@ fn read_local_file_token(home: &Path) -> Option<serde_json::Value> {
 /// WSL2 Ubuntu 內部 token 檔 fallback（本機 agy 跑在 WSL 時可用）
 fn read_wsl_token() -> Option<serde_json::Value> {
     let mut cmd = std::process::Command::new("wsl.exe");
-    cmd.args(["-d", "Ubuntu", "-u", "root", "--", "cat", "/root/.gemini/antigravity-cli/antigravity-oauth-token"]);
+    cmd.args([
+        "-d",
+        "Ubuntu",
+        "-u",
+        "root",
+        "--",
+        "cat",
+        "/root/.gemini/antigravity-cli/antigravity-oauth-token",
+    ]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -155,7 +212,10 @@ fn read_wsl_token() -> Option<serde_json::Value> {
 
 /// 窗長（秒）：優先 bucket 的 `window` 欄位（"5h"／"weekly"），退回 bucketId 後綴。
 fn window_secs(b: &serde_json::Value, bucket_id: &str) -> Option<u64> {
-    let w = b.get("window").and_then(|v| v.as_str()).unwrap_or(bucket_id);
+    let w = b
+        .get("window")
+        .and_then(|v| v.as_str())
+        .unwrap_or(bucket_id);
     if w.ends_with("5h") {
         Some(5 * 3600)
     } else if w.ends_with("weekly") {
@@ -190,7 +250,11 @@ fn find_bucket(group: &serde_json::Value, bucket_id: &str) -> Option<(i64, Optio
                 }
                 _ => false,
             };
-        let reset = if idle { None } else { reset_epoch.map(fmt_countdown) };
+        let reset = if idle {
+            None
+        } else {
+            reset_epoch.map(fmt_countdown)
+        };
         return Some((pct, reset, idle));
     }
     None
@@ -214,7 +278,12 @@ fn merge_groups(into: &mut Vec<serde_json::Value>, body: &serde_json::Value) {
                     .unwrap_or_default()
             })
     };
-    for g in body.get("groups").and_then(|v| v.as_array()).into_iter().flatten() {
+    for g in body
+        .get("groups")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+    {
         let k = key_of(g);
         if !into.iter().any(|e| key_of(e) == k) {
             into.push(g.clone());
@@ -251,7 +320,8 @@ fn collect_models(body: &serde_json::Value) -> Vec<serde_json::Value> {
         .flatten()
         .map(|group| {
             let session = find_bucket(group, "gemini-5h").or_else(|| find_bucket(group, "3p-5h"));
-            let weekly = find_bucket(group, "gemini-weekly").or_else(|| find_bucket(group, "3p-weekly"));
+            let weekly =
+                find_bucket(group, "gemini-weekly").or_else(|| find_bucket(group, "3p-weekly"));
             serde_json::json!({
                 "name": group.get("displayName").and_then(|v| v.as_str()).unwrap_or("Antigravity"),
                 "h5_remaining": session.as_ref().map(|s| s.0),
@@ -294,7 +364,11 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         }
         // 3. WSL2 Ubuntu 內部 token 檔（同步子程序，丟到 blocking 執行緒，不佔 async worker）
         if creds.is_none() {
-            if let Some(v) = tokio::task::spawn_blocking(read_wsl_token).await.ok().flatten() {
+            if let Some(v) = tokio::task::spawn_blocking(read_wsl_token)
+                .await
+                .ok()
+                .flatten()
+            {
                 creds = Some(extract_tokens(&v));
             }
         }
@@ -409,13 +483,23 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     let find_first = |bucket_id: &str| {
         body.get("groups")
             .and_then(|v| v.as_array())
-            .and_then(|groups| groups.iter().find_map(|group| find_bucket(group, bucket_id)))
+            .and_then(|groups| {
+                groups
+                    .iter()
+                    .find_map(|group| find_bucket(group, bucket_id))
+            })
     };
     let session = find_first("gemini-5h");
     let weekly = find_first("gemini-weekly");
     let claude_5h = find_first("3p-5h");
     let claude_weekly = find_first("3p-weekly");
-    let models = collect_models(&body);
+    let mut models = collect_models(&body);
+    let route_limits =
+        std::fs::read_to_string(home.join("route-usage").join("agy-model-limits.json"))
+            .ok()
+            .map(|content| route_agy_models(&content, now_secs()))
+            .unwrap_or_default();
+    models.extend(route_limits.iter().cloned());
 
     // 方案名：原本寫死 "Antigravity"（那是免費層的名字，不是實際方案）
     let tier = match client
@@ -437,15 +521,24 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     };
 
     let fmt = |w: &Option<(i64, Option<String>, bool)>| {
-        w.as_ref().map(|(p, _, _)| format!("{p}%")).unwrap_or_else(|| "--".to_string())
+        w.as_ref()
+            .map(|(p, _, _)| format!("{p}%"))
+            .unwrap_or_else(|| "--".to_string())
     };
-    let text = format!(
+    let mut text = format!(
         "⏱ 5h {} · 7d {}\n3p 5h {} · 7d {}",
         fmt(&session),
         fmt(&weekly),
         fmt(&claude_5h),
         fmt(&claude_weekly)
     );
+    for model in &route_limits {
+        let name = model["name"].as_str().unwrap_or("Argon");
+        let reset = model["wk_reset"].as_str().unwrap_or("--");
+        let family = name.split('（').next().unwrap_or("Argon");
+        let short_name = family.split_whitespace().last().unwrap_or("Argon");
+        text.push_str(&format!("\n{} 個人額度 0%（{}後重設）", short_name, reset));
+    }
 
     let raw = serde_json::json!({
         "ok": true,
@@ -478,6 +571,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn route_model_name_formats_family() {
+        assert_eq!(
+            route_model_name("gemini-4-argon"),
+            "Gemini 4 Argon（個人額度）"
+        );
+    }
+
+    #[test]
+    fn route_agy_models_filters_state_and_expiry() {
+        let input = r#"{"models":{
+            "gemini-4-argon":{"state":"exhausted","reset_at":"2026-10-22T02:00:00Z","observed_at":"seen"},
+            "expired":{"state":"exhausted","reset_at":"2026-10-21T00:00:00Z","observed_at":"old"},
+            "available":{"state":"available","reset_at":"2026-10-23T00:00:00Z","observed_at":"seen"}
+        }}"#;
+        let models = route_agy_models(input, 1_792_630_800);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["wk_remaining"], 0);
+        assert_eq!(models[0]["wk_reset"], "1h0m");
+        assert_eq!(models[0]["source"], "route-agy-429");
+        assert_eq!(models[0]["observed_at"], "seen");
+    }
+
+    #[test]
+    fn route_agy_models_ignores_invalid_document() {
+        assert!(route_agy_models("{broken", 0).is_empty());
+        assert!(route_agy_models("{}", 0).is_empty());
+    }
+
+    #[test]
     fn parse_keyring_blob_plain_json() {
         let v = parse_keyring_blob(br#"{"token":{"access_token":"ya29.x","refresh_token":"1//r","expiry":"2099-01-01T00:00:00Z"}}"#)
             .expect("plain json");
@@ -506,7 +628,10 @@ mod tests {
         ]});
         assert_eq!(find_bucket(&group, "gemini-5h").map(|b| b.0), Some(87));
         assert_eq!(find_bucket(&group, "gemini-weekly").map(|b| b.0), Some(50));
-        assert!(find_bucket(&group, "3p-5h").is_none(), "缺 remainingFraction 不腦補");
+        assert!(
+            find_bucket(&group, "3p-5h").is_none(),
+            "缺 remainingFraction 不腦補"
+        );
         assert!(find_bucket(&group, "nonexistent").is_none());
     }
 
@@ -521,8 +646,14 @@ mod tests {
         assert_eq!(http, "⚠ QuotaSummary 失敗（403）", "有 HTTP 狀態就不重試");
         // 一端點 200 但 JSON 壞掉、另一端點連線失敗：last_code 仍是 0，但已有 HTTP 回應
         let bad_body = quota_failure_text(0, true, Some("operation timed out"));
-        assert_eq!(bad_body, "⚠ QuotaSummary 失敗（0）", "有 HTTP 回應就不當成純連線錯誤");
-        assert_eq!(quota_failure_text(0, true, None), "⚠ QuotaSummary 失敗（0）");
+        assert_eq!(
+            bad_body, "⚠ QuotaSummary 失敗（0）",
+            "有 HTTP 回應就不當成純連線錯誤"
+        );
+        assert_eq!(
+            quota_failure_text(0, true, None),
+            "⚠ QuotaSummary 失敗（0）"
+        );
     }
 
     fn iso_in(secs: u64) -> String {
@@ -543,8 +674,15 @@ mod tests {
             { "bucketId": "gemini-5h", "window": "5h", "remainingFraction": 1, "resetTime": iso_in(2 * 3600) }
         ]});
         let (p, r, idle) = find_bucket(&group, "3p-5h").unwrap();
-        assert_eq!((p, r, idle), (100, None, true), "未開始的 5h 窗不給滾動倒數");
-        assert!(find_bucket(&group, "3p-weekly").unwrap().2, "未開始的週窗同理");
+        assert_eq!(
+            (p, r, idle),
+            (100, None, true),
+            "未開始的 5h 窗不給滾動倒數"
+        );
+        assert!(
+            find_bucket(&group, "3p-weekly").unwrap().2,
+            "未開始的週窗同理"
+        );
         let (p, r, idle) = find_bucket(&group, "gemini-weekly").unwrap();
         assert_eq!(p, 96);
         assert!(!idle && r.is_some(), "已開始的窗照常顯示倒數");
@@ -569,7 +707,10 @@ mod tests {
         assert_eq!(groups.len(), 2);
         let body = serde_json::json!({ "groups": groups });
         let models = collect_models(&body);
-        assert_eq!(models[0]["name"], "Gemini Models", "Gemini 群組不可再被漏掉");
+        assert_eq!(
+            models[0]["name"], "Gemini Models",
+            "Gemini 群組不可再被漏掉"
+        );
         assert_eq!(models[1]["wk_remaining"], 100, "同名群組先到先贏");
     }
 
@@ -580,7 +721,8 @@ mod tests {
             "paidTier": { "id": "g1-pro-tier", "name": "Google AI Pro" }
         });
         assert_eq!(parse_tier_name(&body).as_deref(), Some("Google AI Pro"));
-        let free = serde_json::json!({ "currentTier": { "id": "free-tier", "name": "Antigravity" } });
+        let free =
+            serde_json::json!({ "currentTier": { "id": "free-tier", "name": "Antigravity" } });
         assert_eq!(parse_tier_name(&free).as_deref(), Some("Antigravity"));
         assert!(parse_tier_name(&serde_json::json!({})).is_none());
     }
@@ -628,10 +770,18 @@ mod tests {
     fn write_and_read_cached_token_preserves_refresh_token() {
         let dir = std::env::temp_dir().join(format!("lp_agy_test_{}", now_secs()));
         let _ = std::fs::create_dir_all(&dir);
-        write_cached_token(&dir, "ya29.cache_test", Some("1//rf_test"), now_secs() + 3600);
+        write_cached_token(
+            &dir,
+            "ya29.cache_test",
+            Some("1//rf_test"),
+            now_secs() + 3600,
+        );
 
         assert_eq!(read_cached_token(&dir).as_deref(), Some("ya29.cache_test"));
-        assert_eq!(read_cached_refresh_token(&dir).as_deref(), Some("1//rf_test"));
+        assert_eq!(
+            read_cached_refresh_token(&dir).as_deref(),
+            Some("1//rf_test")
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

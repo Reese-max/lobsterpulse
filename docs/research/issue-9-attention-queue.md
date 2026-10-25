@@ -117,3 +117,16 @@ Disposable config home 啟動 packaged app → replay 多 provider 事件 → �
 correlation/snooze expiry/restart persistence/dup suppression/critical ack →
 `/metrics` 與 queue 一致 → stale/unknown 不 silent-resolve →
 filesystem/network instrumentation 證明 pre-investigation 未越界。
+
+## 4. 與現行來源整合（2026-10-25）
+
+本研究候選已重新整合到 main `32c3fd560947c5c1f321caded76daaf6ef98a8ae`
+（tree `b58db9ff678160b1463c7e026ebb2a837444bcdc`）。只加入本研究的
+workflow、說明、replay 與測試四個檔案；現行 build workflow、Codex
+設定修復、provider／quota guards、staleness 回歸與 issue-loop 記錄均保留，
+不還原舊分支的 generated metadata。
+
+這次整合保留原 replay／policy 行為，並重新執行離線研究與現行來源護欄。
+它沒有新增 packaged queue、持久化、provider API、tray／metrics 整合，
+也沒有執行上述 packaged runtime 或真人 multi-agent canary；不能據此關閉
+issue #9 或宣稱 production attention reliability。

@@ -1,23 +1,15 @@
 {
   "repo": "Reese-max/lobsterpulse",
-  "issue": 10,
-  "base_sha": "18ef417bc59c048187ea00fac7f7fd0337f63605",
-  "red_proof": "At admitted HEAD 18ef417bc59c048187ea00fac7f7fd0337f63605, after adding only test_receipt_hash_binds_all_raw_event_metadata plus the review report and before changing implementation, Git Bash ran: python -B -m unittest discover -s docs/research -p test_issue9_attention_replay.py -v. Exit code 1: Ran 16 tests; all 15 pre-existing methods passed, and the new method failed in eight subcases (providerId, sessionId, correlationId, sourceContractVersion, kind, sourceFreshness, reasonCode, observedAtMs). Each raised AssertionError because evidenceHash stayed 6b8a3d362901924ec21b658c24427144e3d8e9193819bdf72a592b6746c7ce55 after the raw metadata changed. FAILED (failures=8). The two-line implementation fix then hashes the complete normalized source events instead of only eventId/payloadHash.",
-  "test_command": "python -B -m pytest -q docs/research scripts/test_k0_measure.py scripts/test_k0_target_baseline_check.py scripts/test_package_release.py scripts/test_check_counter_migration.py collector/tests && python -B docs/research/issue9_attention_replay.py && node --test test/*.test.js scripts/test_provider_coverage.mjs && python -B scripts/k0_target_baseline_check.py && python -B scripts/check_counter_migration.py && node scripts/provider_inventory_guard.mjs && git diff --check",
+  "issue": 3,
+  "base_sha": "e1adcdb66e2efe46c951619368ef2748bbfecdfa",
+  "red_proof": "Before implementation, `cargo test --locked --manifest-path src-tauri/Cargo.toml codex_startup_reconciles_false_alias_with_enabled_canonical_flag -- --nocapture` exited 1:\nrunning 1 test\n\nthread 'hooks_configurator::r37_silent_fail_surfacing_tests::codex_startup_reconciles_false_alias_with_enabled_canonical_flag' (43236) panicked at src\\hooks_configurator.rs:1823:9:\nassertion failed: reconcile_enabled_codex(&provider).expect(\"repair false legacy flag\")\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\ntest hooks_configurator::r37_silent_fail_surfacing_tests::codex_startup_reconciles_false_alias_with_enabled_canonical_flag ... FAILED\n\nfailures:\n\nfailures:\n    hooks_configurator::r37_silent_fail_surfacing_tests::codex_startup_reconciles_false_alias_with_enabled_canonical_flag\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 593 filtered out; finished in 0.01s\n",
+  "test_command": "cargo test --locked --manifest-path src-tauri/Cargo.toml -- --quiet && npm test && git diff --check",
   "test_exit": 0,
-  "tests_passed": 207,
+  "tests_passed": 618,
   "tests_failed": 0,
-  "summary": "Fixed one medium-severity PR #10 self-review finding: receipt evidenceHash now binds all normalized raw metadata used for attention decisions, preserving historical receipts and the existing queue policy. Added one regression method covering changes to ten metadata fields; eight subcases failed first, and replay tests increased from 15 to 16. The recorded Git Bash command passes 164 Python tests (including all replay, collector and Python CI modules) plus 43 Node tests, with one Node test skipped on Windows; 89 pytest subtests also pass but are not added to tests_passed. The six-event demo, baseline/counter/provider guards and diff checks pass.",
-  "not_done": [
-    "needs-human: decide whether CRITICAL permits audited manual RESOLVE; the issue proposal and acceptance wording differ, and an existing test explicitly permits it.",
-    "needs-human: decide whether BLOCKING ACK removes the item from the queue or only stops reminders; existing ACKED queue behavior is unchanged.",
-    "needs-human: define decision/model-clock ordering and clock-skew handling; nonnegative but backdated decision times remain accepted.",
-    "needs-human: define same-timestamp causality or a trusted source sequence; the existing (observedAtMs, eventId) ordering is unchanged.",
-    "The broader Python command python -B -m pytest -q scripts collector/tests docs/research exited 1 before commit: 255 passed, 3 failed, 2 skipped. Two failures in unchanged scripts/test_chain_staleness.py expect 17 Rust test files (actual 30) and all files stale at earliest-commit-plus-180-days (actual 13/30). The third was scripts/test_r124_sentinel.py's dirty-worktree guard observing the uncommitted review/fix. No scripts, Rust sources, sentinel configuration or existing tests were weakened or changed. The recorded green test_command covers the research/CI/collector Python modules and every Node test, not those broader chain/sentinel guards.",
-    "Rust/Tauri builds, packaged attention integration/persistence, metrics/provider truth comparison, full filesystem/network instrumentation and a real multi-agent usability canary were not run. The existing negative test mocks cover their patched APIs only. This is an offline synthetic research fix, not issue #9 acceptance or closure; issue #9 remains open.",
-    "No push, PR comment, branch switch, merge, issue closure, or modification of another branch."
-  ],
-  "merged_main_record": {
+  "summary": "Aligned startup reconciliation of an enabled Codex provider with the existing installer: hooks=true together with codex_hooks=false now enables the legacy flag through install_provider. Regression-first tests verify five installed hooks, preserved comments, idempotent startup, restoration of only the owned false flag, and byte-identical true-only/both-true configurations. Existing structural TOML, malformed/conflicting input, preservation, and install/reinstall/remove fixtures remain green; the hooks suite grows from 44 to 46 tests and the full Rust plus npm command passes 618 tests.",
+  "not_done": "Real Codex CLI hook generation and MSI/NSIS/DMG installation remain unverified, as do merged-main H01/H02/H03/H05/I05/J05 cross-platform runtime receipts; issue #3 should remain open for those gates. Packaged runtime smokes and the five existing ignored live-environment diagnostics were not run. Coverage ratchet, CRAP, and mutation checks were not added. No push, PR, merge, issue closure, or real CLI profile change was performed.",
+  "merged_main_evidence": {
     "repo": "Reese-max/lobsterpulse",
     "issue": 5,
     "base_sha": "e1adcdb66e2efe46c951619368ef2748bbfecdfa",

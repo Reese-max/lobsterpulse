@@ -216,6 +216,14 @@ test("Windows source-build prerequisites and both artifacts are explicit", () =>
   assert.ok(LANDING.includes("Get-FileHash -Algorithm SHA256"));
 });
 
+test("source-build Rust prerequisite covers the locked dependency MSRV", () => {
+  // Locked image 0.25.10, time 0.3.47 and tonic 0.14.6 require Rust 1.88.
+  const cargo = fs.readFileSync(path.join(ROOT, "src-tauri", "Cargo.toml"), "utf8");
+  assert.match(cargo, /rust-version = "1\.88\.0"/);
+  assert.match(README, /Rust `1\.88\.0`/);
+  assert.match(LANDING, /Rust <code>1\.88\.0\+<\/code>/);
+});
+
 test("macOS and Linux examples use Unix artifact paths and native hash tools", () => {
   for (const artifact of [
     "src-tauri/target/release/lobster-pulse",

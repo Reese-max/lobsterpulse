@@ -30,7 +30,7 @@
 
 ### Windows 11 前置需求
 
-- Rust `1.77.2` 以上，使用 `stable-x86_64-pc-windows-msvc` toolchain。
+- Rust `1.88.0` 以上，使用 `stable-x86_64-pc-windows-msvc` toolchain（目前 lockfile 的依賴最低需求）。
 - Visual Studio Build Tools 2022 的 **Desktop development with C++**，包含 MSVC x64/x86
   build tools 與 Windows 10/11 SDK。
 - Microsoft Edge WebView2 Runtime。

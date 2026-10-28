@@ -43,6 +43,26 @@ def test_current_13_registry_and_public_claims_agree():
     assert receipt["dimensions"]["live_emitting"]["numerator"] == 0
 
 
+@pytest.mark.parametrize("timestamp", ["not-a-date", "2026-09-26", "2026-09-26T12:00:00", 123, True])
+def test_receipt_rejects_invalid_or_unzoned_timestamp(timestamp):
+    registry, _ = current()
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None)
+    receipt["timestamp"] = timestamp
+    assert any("timestamp" in error for error in guard.validate_receipt(receipt, registry))
+
+
+@pytest.mark.parametrize("exclusions", [None, [None], [{"id": []}],
+    [{"id": "mimo", "reason": "lifecycle:deprecated"}] * 2])
+def test_receipt_rejects_malformed_or_duplicate_exclusions(exclusions):
+    registry, _ = current()
+    registry["providers"][-1]["lifecycle"] = "deprecated"
+    receipt = measure.build_coverage_receipt("", measure.parse_provider_sessions(""),
+                                             empty_quota(registry), None, registry=registry)
+    receipt["dimensions"]["live_emitting"]["exclusions"] = exclusions
+    assert any("exclusions" in error for error in guard.validate_receipt(receipt, registry))
+
+
 def test_disabled_provider_is_not_configured_even_with_hook_capability():
     registry, _ = current()
     configured = {p["id"]: True for p in registry["providers"]}

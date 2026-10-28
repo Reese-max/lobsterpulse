@@ -10,6 +10,7 @@ import json
 import hashlib
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,8 +48,11 @@ def validate_receipt(receipt: dict, registry: dict) -> list[str]:
         errors.append("receipt registry version differs from canonical registry")
     if receipt.get("baseline_id") != registry.get("baseline_id"):
         errors.append("receipt baseline differs from canonical registry")
-    if not receipt.get("timestamp"):
-        errors.append("receipt timestamp missing")
+    try:
+        if datetime.fromisoformat(receipt.get("timestamp")).utcoffset() is None:
+            raise ValueError("timezone missing")
+    except (TypeError, ValueError):
+        errors.append("receipt timestamp must be an ISO 8601 datetime with timezone")
     provider_rows = receipt.get("providers")
     if not isinstance(provider_rows, dict):
         errors.append("receipt provider capability evidence missing")
@@ -76,8 +80,12 @@ def validate_receipt(receipt: dict, registry: dict) -> list[str]:
         if d.get("denominator") != expected_denominator or d.get("registered_denominator") != registered:
             errors.append(f"{name}: denominator disagrees with registry")
         expected_exclusions = {} if name == "registered" else excluded
-        actual_exclusions = {x.get("id"): x.get("reason") for x in d.get("exclusions", [])}
-        if actual_exclusions != expected_exclusions:
+        exclusions = d.get("exclusions")
+        if (not isinstance(exclusions, list) or
+                any(not isinstance(x, dict) or not isinstance(x.get("id"), str)
+                    for x in exclusions) or
+                len({x["id"] for x in exclusions}) != len(exclusions) or
+                {x["id"]: x.get("reason") for x in exclusions} != expected_exclusions):
             errors.append(f"{name}: exclusions incomplete or incorrect")
         numerator = d.get("numerator")
         if numerator is not None and (type(numerator) is not int or

@@ -210,6 +210,56 @@ fn read_wsl_token() -> Option<serde_json::Value> {
     serde_json::from_slice(&out.stdout).ok()
 }
 
+/// agy CLI `--output-format json -p /usage` 的完整群組（含 Gemini 週額度與 Argon 個別週額度；
+/// 2026-11-01 實測 Cloud Code QuotaSummary 直呼只回 Claude and GPT 群組），轉成 QuotaSummary 形狀。
+fn usage_groups(stdout: &[u8]) -> Option<serde_json::Value> {
+    let text = String::from_utf8_lossy(stdout);
+    // 整份解析失敗就由最後一行往前找第一個 JSON 物件（agy 可能先印雜訊）
+    let doc = serde_json::from_str::<serde_json::Value>(text.trim()).ok().or_else(|| {
+        text.lines().rev().find_map(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
+    })?;
+    let groups: Vec<serde_json::Value> = doc
+        .pointer("/command/data/groups")?
+        .as_array()?
+        .iter()
+        .filter_map(|g| {
+            // 沒有數值水位的 bucket／群組丟掉，免得同名先贏擋住 API 的有效資料
+            let buckets: Vec<serde_json::Value> = g
+                .get("buckets")?
+                .as_array()?
+                .iter()
+                .filter(|b| b.get("remaining_fraction").and_then(|v| v.as_f64()).is_some())
+                .map(|b| serde_json::json!({
+                    "bucketId": b.get("id"), "displayName": b.get("name"), "window": b.get("window"),
+                    "remainingFraction": b.get("remaining_fraction"), "resetTime": b.get("reset_time"),
+                }))
+                .collect();
+            if buckets.is_empty() {
+                return None;
+            }
+            Some(serde_json::json!({ "displayName": g.get("name")?, "buckets": buckets }))
+        })
+        .collect();
+    (!groups.is_empty()).then(|| serde_json::json!({ "groups": groups }))
+}
+
+/// WSL 內跑 agy `/usage`；冷啟動 WSL＋agy 實測約 7 秒，給 45 秒。
+fn read_agy_usage() -> Option<serde_json::Value> {
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args(["-d", "Ubuntu", "-u", "root", "--", "/usr/local/bin/agy", "--output-format", "json", "-p", "/usage"]);
+    cmd.stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let out = super::output_with_timeout(cmd, std::time::Duration::from_secs(45))?;
+    if !out.status.success() {
+        return None;
+    }
+    usage_groups(&out.stdout)
+}
+
 /// 窗長（秒）：優先 bucket 的 `window` 欄位（"5h"／"weekly"），退回 bucketId 後綴。
 fn window_secs(b: &serde_json::Value, bucket_id: &str) -> Option<u64> {
     let w = b
@@ -319,9 +369,21 @@ fn collect_models(body: &serde_json::Value) -> Vec<serde_json::Value> {
         .into_iter()
         .flatten()
         .map(|group| {
-            let session = find_bucket(group, "gemini-5h").or_else(|| find_bucket(group, "3p-5h"));
-            let weekly =
-                find_bucket(group, "gemini-weekly").or_else(|| find_bucket(group, "3p-weekly"));
+            // 已知 id 優先，其次依 window 欄位（如 Argon 的 gemini-argon-wtu-weekly）
+            let by_window = |window: &str| {
+                group.get("buckets")?.as_array()?.iter().find_map(|b| {
+                    (b.get("window").and_then(|v| v.as_str()) == Some(window))
+                        .then(|| b.get("bucketId").and_then(|v| v.as_str()))
+                        .flatten()
+                        .and_then(|id| find_bucket(group, id))
+                })
+            };
+            let session = find_bucket(group, "gemini-5h")
+                .or_else(|| find_bucket(group, "3p-5h"))
+                .or_else(|| by_window("5h"));
+            let weekly = find_bucket(group, "gemini-weekly")
+                .or_else(|| find_bucket(group, "3p-weekly"))
+                .or_else(|| by_window("weekly"));
             serde_json::json!({
                 "name": group.get("displayName").and_then(|v| v.as_str()).unwrap_or("Antigravity"),
                 "h5_remaining": session.as_ref().map(|s| s.0),
@@ -333,6 +395,23 @@ fn collect_models(body: &serde_json::Value) -> Vec<serde_json::Value> {
             })
         })
         .collect()
+}
+
+/// Summary 缺少 Gemini 時，讀 Flash 的池水位；不推定為 5h／weekly 或其他模型的個別額度。
+fn gemini_pool(body: &serde_json::Value, now: u64) -> Option<serde_json::Value> {
+    let bucket = body.get("buckets")?.as_array()?.iter().find(|bucket| {
+        bucket.get("modelId").and_then(|v| v.as_str()) == Some("gemini-3.8-flash-tiered")
+    })?;
+    let fraction = bucket.get("remainingFraction")?.as_f64()?;
+    if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
+        return None;
+    }
+    let reset = bucket.get("resetTime").and_then(|v| v.as_str()).and_then(iso_to_epoch);
+    Some(serde_json::json!({
+        "name": "Gemini Models（Flash）", "remaining_pct": (fraction * 100.0).round() as i64,
+        "quota_label": "共用池", "quota_reset": reset.map(|at| fmt_countdown_at(at, now)),
+        "source": "retrieveUserQuota",
+    }))
 }
 
 pub async fn fetch(home: &Path) -> RunnerQuota {
@@ -440,6 +519,11 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     let mut last_code = 0u16;
     let mut got_response = false;
     let mut transport_error: Option<String> = None;
+    // agy /usage 最完整，先合併（同名群組先到先贏）；拿不到才只靠 API
+    if let Ok(Some(usage)) = tokio::task::spawn_blocking(read_agy_usage).await {
+        merge_groups(&mut groups, &usage);
+        any_ok = true;
+    }
     for url in QUOTA_ENDPOINTS {
         let resp = client
             .post(url)
@@ -494,11 +578,35 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
     let claude_5h = find_first("3p-5h");
     let claude_weekly = find_first("3p-weekly");
     let mut models = collect_models(&body);
+    if session.is_none() && weekly.is_none() {
+        for endpoint in QUOTA_ENDPOINTS {
+            let response = client.post(endpoint.replace("retrieveUserQuotaSummary", "retrieveUserQuota"))
+                .bearer_auth(&token).header("User-Agent", "antigravity")
+                .json(&serde_json::json!({})).send().await;
+            if let Ok(response) = response {
+                if response.status().is_success() {
+                    if let Ok(body) = response.json::<serde_json::Value>().await {
+                        if let Some(pool) = gemini_pool(&body, now_secs()) {
+                            models.push(pool);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
     let route_limits =
         std::fs::read_to_string(home.join("route-usage").join("agy-model-limits.json"))
             .ok()
             .map(|content| route_agy_models(&content, now_secs()))
             .unwrap_or_default();
+    // /usage 已回報 Argon 真實週額度（有數值）時，不再疊 route 從 429 推得的 0% 列
+    let argon_weekly: Vec<i64> = models
+        .iter()
+        .filter(|m| m["name"].as_str().is_some_and(|n| n.contains("Argon")))
+        .filter_map(|m| m["wk_remaining"].as_i64())
+        .collect();
+    let route_limits: Vec<serde_json::Value> = if argon_weekly.is_empty() { route_limits } else { Vec::new() };
     models.extend(route_limits.iter().cloned());
 
     // 方案名：原本寫死 "Antigravity"（那是免費層的名字，不是實際方案）
@@ -532,6 +640,12 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
         fmt(&claude_5h),
         fmt(&claude_weekly)
     );
+    if let Some(pool) = models.iter().find(|model| model["source"] == "retrieveUserQuota") {
+        text.push_str(&format!("\nGemini Flash 共用池 {}%", pool["remaining_pct"]));
+    }
+    for pct in &argon_weekly {
+        text.push_str(&format!("\nArgon 7d {pct}%"));
+    }
     for model in &route_limits {
         let name = model["name"].as_str().unwrap_or("Argon");
         let reset = model["wk_reset"].as_str().unwrap_or("--");
@@ -569,6 +683,27 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gemini_pool_keeps_zero_and_reset_without_mixing_third_party_or_individual_limits() {
+        for (fraction, expected) in [(0.9799333, 98), (0.0, 0), (1.0, 100)] {
+            let body = serde_json::json!({"buckets": [
+                {"modelId":"claude-opus-5-5-high","remainingFraction":0.47},
+                {"modelId":"gemini-4-argon","remainingFraction":0},
+                {"modelId":"gemini-3.8-flash-tiered","remainingFraction":fraction,"resetTime":"2026-10-25T02:00:00Z"}
+            ]});
+            let pool = gemini_pool(&body, iso_to_epoch("2026-10-25T01:00:00Z").unwrap()).unwrap();
+            assert_eq!(pool["remaining_pct"], expected);
+            assert_eq!(pool["quota_reset"], "1h0m");
+            assert_eq!(pool["name"], "Gemini Models（Flash）");
+            assert!(pool.get("h5_remaining").is_none() && pool.get("wk_remaining").is_none());
+        }
+        for fraction in [serde_json::Value::Null, serde_json::json!(-0.1), serde_json::json!(1.1), serde_json::json!("0")] {
+            assert!(gemini_pool(&serde_json::json!({"buckets":[{"modelId":"gemini-3.8-flash-tiered","remainingFraction":fraction}]}), 0).is_none());
+        }
+        assert!(gemini_pool(&serde_json::json!({"buckets":[{"modelId":"gemini-4-argon","remainingFraction":0}]}), 0).is_none());
+        assert!(gemini_pool(&serde_json::json!({}), 0).is_none());
+    }
 
     #[test]
     fn route_model_name_formats_family() {
@@ -725,6 +860,45 @@ mod tests {
             serde_json::json!({ "currentTier": { "id": "free-tier", "name": "Antigravity" } });
         assert_eq!(parse_tier_name(&free).as_deref(), Some("Antigravity"));
         assert!(parse_tier_name(&serde_json::json!({})).is_none());
+    }
+
+    /// 實機驗證（會呼叫 WSL agy 與 Cloud Code）：cargo test --release live_fetch -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_fetch_reports_gemini_weekly_and_argon() {
+        let quota = fetch(&dirs::home_dir().unwrap()).await;
+        println!("{}\n{}", quota.text, serde_json::to_string(&quota.raw).unwrap());
+        let raw = quota.raw.expect("要有 raw");
+        assert!(quota.ok && raw["wk_remaining"].is_i64(), "Gemini 週額度要有值");
+        assert!(raw["models"].as_array().unwrap().iter().any(|m| m["name"] == "Gemini 4 Argon" && m["wk_remaining"].is_i64()));
+    }
+
+    #[test]
+    fn usage_groups_converts_agy_usage_and_collects_argon_weekly() {
+        // 2026-11-01 agy 1.4.12 `--output-format json -p /usage` 實際輸出（節錄）
+        let stdout = br#"noise line
+{"status":"SUCCESS","response":"...","command":{"name":"usage","data":{"groups":[
+{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.5981217622756958,"reset_time":"2099-11-02T14:36:07Z"},{"id":"gemini-5h","window":"5h","remaining_fraction":0.9998059868812561,"reset_time":"2099-11-01T10:29:12Z"}]},
+{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","window":"weekly","remaining_fraction":1,"reset_time":"2099-11-08T09:08:41Z"},{"id":"3p-5h","window":"5h","remaining_fraction":1,"reset_time":"2099-11-01T14:08:41Z"}]},
+{"name":"Gemini 4 Argon","buckets":[{"id":"gemini-argon-wtu-weekly","name":"Gemini 4 Argon Weekly Limit","window":"weekly","remaining_fraction":0.5915693044662476,"reset_time":"2099-11-04T18:04:51Z"}]}]}}}"#;
+        // 實際輸出是單行 JSON；把 JSON 內的換行去掉，保留雜訊行與 JSON 行之間的換行
+        let (noise, json) = std::str::from_utf8(stdout).unwrap().split_once('\n').unwrap();
+        let one_line = format!("{noise}\n{}", json.replace('\n', ""));
+        let body = usage_groups(one_line.as_bytes()).expect("要解析出群組");
+        let models = collect_models(&body);
+        let names: Vec<_> = models.iter().map(|m| m["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["Gemini Models", "Claude and GPT models", "Gemini 4 Argon"]);
+        assert_eq!(models[0]["wk_remaining"], 60, "Gemini 週額度不可再漏");
+        assert_eq!(models[0]["h5_remaining"], 100);
+        assert_eq!(models[2]["wk_remaining"], 59, "Argon 個別週額度依 window 讀出");
+        assert!(models[2]["h5_remaining"].is_null());
+        assert!(usage_groups(b"{\"status\":\"SUCCESS\"}").is_none());
+        // 沒有數值水位的群組不收，讓 API 同名群組能補上
+        let partial = br#"{"command":{"data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","window":"weekly"}]},{"name":"Empty","buckets":[]},{"name":"Gemini 4 Argon","buckets":[{"id":"x","window":"weekly","remaining_fraction":0.5}]}]}}}"#;
+        let names: Vec<_> = usage_groups(partial).unwrap()["groups"].as_array().unwrap().iter().map(|g| g["displayName"].clone()).collect();
+        assert_eq!(names, ["Gemini 4 Argon"]);
+        assert!(usage_groups(br#"{"command":{"data":{"groups":[{"name":"G","buckets":[{"id":"a"}]}]}}}"#).is_none());
+        assert!(usage_groups(b"garbage").is_none());
     }
 
     #[test]

@@ -96,7 +96,7 @@
     const pct = Math.round(Math.min.apply(null, singles));
     return withModels(Object.assign({
       kind: "simple", subtitle: "",
-      windows: [{ key: "quota", label: "Quota", remainPct: pct, resetText: null }],
+      windows: [{ key: "quota", label: raw.quota_label || "Quota", remainPct: pct, resetText: parseResetDuration(raw.quota_reset) }],
       pct, failed: false,
     }, base));
   }

@@ -7,6 +7,7 @@ const STATS_PATH = path.join(process.env.USERPROFILE || 'C:/Users/Administrator'
 const CREDS_PATH = path.join(process.env.USERPROFILE || 'C:/Users/Administrator', '.claude', '.credentials.json');
 function fmt(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n); }
 function fmtCD(epoch) { const d=epoch*1000-Date.now(); if(d<=0)return'resetting...'; const h=Math.floor(d/3600000),m=Math.floor((d%3600000)/60000); return h>0?`${h}h${m}m`:`${m}m`; }
+function remaining(used) { return Number.isFinite(used) && used >= 0 ? Math.max(0, Math.round((1-used)*100)) : null; }
 try {
   const stats = JSON.parse(fs.readFileSync(STATS_PATH, 'utf8'));
   const today = new Date().toISOString().slice(0,10), weekAgo = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
@@ -34,7 +35,7 @@ try {
         console.log(JSON.stringify({ok:false,error:msg,status_code,ts:new Date().toISOString(),rate_headers_found:false}));
         return;
       }
-      console.log(JSON.stringify({ok:true,status_code,session_label:'5h',weekly_label:'7d',session_5h_remaining:h5u!=null?Math.round((1-h5u)*100):null,session_5h_used:h5u!=null?Math.round(h5u*100):null,session_5h_reset:h5r?fmtCD(h5r):'N/A',week_7d_remaining:d7u!=null?Math.round((1-d7u)*100):null,week_7d_used:d7u!=null?Math.round(d7u*100):null,week_7d_reset:d7r?fmtCD(d7r):'N/A',today_messages:ta?.messageCount||0,today_sessions:ta?.sessionCount||0,week_total:fmt(wT),week_opus:fmt(wO),week_sonnet:fmt(wS),week_haiku:fmt(wH),total_sessions:(stats.totalSessions||0).toLocaleString(),total_messages:(stats.totalMessages||0).toLocaleString(),tier:(m=>m?`Max ${m[1]}x`:(creds.claudeAiOauth?.subscriptionType==='max'?'Max':'Pro'))((creds.claudeAiOauth?.rateLimitTier||'').match(/max_(\d+)x/)),ts:new Date().toISOString(),rate_headers_found:h5uRaw!=null}));
+      console.log(JSON.stringify({ok:true,status_code,session_label:'5h',weekly_label:'7d',session_5h_remaining:remaining(h5u),session_5h_used:h5u!=null?Math.round(h5u*100):null,session_5h_reset:h5r?fmtCD(h5r):'N/A',week_7d_remaining:remaining(d7u),week_7d_used:d7u!=null?Math.round(d7u*100):null,week_7d_reset:d7r?fmtCD(d7r):'N/A',today_messages:ta?.messageCount||0,today_sessions:ta?.sessionCount||0,week_total:fmt(wT),week_opus:fmt(wO),week_sonnet:fmt(wS),week_haiku:fmt(wH),total_sessions:(stats.totalSessions||0).toLocaleString(),total_messages:(stats.totalMessages||0).toLocaleString(),tier:(m=>m?`Max ${m[1]}x`:(creds.claudeAiOauth?.subscriptionType==='max'?'Max':'Pro'))((creds.claudeAiOauth?.rateLimitTier||'').match(/max_(\d+)x/)),ts:new Date().toISOString(),rate_headers_found:h5uRaw!=null}));
     });
   });
   req.on('error',e=>{console.log(JSON.stringify({ok:false,error:e.message}));process.exit(1);});

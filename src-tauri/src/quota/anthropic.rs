@@ -546,7 +546,10 @@ fn tier_label(tier: &str) -> String {
 }
 
 /// 兩種來源都走這裡組成同一個形狀的結果（面板只認一種格式）。
-fn build_quota(home: &Path, limits: RateLimits, tier: &str, source: &str, status_code: Option<u16>) -> RunnerQuota {
+fn build_quota(home: &Path, mut limits: RateLimits, tier: &str, source: &str, status_code: Option<u16>) -> RunnerQuota {
+    // 使用率可超過 100%；API 與 runner 的耗盡窗口都保留為 0%。
+    limits.h5_remaining = limits.h5_remaining.map(|v| v.max(0));
+    limits.d7_remaining = limits.d7_remaining.map(|v| v.max(0));
     let stats = read_stats(home);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     // dailyModelTokens 在 stats-cache 裡是另一個結構，先用 dailyActivity 簡化
@@ -705,6 +708,24 @@ pub async fn fetch(home: &Path) -> RunnerQuota {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exhausted_quota_keeps_zero_windows_and_resets() {
+        let home = std::env::temp_dir().join("lobster-quota-zero-no-stats");
+        for source in ["api", "runner"] {
+            let result = build_quota(&home, RateLimits {
+                h5_remaining: Some(-3), h5_used: Some(103), h5_reset: "1h30m".into(),
+                d7_remaining: Some(-2), d7_used: Some(102), d7_reset: "24h".into(),
+            }, "Pro", source, Some(429));
+            let raw = result.raw.unwrap();
+            assert_eq!(raw["session_5h_remaining"], 0);
+            assert_eq!(raw["week_7d_remaining"], 0);
+            assert_eq!(raw["session_5h_reset"], "1h30m");
+            assert_eq!(raw["week_7d_reset"], "24h");
+            assert_eq!(raw["session_5h_used"], 103);
+            assert!(result.text.contains("5h 0% · 7d 0%"));
+        }
+    }
 
     #[test]
     fn fmt_tokens_below_thousand_keeps_raw() {

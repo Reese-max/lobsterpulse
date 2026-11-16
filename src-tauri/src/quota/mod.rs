@@ -232,12 +232,30 @@ pub fn detect_installed_clis_with_roots(
             color: "#6366f1".to_string(),
         });
     }
+    // 用量頁卡片照此順序：常用在上（2026-11-16 使用者要求，與 live runner 順序一致）
+    out.sort_by_key(|c| DISPLAY_ORDER.iter().position(|id| *id == c.id).unwrap_or(usize::MAX));
     out
 }
+
+pub const DISPLAY_ORDER: [&str; 8] = ["claude", "codex", "devin", "agy", "minimax", "openrouter", "grok", "copilot"];
 
 #[cfg(test)]
 mod detect_tests {
     use super::*;
+
+    #[test]
+    fn detect_installed_clis_follows_display_order() {
+        let tmp = std::env::temp_dir().join(format!("lp-detect-order-{}", std::process::id()));
+        for d in [".claude", ".codex", ".copilot", ".grok", "bin"] {
+            std::fs::create_dir_all(tmp.join(d)).unwrap();
+        }
+        std::fs::write(tmp.join("bin/agy.ps1"), "").unwrap();
+        std::fs::create_dir_all(tmp.join("devin")).unwrap();
+        let got = detect_installed_clis_with_roots(Some(&tmp), None, Some(&tmp), true, true);
+        let ids: Vec<_> = got.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, DISPLAY_ORDER);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn detect_uses_config_dir_presence() {

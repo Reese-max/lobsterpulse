@@ -1372,7 +1372,7 @@ pub(crate) async fn collect_live_quota_snapshot_with_home(
         retry_net(quota::minimax::fetch),
         retry_net(quota::openrouter::fetch),
     );
-    let runners = vec![claude, codex, copilot, grok, devin, agy, minimax, openrouter];
+    let runners = vec![claude, codex, devin, agy, minimax, openrouter, grok, copilot]; // 顯示順序：常用在上（2026-11-16 依 route 近 30 天派工次數）
     let health_results = runners
         .iter()
         .map(|runner| {
@@ -2033,6 +2033,11 @@ mod collect_live_quota_snapshot_tests {
                 "應含 {expected} runner,實際 {names:?}"
             );
         }
+        // 額度卡依此順序顯示：常用在上（2026-11-16 使用者要求）
+        assert_eq!(
+            names,
+            ["claude", "codex", "devin", "agy", "minimax", "openrouter", "grok", "copilot"]
+        );
 
         let _ = std::fs::remove_dir_all(&home);
     }

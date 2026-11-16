@@ -9,8 +9,7 @@ hidden gap。 1 個 Python pytest 模組, 走 R132/R137 同樣模式 (純量化
 腳本 + pytest, 不破 K42 chain 20 Rust 護衛飽和契約)。
 
 R172 5 case:
-  1. test_量測_回傳_17_個_test_檔 — 對齊 src-tauri/src 17 個 test-bearing 檔
-     (R172 grep 16 + T-OGRE15 telemetry.rs)
+  1. test_量測_回傳_30_個_test_檔 — 對齊 src-tauri/src 30 個 test-bearing 檔
   2. test_守衛鏈_計數_健康檢查 — chain_count_min 20 守住
   3. test_過期判定_stale_超過_threshold — mock now_unix 提前 STALE_DAYS*2
   4. test_過期判定_fresh_未超過_threshold — mock now_unix = last_commit
@@ -42,11 +41,10 @@ REPO_SRC = cs.SRC_TAURI
 
 # ---------- 1. 量測主路徑 ----------
 
-def test_量測_回傳_17_個_test_檔():
-    """src-tauri/src 含 #\[test\] 檔應 = 17 (R172 grep 16 + T-OGRE15
-    telemetry.rs 護衛 mod, otel-genai-runtime-emit-2026-q3 Phase 3)"""
+def test_量測_回傳_30_個_test_檔():
+    """目前 src-tauri/src 有 30 個 test-bearing 檔；增減時須核對此基準。"""
     results = cs.measure(src_root=REPO_SRC)
-    assert len(results) == 17, f"預期 17 個 test 檔, 實際 {len(results)}: {[r.relpath for r in results]}"
+    assert len(results) == 30, f"預期 30 個 test 檔, 實際 {len(results)}: {[r.relpath for r in results]}"
 
 
 # ---------- 2. 計數健康檢查 ----------
@@ -65,14 +63,27 @@ def test_過期判定_stale_超過_threshold():
     results = cs.measure(src_root=REPO_SRC)
     fresh_results = [r for r in results if r.last_commit_unix > 0]
     assert fresh_results, "應至少有 1 個檔有真實 commit time"
-    earliest = min(r.last_commit_unix for r in fresh_results)
-    far_future = earliest + cs.STALE_DAYS * 2 * 86400
+    latest = max(r.last_commit_unix for r in fresh_results)
+    far_future = latest + cs.STALE_DAYS * 2 * 86400
 
     stale_results = cs.measure(src_root=REPO_SRC, now_unix=far_future)
     stale_count = sum(1 for r in stale_results if r.is_stale)
     assert stale_count == len(fresh_results), (
         f"提前到 +{cs.STALE_DAYS*2}d 應全 stale, 實際 {stale_count}/{len(fresh_results)}"
     )
+
+
+def test_過期視窗涵蓋相隔超過閾值的提交(monkeypatch, tmp_path):
+    """最新檔晚於最舊檔 200 天時，全 stale 的觀察時間仍須涵蓋兩者。"""
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    for name in ("old.rs", "new.rs"):
+        (src_root / name).write_text("#[test]\nfn guard() {}\n", encoding="utf-8")
+    commits = {"src/old.rs": 1_700_000_000, "src/new.rs": 1_700_000_000 + 200 * 86400}
+    monkeypatch.setattr(cs, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(cs, "_git_last_commit_unix", commits.__getitem__)
+    monkeypatch.setattr(sys.modules[__name__], "REPO_SRC", src_root)
+    test_過期判定_stale_超過_threshold()
 
 
 # ---------- 4. 過期判定: 同時刻 = fresh ----------

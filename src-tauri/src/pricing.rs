@@ -11,9 +11,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SOURCE_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-const SNAPSHOT_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+// 1 天：新模型上架後隔天就有價（原 7 天會缺價一週）；每天只多一次 ~5MB 下載
+const SNAPSHOT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const REFRESH_BACKOFF: Duration = Duration::from_secs(60 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+const FILTER_VERSION: u32 = 3; // 2026-11-19：gpt- 全收
 
 /// 本機修正價不得被上游同名列覆蓋。
 pub const PROTECTED_KEYS: &[&str] = &["claude-opus-4-8"];
@@ -72,6 +74,9 @@ impl TokenUsage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Snapshot {
+    // 篩選規則（is_supported_model）改了就 +1：舊快照 7 天 TTL 內不會重抓，新模型會一直缺價
+    #[serde(default)]
+    filter_version: u32,
     fetched_at: u64,
     source: String,
     models: BTreeMap<String, ModelPrice>,
@@ -356,7 +361,9 @@ pub async fn refresh_if_needed(home: Option<&Path>) {
     let path = snapshot_path(home);
     let now = unix_now();
     if read_snapshot(&path)
-        .map(|snapshot| is_fresh(snapshot.fetched_at, now))
+        .map(|snapshot| {
+            snapshot.filter_version == FILTER_VERSION && is_fresh(snapshot.fetched_at, now)
+        })
         .unwrap_or(false)
     {
         return;
@@ -415,6 +422,7 @@ async fn fetch_snapshot(fetched_at: u64) -> Result<Snapshot, String> {
 
     let models = parse_litellm(&payload)?;
     Ok(Snapshot {
+        filter_version: FILTER_VERSION,
         fetched_at,
         source: SOURCE_URL.to_string(),
         models,
@@ -501,7 +509,8 @@ fn parse_litellm(value: &serde_json::Value) -> Result<BTreeMap<String, ModelPric
 }
 
 fn is_supported_model(key: &str) -> bool {
-    key.starts_with("claude-") || key.starts_with("gpt-5") || key.starts_with("gemini-")
+    // gpt- 全收：未來 gpt-7 之類不必再改碼（舊型號多幾筆無害）
+    key.starts_with("claude-") || key.starts_with("gpt-") || key.starts_with("gemini-")
 }
 
 fn source_priority(raw_key: &str, details: &serde_json::Map<String, serde_json::Value>) -> u8 {
@@ -554,6 +563,19 @@ mod tests {
         let merged = merge_catalog(builtin, upstream);
         assert_eq!(merged["claude-opus-4-8"], protected);
         assert_eq!(merged["claude-sonnet"], upstream_price);
+    }
+
+    #[test]
+    fn parse_keeps_gpt6_models() {
+        let upstream = serde_json::json!({
+            "gpt-6.1-terra": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.00001},
+            "gpt-7": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.00001},
+            "llama-9": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000001},
+        });
+        let models = parse_litellm(&upstream).unwrap();
+        assert!(models.contains_key("gpt-6.1-terra"));
+        assert!(models.contains_key("gpt-7"));
+        assert!(!models.contains_key("llama-9"));
     }
 
     #[test]

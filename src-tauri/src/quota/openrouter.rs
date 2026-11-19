@@ -86,12 +86,12 @@ async fn fetch_one(
         .bearer_auth(&key)
         .send()
         .await
-        .map_err(|e| format!("API error: {e}"))?;
+        .map_err(|e| format!("key {label} API error: {e}"))?;
     let status = resp.status().as_u16();
     if !resp.status().is_success() {
         return Err(format!("key {label} rejected ({status})"));
     }
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("key {label} parse: {e}"))?;
     let (left, total) = parse_credits(&body).ok_or_else(|| format!("key {label}: 缺 credits 欄位"))?;
     // key 上限查不到不擋整把 key：退回帳號餘額（舊行為）
     let key_body = match client.get(OPENROUTER_KEY_API).bearer_auth(&key).send().await {
@@ -138,6 +138,7 @@ pub async fn fetch() -> RunnerQuota {
         }
     }
     rows.sort_by(|a, b| a.label.cmp(&b.label));
+    errors.sort();
 
     if rows.is_empty() {
         // 全滅：優先回帶「API error」的訊息讓 retry_net 接手網路型失敗
@@ -178,6 +179,8 @@ pub async fn fetch() -> RunnerQuota {
             "key_limit_usd": r.key_limit, "key_limit_remaining_usd": r.key_limit_remaining,
         })).collect::<Vec<_>>(),
         "failed_keys": errors.len(),
+        // 卡片要點名是哪把 key、為何失敗（2026-11-19：Key A 過期 401 卻只在舊文字列露出計數）
+        "failed_key_errors": errors,
         "ts": chrono::Utc::now().to_rfc3339(),
     });
 

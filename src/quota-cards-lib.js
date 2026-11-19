@@ -235,7 +235,19 @@
       : { text: `到期 ${md}`, cls: "apikey-used" };
   }
 
+  // 多 key 卡（openrouter）抓取失敗的 key：有逐把原因就列原因，舊資料只有計數時退回計數
+  function failedKeyNotes(raw) {
+    if (!raw) return [];
+    const errs = Array.isArray(raw.failed_key_errors)
+      ? raw.failed_key_errors.filter((e) => typeof e === "string" && e)
+      : [];
+    if (errs.length) return errs;
+    const n = Number(raw.failed_keys);
+    return Number.isFinite(n) && n > 0 ? [`${n} key 抓取失敗`] : [];
+  }
+
   const api = {
+    failedKeyNotes,
     parseResetDuration, normalizeRunnerCard, normalizeCodexModelUsage,
     recentCompletions, waitingSessions, statsFreshness,
     PROVIDER_LINKS, providerUsageUrl, keyManageUrl,

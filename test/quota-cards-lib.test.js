@@ -305,3 +305,11 @@ test("apiKeyExpiryTag：過期標紅、未過期標日期、非 JWT 不畫", () 
   assert.strictEqual(apiKeyExpiryTag(null, 0), null);
   assert.strictEqual(apiKeyExpiryTag(undefined, 0), null);
 });
+
+test("failedKeyNotes：逐把原因優先，舊資料退回計數，無失敗回空", () => {
+  const { failedKeyNotes } = require("../src/quota-cards-lib.js");
+  assert.deepStrictEqual(failedKeyNotes({ failed_keys: 1, failed_key_errors: ["key A rejected (401)"] }), ["key A rejected (401)"]);
+  assert.deepStrictEqual(failedKeyNotes({ failed_keys: 2 }), ["2 key 抓取失敗"]);
+  assert.deepStrictEqual(failedKeyNotes({ failed_keys: 0, failed_key_errors: [] }), []);
+  assert.deepStrictEqual(failedKeyNotes(null), []);
+});

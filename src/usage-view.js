@@ -175,7 +175,10 @@
           const capped = typeof a.key_limit_usd === "number" ? " key 上限" : "";
           return barRow(`Key ${a.key}`, pct, null, barColor, `${fmtUsd(a.left_usd)} / ${fmtUsd(a.total_usd)}${capped}`);
         })
-        .join("");
+        .join("") +
+        window.QuotaCards.failedKeyNotes(runner.raw)
+          .map((msg) => `<div class="uv-note">⚠ ${esc(msg)}</div>`)
+          .join("");
     } else if (quotaWindows.length > 0) {
       body = quotaWindows.map((w) => barRow(w.label, w.remainPct, w.resetText, barColor, w.resetNote)).join("");
     } else {
